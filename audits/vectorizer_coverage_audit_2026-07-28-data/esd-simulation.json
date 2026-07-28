@@ -1,0 +1,2377 @@
+{
+ "category": "simulation",
+ "cases": [
+  {
+   "case": "advection_1d_dirichlet_central",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_dirichlet_central.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 36,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_inflow_lax_friedrichs",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_lax_friedrichs.esm",
+   "model": "AdvectionLaxFriedrichsInflow",
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 7,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_inflow_minmod",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_minmod.esm",
+   "model": "AdvectionMinmodInflow",
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_inflow_ppm",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_ppm.esm",
+   "model": "AdvectionPPMInflow",
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_inflow_right_upwind",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_right_upwind.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_inflow_superbee",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_superbee.esm",
+   "model": "AdvectionSuperbeeInflow",
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 7,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_inflow_upwind",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_upwind.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_nonuniform_dirichlet",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_nonuniform_dirichlet.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 10,
+     "visits": 131,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 18,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_nonuniform_zero_grad",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_nonuniform_zero_grad.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 11,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 19,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_periodic",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_periodic_central",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic_central.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_periodic_lax_friedrichs",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic_lax_friedrichs_tvd.esm",
+   "model": "AdvectionLaxFriedrichsTVD",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 16,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_1d_zero_grad_central",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_zero_grad_central.esm",
+   "model": "Advection",
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_2d_x_dirichlet_central",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_x_dirichlet_central.esm",
+   "model": "Advection2DxDirichlet",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 36,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_2d_x_periodic_central",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_x_periodic_central.esm",
+   "model": "Advection2DxPeriodic",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:gx": {
+     "kind": "obs_scalar",
+     "name": "gx",
+     "status": "vectorized",
+     "us": 34,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_2d_y_dirichlet_central",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_y_dirichlet_central.esm",
+   "model": "Advection2DyDirichlet",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 86,
+     "visits": 36,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "advection_2d_y_periodic_central",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_y_periodic_central.esm",
+   "model": "Advection2DyPeriodic",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:gy": {
+     "kind": "obs_scalar",
+     "name": "gy",
+     "status": "vectorized",
+     "us": 34,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "divergence_mpas",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/divergence_mpas.esm",
+   "model": "Divergence",
+   "entries": {
+    "obs_scalar:eta": {
+     "kind": "obs_scalar",
+     "name": "eta",
+     "status": "vectorized",
+     "us": 13,
+     "visits": 4,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.areaCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.areaCell",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.cellsOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.cellsOnEdge",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dcEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dcEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dvEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dvEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgeSignOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgeSignOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.latCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.latVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.nEdgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.nEdgesOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnEdge",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:nEdgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "nEdgesOnCell",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:verticesOnEdge": {
+     "kind": "obs_scalar",
+     "name": "verticesOnEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:areaCell": {
+     "kind": "obs_scalar",
+     "name": "areaCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dvEdge": {
+     "kind": "obs_scalar",
+     "name": "dvEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:edgeSignOnCell": {
+     "kind": "obs_scalar",
+     "name": "edgeSignOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:edgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "edgesOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:flux": {
+     "kind": "obs_scalar",
+     "name": "flux",
+     "status": "per-cell",
+     "us": 54,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+      "in op index/2",
+      "in op -/2",
+      "in op //2"
+     ],
+     "n": 1
+    },
+    "obs_scalar:div_flux": {
+     "kind": "obs_scalar",
+     "name": "div_flux",
+     "status": "per-cell",
+     "us": 63,
+     "visits": null,
+     "deepest": "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+     "frames": [
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }"
+     ],
+     "n": 1
+    },
+    "rule:u": {
+     "kind": "rule",
+     "name": "u",
+     "status": "per-cell",
+     "us": null,
+     "visits": null,
+     "deepest": "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+     "frames": [
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5"
+     ],
+     "n": 8
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "duo_swe_freestream",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/duo_swe.esm",
+   "model": "DuoSWFreestream",
+   "status": "timeout",
+   "message": "timeout after 900s",
+   "entries": {
+    "obs_scalar:phis": {
+     "kind": "obs_scalar",
+     "name": "phis",
+     "status": "vectorized",
+     "us": 16,
+     "visits": 4,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:refx": {
+     "kind": "obs_scalar",
+     "name": "refx",
+     "status": "vectorized",
+     "us": 37,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:refy": {
+     "kind": "obs_scalar",
+     "name": "refy",
+     "status": "vectorized",
+     "us": 9,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:node": {
+     "kind": "obs_scalar",
+     "name": "node",
+     "status": "per-cell",
+     "us": 134158,
+     "visits": null,
+     "deepest": "op: array-valued `const`",
+     "frames": [
+      "op: array-valued `const`",
+      "in op const/0",
+      "in op index/4",
+      "in op +/3",
+      "in op */2",
+      "in op //2"
+     ],
+     "n": 1
+    },
+    "obs_scalar:area": {
+     "kind": "obs_scalar",
+     "name": "area",
+     "status": "vectorized",
+     "us": 1603,
+     "visits": 891,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:center": {
+     "kind": "obs_scalar",
+     "name": "center",
+     "status": "vectorized",
+     "us": 361,
+     "visits": 47,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:cosA": {
+     "kind": "obs_scalar",
+     "name": "cosA",
+     "status": "vectorized",
+     "us": 3533,
+     "visits": 1798,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dp_e": {
+     "kind": "obs_scalar",
+     "name": "dp_e",
+     "status": "per-cell",
+     "us": 93269,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "in op */2",
+      "in op -/2",
+      "in op ifelse/3",
+      "in op */3",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "\u2026 180 more frames",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "in op */2",
+      "in op -/2",
+      "in op ifelse/3",
+      "in op */3",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "\u2026 180 more frames"
+     ],
+     "n": 2
+    },
+    "obs_scalar:f": {
+     "kind": "obs_scalar",
+     "name": "f",
+     "status": "vectorized",
+     "us": 221,
+     "visits": 7209,
+     "deepest": null,
+     "frames": [],
+     "n": 2
+    },
+    "obs_scalar:ua_e": {
+     "kind": "obs_scalar",
+     "name": "ua_e",
+     "status": "per-cell",
+     "us": 97377,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "in op */2",
+      "in op -/2",
+      "in op ifelse/3",
+      "in op */3",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "\u2026 180 more frames",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "in op */2",
+      "in op -/2",
+      "in op ifelse/3",
+      "in op */3",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "\u2026 180 more frames"
+     ],
+     "n": 2
+    },
+    "obs_scalar:va_e": {
+     "kind": "obs_scalar",
+     "name": "va_e",
+     "status": "per-cell",
+     "us": 89815,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "in op */2",
+      "in op -/2",
+      "in op ifelse/3",
+      "in op */3",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "\u2026 180 more frames",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "in op */2",
+      "in op -/2",
+      "in op ifelse/3",
+      "in op */3",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"1\", \"gi\", \"gj\"])",
+      "in op index/4",
+      "in op ifelse/3",
+      "in op ifelse/3",
+      "\u2026 180 more frames"
+     ],
+     "n": 2
+    },
+    "rule:ua": {
+     "kind": "rule",
+     "name": "ua",
+     "status": "per-cell",
+     "us": null,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "in op aggregate/1",
+      "in op makearray/0",
+      "in op index/4",
+      "in op */2",
+      "in op +/5",
+      "in op +/2",
+      "in op */2",
+      "in op -/2",
+      "in op */2",
+      "in op +/2",
+      "in op //2",
+      "in op */2",
+      "in op +/2",
+      "in op makearray/0",
+      "in op index/4",
+      "in op +/2",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "in op aggregate/1",
+      "in op makearray/0",
+      "in op index/4",
+      "in op */2",
+      "in op +/5",
+      "in op +/2",
+      "in op */2",
+      "in op -/2",
+      "in op */2",
+      "in op +/2"
+     ],
+     "n": 2
+    },
+    "rule:va": {
+     "kind": "rule",
+     "name": "va",
+     "status": "per-cell",
+     "us": null,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 1 = op max/2 (unclaimed output syms = [\"gi\", \"gj\"])",
+      "in op index/4",
+      "in op aggregate/1",
+      "in op makearray/0",
+      "in op index/4",
+      "in op */2",
+      "in op +/5",
+      "in op +/2",
+      "in op */2",
+      "in op -/2",
+      "in op */2",
+      "in op +/2",
+      "in op //2",
+      "in op */2",
+      "in op +/2",
+      "in op makearray/0",
+      "in op index/4",
+      "in op +/2"
+     ],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "godunov_norm_1d_eikonal_dirichlet_mms",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/godunov_norm_1d_eikonal_dirichlet_mms.esm",
+   "model": "GodunovEikonalDirichletMMS",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 19,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 18,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "godunov_norm_1d_eikonal_mms",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/godunov_norm_1d_eikonal_mms.esm",
+   "model": "GodunovEikonalMMS",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 9,
+     "visits": 13,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "godunov_norm_1d_periodic_exact",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/godunov_norm_1d_periodic_exact.esm",
+   "model": "GodunovNormExact",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 1,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "gradient_mpas",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/gradient_mpas.esm",
+   "model": "Gradient",
+   "entries": {
+    "obs_scalar:mesh.areaCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.areaCell",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 1,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.cellsOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.cellsOnEdge",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dcEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dcEdge",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dvEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dvEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgeSignOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgeSignOnCell",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.latCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.latVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.nEdgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.nEdgesOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnEdge",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phi": {
+     "kind": "obs_scalar",
+     "name": "phi",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 1,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:cellsOnEdge": {
+     "kind": "obs_scalar",
+     "name": "cellsOnEdge",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dcEdge": {
+     "kind": "obs_scalar",
+     "name": "dcEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:grad_phi": {
+     "kind": "obs_scalar",
+     "name": "grad_phi",
+     "status": "per-cell",
+     "us": 50,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+      "in op index/2",
+      "in op -/2",
+      "in op //2"
+     ],
+     "n": 1
+    },
+    "rule:u": {
+     "kind": "rule",
+     "name": "u",
+     "status": "per-cell",
+     "us": null,
+     "visits": null,
+     "deepest": "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+     "frames": [
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+      "in op index/2",
+      "in op -/2",
+      "in op //2",
+      "in op aggregate/3",
+      "in op index/2",
+      "in op -/1",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+      "in op index/2",
+      "in op -/2",
+      "in op //2",
+      "in op aggregate/3",
+      "in op index/2",
+      "in op -/1",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+      "in op index/2",
+      "in op -/2",
+      "in op //2",
+      "in op aggregate/3",
+      "in op index/2",
+      "in op -/1",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+      "in op index/2",
+      "in op -/2",
+      "in op //2",
+      "in op aggregate/3",
+      "in op index/2",
+      "in op -/1",
+      "index: axis expression is neither an affine/wrap map of an unclaimed output symbol nor a constant select: axis 0 = op index/3 (unclaimed output syms = [\"e\"])",
+      "in op index/2"
+     ],
+     "n": 122
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_dirichlet",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_dirichlet.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_dirichlet_o4",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_dirichlet_o4.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_neumann_flux",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_neumann_flux.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_neumann_flux_o4",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_neumann_flux_o4.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_nonuniform",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_nonuniform.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 11,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 20,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_nonuniform_dirichlet",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_nonuniform_dirichlet.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 10,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 19,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_nonuniform_neumann",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_nonuniform_neumann.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 10,
+     "visits": 94,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 18,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_periodic",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_periodic.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_periodic_o4",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_periodic_o4.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_zero_grad",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_zero_grad.esm",
+   "model": "Heat",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_1d_zero_grad_nonunit",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_zero_grad_nonunit.esm",
+   "model": "HeatNonunit",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_x_dirichlet",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_dirichlet.esm",
+   "model": "Heat2DxDirichlet",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_x_dirichlet_o4",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_dirichlet_o4.esm",
+   "model": "Heat2DxDirichletO4",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_x_periodic",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_periodic.esm",
+   "model": "Heat2DxPeriodic",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_x_periodic_o4",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_periodic_o4.esm",
+   "model": "Heat2DxPeriodicO4",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_y_dirichlet",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_dirichlet.esm",
+   "model": "Heat2DyDirichlet",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_y_dirichlet_o4",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_dirichlet_o4.esm",
+   "model": "Heat2DyDirichletO4",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_y_periodic",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_periodic.esm",
+   "model": "Heat2DyPeriodic",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "heat_2d_y_periodic_o4",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_periodic_o4.esm",
+   "model": "Heat2DyPeriodicO4",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "hjweno_norm_1d_eikonal_mms",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/hjweno_norm_1d_eikonal_mms.esm",
+   "model": "HJWenoEikonalMMS",
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 13,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "laplacian_mpas",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/laplacian_mpas.esm",
+   "model": "Laplacian",
+   "entries": {
+    "obs_scalar:mesh.areaCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.areaCell",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 1,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.cellsOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.cellsOnEdge",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dcEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dcEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dvEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dvEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgeSignOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgeSignOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.latCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.latVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.nEdgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.nEdgesOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnEdge",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:nEdgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "nEdgesOnCell",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phi_const": {
+     "kind": "obs_scalar",
+     "name": "phi_const",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 1,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:areaCell": {
+     "kind": "obs_scalar",
+     "name": "areaCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:cellsOnEdge": {
+     "kind": "obs_scalar",
+     "name": "cellsOnEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dcEdge": {
+     "kind": "obs_scalar",
+     "name": "dcEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dvEdge": {
+     "kind": "obs_scalar",
+     "name": "dvEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:edgeSignOnCell": {
+     "kind": "obs_scalar",
+     "name": "edgeSignOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:edgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "edgesOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:lap_const": {
+     "kind": "obs_scalar",
+     "name": "lap_const",
+     "status": "per-cell",
+     "us": 121,
+     "visits": null,
+     "deepest": "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+     "frames": [
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }"
+     ],
+     "n": 1
+    },
+    "obs_scalar:latCell": {
+     "kind": "obs_scalar",
+     "name": "latCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:lap_lat": {
+     "kind": "obs_scalar",
+     "name": "lap_lat",
+     "status": "per-cell",
+     "us": 104,
+     "visits": null,
+     "deepest": "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+     "frames": [
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }"
+     ],
+     "n": 1
+    },
+    "obs_scalar:conservation_integrand": {
+     "kind": "obs_scalar",
+     "name": "conservation_integrand",
+     "status": "vectorized",
+     "us": 27,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "rule:u": {
+     "kind": "rule",
+     "name": "u",
+     "status": "per-cell",
+     "us": null,
+     "visits": null,
+     "deepest": "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+     "frames": [
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7",
+      "in op index/2",
+      "in op -/1",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/7"
+     ],
+     "n": 122
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "latlon_advection_meridional_zero_grad",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon_advection_meridional_zero_grad.esm",
+   "model": "MeridionalAdvection",
+   "entries": {
+    "obs_scalar:dPdlat": {
+     "kind": "obs_scalar",
+     "name": "dPdlat",
+     "status": "vectorized",
+     "us": 109,
+     "visits": 50,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "latlon_diffusion_meridional_zero_grad",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon_diffusion_meridional_zero_grad.esm",
+   "model": "MeridionalDiffusion",
+   "entries": {
+    "obs_scalar:d2P": {
+     "kind": "obs_scalar",
+     "name": "d2P",
+     "status": "vectorized",
+     "us": 185,
+     "visits": 76,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "lcc_grid_roundtrip",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/tests/conformance/reprojection/lcc_grid_roundtrip/fixture.esm",
+   "model": "ReprojectGrid",
+   "entries": {
+    "obs_scalar:x_grid": {
+     "kind": "obs_scalar",
+     "name": "x_grid",
+     "status": "vectorized",
+     "us": 40,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:y_grid": {
+     "kind": "obs_scalar",
+     "name": "y_grid",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:lat_grid": {
+     "kind": "obs_scalar",
+     "name": "lat_grid",
+     "status": "vectorized",
+     "us": 71,
+     "visits": 237,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:lon_grid": {
+     "kind": "obs_scalar",
+     "name": "lon_grid",
+     "status": "vectorized",
+     "us": 13,
+     "visits": 134,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:x_rt": {
+     "kind": "obs_scalar",
+     "name": "x_rt",
+     "status": "vectorized",
+     "us": 15,
+     "visits": 133,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:y_rt": {
+     "kind": "obs_scalar",
+     "name": "y_rt",
+     "status": "vectorized",
+     "us": 17,
+     "visits": 232,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:err_x_rel": {
+     "kind": "obs_scalar",
+     "name": "err_x_rel",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:err_y_rel": {
+     "kind": "obs_scalar",
+     "name": "err_y_rel",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  },
+  {
+   "case": "two_cartesian_grids_coexist",
+   "mode": "pde-tests",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/two_cartesian_grids_coexist.esm",
+   "model": "TwoGrids",
+   "entries": {
+    "obs_scalar:meshA_dx": {
+     "kind": "obs_scalar",
+     "name": "meshA_dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:meshB_dx": {
+     "kind": "obs_scalar",
+     "name": "meshB_dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   },
+   "status": "ok"
+  }
+ ]
+}

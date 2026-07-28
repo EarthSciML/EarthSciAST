@@ -1,0 +1,98 @@
+[
+ {
+  "case": "advection_2d_x_periodic_central",
+  "vec_s": 0.065,
+  "novec_s": 0.516,
+  "speedup": 7.968,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "divergence_mpas",
+  "vec_s": 0.065,
+  "novec_s": 0.065,
+  "speedup": 1.001,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "godunov_norm_1d_eikonal_mms",
+  "vec_s": 0.065,
+  "novec_s": 0.165,
+  "speedup": 2.545,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "advection_1d_inflow_ppm",
+  "vec_s": 0.717,
+  "novec_s": 13.394,
+  "speedup": 18.677,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "gradient_mpas",
+  "vec_s": 0.115,
+  "novec_s": 0.115,
+  "speedup": 1.003,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "laplacian_mpas",
+  "vec_s": 0.216,
+  "novec_s": 0.216,
+  "speedup": 1.003,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "advection_1d_inflow_weno5",
+  "vec_s": 0.266,
+  "novec_s": 2.421,
+  "speedup": 9.112,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "heat_1d_varcoeff_zero_flux",
+  "vec_s": 0.215,
+  "novec_s": 12.197,
+  "speedup": 56.653,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "anisotropic_diffusion_2d_periodic",
+  "vec_s": 2.371,
+  "novec_s": 400.0,
+  "speedup": 168.697,
+  "status_vec": "ok",
+  "status_novec": "timeout"
+ },
+ {
+  "case": "laplace_beltrami_band_mms",
+  "vec_s": 116.587,
+  "novec_s": 400.0,
+  "speedup": 3.431,
+  "status_vec": "ok",
+  "status_novec": "timeout"
+ },
+ {
+  "case": "latlon_advection_zonal_upwind",
+  "vec_s": 0.065,
+  "novec_s": 3.623,
+  "speedup": 56.091,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ },
+ {
+  "case": "advection_1d_periodic_superbee",
+  "vec_s": 2.521,
+  "novec_s": 76.016,
+  "speedup": 30.152,
+  "status_vec": "ok",
+  "status_novec": "ok"
+ }
+]

@@ -1,0 +1,3797 @@
+{
+ "category": "convergence",
+ "cases": [
+  {
+   "case": "advection_1d_dirichlet_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_dirichlet_central.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 47,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 36,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_inflow_lax_friedrichs",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_lax_friedrichs.esm",
+   "model": "AdvectionLaxFriedrichsInflow",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 162,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_inflow_minmod",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_minmod.esm",
+   "model": "AdvectionMinmodInflow",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 162,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_inflow_ppm",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_ppm.esm",
+   "model": "AdvectionPPMInflow",
+   "manifest_excluded_rust": "Same CW84-limited PPM RHS (stencils/ppm_flux -> ppm_limit_right, a large non-smooth min/max ifelse AST) that hangs earthsci-ast-rs's diffsol integrator on the periodic PPM case (tests/conformance/convergence/advection_1d_ppm_periodic): diffsol has no dtmin/max-step fail-fast guard, so it drives dt->0 without terminating instead of erroring. Blocked by structural analogy to the periodic PPM sweep (identical flux/limiter chain); Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard / is verified on this case.",
+   "status": "ok",
+   "stderr_bytes": 162,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_inflow_right_upwind",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_right_upwind.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 95,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_inflow_superbee",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_superbee.esm",
+   "model": "AdvectionSuperbeeInflow",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 95,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_inflow_upwind",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_upwind.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 95,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_inflow_weno5",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_inflow_weno5.esm",
+   "model": "AdvectionWENO5Inflow",
+   "manifest_excluded_rust": "Same huge nonlinear WENO5-Z reconstruction RHS (stencils/weno5_recon, repeated per face, plus the WENO3 boundary reconstruction) that hangs earthsci-ast-rs's diffsol integrator on the periodic WENO5 case (tests/conformance/convergence/advection_1d_periodic_weno5): diffsol has no dtmin/max-step fail-fast guard, so on this large nonlinear RHS it drives dt->0 without terminating instead of erroring. Blocked by structural analogy to the periodic WENO5 sweep (identical reconstruction chain); Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard / is verified on this case.",
+   "status": "ok",
+   "stderr_bytes": 95,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_nonuniform_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_nonuniform_dirichlet.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 142,
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 131,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 18,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_nonuniform_zero_grad",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_nonuniform_zero_grad.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 25,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 7,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_periodic_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic_central.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_periodic_lax_friedrichs",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic_lax_friedrichs.esm",
+   "model": "AdvectionLaxFriedrichs",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_periodic_minmod",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic_minmod.esm",
+   "model": "AdvectionMinmod",
+   "manifest_excluded_rust": "No Rust tolerance both terminates and passes: it terminates only at reltol >= 1e-8 (looser hangs the diffsol integrator -- no dtmin/max-step guard), but at 1e-8 its temporal error exceeds the 1e-4 errors-vs-golden tolerance vs the Julia reference; a tolerance tight enough to meet the gate hangs. Julia (Tsit5) and Python (LSODA) verify it.",
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_periodic_superbee",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic_superbee.esm",
+   "model": "AdvectionSuperbee",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_periodic_weno5",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_periodic_weno5.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_ppm_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_ppm_periodic.esm",
+   "model": "AdvectionPPM",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_1d_zero_grad_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_1d_zero_grad_central.esm",
+   "model": "Advection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 162,
+   "entries": {
+    "obs_scalar:dGdx": {
+     "kind": "obs_scalar",
+     "name": "dGdx",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_2d_x_dirichlet_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_x_dirichlet_central.esm",
+   "model": "Advection2DxDirichlet",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 36,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_2d_x_periodic_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_x_periodic_central.esm",
+   "model": "Advection2DxPeriodic",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:gx": {
+     "kind": "obs_scalar",
+     "name": "gx",
+     "status": "vectorized",
+     "us": 17,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_2d_x_zero_grad_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_x_zero_grad_central.esm",
+   "model": "Advection2DxZeroGrad",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:gx": {
+     "kind": "obs_scalar",
+     "name": "gx",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_2d_y_dirichlet_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_y_dirichlet_central.esm",
+   "model": "Advection2DyDirichlet",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 36,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_2d_y_periodic_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_y_periodic_central.esm",
+   "model": "Advection2DyPeriodic",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:gy": {
+     "kind": "obs_scalar",
+     "name": "gy",
+     "status": "vectorized",
+     "us": 13,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "advection_2d_y_zero_grad_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/advection_2d_y_zero_grad_central.esm",
+   "model": "Advection2DyZeroGrad",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:gy": {
+     "kind": "obs_scalar",
+     "name": "gy",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "anisotropic_diffusion_2d_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/anisotropic_diffusion_2d_dirichlet.esm",
+   "model": "AnisotropicDiffusion2DDirichlet",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried on this stiff / non-smooth / large-AST anisotropic-diffusion RHS (same failure as anisotropic_diffusion_2d_periodic): earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 139,
+   "entries": {
+    "obs_scalar:S": {
+     "kind": "obs_scalar",
+     "name": "S",
+     "status": "vectorized",
+     "us": 62,
+     "visits": 66,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "anisotropic_diffusion_2d_neumann",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/anisotropic_diffusion_2d_neumann.esm",
+   "model": "AnisotropicDiffusion2DNeumann",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried on this stiff / non-smooth / large-AST anisotropic-diffusion RHS (same failure as anisotropic_diffusion_2d_periodic): earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 139,
+   "entries": {
+    "obs_scalar:S": {
+     "kind": "obs_scalar",
+     "name": "S",
+     "status": "vectorized",
+     "us": 63,
+     "visits": 66,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "anisotropic_diffusion_2d_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/anisotropic_diffusion_2d_periodic.esm",
+   "model": "AnisotropicDiffusion2DPeriodic",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 139,
+   "entries": {
+    "obs_scalar:S": {
+     "kind": "obs_scalar",
+     "name": "S",
+     "status": "vectorized",
+     "us": 63,
+     "visits": 66,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "divergence_mpas",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/divergence_mpas_l0.esm",
+   "model": "Divergence",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 30067,
+   "entries": {
+    "obs_scalar:flux": {
+     "kind": "obs_scalar",
+     "name": "flux",
+     "status": "vectorized",
+     "us": 7,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.areaCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.areaCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.cellsOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.cellsOnEdge",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dcEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dcEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.dvEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.dvEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgeSignOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgeSignOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.edgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.edgesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.latCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.latVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.latVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.lonVertex": {
+     "kind": "obs_scalar",
+     "name": "mesh.lonVertex",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.nEdgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.nEdgesOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnCell": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnCell",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:mesh.verticesOnEdge": {
+     "kind": "obs_scalar",
+     "name": "mesh.verticesOnEdge",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:nEdgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "nEdgesOnCell",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:areaCell": {
+     "kind": "obs_scalar",
+     "name": "areaCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dvEdge": {
+     "kind": "obs_scalar",
+     "name": "dvEdge",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:edgeSignOnCell": {
+     "kind": "obs_scalar",
+     "name": "edgeSignOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:edgesOnCell": {
+     "kind": "obs_scalar",
+     "name": "edgesOnCell",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "rule:u": {
+     "kind": "rule",
+     "name": "u",
+     "status": "per-cell",
+     "us": null,
+     "visits": null,
+     "deepest": "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+     "frames": [
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2",
+      "contracted: non-static contraction dim (ragged/derived): Ragged { offsets: \"nEdgesOnCell\", of: [\"i\"] }",
+      "in op aggregate/5",
+      "in op index/2"
+     ],
+     "n": 86
+    }
+   }
+  },
+  {
+   "case": "godunov_norm_1d_eikonal_dirichlet_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/godunov_norm_1d_eikonal_dirichlet_mms.esm",
+   "model": "GodunovEikonalDirichletMMS",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 99,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 19,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 9,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "godunov_norm_1d_eikonal_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/godunov_norm_1d_eikonal_mms.esm",
+   "model": "GodunovEikonalMMS",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 98,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 13,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "godunov_norm_2d_eikonal_dirichlet_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/godunov_norm_2d_eikonal_dirichlet_mms.esm",
+   "model": "GodunovEikonal2DDirichletMMS",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 146,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 90,
+     "visits": 54,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "godunov_norm_2d_eikonal_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/godunov_norm_2d_eikonal_mms.esm",
+   "model": "GodunovEikonal2DMMS",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 146,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 48,
+     "visits": 28,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_dirichlet.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 47,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_dirichlet_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_dirichlet_o4.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 47,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_dirichlet_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_dirichlet_o6.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 47,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_neumann_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_neumann_flux.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 47,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_neumann_flux_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_neumann_flux_o4.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 47,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_neumann_flux_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_neumann_flux_o6.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 47,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_nonuniform",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_nonuniform.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 20,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_nonuniform_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_nonuniform_dirichlet.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 19,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_nonuniform_neumann",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_nonuniform_neumann.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 141,
+   "entries": {
+    "obs_scalar:xe": {
+     "kind": "obs_scalar",
+     "name": "xe",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 94,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dxw": {
+     "kind": "obs_scalar",
+     "name": "dxw",
+     "status": "vectorized",
+     "us": 18,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:xc": {
+     "kind": "obs_scalar",
+     "name": "xc",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_periodic.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_periodic_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_periodic_o4.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_periodic_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_periodic_o6.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_varcoeff_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_varcoeff_dirichlet.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_zero_flux: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_varcoeff_neumann",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_varcoeff_neumann.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_zero_flux: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_varcoeff_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_varcoeff_periodic.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_zero_flux: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 92,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_varcoeff_zero_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_varcoeff_zero_flux.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 92,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_zero_grad",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_zero_grad.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_1d_zero_grad_nonunit",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_1d_zero_grad_nonunit.esm",
+   "model": "HeatNonunit",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 46,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_neumann_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_neumann_flux.esm",
+   "model": "Heat2D",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 40,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_neumann_flux_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_neumann_flux_o4.esm",
+   "model": "Heat2DO4",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 40,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_neumann_flux_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_neumann_flux_o6.esm",
+   "model": "Heat2DO6",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 40,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_x_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_x_dirichlet.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_dirichlet: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_x_neumann",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_x_neumann.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_neumann: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_x_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_x_periodic.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_periodic: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_x_zero_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_x_zero_flux.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_zero_flux: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 13,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_y_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_y_dirichlet.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_dirichlet: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 14,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_y_neumann",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_y_neumann.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_neumann: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_y_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_y_periodic.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_periodic: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 13,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_varcoeff_y_zero_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_varcoeff_y_zero_flux.esm",
+   "model": "Heat",
+   "manifest_excluded_rust": "Preemptively excluded, mirroring the same-operator sibling heat_1d_varcoeff_zero_flux: earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard and wedges (drives dt->0 without terminating) on this stiff variable-coefficient large-AST RHS. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 140,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:k": {
+     "kind": "obs_scalar",
+     "name": "k",
+     "status": "vectorized",
+     "us": 13,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_x_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_dirichlet.esm",
+   "model": "Heat2DxDirichlet",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_x_dirichlet_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_dirichlet_o4.esm",
+   "model": "Heat2DxDirichletO4",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 160,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_x_dirichlet_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_dirichlet_o6.esm",
+   "model": "Heat2DxDirichletO6",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_x_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_periodic.esm",
+   "model": "Heat2DxPeriodic",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_x_periodic_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_periodic_o4.esm",
+   "model": "Heat2DxPeriodicO4",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_x_periodic_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_x_periodic_o6.esm",
+   "model": "Heat2DxPeriodicO6",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_y_dirichlet",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_dirichlet.esm",
+   "model": "Heat2DyDirichlet",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_y_dirichlet_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_dirichlet_o4.esm",
+   "model": "Heat2DyDirichletO4",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_y_dirichlet_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_dirichlet_o6.esm",
+   "model": "Heat2DyDirichletO6",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 21,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_y_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_periodic.esm",
+   "model": "Heat2DyPeriodic",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_y_periodic_o4",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_periodic_o4.esm",
+   "model": "Heat2DyPeriodicO4",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "heat_2d_y_periodic_o6",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/heat_2d_y_periodic_o6.esm",
+   "model": "Heat2DyPeriodicO6",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 93,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 10,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dy": {
+     "kind": "obs_scalar",
+     "name": "dy",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "hjweno_norm_1d_eikonal_dirichlet_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/hjweno_norm_1d_eikonal_dirichlet_mms.esm",
+   "model": "HJWenoEikonalDirichletMMS",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 99,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 19,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "hjweno_norm_1d_eikonal_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/hjweno_norm_1d_eikonal_mms.esm",
+   "model": "HJWenoEikonalMMS",
+   "manifest_excluded_rust": "No Rust tolerance both terminates and passes: it terminates only at reltol >= 1e-7 (looser hangs the diffsol integrator -- no dtmin/max-step guard), but at 1e-7 its temporal error exceeds the 1e-4 errors-vs-golden tolerance vs the Julia reference; a tolerance tight enough to meet the gate hangs. Julia (Tsit5) and Python (LSODA) verify it.",
+   "status": "ok",
+   "stderr_bytes": 98,
+   "entries": {
+    "obs_scalar:dx": {
+     "kind": "obs_scalar",
+     "name": "dx",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:forcing": {
+     "kind": "obs_scalar",
+     "name": "forcing",
+     "status": "vectorized",
+     "us": 7,
+     "visits": 13,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "laplace_beltrami_band_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/laplace_beltrami_band_mms.esm",
+   "model": "LaplaceBeltramiBand",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 157,
+   "entries": {
+    "obs_scalar:Lstar": {
+     "kind": "obs_scalar",
+     "name": "Lstar",
+     "status": "vectorized",
+     "us": 233,
+     "visits": 399,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_meridional_ppm",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_meridional_ppm.esm",
+   "model": "MeridionalAdvectionPPM3d",
+   "manifest_excluded_rust": "Same CW84-limited PPM RHS (stencils/ppm_flux -> ppm_limit_right, a large non-smooth min/max ifelse AST) that hangs earthsci-ast-rs's diffsol integrator on the other PPM sweeps (advection_1d_ppm_periodic, advection_1d_inflow_ppm, latlon3d_advection_zonal_ppm): diffsol has no dtmin/max-step fail-fast guard, so it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 104,
+   "entries": {
+    "obs_scalar:dPdlat": {
+     "kind": "obs_scalar",
+     "name": "dPdlat",
+     "status": "vectorized",
+     "us": 78,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_meridional_ppm_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_meridional_ppm_flux.esm",
+   "model": "MeridionalAdvectionPPMFlux3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 356,
+   "entries": {
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 47,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phie": {
+     "kind": "obs_scalar",
+     "name": "phie",
+     "status": "vectorized",
+     "us": 10,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:coslat_e": {
+     "kind": "obs_scalar",
+     "name": "coslat_e",
+     "status": "vectorized",
+     "us": 17,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dS_lat": {
+     "kind": "obs_scalar",
+     "name": "dS_lat",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dphi_lat": {
+     "kind": "obs_scalar",
+     "name": "dphi_lat",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 206,
+     "visits": 98,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:V": {
+     "kind": "obs_scalar",
+     "name": "V",
+     "status": "vectorized",
+     "us": 63,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_meridional_ppm_flux_mono",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_meridional_ppm_flux_mono.esm",
+   "model": "MeridionalAdvectionPPMFluxMono3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 355,
+   "entries": {
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 47,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phie": {
+     "kind": "obs_scalar",
+     "name": "phie",
+     "status": "vectorized",
+     "us": 9,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:coslat_e": {
+     "kind": "obs_scalar",
+     "name": "coslat_e",
+     "status": "vectorized",
+     "us": 18,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dS_lat": {
+     "kind": "obs_scalar",
+     "name": "dS_lat",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dphi_lat": {
+     "kind": "obs_scalar",
+     "name": "dphi_lat",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 225,
+     "visits": 98,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:V": {
+     "kind": "obs_scalar",
+     "name": "V",
+     "status": "vectorized",
+     "us": 73,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_meridional_upwind_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_meridional_upwind_flux.esm",
+   "model": "MeridionalAdvectionUpwindFlux3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 304,
+   "entries": {
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 47,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phie": {
+     "kind": "obs_scalar",
+     "name": "phie",
+     "status": "vectorized",
+     "us": 25,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:coslat_e": {
+     "kind": "obs_scalar",
+     "name": "coslat_e",
+     "status": "vectorized",
+     "us": 15,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dS_lat": {
+     "kind": "obs_scalar",
+     "name": "dS_lat",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 221,
+     "visits": 98,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:V": {
+     "kind": "obs_scalar",
+     "name": "V",
+     "status": "vectorized",
+     "us": 69,
+     "visits": 23,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_meridional_zero_grad",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_meridional_zero_grad.esm",
+   "model": "MeridionalAdvection3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 104,
+   "entries": {
+    "obs_scalar:dPdlat": {
+     "kind": "obs_scalar",
+     "name": "dPdlat",
+     "status": "vectorized",
+     "us": 84,
+     "visits": 57,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_vertical_ppm",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_vertical_ppm.esm",
+   "model": "VerticalAdvectionPPM3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 194,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 123,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:w_edge": {
+     "kind": "obs_scalar",
+     "name": "w_edge",
+     "status": "vectorized",
+     "us": 19,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 47,
+     "visits": 18,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_vertical_ppm_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_vertical_ppm_flux.esm",
+   "model": "VerticalAdvectionPPMFlux3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 192,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 123,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:W": {
+     "kind": "obs_scalar",
+     "name": "W",
+     "status": "vectorized",
+     "us": 117,
+     "visits": 30,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 204,
+     "visits": 74,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_vertical_ppm_flux_mono",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_vertical_ppm_flux_mono.esm",
+   "model": "VerticalAdvectionPPMFluxMono3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 193,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 11,
+     "visits": 123,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:W": {
+     "kind": "obs_scalar",
+     "name": "W",
+     "status": "vectorized",
+     "us": 118,
+     "visits": 30,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 197,
+     "visits": 74,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_vertical_ppm_mono",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_vertical_ppm_mono.esm",
+   "model": "VerticalAdvectionPPMMono3d",
+   "manifest_excluded_rust": "Same non-smooth limiter RHS that hangs earthsci-ast-rs's diffsol integrator on every other CW84-LIMITED PPM sweep (advection_1d_ppm_periodic, advection_1d_inflow_ppm, latlon3d_advection_zonal_ppm, latlon3d_advection_meridional_ppm): the eq (1.8)/(1.10) limiters lower to a large non-smooth min/max/abs/ifelse AST, and diffsol has no dtmin/max-step fail-fast guard, so it drives dt->0 without terminating instead of erroring. Note the UNLIMITED sibling sweep latlon3d_advection_vertical_ppm is NOT blocked -- its RHS is smooth precisely because it has no limiter, which is the cleanest available confirmation that the limiter is what diffsol chokes on. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 194,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 123,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:w_edge": {
+     "kind": "obs_scalar",
+     "name": "w_edge",
+     "status": "vectorized",
+     "us": 17,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 30,
+     "visits": 18,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_vertical_upwind_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_vertical_upwind_flux.esm",
+   "model": "VerticalAdvectionUpwindFlux3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 192,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 8,
+     "visits": 123,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:W": {
+     "kind": "obs_scalar",
+     "name": "W",
+     "status": "vectorized",
+     "us": 189,
+     "visits": 30,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 376,
+     "visits": 74,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_vertical_zero_grad",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_vertical_zero_grad.esm",
+   "model": "VerticalAdvection3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 142,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 60,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:zc": {
+     "kind": "obs_scalar",
+     "name": "zc",
+     "status": "vectorized",
+     "us": 16,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 23,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_zonal_central",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_zonal_central.esm",
+   "model": "ZonalAdvection3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 53,
+   "entries": {
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_zonal_ppm",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_zonal_ppm.esm",
+   "model": "ZonalAdvectionPPM3d",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (as with the 1-D sibling advection_1d_ppm_periodic): earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this non-smooth (min/max limiter) large-AST PPM RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 53,
+   "entries": {
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 24,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_zonal_ppm_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_zonal_ppm_flux.esm",
+   "model": "ZonalAdvectionPPMFlux3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 303,
+   "entries": {
+    "obs_scalar:U": {
+     "kind": "obs_scalar",
+     "name": "U",
+     "status": "vectorized",
+     "us": 116,
+     "visits": 58,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phie": {
+     "kind": "obs_scalar",
+     "name": "phie",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dS_lat": {
+     "kind": "obs_scalar",
+     "name": "dS_lat",
+     "status": "vectorized",
+     "us": 19,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dphi_lat": {
+     "kind": "obs_scalar",
+     "name": "dphi_lat",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 250,
+     "visits": 80,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_zonal_ppm_flux_mono",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_zonal_ppm_flux_mono.esm",
+   "model": "ZonalAdvectionPPMFluxMono3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 304,
+   "entries": {
+    "obs_scalar:U": {
+     "kind": "obs_scalar",
+     "name": "U",
+     "status": "vectorized",
+     "us": 104,
+     "visits": 58,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phie": {
+     "kind": "obs_scalar",
+     "name": "phie",
+     "status": "vectorized",
+     "us": 12,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dS_lat": {
+     "kind": "obs_scalar",
+     "name": "dS_lat",
+     "status": "vectorized",
+     "us": 21,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dphi_lat": {
+     "kind": "obs_scalar",
+     "name": "dphi_lat",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 243,
+     "visits": 80,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_zonal_upwind",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_zonal_upwind.esm",
+   "model": "ZonalAdvectionUpwind3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 53,
+   "entries": {
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 24,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_advection_zonal_upwind_flux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_advection_zonal_upwind_flux.esm",
+   "model": "ZonalAdvectionUpwindFlux3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 303,
+   "entries": {
+    "obs_scalar:U": {
+     "kind": "obs_scalar",
+     "name": "U",
+     "status": "vectorized",
+     "us": 120,
+     "visits": 58,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:phie": {
+     "kind": "obs_scalar",
+     "name": "phie",
+     "status": "vectorized",
+     "us": 4,
+     "visits": 17,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dS_lat": {
+     "kind": "obs_scalar",
+     "name": "dS_lat",
+     "status": "vectorized",
+     "us": 18,
+     "visits": 15,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dphi_lat": {
+     "kind": "obs_scalar",
+     "name": "dphi_lat",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 9,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src": {
+     "kind": "obs_scalar",
+     "name": "src",
+     "status": "vectorized",
+     "us": 257,
+     "visits": 80,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_diffusion_vertical_noflux",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_diffusion_vertical_noflux.esm",
+   "model": "VerticalDiffusion3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 188,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 72,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:zc": {
+     "kind": "obs_scalar",
+     "name": "zc",
+     "status": "vectorized",
+     "us": 16,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:kz": {
+     "kind": "obs_scalar",
+     "name": "kz",
+     "status": "vectorized",
+     "us": 22,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_diffusion_vertical_robin_surface",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_diffusion_vertical_robin_surface.esm",
+   "model": "VerticalDiffusionRobin3d",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 286,
+   "entries": {
+    "obs_scalar:emis": {
+     "kind": "obs_scalar",
+     "name": "emis",
+     "status": "vectorized",
+     "us": 3,
+     "visits": 112,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 6,
+     "visits": 20,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:vdep": {
+     "kind": "obs_scalar",
+     "name": "vdep",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 1,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:zc": {
+     "kind": "obs_scalar",
+     "name": "zc",
+     "status": "vectorized",
+     "us": 16,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 2,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:kz": {
+     "kind": "obs_scalar",
+     "name": "kz",
+     "status": "vectorized",
+     "us": 21,
+     "visits": 12,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon3d_transport_cwc_mms",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon3d_transport_cwc_mms.esm",
+   "model": "TransportCWCMMS",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 2079,
+   "entries": {
+    "obs_scalar:pe": {
+     "kind": "obs_scalar",
+     "name": "pe",
+     "status": "vectorized",
+     "us": 10,
+     "visits": 598,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:M": {
+     "kind": "obs_scalar",
+     "name": "M",
+     "status": "vectorized",
+     "us": 247,
+     "visits": 39,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dz": {
+     "kind": "obs_scalar",
+     "name": "dz",
+     "status": "vectorized",
+     "us": 5,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src_m": {
+     "kind": "obs_scalar",
+     "name": "src_m",
+     "status": "vectorized",
+     "us": 16,
+     "visits": 8,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:src_mq": {
+     "kind": "obs_scalar",
+     "name": "src_mq",
+     "status": "vectorized",
+     "us": 49,
+     "visits": 24,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:q": {
+     "kind": "obs_scalar",
+     "name": "q",
+     "status": "vectorized",
+     "us": 27,
+     "visits": 5,
+     "deepest": null,
+     "frames": [],
+     "n": 39
+    }
+   }
+  },
+  {
+   "case": "latlon_advection_meridional_zero_grad",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon_advection_meridional_zero_grad.esm",
+   "model": "MeridionalAdvection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 104,
+   "entries": {
+    "obs_scalar:dPdlat": {
+     "kind": "obs_scalar",
+     "name": "dPdlat",
+     "status": "vectorized",
+     "us": 48,
+     "visits": 50,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon_advection_zonal_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon_advection_zonal_periodic.esm",
+   "model": "ZonalAdvection",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 53,
+   "entries": {
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon_advection_zonal_upwind",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon_advection_zonal_upwind.esm",
+   "model": "ZonalAdvectionUpwind",
+   "manifest_excluded_rust": null,
+   "status": "ok",
+   "stderr_bytes": 120,
+   "entries": {
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 14,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon_diffusion_meridional_zero_grad",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon_diffusion_meridional_zero_grad.esm",
+   "model": "MeridionalDiffusion",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 101,
+   "entries": {
+    "obs_scalar:d2P": {
+     "kind": "obs_scalar",
+     "name": "d2P",
+     "status": "vectorized",
+     "us": 49,
+     "visits": 76,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    },
+    "obs_scalar:dlat_deg": {
+     "kind": "obs_scalar",
+     "name": "dlat_deg",
+     "status": "vectorized",
+     "us": 1,
+     "visits": 0,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  },
+  {
+   "case": "latlon_diffusion_zonal_periodic",
+   "mode": "convergence",
+   "problem": "/projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciDiscretizations/problems/latlon_diffusion_zonal_periodic.esm",
+   "model": "ZonalDiffusion",
+   "manifest_excluded_rust": "Rust hangs at every tolerance tried (loosest reltol 1e-6; all three solvers Erk/Bdf/Sdirk wedge). earthsci-ast-rs's diffsol integrator has no dtmin/max-step fail-fast guard, so on this stiff / non-smooth-min-max / large-AST RHS it drives dt->0 without terminating instead of erroring. Julia (Tsit5) and Python (LSODA) solve it. Remove once the Rust solver gains a step guard.",
+   "status": "ok",
+   "stderr_bytes": 52,
+   "entries": {
+    "obs_scalar:dlon_deg": {
+     "kind": "obs_scalar",
+     "name": "dlon_deg",
+     "status": "vectorized",
+     "us": 0,
+     "visits": 7,
+     "deepest": null,
+     "frames": [],
+     "n": 1
+    }
+   }
+  }
+ ]
+}
