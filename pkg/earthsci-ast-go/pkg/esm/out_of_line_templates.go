@@ -1226,11 +1226,75 @@ func sameRef(a, b any) bool {
 	}
 }
 
+// registryCollisionNames returns the set of template names the flatten-time
+// registry merge MUST owner-path rename (esm-spec §9.6.4 rule 7 / §10.7).
+// `byname` maps a template name to its per-component occurrences
+// `[[path, decl], …]`.
+//
+// A name collides directly when its occurrences are not all deep-equal. The set
+// is then closed under the reference DAG: **if a declaration references a
+// colliding name, that declaration collides too**, in every component that
+// carries it. That propagation is what makes the rename total.
+//
+// Without it the common multi-model shape silently breaks. Two components
+// import one rule library; the leaf stencil folds differently per component (a
+// rebind, a metaparameter, or the §10.7 component-scoping of its free
+// variables) and renames to `A.leaf` / `B.leaf`, while the intermediate wrapper
+// that REFERENCES the leaf is byte-identical and would dedup under its bare
+// name. That single deduped body then carries a reference the registry no longer
+// holds, and expansion fails with `apply_expression_template_unknown_template`
+// naming a template no component ever mentioned. Renaming the wrapper per owner
+// lets each copy's nested reference be rewritten to its own owner's leaf.
+//
+// A consequence worth relying on: a name left OUT of the returned set never
+// references a name inside it, so deduped entries need no reference rewriting.
+//
+// Mirrors the Julia reference `_registry_collision_names`.
+func registryCollisionNames(byname *orderedMap) map[string]bool {
+	collide := map[string]bool{}
+	refs := map[string]map[string]bool{}
+	for _, name := range byname.keys {
+		occ, _ := byname.get(name).([]any)
+		first := occ[0].([2]any)[1]
+		seen := map[string]bool{}
+		for _, o := range occ {
+			decl := o.([2]any)[1]
+			if !jsonEqual(first, decl) {
+				collide[name] = true
+			}
+			var names []string
+			collectApplyNames(&names, decl)
+			for _, r := range names {
+				seen[r] = true
+			}
+		}
+		refs[name] = seen
+	}
+	// Close under the reference edges (monotone; <= len(byname.keys) rounds).
+	for changed := true; changed; {
+		changed = false
+		for _, name := range byname.keys {
+			if collide[name] {
+				continue
+			}
+			for r := range refs[name] {
+				if collide[r] {
+					collide[name] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return collide
+}
+
 // flattenTemplateRegistries merges every component's `expression_templates`
 // registry of an Option-B loaded document into a single document-scoped merged
 // registry (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4):
-// deep-equal same-name entries dedupe at first occurrence; a non-deep-equal
-// same-name collision renames BOTH to `<ComponentPath>.<name>` with references
+// deep-equal same-name entries dedupe at first occurrence; a colliding name (see
+// registryCollisionNames — non-deep-equal, or reaching one that is) renames its
+// entry in EVERY owning component to `<ComponentPath>.<name>` with references
 // rewritten in lockstep. Returns the rewritten document and the merged registry
 // (the FlattenedSystem's first-class registry field). Match rules are not merged.
 // Mutates `view` in place. Mirrors the Julia `flatten_template_registries`.
@@ -1283,18 +1347,11 @@ func flattenTemplateRegistries(view map[string]any) (map[string]any, *orderedMap
 	rename := map[string]map[string]string{} // path => (old => new)
 	names := append([]string(nil), byname.keys...)
 	sort.Strings(names)
+	collide := registryCollisionNames(byname)
 	for _, name := range names {
 		occ, _ := byname.get(name).([]any)
-		alleq := true
-		first := occ[0].([2]any)[1]
-		for _, o := range occ {
-			if !jsonEqual(first, o.([2]any)[1]) {
-				alleq = false
-				break
-			}
-		}
-		if alleq {
-			merged.set(name, first)
+		if !collide[name] {
+			merged.set(name, occ[0].([2]any)[1]) // deep-equal dedup
 			continue
 		}
 		for _, o := range occ {

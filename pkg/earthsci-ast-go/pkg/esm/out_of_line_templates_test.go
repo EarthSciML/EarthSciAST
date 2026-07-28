@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -427,6 +428,131 @@ func TestOOL_FlattenRegistryMerge(t *testing.T) {
 	}
 	if _, has := root["models"].(map[string]any)["B"].(map[string]any)["expression_templates"]; has {
 		t.Errorf("model B still carries expression_templates after flatten")
+	}
+}
+
+// -----------------------------------------------------------------------
+// flatten_registry_merge_transitive (§9.6.4 rule 7, §10.7): TWO models in ONE
+// document import the same rule library. `interior_stencil` folds differently
+// per model (B rebinds its free `inv_dx`) and collides; the byte-identical
+// `outer_stencil` that REFERENCES it must collide too — a single deduped
+// `outer_stencil` would carry a reference the merged registry no longer holds,
+// and expansion would fail with `apply_expression_template_unknown_template`
+// naming a transitively imported stencil no model ever mentioned.
+// -----------------------------------------------------------------------
+
+func TestOOL_FlattenRegistryMergeTransitive(t *testing.T) {
+	applyNames := func(x any) []string {
+		out := []string{}
+		collectApplyNames(&out, x)
+		return out
+	}
+	loaded := oolLoad(t, "flatten_registry_merge_transitive")
+	root, merged := flattenTemplateRegistries(loaded)
+	gotKeys := append([]string(nil), merged.keys...)
+	sort.Strings(gotKeys)
+	wantKeys := []string{"A.interior_stencil", "A.outer_stencil", "B.interior_stencil", "B.outer_stencil"}
+	if !reflect.DeepEqual(gotKeys, wantKeys) {
+		t.Errorf("merged registry keys = %v; want %v", gotKeys, wantKeys)
+	}
+	// Each owner's wrapper reaches its OWN leaf, never the other model's.
+	for _, m := range []string{"A", "B"} {
+		decl, ok := merged.get(m + ".outer_stencil").(map[string]any)
+		if !ok {
+			t.Fatalf("merged registry is missing %s.outer_stencil", m)
+		}
+		if got, want := applyNames(decl["body"]), []string{m + ".interior_stencil"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s.outer_stencil body references %v; want %v", m, got, want)
+		}
+	}
+	// Component reference sites follow in lockstep.
+	models := root["models"].(map[string]any)
+	for _, m := range []string{"A", "B"} {
+		eqs := models[m].(map[string]any)["equations"]
+		if got, want := applyNames(eqs), []string{m + ".outer_stencil"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("model %s equations reference %v; want %v", m, got, want)
+		}
+	}
+	// Nothing dangles: every surviving reference resolves in the merged registry.
+	for _, k := range merged.keys {
+		for _, r := range applyNames(merged.get(k)) {
+			if !merged.has(r) {
+				t.Errorf("dangling registry reference %s (from %s)", r, k)
+			}
+		}
+	}
+	for _, m := range []string{"A", "B"} {
+		for _, r := range applyNames(models[m].(map[string]any)["equations"]) {
+			if !merged.has(r) {
+				t.Errorf("dangling component reference %s (from model %s)", r, m)
+			}
+		}
+	}
+}
+
+// -----------------------------------------------------------------------
+// flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
+// the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
+// rule library; `interior_stencil`'s body references the free name `inv_dx`,
+// which is a model-local parameter and so denotes a DIFFERENT variable in each.
+//
+// flattenTemplateRegistries is the UNION half only, over the un-namespaced
+// component view: identical bodies dedupe under their bare names, and the pair
+// it returns is self-consistent with the un-namespaced document. Go reaches this
+// surface only from conformance — LowerExpressionTemplates runs Expand-at-build
+// (§9.6.4 rule 2) so the load path never leaves a surviving reference, and Go's
+// flatten carries no registry, so no scoping step exists here and none is
+// required (§10.7, "Applicability across bindings"). The Julia twin of this test
+// also pins the scoping∘merge composition, which its reference-preserving
+// `flatten` does carry; a binding that grows that path inherits the obligation,
+// and this test is what will fail if the merge is fed unscoped bodies from it.
+// -----------------------------------------------------------------------
+
+func TestOOL_FlattenRegistryMergeIsUnionHalfOnly(t *testing.T) {
+	applyNames := func(x any) []string {
+		out := []string{}
+		collectApplyNames(&out, x)
+		return out
+	}
+	loaded := oolLoad(t, "flatten_registry_merge_transitive", "fixture_twins.esm")
+	root, merged := flattenTemplateRegistries(loaded)
+	// Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
+	gotKeys := append([]string(nil), merged.keys...)
+	sort.Strings(gotKeys)
+	if want := []string{"interior_stencil", "outer_stencil"}; !reflect.DeepEqual(gotKeys, want) {
+		t.Fatalf("merged registry keys = %v; want %v", gotKeys, want)
+	}
+	outer := merged.get("outer_stencil").(map[string]any)
+	if got, want := applyNames(outer["body"]), []string{"interior_stencil"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("outer_stencil body references %v; want %v", got, want)
+	}
+	models := root["models"].(map[string]any)
+	for _, m := range []string{"A", "B"} {
+		eqs := models[m].(map[string]any)["equations"]
+		if got, want := applyNames(eqs), []string{"outer_stencil"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("model %s equations reference %v; want %v", m, got, want)
+		}
+	}
+	// Nothing dangles at this layer.
+	for _, k := range merged.keys {
+		for _, r := range applyNames(merged.get(k)) {
+			if !merged.has(r) {
+				t.Errorf("dangling registry reference %s (from %s)", r, k)
+			}
+		}
+	}
+	// The carried body's free variable is NOT component-scoped by this surface:
+	// `inv_dx`, not `A.inv_dx`. Scoping belongs to the caller that namespaces.
+	blob, err := json.Marshal(merged.get("interior_stencil").(map[string]any)["body"])
+	if err != nil {
+		t.Fatalf("marshal interior_stencil body: %v", err)
+	}
+	body := string(blob)
+	if !strings.Contains(body, `"inv_dx"`) {
+		t.Errorf("interior_stencil body lost its free inv_dx: %s", body)
+	}
+	if strings.Contains(body, "A.inv_dx") || strings.Contains(body, "B.inv_dx") {
+		t.Errorf("the union-half surface must not component-scope free variables: %s", body)
 	}
 }
 

@@ -16,6 +16,7 @@ import {
   expandDocument,
   emitEsmString,
   flattenTemplateRegistries,
+  collectApplyNames,
   EsmMachineryError,
 } from './lower-expression-templates.js'
 import { resolveTemplateMachinery, emitDocument } from './template-imports.js'
@@ -233,6 +234,77 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     // per-component blocks surrendered to the merged registry
     expect('expression_templates' in models.A).toBe(false)
     expect('expression_templates' in models.B).toBe(false)
+  })
+
+  // -------------------------------------------------------------------------
+  // flatten_registry_merge_transitive (§9.6.4 rule 7, §10.7): TWO models in ONE
+  // document import the same rule library. `interior_stencil` folds differently
+  // per model (B rebinds its free `inv_dx`) and collides; the byte-identical
+  // `outer_stencil` that REFERENCES it must collide too — a single deduped
+  // `outer_stencil` would carry a reference the merged registry no longer holds,
+  // and expansion would fail with `apply_expression_template_unknown_template`
+  // naming a transitively imported stencil no model ever mentioned.
+  // -------------------------------------------------------------------------
+  it('flatten_registry_merge_transitive: collisions propagate along the reference DAG', () => {
+    const loaded = loadRefPreserving('flatten_registry_merge_transitive')
+    const { root, merged } = flattenTemplateRegistries(loaded)
+    expect(new Set(Object.keys(merged))).toEqual(
+      new Set(['A.interior_stencil', 'A.outer_stencil', 'B.interior_stencil', 'B.outer_stencil']),
+    )
+    // Each owner's wrapper reaches its OWN leaf, never the other model's.
+    const names = (x: unknown): string[] => collectApplyNames(x, [])
+    expect(names((merged['A.outer_stencil'] as any).body)).toEqual(['A.interior_stencil'])
+    expect(names((merged['B.outer_stencil'] as any).body)).toEqual(['B.interior_stencil'])
+    // Component reference sites follow in lockstep.
+    const models = root.models as Record<string, any>
+    expect(names(models.A.equations)).toEqual(['A.outer_stencil'])
+    expect(names(models.B.equations)).toEqual(['B.outer_stencil'])
+    // Nothing dangles: every surviving reference resolves in the merged registry.
+    for (const decl of Object.values(merged)) {
+      for (const r of names(decl)) expect(Object.keys(merged)).toContain(r)
+    }
+    for (const m of ['A', 'B']) {
+      for (const r of names(models[m].equations)) expect(Object.keys(merged)).toContain(r)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
+  // the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
+  // rule library; `interior_stencil`'s body references the free name `inv_dx`,
+  // which is a model-local parameter and so denotes a DIFFERENT variable in each.
+  //
+  // `flattenTemplateRegistries` is the UNION half only, over the un-namespaced
+  // component view: identical bodies dedupe under their bare names, and the pair
+  // it returns is self-consistent with the un-namespaced document. TypeScript
+  // reaches this surface only from conformance — its load path expands every
+  // surviving reference (§9.6.4 rule 2) so `flatten` carries no registry, which
+  // is why no scoping step exists here and none is required (§10.7,
+  // "Applicability across bindings"). The Julia twin of this test also pins the
+  // scoping∘merge composition, which its reference-preserving `flatten` does
+  // carry; if TypeScript ever grows that path it inherits the obligation, and
+  // this test is what will fail if the merge is fed unscoped bodies from it.
+  // -------------------------------------------------------------------------
+  it('flatten_registry_merge: the shared surface is the union half only', () => {
+    const loaded = loadRefPreserving('flatten_registry_merge_transitive', 'fixture_twins.esm')
+    const { root, merged } = flattenTemplateRegistries(loaded)
+    const names = (x: unknown): string[] => collectApplyNames(x, [])
+    // Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
+    expect(new Set(Object.keys(merged))).toEqual(new Set(['interior_stencil', 'outer_stencil']))
+    expect(names((merged.outer_stencil as any).body)).toEqual(['interior_stencil'])
+    const models = root.models as Record<string, any>
+    expect(names(models.A.equations)).toEqual(['outer_stencil'])
+    expect(names(models.B.equations)).toEqual(['outer_stencil'])
+    // Nothing dangles at this layer.
+    for (const decl of Object.values(merged)) {
+      for (const r of names(decl)) expect(Object.keys(merged)).toContain(r)
+    }
+    // The carried body's free variable is NOT component-scoped by this surface:
+    // `inv_dx`, not `A.inv_dx`. Scoping belongs to the caller that namespaces.
+    const body = JSON.stringify((merged.interior_stencil as any).body)
+    expect(body).toContain('"inv_dx"')
+    expect(body).not.toContain('A.inv_dx')
+    expect(body).not.toContain('B.inv_dx')
   })
 
   // -------------------------------------------------------------------------

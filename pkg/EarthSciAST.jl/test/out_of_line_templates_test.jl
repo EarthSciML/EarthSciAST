@@ -280,6 +280,53 @@ include("testutils.jl")
     end
 
     # -----------------------------------------------------------------------
+    # flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7,
+    # §10.7): the SCOPING PRECONDITION, with BOTH halves pinned side by side.
+    # Two byte-identical models import the same rule library;
+    # `interior_stencil`'s body references the free name `inv_dx`, a model-local
+    # parameter that denotes a DIFFERENT variable in each model.
+    #
+    #   - `flatten_template_registries` is the UNION half only, over the
+    #     un-namespaced component view — the surface all five bindings share.
+    #     Identical bodies dedupe under their bare names; the returned pair is
+    #     self-consistent with the un-namespaced document, and the bodies keep
+    #     their free `inv_dx`.
+    #   - the executing `flatten` composes the §10.7 component SCOPING with that
+    #     merge. Scoping rewrites `inv_dx` to `A.inv_dx` / `B.inv_dx`, which
+    #     makes the two copies non-deep-equal and forces the owner-path rename of
+    #     all four entries (the wrapper via the reference-DAG propagation).
+    #
+    # Deduping BEFORE scoping would keep one body whose `inv_dx` is correct for
+    # neither model — which is exactly why the ordering is normative. Julia is
+    # the only binding whose flattened representation carries a registry, so it
+    # is the only one that can pin the composition; the other four pin the union
+    # half against this same fixture (§10.7, "Applicability across bindings").
+    # -----------------------------------------------------------------------
+    @testset "registry merge: union half vs. scoping∘merge" begin
+        dir = "flatten_registry_merge_transitive"
+        _names(x) = EarthSciAST._collect_apply_names!(String[], x)
+        loaded = _load(dir, "fixture_twins.esm")
+        root, merged = flatten_template_registries(loaded)
+        # Union half: dedup under the bare names.
+        @test Set(keys(merged)) == Set(["interior_stencil", "outer_stencil"])
+        @test _names(merged["outer_stencil"]["body"]) == ["interior_stencil"]
+        @test _names(root["models"]["A"]["equations"]) == ["outer_stencil"]
+        @test _names(root["models"]["B"]["equations"]) == ["outer_stencil"]
+        # …and the free variable is NOT component-scoped by that surface.
+        body = JSON3.write(merged["interior_stencil"]["body"])
+        @test occursin("\"inv_dx\"", body)
+        @test !occursin("A.inv_dx", body) && !occursin("B.inv_dx", body)
+
+        # scoping ∘ merge: the executing flatten renames all four entries, and
+        # every surviving reference resolves against the carried registry.
+        flat = EarthSciAST.flatten(EarthSciAST.load(conf(dir, "fixture_twins.esm")))
+        @test Set(keys(flat.template_registry)) ==
+              Set(["A.interior_stencil", "A.outer_stencil",
+                   "B.interior_stencil", "B.outer_stencil"])
+        @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem
+    end
+
+    # -----------------------------------------------------------------------
     # Idempotency property over every new emit fixture (RFC §12 gate 2).
     # -----------------------------------------------------------------------
     @testset "emit ∘ load byte-wise fixed point (all emit fixtures)" begin

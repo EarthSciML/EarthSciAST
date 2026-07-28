@@ -2199,6 +2199,61 @@ function renameApplyRefs(node: Json, rename: Record<string, string>): Json {
   return node
 }
 
+/**
+ * The set of template names the flatten-time registry merge MUST owner-path
+ * rename (esm-spec §9.6.4 rule 7 / §10.7). `byname` maps a template name to its
+ * per-component occurrences.
+ *
+ * A name collides directly when its occurrences are not all deep-equal. The set
+ * is then closed under the reference DAG: **if a declaration references a
+ * colliding name, that declaration collides too**, in every component that
+ * carries it. That propagation is what makes the rename total.
+ *
+ * Without it the common multi-model shape silently breaks. Two components
+ * import one rule library; the leaf stencil folds differently per component (a
+ * rebind, a metaparameter, or the §10.7 component-scoping of its free
+ * variables) and renames to `A.leaf` / `B.leaf`, while the intermediate wrapper
+ * that REFERENCES the leaf is byte-identical and would dedup under its bare
+ * name. That single deduped body then carries a reference the registry no
+ * longer holds, and expansion fails with
+ * `apply_expression_template_unknown_template` naming a template no component
+ * ever mentioned. Renaming the wrapper per owner lets each copy's nested
+ * reference be rewritten to its own owner's leaf.
+ *
+ * A consequence worth relying on: a name left OUT of the returned set never
+ * references a name inside it, so deduped entries need no reference rewriting.
+ *
+ * Mirrors the Julia reference `_registry_collision_names`.
+ */
+function registryCollisionNames(
+  byname: Map<string, { path: string; decl: unknown }[]>,
+): Set<string> {
+  const collide = new Set<string>()
+  const refs = new Map<string, Set<string>>()
+  for (const [name, occ] of byname) {
+    if (!occ.every((o) => deepEqual(occ[0]!.decl, o.decl))) collide.add(name)
+    const seen = new Set<string>()
+    for (const { decl } of occ) for (const r of collectApplyNames(decl, [])) seen.add(r)
+    refs.set(name, seen)
+  }
+  // Close under the reference edges (monotone; ≤ byname.size rounds).
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const name of byname.keys()) {
+      if (collide.has(name)) continue
+      for (const r of refs.get(name)!) {
+        if (collide.has(r)) {
+          collide.add(name)
+          changed = true
+          break
+        }
+      }
+    }
+  }
+  return collide
+}
+
 /** Result of {@link flattenTemplateRegistries}: the rewritten document + merged registry. */
 export interface FlattenedTemplateRegistries {
   root: Record<string, unknown>
@@ -2216,6 +2271,11 @@ export interface FlattenedTemplateRegistries {
  *  - **Non-deep-equal same-name collision** — both entries are renamed
  *    deterministically to `<ComponentPath>.<name>` and their
  *    `apply_expression_template` references are rewritten in lockstep.
+ *  - **Collisions propagate along the reference DAG** — a declaration that
+ *    references a colliding name collides too (see
+ *    {@link registryCollisionNames}), so a byte-identical wrapper over a
+ *    per-component leaf is renamed per owner rather than deduped into one body
+ *    whose nested reference no longer resolves.
  *
  * Returns the rewritten document `root` (component reference sites updated) and
  * the merged registry (the FlattenedSystem's first-class registry field).
@@ -2255,18 +2315,18 @@ export function flattenTemplateRegistries(loaded: object): FlattenedTemplateRegi
 
   const merged: Record<string, unknown> = {}
   const rename: Record<string, Record<string, string>> = {} // path => (old => new)
+  const collide = registryCollisionNames(byname)
   for (const name of [...byname.keys()].sort()) {
     const occ = byname.get(name)!
-    const allEq = occ.every((o) => deepEqual(occ[0]!.decl, o.decl))
-    if (allEq) {
-      merged[name] = occ[0]!.decl // deep-equal dedup
-    } else {
+    if (collide.has(name)) {
       for (const { path, decl } of occ) {
         // collision: owner-path rename
         const newname = `${path}.${name}`
         merged[newname] = decl
         ;(rename[path] ??= {})[name] = newname
       }
+    } else {
+      merged[name] = occ[0]!.decl // deep-equal dedup
     }
   }
 
