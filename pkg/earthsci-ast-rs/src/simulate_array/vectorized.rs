@@ -312,7 +312,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
     // before returning). A nested aggregate re-enters here and gets its own
     // scope, so a subtree under a different box never shares a memo entry.
     if let Some(rt) = ctx.cse {
-        rt.analyse(body);
+        rt.analyse(body, output_idx_names, contract_names);
     }
     let _cse_scope = ctx.cse.map(|rt| rt.scope(pool));
     let mut ops = 0usize;
@@ -603,9 +603,17 @@ pub(super) fn eval_vec<'a>(
     // (scope, class) — a fresh scope per `VecBox` — so a hit is the value this
     // node WOULD have computed, not merely a syntactic twin. See `cse.rs` for
     // the scoping argument.
+    //
+    // A class id carrying `PURE_BIT` marks a BOX-PURE subtree (ess-lih): one
+    // built only from this box's index symbols and CONST-tier names, so its
+    // value is fixed for the whole solve. `get`/`put` route those to the
+    // PERSISTENT store keyed by the box SIGNATURE instead of the per-evaluation
+    // memo, so a model's grid geometry — coordinate ramps, `sin`/`cos` of a
+    // latitude, metric factors read off an already-hoisted static observed — is
+    // computed once rather than once per RHS call. See `cse.rs` (§ess-lih).
     let cse_class = ctx.cse.and_then(|c| c.class_of(expr));
     if let (Some(rt), Some(class)) = (ctx.cse, cse_class)
-        && let Some(hit) = rt.get(class)
+        && let Some(hit) = rt.get(class, bx)
     {
         return Some(hit);
     }
@@ -616,7 +624,7 @@ pub(super) fn eval_vec<'a>(
         Expr::Operator(node) => eval_vec_op(node, bx, ctx, pool, ops),
     };
     let r = match (ctx.cse, cse_class, r) {
-        (Some(rt), Some(class), Some(v)) => Some(rt.put(class, v)),
+        (Some(rt), Some(class), Some(v)) => Some(rt.put(class, v, bx)),
         (_, _, r) => r,
     };
     if r.is_none() {
