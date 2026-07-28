@@ -119,6 +119,18 @@ pub(super) fn cse_disabled() -> bool {
     })
 }
 
+/// `true` when `ESS_CSE_PARANOID=1` asks [`CseRt::class_of`] to cross-check the
+/// resolved class table against the map on every node visit.
+fn cse_paranoid() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ESS_CSE_PARANOID")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
 // ============================================================================
 // Structural classification (build time — once per rule body, per scratch).
 // ============================================================================
@@ -642,6 +654,10 @@ struct Inner {
     /// Set when the analysed addresses could not be resolved (see
     /// [`AddrClasses::add`]); `class_of` then reads `classes.memoizable`.
     addrs_unusable: bool,
+    /// Set from `ESS_CSE_PARANOID`; see [`CseRt::verify_class`]. Kept as a field
+    /// rather than read from the environment in `class_of` so the hot path pays
+    /// one perfectly-predicted branch on a byte it already has in cache.
+    verify: bool,
     /// Live memo, indexed `memo[depth - 1][class]`: one dense row per OPEN
     /// scope, stamped with the scope that wrote it.
     ///
@@ -726,6 +742,7 @@ impl CseRt {
             return;
         }
         let mut i = self.inner.borrow_mut();
+        i.verify = cse_paranoid();
         i.classes.analyse(body);
         if i.classes.pending.is_empty() {
             return;
@@ -813,13 +830,8 @@ impl CseRt {
             return None;
         }
         let addr = expr as *const Expr as usize;
-        if std::env::var("ESS_CSE_DBG").is_ok() {
-            let want = i.classes.memoizable.get(&addr).copied();
-            let got = i.addrs.get(addr);
-            assert_eq!(want, got, "addr table disagrees at {addr:#x}");
-            if std::env::var("ESS_CSE_DBG").as_deref() == Ok("map") {
-                return want;
-            }
+        if i.verify {
+            return Self::verify_class(&i, addr);
         }
         if i.addrs_unusable {
             // The analysed trees could not be indexed by a 32-bit ordinal; the
@@ -828,6 +840,23 @@ impl CseRt {
             return i.classes.memoizable.get(&addr).copied();
         }
         i.addrs.get(addr)
+    }
+
+    /// `ESS_CSE_PARANOID=1`: assert on EVERY node visit that the resolved table
+    /// answers exactly what the map it was resolved from would, and answer from
+    /// the map. That equality is the entire correctness basis of the resolved
+    /// table, so being able to assert it over a real solve — rather than over
+    /// fixtures — is worth a switch; it makes the solve several times slower.
+    #[cold]
+    #[inline(never)]
+    fn verify_class(i: &Inner, addr: usize) -> Option<u32> {
+        let want = i.classes.memoizable.get(&addr).copied();
+        assert_eq!(
+            i.addrs.get(addr),
+            want,
+            "resolved CSE class table disagrees with the map at {addr:#x}"
+        );
+        want
     }
 
     /// Borrow the array in slab `idx` for the caller's `'a`.
