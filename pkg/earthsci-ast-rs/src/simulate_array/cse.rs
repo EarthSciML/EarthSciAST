@@ -121,9 +121,14 @@ enum CseKey {
     /// compare equal but are not interchangeable under `1/x` — stay distinct,
     /// and so `NaN` keys are usable at all.
     Num(u64),
-    Var(String),
+    /// Interned variable name (see [`ClassTable::intern_str`]).
+    Var(u32),
     Op {
-        attrs: Box<str>,
+        /// Interned rendering of every non-child attribute (see [`attrs_key`]).
+        /// For the overwhelmingly common bare node this is just the operator
+        /// name, so classifying one costs a hash lookup and NO allocation —
+        /// which matters, because the analysis walks every node of every body.
+        attrs: u32,
         kids: SmallVec<[u32; 4]>,
     },
 }
@@ -135,6 +140,9 @@ struct ClassTable {
     /// Hash-cons: exact structural key → class id.
     keys: FxHashMap<CseKey, u32>,
     next_class: u32,
+    /// String interner for operator names, variable names, and rendered
+    /// attribute blobs. Equal ids ⇔ equal strings, so keys stay EXACT.
+    strs: FxHashMap<Box<str>, u32>,
     /// Node address → class id, restricted to nodes whose class occurs ≥ 2×
     /// within their own static scope. A node absent here is never memoized.
     memoizable: FxHashMap<usize, u32>,
@@ -158,7 +166,7 @@ impl ClassTable {
         self.counts.clear();
         self.seen.clear();
         let scope = self.new_static_scope();
-        self.walk(root, scope);
+        self.walk(root, scope, true);
         // Only a class seen twice or more *inside one static scope* can ever be
         // served from the memo, so only those addresses are recorded.
         for &(addr, scope, class) in &std::mem::take(&mut self.seen) {
@@ -179,6 +187,15 @@ impl ClassTable {
         self.next_static_scope
     }
 
+    fn intern_str(&mut self, s: &str) -> u32 {
+        if let Some(&i) = self.strs.get(s) {
+            return i;
+        }
+        let n = self.strs.len() as u32;
+        self.strs.insert(s.into(), n);
+        n
+    }
+
     fn intern(&mut self, key: CseKey) -> u32 {
         let next = self.next_class;
         match self.keys.entry(key) {
@@ -196,11 +213,21 @@ impl ClassTable {
     /// outside [`BOX_TRANSPARENT_OPS`] that is not a recognised box-opener, or
     /// one whose attributes it cannot key exactly. An unclassified node makes
     /// every ancestor unclassified too (their value depends on it).
-    fn walk(&mut self, e: &Expr, scope: u32) -> Option<u32> {
+    ///
+    /// `evaluated` says whether `eval_vec` ever reaches this position. A node it
+    /// never evaluates still needs a CLASS (it is part of its parent's key) but
+    /// never needs a memo entry, so it is left out of the occurrence census.
+    /// That is a large saving: an `index` node's axis expressions are *parsed*
+    /// (`classify_axis_index`), never evaluated, and they are the majority of
+    /// the nodes in a lowered stencil.
+    fn walk(&mut self, e: &Expr, scope: u32, evaluated: bool) -> Option<u32> {
         let class = match e {
             Expr::Integer(i) => self.intern(CseKey::Int(*i)),
             Expr::Number(n) => self.intern(CseKey::Num(n.to_bits())),
-            Expr::Variable(v) => self.intern(CseKey::Var(v.clone())),
+            Expr::Variable(v) => {
+                let id = self.intern_str(v);
+                self.intern(CseKey::Var(id))
+            }
             Expr::Operator(node) => {
                 let transparent = BOX_TRANSPARENT_OPS.contains(&node.op.as_str());
                 let opener = matches!(node.op.as_str(), "aggregate" | "arrayop" | "makearray");
@@ -212,24 +239,38 @@ impl ClassTable {
                     self.new_static_scope()
                 };
                 let attrs = if transparent || opener {
-                    attrs_key(node)
+                    self.attrs_id(node)
                 } else {
                     None
                 };
-                // Walk the children regardless (they may contain shareable
-                // material of their own), then classify this node only if we
-                // could key it and every child classified.
+                // A node the overlay bails on evaluates none of its children; a
+                // nested aggregate underneath is analysed separately when the
+                // oracle reaches it through its own `try_eval_arrayop_vectorized`.
+                let kids_evaluated = evaluated && (transparent || opener);
                 let mut kids: SmallVec<[u32; 4]> = SmallVec::new();
                 let mut ok = attrs.is_some();
-                node.for_each_child(&mut |c| {
-                    // `for_each_child` visits `axes`/`bindings` maps in sorted
-                    // key order, but `attrs_key` refuses any node carrying them,
-                    // so a map-child node is already unclassified here.
-                    match self.walk(c, child_scope) {
-                        Some(k) => kids.push(k),
-                        None => ok = false,
+                if node.op == "index" {
+                    // `index(src, ax…)`: only `src` is evaluated; the axis
+                    // expressions are classified for the key alone. (An `index`
+                    // node carries no sidecar children, so iterating `args`
+                    // covers the whole `for_each_child` set.)
+                    for (i, c) in node.args.iter().enumerate() {
+                        match self.walk(c, child_scope, kids_evaluated && i == 0) {
+                            Some(k) => kids.push(k),
+                            None => ok = false,
+                        }
                     }
-                });
+                } else {
+                    node.for_each_child(&mut |c| {
+                        // `for_each_child` visits `axes`/`bindings` maps in
+                        // sorted key order, but `attrs_key` refuses any node
+                        // carrying them, so such a node is already unclassified.
+                        match self.walk(c, child_scope, kids_evaluated) {
+                            Some(k) => kids.push(k),
+                            None => ok = false,
+                        }
+                    });
+                }
                 if !ok {
                     return None;
                 }
@@ -239,22 +280,46 @@ impl ClassTable {
                 })
             }
         };
-        let addr = e as *const Expr as usize;
-        *self.counts.entry((scope, class)).or_insert(0) += 1;
-        self.seen.push((addr, scope, class));
+        if evaluated {
+            let addr = e as *const Expr as usize;
+            *self.counts.entry((scope, class)).or_insert(0) += 1;
+            self.seen.push((addr, scope, class));
+        }
         Some(class)
     }
 }
 
 /// An exact, order-deterministic rendering of every NON-child field of `node`
-/// that can change what it computes. `None` means "this node carries a field
-/// this module does not key" — the caller then leaves it unclassified.
+/// that can change what it computes, interned to a `u32`. `None` means "this
+/// node carries a field this module does not key" — the caller then leaves it
+/// unclassified.
 ///
 /// `args`/`lower`/`upper`/`expr`/`filter`/`values` are children (handled by
 /// class id) and so are absent here. `axes`/`key`/`bindings` are also children
 /// but live in `HashMap`s / template machinery the overlay never evaluates, so
 /// their presence is rejected outright rather than keyed.
-fn attrs_key(node: &ExpressionNode) -> Option<Box<str>> {
+///
+/// The bare case — a node with the operator and its operands and nothing else,
+/// which is essentially all of a lowered stencil — interns the operator name
+/// directly and allocates nothing. A rendered blob always contains `|`, which
+/// an operator name never does, so the two families cannot collide.
+impl ClassTable {
+    fn attrs_id(&mut self, node: &ExpressionNode) -> Option<u32> {
+        let rendered = attrs_key(node)?;
+        Some(match rendered {
+            Rendered::Bare => self.intern_str(&node.op),
+            Rendered::Blob(s) => self.intern_str(&s),
+        })
+    }
+}
+
+/// Either "nothing but the operator name" or a fully rendered attribute blob.
+enum Rendered {
+    Bare,
+    Blob(String),
+}
+
+fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
     // Fields whose presence means "not a construct this module keys".
     if node.join.is_some()
         || node.axes.is_some()
@@ -268,8 +333,6 @@ fn attrs_key(node: &ExpressionNode) -> Option<Box<str>> {
     {
         return None;
     }
-    let mut s = String::with_capacity(node.op.len() + 8);
-    s.push_str(&node.op);
     // The common case by a wide margin: a bare arithmetic / index / ifelse node
     // with no sidecar attribute at all.
     let bare = node.wrt.is_none()
@@ -288,8 +351,10 @@ fn attrs_key(node: &ExpressionNode) -> Option<Box<str>> {
         && node.value.is_none()
         && node.id.is_none();
     if bare {
-        return Some(s.into_boxed_str());
+        return Some(Rendered::Bare);
     }
+    let mut s = String::with_capacity(node.op.len() + 64);
+    s.push_str(&node.op);
     use std::fmt::Write as _;
     let _ = write!(
         s,
@@ -323,7 +388,7 @@ fn attrs_key(node: &ExpressionNode) -> Option<Box<str>> {
         s.push_str("|v=");
         s.push_str(&serde_json::to_string(v).ok()?);
     }
-    Some(s.into_boxed_str())
+    Some(Rendered::Blob(s))
 }
 
 // ============================================================================
