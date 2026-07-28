@@ -668,6 +668,11 @@ end
 # box-locally through the existing `_AccConstBox` descriptor. The values are
 # `_eval_recipe`'s per-cell outputs (boundary folds included), so a fetch is
 # bit-identical to the per-cell resolve.
+#
+# Having paid for every cell, the all-equal case folds to a literal — an
+# EXHAUSTIVE invariance test (`vals` is the whole box), not a sampled one. This
+# is the only place the invariance-to-literal fold is legal without a structural
+# argument; the LANE_CONST fast path below derives it from the index instead.
 function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays)
     s, off, len = _box_local_addr(box, D)
@@ -679,6 +684,8 @@ function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
         vals[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
                                var_map, const_arrays)::Float64
     end
+    v1 = vals[1]
+    all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
     return _AccRepl(_AccConstBox(vals, s[1], s[2], s[3], off))
 end
 
@@ -721,13 +728,29 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         dim === nothing && throw(_StencilFallback("loop-lit name not an output index"))
         return thin[dim] ? _LitRepl(Float64(rep[dim])) : _AccRepl(_AccLoopIdx(dim))
     elseif rec.kind == LANE_CONST
+        # Loop-invariance is derived from the INDEX, never sampled from the
+        # VALUES.  The historical fast path here compared `_eval_recipe`'s value
+        # at `rep` against its value at the 2^D box CORNERS and folded the lane
+        # to a literal when they agreed.  That is unsound: a const array is
+        # arbitrary data, so corner agreement says nothing about the interior —
+        # a regrid weight column reading (0, 0.5, 0) across a box coincides at
+        # both ends and folded to a literal 0.0, silently zeroing the interior
+        # cell with no error and no warning.  Nothing licenses interpolating
+        # between sampled data values; a denser sample would only make the wrong
+        # answer rarer, not impossible.
+        #
+        # The corner checks that REMAIN below are a different kind of test and
+        # stay: they verify the resolved LINEAR INDEX (`_recipe_const_lin`) is
+        # affine in the loop index, which it is BY CONSTRUCTION within a box —
+        # subscripts are affine expressions of the loop names and every
+        # boundary-fold transition already forces a box cut (`_const_fold_key!`),
+        # so two corners pin the affine map exactly. Invariance then follows
+        # STRUCTURALLY: an all-zero stride vector means the index — hence the
+        # value — does not move over the box, and only then is the literal fold
+        # legal. That test cannot be fooled by adversarial data, and it costs the
+        # same O(2^D) corner evals as before: no per-cell work is added on the
+        # fast path.
         val_rep = ev(rep)
-        allinv = true
-        for cn in corners
-            if ev(cn) != val_rep; allinv = false; break; end
-        end
-        allinv && return _LitRepl(Float64(val_rep))
-        arr_flat = get!(flat_cache, rec.arr) do; Float64.(vec(rec.arr)); end
         lenv = Dict{String,Int}()
         clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
         lin_rep = clin(rep)
@@ -744,6 +767,14 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 return _materialize_const_box(rec, idx_names, box, D,
                                               var_map, const_arrays)
         end
+        # Index verified affine over the box; a zero stride in every dim means it
+        # is the SAME element for every cell (thin dims contribute nothing — the
+        # box is one cell wide there), so the read is genuinely loop-invariant
+        # and folds to a literal. `flat[_recipe_const_lin(...)] ==
+        # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
+        # element and the fold is bit-identical.
+        (s[1] == 0 && s[2] == 0 && s[3] == 0) && return _LitRepl(Float64(val_rep))
+        arr_flat = get!(flat_cache, rec.arr) do; Float64.(vec(rec.arr)); end
         return _AccRepl(_AccConstBox(arr_flat, s[1], s[2], s[3], off))
     else  # LANE_PGATHER — LIVE forcing gather
         # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
