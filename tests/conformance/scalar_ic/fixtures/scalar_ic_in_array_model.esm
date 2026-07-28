@@ -1,0 +1,201 @@
+{
+  "esm": "0.8.0",
+  "metadata": {
+    "name": "scalar_ic_in_array_model",
+    "description": "The same esm-spec 11.4 contract for a 0-D state that shares a model with an ARRAY state, so the document routes through each binding's ARRAY runtime rather than its scalar one. Array state `f` (ic = 1.5) is the anchor proving the array-ic path is intact; scalar state `s` (ic = 2*B) is the case a binding that only folds ARRAY-shaped ic targets drops.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "inline-test",
+      "esm-spec-11.4",
+      "esm-spec-6.6.5",
+      "scalar-ic",
+      "array-ic",
+      "mixed-rank",
+      "initial-conditions"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "N": {
+      "variables": {
+        "B": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Referenced ONLY by ic(s)."
+        },
+        "f": {
+          "type": "state",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "Array state seeded by the broadcast ic 1.5; held constant."
+        },
+        "s": {
+          "type": "state",
+          "units": "1",
+          "default": 0.0,
+          "description": "0-D state seeded by the parameter expression ic 2*B, inside an ARRAY model."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "f",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                4
+              ]
+            },
+            "expr": 0
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "s"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "f"
+            ]
+          },
+          "rhs": 1.5
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "s"
+            ]
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "B"
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-09,
+        "abs": 1e-11
+      },
+      "tests": [
+        {
+          "id": "array_and_scalar_ic_defaults",
+          "description": "The array ic broadcasts 1.5 over all four cells AND the 0-D ic seeds s = 2*3 = 6. A binding that folds only array-shaped ic targets reports s = 0 (its declared default) while every f assertion still passes.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "coords": {
+                "x": 1
+              },
+              "expected": 1.5
+            },
+            {
+              "variable": "f",
+              "time": 0.0,
+              "reduce": "max",
+              "expected": 1.5
+            },
+            {
+              "variable": "f",
+              "time": 0.0,
+              "reduce": "min",
+              "expected": 1.5
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "s",
+              "time": 1.0,
+              "expected": 6.0
+            }
+          ]
+        },
+        {
+          "id": "array_and_scalar_ic_param_override",
+          "description": "parameter_overrides {B: 10} reaches the 0-D ic's build-time scope inside the array runtime: s = 20. The parameter-free array ic is unmoved.",
+          "parameter_overrides": {
+            "B": 10.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "f",
+              "time": 0.0,
+              "coords": {
+                "x": 2
+              },
+              "expected": 1.5
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
