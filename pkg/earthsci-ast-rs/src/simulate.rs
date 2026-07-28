@@ -85,6 +85,19 @@ pub enum SimulateError {
         name: String,
     },
 
+    /// The user supplied a BARE parameter name that two or more of the
+    /// flattened system's parameters carry as their local name (esm-spec
+    /// §6.6.2). Distinct from [`SimulateError::InvalidParameter`]: the name
+    /// exists, it just does not identify ONE parameter, and binding it to
+    /// either candidate would be a wrong answer rather than a missing one.
+    #[error("Ambiguous parameter '{name}': the local name of {candidates:?} — qualify it with its owning component")]
+    AmbiguousParameter {
+        /// The ambiguous local name.
+        name: String,
+        /// The qualified parameters that carry it.
+        candidates: Vec<String>,
+    },
+
     /// The user supplied an initial condition for a name that is not a state
     /// variable, or a state variable has no initial value (no entry in
     /// `initial_conditions` and no `default` on the `ModelVariable`).
@@ -92,6 +105,17 @@ pub enum SimulateError {
     InvalidInitialCondition {
         /// The variable name.
         name: String,
+    },
+
+    /// The user supplied a BARE state name that two or more of the flattened
+    /// system's states carry as their local name (esm-spec §6.6.2). The
+    /// state-side counterpart of [`SimulateError::AmbiguousParameter`].
+    #[error("Ambiguous initial condition '{name}': the local name of {candidates:?} — qualify it with its owning component")]
+    AmbiguousInitialCondition {
+        /// The ambiguous local name.
+        name: String,
+        /// The qualified states that carry it.
+        candidates: Vec<String>,
     },
 
     /// An `ic(target)` field initial condition could not be resolved to a
@@ -223,6 +247,12 @@ pub struct Compiled {
     /// the value expression for `state = ...` (treated as the scalar
     /// equivalent of MTK's `structural_simplify` — esm-0kt).
     state_kinds: Vec<StateKind>,
+    /// Per-state `ic(state) = rhs` initial value (esm-spec §11.4), resolved
+    /// against the PARAMETER scope only — §6.6.5 binds the model's parameters
+    /// as load-time constants in a build-time expression, and state is not in
+    /// scope (there is no trajectory value at build time). `None` where the
+    /// state declares no `ic`, which falls back to its declared `default`.
+    state_ic_exprs: Vec<Option<ResolvedExpr>>,
     /// State indices that are algebraic, in dependency-respecting order. Each
     /// algebraic state's expression may reference differential states,
     /// parameters, time, observed variables, or *earlier-listed* algebraic
@@ -272,6 +302,7 @@ impl Compiled {
         let ClassifiedEquations {
             state_diff_raw,
             state_alg_raw,
+            state_ic_raw,
             observed_rhs_raw,
         } = classify_equations(flat, &state_names, &state_index, &observed_index_raw)?;
 
@@ -297,6 +328,21 @@ impl Compiled {
             &observed_index,
         )?;
 
+        // (7) Resolve each `ic(state) = rhs` (esm-spec §11.4) in the BUILD-TIME
+        // scope: model parameters are load-time constants and bind (§6.6.5);
+        // state and observed do not, so an empty state/observed table turns a
+        // reference to either into the ordinary unknown-variable build error
+        // rather than a silently-zero read at u0.
+        let empty_scope: HashMap<String, usize> = HashMap::new();
+        let state_ic_exprs = state_ic_raw
+            .iter()
+            .map(|slot| {
+                slot.as_ref()
+                    .map(|rhs| resolve_expr(rhs, &empty_scope, &param_index, &empty_scope, None))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             state_names,
             state_index,
@@ -307,6 +353,7 @@ impl Compiled {
             observed_names,
             observed_exprs,
             state_kinds,
+            state_ic_exprs,
             algebraic_topo,
         })
     }
@@ -358,7 +405,7 @@ impl Compiled {
         let (t0, t_end) = tspan;
 
         let param_vec = self.build_param_vec(params)?;
-        let mut ic_vec = self.build_initial_state(initial_conditions)?;
+        let mut ic_vec = self.build_initial_state(initial_conditions, &param_vec, t0)?;
         self.apply_algebraic_ics(&mut ic_vec, &param_vec, t0);
 
         let (time, mut state, stats) = self.integrate(t0, t_end, &param_vec, &ic_vec, opts)?;
@@ -382,11 +429,13 @@ impl Compiled {
     /// and build the parameter vector in canonical order: user value >
     /// declared default; a parameter with neither is an error.
     fn build_param_vec(&self, params: &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError> {
-        for key in params.keys() {
-            if !self.param_index.contains_key(key) {
-                return Err(SimulateError::InvalidParameter { name: key.clone() });
-            }
-        }
+        // esm-spec §6.6.2 keys `parameter_overrides` by LOCAL parameter name
+        // (`A`), while flattening qualifies it (`M.A`). Canonicalize first so
+        // both spellings bind, then reject anything that still designates no
+        // parameter — an unknown key is `InvalidParameter`, a bare name two
+        // components both carry is the distinct `AmbiguousParameter`.
+        let params =
+            canonicalize_override_keys(&self.param_index, params).map_err(param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -401,21 +450,33 @@ impl Compiled {
     }
 
     /// Validate user-supplied initial conditions (every key must be a state
-    /// variable) and build the initial state vector: user value > declared
-    /// default; a state with neither is an error.
+    /// variable) and build the initial state vector in the esm-spec §11.4
+    /// precedence: an explicit `initial_conditions` override wins ("Run-time
+    /// overrides ... overrides the `ic` equation's value for that run"), else
+    /// the state's own `ic` equation const-folded in the parameter scope
+    /// (§6.6.5), else the declared `default`; a state with none of the three
+    /// is an error.
     fn build_initial_state(
         &self,
         initial_conditions: &HashMap<String, f64>,
+        param_vec: &[f64],
+        t0: f64,
     ) -> Result<Vec<f64>, SimulateError> {
-        for key in initial_conditions.keys() {
-            if !self.state_index.contains_key(key) {
-                return Err(SimulateError::InvalidInitialCondition { name: key.clone() });
-            }
-        }
+        // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
+        let initial_conditions =
+            canonicalize_override_keys(&self.state_index, initial_conditions)
+                .map_err(ic_key_error)?;
+        let no_state: [f64; 0] = [];
+        let no_obs: [f64; 0] = [];
         let mut ic_vec = vec![0.0f64; self.state_names.len()];
         for (i, name) in self.state_names.iter().enumerate() {
             if let Some(&v) = initial_conditions.get(name) {
                 ic_vec[i] = v;
+            } else if let Some(expr) = self.state_ic_exprs[i].as_ref() {
+                // `ic` bodies resolve against the parameter scope alone (see
+                // `state_ic_exprs`), so the empty state/observed buffers here
+                // are never indexed.
+                ic_vec[i] = interpret(expr, &no_state, param_vec, &no_obs, t0);
             } else if let Some(d) = self.state_defaults[i] {
                 ic_vec[i] = d;
             } else {
@@ -807,6 +868,9 @@ struct ClassifiedEquations {
     state_diff_raw: Vec<Option<Expr>>,
     /// Bare-LHS algebraic body per state index (esm-0kt).
     state_alg_raw: Vec<Option<Expr>>,
+    /// `ic(state) = rhs` RHS per state index (esm-spec §11.4). Folded into u0
+    /// by [`Compiled::build_initial_state`], never integrated.
+    state_ic_raw: Vec<Option<Expr>>,
     /// Defining RHS per raw observed index.
     observed_rhs_raw: Vec<Option<Expr>>,
 }
@@ -825,6 +889,7 @@ fn classify_equations(
 ) -> Result<ClassifiedEquations, CompileError> {
     let mut state_diff_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
     let mut state_alg_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
+    let mut state_ic_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
     let mut observed_rhs_raw: Vec<Option<Expr>> = vec![None; flat.observed_variables.len()];
 
     // Pull observed defining expressions out of the variable struct as a
@@ -836,6 +901,24 @@ fn classify_equations(
         }
     }
 
+    // `ic(state) = rhs` (esm-spec §11.4) declares the target's INITIAL value,
+    // not its dynamics, so `flatten` routes every one of them out of
+    // `flat.equations` into `flat.field_ics`. This scalar interpreter used to
+    // read only `flat.equations` and so never saw them at all: `ic(u) ~ 3.0`
+    // was dropped and the state silently started at its declared `default`.
+    // (The ARRAY runtime in `simulate_array` already consumes `field_ics`;
+    // only this pathway ignored them.)
+    for (target, rhs) in &flat.field_ics {
+        let idx = state_index
+            .get(target)
+            .ok_or_else(|| CompileError::InterpreterBuildError {
+                details: format!(
+                    "Equation declares ic({target}) but '{target}' is not in \
+                     flat.state_variables"
+                ),
+            })?;
+        state_ic_raw[*idx] = Some(rhs.clone());
+    }
     for eq in &flat.equations {
         if let Some(state_name) = state_lhs_name(&eq.lhs) {
             let idx = state_index.get(&state_name).ok_or_else(|| {
@@ -885,9 +968,11 @@ fn classify_equations(
     Ok(ClassifiedEquations {
         state_diff_raw,
         state_alg_raw,
+        state_ic_raw,
         observed_rhs_raw,
     })
 }
+
 
 /// Output of [`resolve_observed`]: observed names in evaluation order, the
 /// matching name -> index table, and the resolved defining expressions
@@ -1405,6 +1490,141 @@ pub enum ResolvedFnArg {
     Array(Vec<f64>),
     /// A 2-D constant array argument (the `table` of `interp.bilinear`).
     Array2D(Vec<Vec<f64>>),
+}
+
+// ============================================================================
+// Caller override-key canonicalization (esm-spec §6.6.2)
+// ============================================================================
+
+/// Why a caller-supplied override key designates no single build-resolved name.
+///
+/// The two cases are kept apart deliberately: an UNKNOWN key names nothing at
+/// all (a typo, a renamed parameter), while an AMBIGUOUS one names a local
+/// variable that two mounted components both carry — the fix for the first is
+/// to correct the name, for the second to qualify it.
+#[derive(Debug, Clone)]
+pub(crate) enum OverrideKeyError {
+    /// The key matches no name under any of the §6.6.2 rules.
+    Unknown(String),
+    /// A bare key that is the local name of two or more qualified names.
+    Ambiguous {
+        /// The ambiguous local name as the caller spelled it.
+        key: String,
+        /// The qualified names that carry it, sorted.
+        candidates: Vec<String>,
+    },
+}
+
+/// The trailing (local) segment of a possibly dot-qualified name.
+fn bare_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
+
+/// Rewrite each caller override key onto the build-resolved name it designates
+/// (esm-spec §6.6.2 "Unrecognized override keys"), or report why it designates
+/// none. `known` is the build's own name -> slot table — flattening-qualified
+/// parameters (`M.A`) or state elements (`M.u`, `M.u[1]`); only its KEYS are
+/// consulted.
+///
+/// Precedence, matching the Julia tree-walk `_canonicalize_override_keys` and
+/// Python's `canonicalize_override_keys`:
+///   1. an exact hit wins;
+///   2. else a DOTTED key whose trailing segment is itself a name resolves to
+///      it (`M.A` against a bare-named single-model system — the case the old
+///      `normalize_override_keys` handled by stripping the `<namespace>.`
+///      prefix);
+///   3. else a BARE key that is the trailing segment of exactly ONE name
+///      resolves to it (`A` against the flattened `M.A`);
+///   4. else a BARE key carried by two or more names is `Ambiguous`;
+///   5. else it is `Unknown`.
+///
+/// Errors are reported for the lexicographically first offending key so the
+/// diagnostic does not depend on `HashMap` iteration order.
+pub(crate) fn canonicalize_override_keys(
+    known: &HashMap<String, usize>,
+    overrides: &HashMap<String, f64>,
+) -> Result<HashMap<String, f64>, OverrideKeyError> {
+    if overrides.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // Local name -> every qualified name carrying it.
+    let mut groups: HashMap<&str, Vec<&str>> = HashMap::new();
+    for n in known.keys() {
+        let b = bare_name(n);
+        if b != n.as_str() {
+            groups.entry(b).or_default().push(n.as_str());
+        }
+    }
+
+    let mut out: HashMap<String, f64> = HashMap::new();
+    let mut failures: Vec<OverrideKeyError> = Vec::new();
+    // Two passes so precedence is DETERMINISTIC when a caller supplies both
+    // spellings of one name (`A` and `M.A`): alias-resolved keys land first,
+    // exact-name keys overwrite them.
+    for (k, v) in overrides {
+        if known.contains_key(k.as_str()) {
+            continue; // rule 1, applied below
+        }
+        let bare = bare_name(k);
+        if bare != k.as_str() && known.contains_key(bare) {
+            out.insert(bare.to_string(), *v); // rule 2
+        } else if let Some(cands) = groups.get(k.as_str()) {
+            if cands.len() == 1 {
+                out.insert(cands[0].to_string(), *v); // rule 3
+            } else {
+                let mut candidates: Vec<String> =
+                    cands.iter().map(|s| (*s).to_string()).collect();
+                candidates.sort();
+                failures.push(OverrideKeyError::Ambiguous {
+                    key: k.clone(),
+                    candidates,
+                }); // rule 4
+            }
+        } else {
+            failures.push(OverrideKeyError::Unknown(k.clone())); // rule 5
+        }
+    }
+    if !failures.is_empty() {
+        failures.sort_by(|a, b| override_key_of(a).cmp(override_key_of(b)));
+        return Err(failures.swap_remove(0));
+    }
+    for (k, v) in overrides {
+        if known.contains_key(k.as_str()) {
+            out.insert(k.clone(), *v); // rule 1
+        }
+    }
+    Ok(out)
+}
+
+fn override_key_of(e: &OverrideKeyError) -> &str {
+    match e {
+        OverrideKeyError::Unknown(k) => k,
+        OverrideKeyError::Ambiguous { key, .. } => key,
+    }
+}
+
+/// Map an override-key failure onto the `parameter_overrides` error surface.
+pub(crate) fn param_key_error(e: OverrideKeyError) -> SimulateError {
+    match e {
+        OverrideKeyError::Unknown(name) => SimulateError::InvalidParameter { name },
+        OverrideKeyError::Ambiguous { key, candidates } => SimulateError::AmbiguousParameter {
+            name: key,
+            candidates,
+        },
+    }
+}
+
+/// Map an override-key failure onto the `initial_conditions` error surface.
+pub(crate) fn ic_key_error(e: OverrideKeyError) -> SimulateError {
+    match e {
+        OverrideKeyError::Unknown(name) => SimulateError::InvalidInitialCondition { name },
+        OverrideKeyError::Ambiguous { key, candidates } => {
+            SimulateError::AmbiguousInitialCondition {
+                name: key,
+                candidates,
+            }
+        }
+    }
 }
 
 /// Build a `name -> position` lookup from an ordered list of names.
