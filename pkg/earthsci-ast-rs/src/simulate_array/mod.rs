@@ -65,6 +65,7 @@
 )]
 
 mod compile;
+mod cse;
 mod driver;
 mod eval;
 mod layout;
@@ -85,6 +86,7 @@ pub(crate) use eval::{apply_binary, apply_unary, fold_scalar};
 pub use rhs::RhsScratch;
 
 use compile::*;
+use cse::*;
 use eval::*;
 use layout::*;
 use rhs::*;
@@ -515,4 +517,10 @@ struct EvalCtx<'a> {
     /// entry here (see [`lookup_variable`]). Empty for models with no loader
     /// forcing, so the scalar-`p` path reads identically.
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
+    /// Common-subexpression memo for the vectorized overlay (ess-cse). `None`
+    /// on the entry points that evaluate a one-off expression (`eval_expression`,
+    /// the build-time observed materialization), where there is nothing to amortize
+    /// a structural analysis over; the overlay then behaves exactly as it did
+    /// before. See [`cse`] for the scoping rule that makes sharing sound.
+    cse: Option<&'a CseRt>,
 }

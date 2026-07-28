@@ -32,6 +32,11 @@ pub struct RhsScratch {
     observed_arrays: ArrMap,
     /// Recycled `f64` buffers for vectorized kernel intermediates.
     pool: Pool,
+    /// Common-subexpression memo for the vectorized overlay (ess-cse). Lives
+    /// here because it is keyed by AST node ADDRESS and must therefore share the
+    /// lifetime of the (cloned) rule bodies this scratch is evaluated against —
+    /// which is exactly the RHS closure that co-owns both.
+    cse: CseRt,
     /// Names of the hoisted STATE-FREE / `t`-free observeds (ess: static-observed
     /// hoist). Their arrays are seeded into `observed_arrays` ONCE by
     /// [`Self::set_static`] and then RETAINED in place across every RHS eval
@@ -60,6 +65,7 @@ impl RhsScratch {
             state_arrays,
             observed_arrays: ArrMap::default(),
             pool: Pool::default(),
+            cse: CseRt::default(),
             static_keys: HashSet::new(),
         }
     }
@@ -326,6 +332,7 @@ pub(super) fn materialize_observeds_into(
         // to the oracle, and this runs once, off the per-step hot path).
         false,
         &mut RhsStats::default(),
+        None,
     );
 }
 
@@ -355,6 +362,10 @@ pub(super) fn materialize_observeds_append(
     // Records how each array observed was materialized (vectorized vs per-cell),
     // mirroring the `vectorized_rules`/`scalar_rules` split for state rules.
     stats: &mut RhsStats,
+    // Common-subexpression memo (ess-cse), or `None` on the build-time /
+    // one-shot materialization paths, which run once and so have nothing to
+    // amortize the structural analysis over.
+    cse: Option<&CseRt>,
 ) {
     for rule in observed_rules {
         match rule {
@@ -372,6 +383,7 @@ pub(super) fn materialize_observeds_append(
                     t,
                     derived_rings,
                     forcing,
+                    cse,
                 };
                 let arr = match eval(body, &mut ctx) {
                     Value::Array(a) => *a,
@@ -447,26 +459,32 @@ pub(super) fn materialize_observeds_append(
                             t,
                             derived_rings,
                             forcing,
+                            cse,
                         };
-                        let mut pool = Pool::default();
-                        try_eval_arrayop_vectorized(
-                            output_idx_names,
-                            output_ranges,
-                            body,
-                            &[],
-                            &[],
-                            ReduceKind::Sum,
-                            None,
-                            &ctx,
-                            &mut pool,
-                        )
-                        .map(|(val, _ops)| {
-                            let arr = val
-                                .view()
-                                .expect("vectorized observed value has a view")
-                                .to_owned();
-                            val.release(&mut pool);
-                            arr
+                        // The THREAD's persistent pool, not a fresh one per
+                        // observed: a model with dozens of array observeds
+                        // re-materialized every step got an empty pool on each
+                        // one, so every kernel intermediate hit the allocator.
+                        with_arrayop_pool(|pool| {
+                            try_eval_arrayop_vectorized(
+                                output_idx_names,
+                                output_ranges,
+                                body,
+                                &[],
+                                &[],
+                                ReduceKind::Sum,
+                                None,
+                                &ctx,
+                                pool,
+                            )
+                            .map(|(val, _ops)| {
+                                let arr = val
+                                    .view()
+                                    .expect("vectorized observed value has a view")
+                                    .to_owned();
+                                val.release(pool);
+                                arr
+                            })
                         })
                     };
                     if let Some(arr) = materialized {
@@ -507,6 +525,7 @@ pub(super) fn materialize_observeds_append(
                         t,
                         derived_rings,
                         forcing,
+                        cse: None,
                     };
                     let mut tuples = CartesianTuples::new(output_ranges);
                     while let Some(tuple) = tuples.next() {
@@ -558,6 +577,16 @@ pub(super) fn evaluate_rhs_with_scratch(
     //     flat state vector (no per-call allocation).
     refill_state_arrays(&mut scratch.state_arrays, var_shapes, state);
 
+    // ess-cse: bind the CSE class table to THIS rule set. Its keys are AST node
+    // addresses, so handing the same scratch a different rule set must discard
+    // it rather than reuse stale classification.
+    scratch.cse.retarget(
+        (rhs_rules.as_ptr() as u64)
+            ^ (observed_rules.as_ptr() as u64).rotate_left(32)
+            ^ ((rhs_rules.len() as u64) << 16)
+            ^ (observed_rules.len() as u64),
+    );
+
     // FAQ-materialized derived rings (RFC §8.1), keyed by producer node id. An
     // `intersect_polygon` clip self-registers its closed overlap ring here as it
     // evaluates (see `eval_intersect_polygon`); a downstream `aggregate` over a
@@ -587,6 +616,7 @@ pub(super) fn evaluate_rhs_with_scratch(
             state_arrays,
             observed_arrays,
             static_keys,
+            cse,
             ..
         } = &mut *scratch;
         observed_arrays.retain(|k, _| static_keys.contains(k));
@@ -603,6 +633,9 @@ pub(super) fn evaluate_rhs_with_scratch(
             // too, so the reference trajectory is fully un-vectorized.
             force_scalar,
             stats,
+            // ess-cse: the observed bodies are where the expanded discretization
+            // subtrees live, so this is the memo's main beneficiary.
+            Some(&*cse),
         );
     }
 
@@ -612,6 +645,7 @@ pub(super) fn evaluate_rhs_with_scratch(
     // are read (shared) while the buffer pool is checked out (exclusive).
     let state_arrays = &scratch.state_arrays;
     let observed_arrays = &scratch.observed_arrays;
+    let cse = Some(&scratch.cse);
     let pool = &mut scratch.pool;
 
     // (c) Evaluate each RHS rule and write into dy.
@@ -627,6 +661,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                     t,
                     derived_rings: &derived_rings,
                     forcing,
+                    cse,
                 };
                 let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
                 dy[*slot] = v;
@@ -641,6 +676,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                     t,
                     derived_rings: &derived_rings,
                     forcing,
+                    cse,
                 };
                 let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
                 dy[*slot] = v;
@@ -694,6 +730,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                             t,
                             derived_rings: &derived_rings,
                             forcing,
+                            cse,
                         };
                         if let Some((val, ops)) = try_eval_arrayop_vectorized(
                             output_idx_names,
@@ -767,6 +804,7 @@ pub(super) fn evaluate_rhs_with_scratch(
                     t,
                     derived_rings: &derived_rings,
                     forcing,
+                    cse: None,
                 };
                 // ---- Forward prefix scan (O(N) instead of the O(N²) triangle)
                 // A cumulative reduction (esm-spec §4.3.1) is a triangular double

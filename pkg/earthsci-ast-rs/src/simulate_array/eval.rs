@@ -9,6 +9,11 @@ use crate::aggregate::effective_reduce_kind;
 use crate::compile_error::CompileError;
 use crate::types::ExpressionNode;
 
+/// Stack-inlined per-axis `(lo, hi)` range list, the same rank≤4 argument
+/// [`DimI`]/[`DimU`] rest on. Used where a range list is rebuilt on every RHS
+/// evaluation ([`ArrayOpSpec`]), so it does not reach the allocator.
+pub(super) type RangeVec = SmallVec<[(i64, i64); 4]>;
+
 /// The distinct-vertex extent of the FAQ-materialized ring registered under
 /// `from_faq` (RFC §8.1): the producing `intersect_polygon` clip stores the
 /// **closed** ring (`n+1` rows, first vertex repeated so the `polygon_area`
@@ -550,6 +555,43 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
     }
 }
 
+/// [`apply_binary`]'s per-element arithmetic with the **op-name lookup lifted
+/// out**: resolve the name once, then call the returned kernel per element.
+///
+/// The per-cell oracle calls `apply_binary(op, x, y)` once per cell, so the
+/// `match op` costs one string dispatch per element either way. The whole-array
+/// overlay ran the *same* call inside an N-element `ndarray::Zip`, so every
+/// element of every kernel node re-matched the operator name — `apply_binary`
+/// plus `__memcmp_evex` were 14% of a vectorized RHS profile, and the string
+/// compare also blocked the loop from vectorizing. Hoisting the lookup to once
+/// per AST node leaves an inlinable `f64`-only body in the loop.
+///
+/// The arms are the arms of [`apply_binary`], in the same order, evaluating the
+/// same expressions — `binary_kernels_match_apply_binary` pins the two to raw
+/// IEEE bit equality over every op name and a spread of operands (±0, ±inf,
+/// NaN, subnormals), so a divergence is a test failure, not a silent one.
+pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
+    match op {
+        "+" => |x, y| x + y,
+        "-" => |x, y| x - y,
+        "*" => |x, y| x * y,
+        "/" => |x, y| x / y,
+        "^" => |x: f64, y: f64| x.powf(y),
+        "atan2" => |x: f64, y: f64| x.atan2(y),
+        "min" => |x: f64, y: f64| x.min(y),
+        "max" => |x: f64, y: f64| x.max(y),
+        "==" => |x, y| scalar_compare("==", x, y),
+        "!=" => |x, y| scalar_compare("!=", x, y),
+        "<" => |x, y| scalar_compare("<", x, y),
+        "<=" => |x, y| scalar_compare("<=", x, y),
+        ">" => |x, y| scalar_compare(">", x, y),
+        ">=" => |x, y| scalar_compare(">=", x, y),
+        "and" => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
+        "or" => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
+        _ => |_, _| f64::NAN,
+    }
+}
+
 pub(super) fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> ArrayD<f64> {
     // Julia-style left-align: pad the lower-rank operand with trailing
     // singletons before broadcasting.
@@ -662,6 +704,120 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
         "atanh" => x.atanh(),
         "not" => (x == 0.0) as i32 as f64,
         _ => f64::NAN,
+    }
+}
+
+/// [`apply_unary`]'s per-element map with the op-name lookup lifted out — the
+/// unary counterpart of [`binary_kernel`], for the same reason (the whole-array
+/// overlay applied it inside an N-element loop). Arms mirror [`apply_unary`]
+/// exactly; `unary_kernels_match_apply_unary` pins them to bit equality.
+pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
+    match op {
+        "exp" => |x: f64| x.exp(),
+        "log" | "ln" => |x: f64| x.ln(),
+        "log10" => |x: f64| x.log10(),
+        "sqrt" => |x: f64| x.sqrt(),
+        "abs" => |x: f64| x.abs(),
+        "sign" => |x: f64| {
+            if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        },
+        "floor" => |x: f64| x.floor(),
+        "ceil" => |x: f64| x.ceil(),
+        "sin" => |x: f64| x.sin(),
+        "cos" => |x: f64| x.cos(),
+        "tan" => |x: f64| x.tan(),
+        "asin" => |x: f64| x.asin(),
+        "acos" => |x: f64| x.acos(),
+        "atan" => |x: f64| x.atan(),
+        "sinh" => |x: f64| x.sinh(),
+        "cosh" => |x: f64| x.cosh(),
+        "tanh" => |x: f64| x.tanh(),
+        "asinh" => |x: f64| x.asinh(),
+        "acosh" => |x: f64| x.acosh(),
+        "atanh" => |x: f64| x.atanh(),
+        "not" => |x: f64| (x == 0.0) as i32 as f64,
+        _ => |_| f64::NAN,
+    }
+}
+
+#[cfg(test)]
+mod kernel_equivalence_tests {
+    //! The whole-array overlay resolves an operator name to a kernel ONCE per
+    //! AST node ([`binary_kernel`]/[`unary_kernel`]) where the per-cell oracle
+    //! re-matches it per element ([`apply_binary`]/[`apply_unary`]). The two
+    //! paths must stay bit-identical, so pin them here rather than trusting two
+    //! hand-kept copies of the same match to drift together.
+    use super::*;
+
+    /// Operand spread: signed zeros, subnormals, ±inf and NaN, so a divergence
+    /// in a branchy arm (`min`/`max`/`sign`/the comparisons) cannot hide.
+    const XS: &[f64] = &[
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        -3.25,
+        2.0,
+        f64::MIN_POSITIVE,
+        5e-324,
+        1e300,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+
+    #[rustfmt::skip]
+    const BIN_OPS: &[&str] = &[
+        "+", "-", "*", "/", "^", "atan2", "min", "max",
+        "==", "!=", "<", "<=", ">", ">=", "and", "or", "no_such_op",
+    ];
+
+    #[rustfmt::skip]
+    const UN_OPS: &[&str] = &[
+        "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil", "sin", "cos",
+        "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+        "not", "no_such_op",
+    ];
+
+    #[test]
+    fn binary_kernels_match_apply_binary() {
+        for op in BIN_OPS {
+            let k = binary_kernel(op);
+            for &x in XS {
+                for &y in XS {
+                    let a = apply_binary(op, x, y);
+                    let b = k(x, y);
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "binary_kernel(\"{op}\")({x}, {y}) = {b} != apply_binary = {a}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unary_kernels_match_apply_unary() {
+        for op in UN_OPS {
+            let k = unary_kernel(op);
+            for &x in XS {
+                let a = apply_unary(op, x);
+                let b = k(x);
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "unary_kernel(\"{op}\")({x}) = {b} != apply_unary = {a}"
+                );
+            }
+        }
     }
 }
 
@@ -1057,6 +1213,9 @@ pub fn eval_expression(
         t,
         derived_rings: &derived_rings,
         forcing: &forcing,
+        // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
+        // structural analysis over), so this path is unchanged.
+        cse: None,
     };
     Ok(eval(expr, &mut ctx))
 }
@@ -1413,6 +1572,37 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
     arr.get(IxDyn(&idx)).map(|v| v.round() as i64).unwrap_or(0)
 }
 
+thread_local! {
+    /// Kernel-buffer pool for the vectorized overlay reached OUTSIDE the
+    /// compiled-rule driver: a standalone `aggregate` materialized by
+    /// [`eval_arrayop`], and an `AlgebraicRule::ArrayLoop` observed. Both used
+    /// to build a `Pool::default()` per call, so their pool was empty every
+    /// time and every kernel intermediate hit the allocator — the RHS-rule path
+    /// has recycled through [`RhsScratch`]'s pool since ess-mro, but the
+    /// observed path (where a stencil-heavy model does most of its work) never
+    /// did.
+    ///
+    /// Thread-local rather than a field on `EvalCtx`: the overlay takes the
+    /// pool by `&mut` while `EvalCtx` is borrowed shared, and the observed and
+    /// aggregate call sites construct their contexts independently.
+    static ARRAYOP_POOL: RefCell<Pool> = RefCell::new(Pool::default());
+}
+
+/// Run `f` with this thread's persistent kernel-buffer pool.
+///
+/// Re-entrancy is possible in principle — an outer aggregate whose vectorized
+/// attempt FAILED falls back to the per-cell oracle, which may evaluate an
+/// inner aggregate — but only after the outer borrow has been released, since
+/// the borrow spans just the overlay attempt. The `try_borrow_mut` fallback to
+/// a private pool makes that structural claim unnecessary: a nested use loses
+/// the recycling, never correctness, and never panics.
+pub(super) fn with_arrayop_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
+    ARRAYOP_POOL.with(|p| match p.try_borrow_mut() {
+        Ok(mut pool) => f(&mut pool),
+        Err(_) => f(&mut Pool::default()),
+    })
+}
+
 /// The evaluation parameters of a standalone `aggregate`/`arrayop` node.
 ///
 /// Extracted in ONE place so the per-cell oracle ([`eval_arrayop`]) and the
@@ -1422,7 +1612,10 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
 /// compute a *different* array while both look correct in isolation.
 pub(super) struct ArrayOpSpec<'n> {
     pub(super) idx_names: &'n [String],
-    pub(super) ranges: Vec<(i64, i64)>,
+    /// Stack-inlined (grid rank ≤ 4 in practice): a standalone aggregate is
+    /// re-specified on every observed materialization of every RHS call, and a
+    /// `Vec` here was one heap allocation per aggregate per call.
+    pub(super) ranges: RangeVec,
     pub(super) body: &'n Expr,
     pub(super) contract_names: Vec<String>,
     pub(super) contract_dims: Vec<ContractDim>,
@@ -1445,7 +1638,7 @@ pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
         .as_ref()
         .unwrap_or_else(|| EMPTY_RANGES.get_or_init(HashMap::new));
     let body: &Expr = node.expr.as_deref()?;
-    let ranges: Vec<(i64, i64)> = idx_names
+    let ranges: RangeVec = idx_names
         .iter()
         .map(|n| {
             let r = ranges_map.get(n).and_then(|s| s.bounds()).unwrap_or([0, 0]);
@@ -1453,11 +1646,13 @@ pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
         })
         .collect();
 
-    // Contracted indices: in ranges_map but not in output_idx.
-    let output_idx_set: std::collections::HashSet<&String> = idx_names.iter().collect();
+    // Contracted indices: in ranges_map but not in output_idx. A linear scan of
+    // `idx_names` (rank ≤ 4) rather than a `HashSet` built per call — the set
+    // was a heap allocation on every aggregate of every RHS evaluation, and it
+    // was probed at most `ranges_map.len()` times.
     let mut sorted_contract_keys: Vec<&String> = ranges_map
         .keys()
-        .filter(|k| !output_idx_set.contains(k))
+        .filter(|k| !idx_names.iter().any(|n| n == *k))
         .collect();
     sorted_contract_keys.sort();
     let contract_names: Vec<String> = sorted_contract_keys.iter().map(|k| (*k).clone()).collect();
@@ -1501,11 +1696,12 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         None => return Value::Scalar(f64::NAN),
     };
 
-    let shape: Vec<usize> = ranges
+    // Stack-inlined (rank ≤ 4): rebuilt for every aggregate of every RHS call.
+    let shape: DimU = ranges
         .iter()
         .map(|(lo, hi)| (hi - lo + 1) as usize)
         .collect();
-    let origin: Vec<i64> = ranges.iter().map(|(lo, _)| *lo).collect();
+    let origin: DimI = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
 
     // Hoist cell-independent (all-static) contraction bounds out of the per-cell
@@ -1550,23 +1746,33 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // per-cell oracle below; any op / ragged-bound the overlay does not handle
     // returns `None` and we fall through. A local `Pool` recycles intermediates.
     if !shape.is_empty() && scan.is_none() {
-        let mut pool = Pool::default();
-        if let Some((vv, _ops)) = try_eval_arrayop_vectorized(
-            idx_names,
-            &ranges,
-            body,
-            &contract_names,
-            &contract_dims,
-            reduce,
-            filter,
-            &*ctx,
-            &mut pool,
-        ) {
-            // `try_eval_arrayop_vectorized` already verified the value covers the
-            // output box exactly (bailing to `None` otherwise) and lifted a bare
-            // scalar into an owned box buffer, so a plain view→owned suffices.
-            let out = vv.view().expect("vectorized arrayop has a view").to_owned();
-            vv.release(&mut pool);
+        // The pool is the THREAD's, not a fresh one per call: a stencil-heavy
+        // model materializes dozens of standalone aggregates per RHS evaluation
+        // and a per-call `Pool::default()` started empty every time, so every
+        // kernel intermediate went to the allocator.
+        let materialized = with_arrayop_pool(|pool| {
+            try_eval_arrayop_vectorized(
+                idx_names,
+                &ranges,
+                body,
+                &contract_names,
+                &contract_dims,
+                reduce,
+                filter,
+                &*ctx,
+                pool,
+            )
+            .map(|(vv, _ops)| {
+                // `try_eval_arrayop_vectorized` already verified the value covers
+                // the output box exactly (bailing to `None` otherwise) and lifted
+                // a bare scalar into an owned box buffer, so a plain view→owned
+                // suffices.
+                let out = vv.view().expect("vectorized arrayop has a view").to_owned();
+                vv.release(pool);
+                out
+            })
+        });
+        if let Some(out) = materialized {
             return Value::Array(Box::new(out));
         }
     }
