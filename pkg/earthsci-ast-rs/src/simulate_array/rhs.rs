@@ -647,6 +647,20 @@ pub(super) fn evaluate_rhs_with_scratch(
                 // (`try_eval_arrayop_vectorized`); a ragged/derived-bound filter
                 // (dynamic contraction window) bails to the per-cell oracle.
                 let lhs_shifts = lhs_constant_shifts(lhs_idx_exprs, output_idx_names);
+                // `ESS_VEC_DEBUG=2`: dump the rule body once, for inspection.
+                if std::env::var("ESS_VEC_DEBUG").as_deref() == Ok("2") {
+                    let path = format!("/tmp/vec_rule_{var_name}.json");
+                    if !std::path::Path::new(&path).exists() {
+                        let _ = std::fs::write(
+                            &path,
+                            serde_json::to_string_pretty(&**body).unwrap_or_default(),
+                        );
+                    }
+                }
+                // Clear any stale trace so the log below belongs to THIS rule.
+                if vec_trace_on() {
+                    let _ = take_bail_log();
+                }
                 if !force_scalar {
                     if let Some(dest_lo) = lhs_shifts
                         .as_ref()
@@ -700,7 +714,10 @@ pub(super) fn evaluate_rhs_with_scratch(
                             lhs_shifts
                         );
                     } else {
-                        eprintln!("[vec-bail] rule D({var_name}) -> per-cell oracle:");
+                        eprintln!(
+                            "[vec-bail] rule D({var_name}) -> per-cell oracle                              (output_idx={output_idx_names:?} contract={contract_names:?}                              reduce={reduce:?} filter={}):",
+                            filter.is_some()
+                        );
                         for (i, l) in log.iter().enumerate() {
                             if i < 24 {
                                 eprintln!("[vec-bail]   {l}");

@@ -646,6 +646,16 @@ pub(super) fn eval_vec_op<'a>(
             pool,
         )),
         "index" => eval_vec_index(node, bx, ctx, pool, ops),
+        // A nested `aggregate` used as an array-valued sub-expression — the
+        // shape every discretized primitive-equation tendency lowers to:
+        // `D(u[i,j,k]) = index(aggregate[i,j,k](…), i, j, k)`. Materialize it
+        // ONCE as a whole array over its own box (recursively through this same
+        // overlay) and let the enclosing `index(...)` align it. Without this arm
+        // the whole rule bailed at its outermost node and the per-cell oracle
+        // then re-materialized the ENTIRE nested array once per output cell —
+        // an O(N²) walk that dominated the RHS. See [`eval_vec_nested_aggregate`]
+        // for the binding-independence precondition that makes hoisting sound.
+        "aggregate" => eval_vec_nested_aggregate(node, bx, ctx, pool, ops),
         "makearray" => eval_vec_makearray(node, bx, ctx, pool, ops),
         "const" => match eval_const(node) {
             Value::Scalar(s) => Some(VecValue::Scalar(s)),
@@ -740,6 +750,88 @@ pub(super) fn eval_vec_op<'a>(
     }
 }
 
+
+/// Whether `expr` mentions the variable `name` anywhere (including in an
+/// `index` axis position, a nested aggregate body, or a `makearray` region
+/// value). Used as a *conservative* dependence test: a false positive only
+/// costs the fast path, never correctness.
+fn expr_mentions(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Variable(v) => v == name,
+        Expr::Number(_) | Expr::Integer(_) => false,
+        Expr::Operator(n) => {
+            n.args.iter().any(|a| expr_mentions(a, name))
+                || n.expr.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.filter.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.lower.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.upper.as_deref().is_some_and(|e| expr_mentions(e, name))
+                || n.values
+                    .as_ref()
+                    .is_some_and(|vs| vs.iter().any(|e| expr_mentions(e, name)))
+        }
+    }
+}
+
+/// Vectorized nested `aggregate`: materialize the sub-array once over the
+/// aggregate's OWN index box, through the same [`try_eval_arrayop_vectorized`]
+/// entry the per-cell oracle's [`eval_arrayop`] tries first. Because both paths
+/// call that one function with parameters derived from the shared
+/// [`arrayop_spec`], a success here returns the byte-identical array the oracle
+/// would have produced — and a failure returns `None`, leaving the oracle in
+/// charge exactly as before.
+///
+/// PRECONDITION (why hoisting out of the enclosing loop is sound): the oracle
+/// re-evaluates this node once per enclosing output tuple, with the enclosing
+/// output symbols and contracted indices bound in `ctx.loop_binds`. Evaluating
+/// it ONCE is therefore only equivalent when the nested node does not depend on
+/// any of those bindings. We bail if the body or filter mentions any enclosing
+/// index symbol, any bound contraction name, or any name already bound in
+/// `ctx.loop_binds` (a scalar `eval` walk that reached this overlay from inside
+/// a per-cell loop). The test is syntactic and conservative — a symbol shadowed
+/// by the aggregate's own `output_idx` is rejected rather than analysed.
+fn eval_vec_nested_aggregate<'a>(
+    node: &ExpressionNode,
+    bx: &VecBox,
+    ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
+    ops: &mut usize,
+) -> Option<VecValue<'a>> {
+    let spec = match arrayop_spec(node) {
+        Some(s) => s,
+        None => bail_vec!("aggregate: node carries no `expr` body"),
+    };
+    if spec.ranges.is_empty() {
+        bail_vec!("aggregate: rank-0 output (scalar reduction)");
+    }
+    for name in bx
+        .syms
+        .iter()
+        .chain(bx.cnames.iter())
+        .chain(ctx.loop_binds.keys())
+    {
+        if expr_mentions(spec.body, name)
+            || spec.filter.is_some_and(|f| expr_mentions(f, name))
+        {
+            bail_vec!(
+                "aggregate: nested body depends on an enclosing bound index",
+                name
+            );
+        }
+    }
+    let (v, sub_ops) = try_eval_arrayop_vectorized(
+        spec.idx_names,
+        &spec.ranges,
+        spec.body,
+        &spec.contract_names,
+        &spec.contract_dims,
+        spec.reduce,
+        spec.filter,
+        ctx,
+        pool,
+    )?;
+    *ops += sub_ops;
+    Some(v)
+}
 
 /// The shared scalar-comparison kernel: the per-cell oracle (`apply_binary`,
 /// eval.rs) and this vectorized overlay both route through it, so the two paths
