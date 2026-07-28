@@ -251,11 +251,12 @@ pub struct DaeInfo {
 /// node kinds. On the wire (§5.4.6 round-trip parse rule), a JSON-number
 /// token containing `.`, `e`, or `E` deserializes to [`Expr::Number`]; a token
 /// matching the integer grammar `-?(0|[1-9][0-9]*)` deserializes to
-/// [`Expr::Integer`]. `#[serde(untagged)]` tries variants in order; `Integer`
-/// appears before `Number` so that the strict integer JSON tokens bind to
-/// `Integer` and float tokens fall through to `Number`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(untagged)]
+/// [`Expr::Integer`]. The hand-written [`Deserialize`] impl below dispatches on
+/// the incoming JSON token type directly, which is what an
+/// `#[serde(untagged)]` derive would decide by trying `Integer` before
+/// `Number`: strict integer JSON tokens bind to `Integer`, float tokens to
+/// `Number`.
+#[derive(Debug, Clone, PartialEq)]
 // Boxing the large variant would change the wire-facing construction/match
 // ergonomics on one of the crate's most-touched types for a size win that
 // profiling has not justified; when a variant IS boxed the field carries its
@@ -275,7 +276,103 @@ pub enum Expr {
     Operator(ExpressionNode),
 }
 
-// `Expr` derives `Deserialize` (untagged) but serializes by hand so that the
+// `Expr` used to derive `Deserialize` with `#[serde(untagged)]`. That derive
+// works by buffering the ENTIRE incoming subtree into serde's `Content` tree
+// and then replaying it against each variant in turn until one sticks. `Expr`
+// is the crate's most common node type and it nests (an operator node's `args`
+// are themselves `Expr`s), so every level of an expression re-buffered its own
+// subtree: a load-phase profile of simpleclimate.esm attributed ~88% of the
+// 15 s load to serde, of which `content_clone` (8.9% self), the matching
+// `drop_in_place::<Content>` (8.9% self) and the allocator traffic they drive
+// (`_int_malloc` 22%, `malloc_consolidate` 11%, `cfree` 10%, `_int_free` 7%)
+// were the bulk. The failed-variant attempts also each construct a discarded
+// `serde_json::Error` (`make_error`, 0.5% self).
+//
+// The hand-written impl below dispatches on the token type the deserializer
+// reports, which is exactly the decision the untagged derive reached by trial:
+//
+//   * a signed integer token        -> `Integer`
+//   * an unsigned token that fits `i64` -> `Integer`; one that does not -> `Number`
+//     (untagged: `i64`'s visitor rejects it, so the `Number(f64)` variant, whose
+//     `deserialize_float` accepts `Content::U64` via `visit_u64`, wins)
+//   * a float token                 -> `Number` (`deserialize_integer` rejects
+//     `Content::F64`, so the untagged derive fell through to `Number` too)
+//   * a string token                -> `Variable`
+//   * a map                         -> `Operator` (`ExpressionNode`)
+//   * a seq                         -> `Operator`, positionally. Obscure, but
+//     serde's `ContentDeserializer::deserialize_struct` visits `Content::Seq`
+//     as a seq, so the untagged derive accepted a full-length positional array
+//     as an `ExpressionNode`; `SeqAccessDeserializer` reproduces that.
+//   * anything else (null, bool, …) -> error, as before. Only the message text
+//     changes: the untagged derive said "data did not match any variant of
+//     untagged enum Expr", this says which type was found instead.
+//
+// Everything streams: no `Content`, no subtree clone, no speculative errors.
+impl<'de> Deserialize<'de> for Expr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ExprVisitor)
+    }
+}
+
+/// Visitor backing [`Expr`]'s hand-written [`Deserialize`]. The unimplemented
+/// `visit_*` hooks fall through to serde's defaults, which widen the narrow
+/// integer/float types onto `visit_i64` / `visit_u64` / `visit_f64` and route
+/// borrowed strings onto `visit_str` — the same widening `Content` performed.
+struct ExprVisitor;
+
+impl<'de> serde::de::Visitor<'de> for ExprVisitor {
+    type Value = Expr;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("an expression: a number, a variable name, or an operator node")
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+        Ok(Expr::Integer(v))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+        // Above `i64::MAX` the untagged derive's `Integer` variant failed and
+        // `Number` took it as a float; keep that.
+        Ok(match i64::try_from(v) {
+            Ok(i) => Expr::Integer(i),
+            Err(_) => Expr::Number(v as f64),
+        })
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+        Ok(Expr::Number(v))
+    }
+
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+        Ok(Expr::Variable(v.to_owned()))
+    }
+
+    fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+        Ok(Expr::Variable(v))
+    }
+
+    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        ExpressionNode::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+            .map(Expr::Operator)
+    }
+
+    fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        ExpressionNode::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
+            .map(Expr::Operator)
+    }
+}
+
+// `Expr` deserializes by hand (above) and serializes by hand so that the
 // `Number` variant obeys the ESM canonical-number rule (§5.5.3.1): an integral
 // float value re-serializes as an INTEGER literal (`0.0` → `0`, `9.0` → `9`),
 // exactly as the JS / Julia / Python bindings do. A derived untagged
@@ -921,6 +1018,150 @@ pub(crate) const EXPR_ARRAY_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_ARRAY)
 /// Name→child-`Expr` map slots (`Option<HashMap<String, Expr>>`), visited in
 /// sorted-key order.
 pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_MAP);
+
+/// Pins the JSON-token → [`Expr`] variant mapping that the hand-written
+/// `Deserialize` impl performs, INCLUDING the corner cases where it has to
+/// reproduce a decision the old `#[serde(untagged)]` derive reached only by
+/// trying variants in order. A hand-written impl that silently widened or
+/// narrowed what parses is the one real hazard of dropping the derive, so each
+/// case below states which untagged behavior it is standing in for.
+#[cfg(test)]
+mod expr_deserialize_token_mapping_tests {
+    use super::*;
+
+    fn parse(src: &str) -> Result<Expr, serde_json::Error> {
+        serde_json::from_str::<Expr>(src)
+    }
+
+    /// The same document routed through `serde_json::Value` — the shape the
+    /// LOADER actually uses (`load_with_options` ends in a `from_value`) —
+    /// must land on the same variant as parsing the text directly.
+    fn parse_via_value(src: &str) -> Result<Expr, serde_json::Error> {
+        let v: serde_json::Value = serde_json::from_str(src).expect("fixture is JSON");
+        serde_json::from_value::<Expr>(v)
+    }
+
+    #[test]
+    fn integer_tokens_bind_to_integer_and_float_tokens_to_number() {
+        // Untagged tried `Integer(i64)` first; `deserialize_integer` accepts
+        // only Content's integer variants, so a float token fell through to
+        // `Number`. §5.4.6 round-trip parse rule.
+        for (src, want) in [
+            ("0", Expr::Integer(0)),
+            ("-7", Expr::Integer(-7)),
+            ("9223372036854775807", Expr::Integer(i64::MAX)),
+            ("-9223372036854775808", Expr::Integer(i64::MIN)),
+            ("0.0", Expr::Number(0.0)),
+            ("9.0", Expr::Number(9.0)),
+            ("1e3", Expr::Number(1e3)),
+            ("-104.52369275835723", Expr::Number(-104.52369275835723)),
+        ] {
+            assert_eq!(parse(src).expect(src), want, "from_str {src}");
+            assert_eq!(parse_via_value(src).expect(src), want, "from_value {src}");
+        }
+    }
+
+    #[test]
+    fn unsigned_tokens_above_i64_max_become_number() {
+        // Untagged: `i64`'s visitor rejects `visit_u64` past `i64::MAX`, so the
+        // `Number(f64)` variant took it (its `deserialize_float` forwards
+        // `Content::U64` to `visit_u64`, which `f64` accepts).
+        let src = "9223372036854775808";
+        let want = Expr::Number(9223372036854775808u64 as f64);
+        assert_eq!(parse(src).expect(src), want);
+        assert_eq!(parse_via_value(src).expect(src), want);
+    }
+
+    #[test]
+    fn string_tokens_bind_to_variable() {
+        assert_eq!(parse(r#""theta""#).unwrap(), Expr::Variable("theta".into()));
+        assert_eq!(
+            parse_via_value(r#""theta""#).unwrap(),
+            Expr::Variable("theta".into())
+        );
+        // A numeric-looking STRING is still a variable reference, never a
+        // number: `Integer` / `Number` reject `Content::Str`.
+        assert_eq!(parse(r#""12""#).unwrap(), Expr::Variable("12".into()));
+    }
+
+    #[test]
+    fn objects_bind_to_operator_nodes() {
+        let src = r#"{"op":"+","args":[1,2.5,"x"]}"#;
+        let Expr::Operator(node) = parse(src).expect(src) else {
+            panic!("expected an operator node");
+        };
+        assert_eq!(node.op, "+");
+        assert_eq!(
+            node.args,
+            vec![
+                Expr::Integer(1),
+                Expr::Number(2.5),
+                Expr::Variable("x".into())
+            ]
+        );
+        assert_eq!(parse_via_value(src).expect(src), Expr::Operator(node));
+    }
+
+    #[test]
+    fn non_expression_tokens_are_rejected() {
+        // Untagged rejected these too (no variant matched) — only the message
+        // wording changes. `[1,2]` is a SHORT positional array: it stands in
+        // for the seq case, which `ExpressionNode`'s derived `visit_seq`
+        // rejects for want of the remaining fields, exactly as it did when
+        // `ContentDeserializer::deserialize_struct` fed it a `Content::Seq`.
+        // `{"op":"x"}` covers the required-field rule: `ExpressionNode::args`
+        // carries no `#[serde(default)]`, so an operator node without `args`
+        // is rejected here exactly as it was under the derive.
+        for src in ["null", "true", "false", "[]", "[1,2]", "{}", r#"{"op":"x"}"#] {
+            assert!(parse(src).is_err(), "{src} must not parse as an Expr");
+            assert!(
+                parse_via_value(src).is_err(),
+                "{src} must not parse as an Expr via Value"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_expressions_recurse_through_every_child_slot() {
+        // The nesting is the whole reason the untagged derive was expensive
+        // (each level re-buffered its own subtree); make sure the streaming
+        // impl still reaches children in `args`, the scalar slots, and the
+        // map slots.
+        let src = r#"{
+            "op":"arrayop","args":[],"output_idx":["i"],
+            "expr":{"op":"*","args":[{"op":"-","args":["a",1]},2.0]},
+            "filter":{"op":">","args":["i",0]},
+            "axes":{"z":{"op":"+","args":["b",3]}}
+        }"#;
+        let Expr::Operator(node) = parse(src).expect("nested fixture parses") else {
+            panic!("expected an operator node");
+        };
+        let Some(Expr::Operator(inner)) = node.expr.as_deref() else {
+            panic!("expr slot must hold an operator node");
+        };
+        assert_eq!(inner.op, "*");
+        assert_eq!(inner.args[1], Expr::Number(2.0));
+        let Expr::Operator(lhs) = &inner.args[0] else {
+            panic!("nested arg must be an operator node");
+        };
+        assert_eq!(lhs.args, vec![Expr::Variable("a".into()), Expr::Integer(1)]);
+        assert!(node.filter.is_some());
+        assert!(node.axes.as_ref().is_some_and(|m| m.contains_key("z")));
+    }
+
+    #[test]
+    fn parse_emit_round_trip_is_byte_identical() {
+        // The `Serialize` half is unchanged, but the round trip is what the
+        // AST byte-identity conformance actually pins, so guard the pair.
+        for src in [
+            r#"{"op":"+","args":[1,"x"]}"#,
+            r#"{"op":"/","args":[{"op":"sin","args":["t"]},2.5]}"#,
+        ] {
+            let expr = parse(src).expect(src);
+            assert_eq!(serde_json::to_string(&expr).unwrap(), src);
+        }
+    }
+}
 
 #[cfg(test)]
 mod expr_child_spec_tests {
