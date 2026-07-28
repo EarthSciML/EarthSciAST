@@ -38,6 +38,9 @@ const _NK_CONTRACTION  = UInt8(6)   # runtime ⊕-reduction over children (seq. 
 const _NK_CACHED       = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
 const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: payload[idx] (ess-14f.3)
 const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an EVAL-TIME-computed offset (wall2 Phase B)
+const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter (ess-runtime-contraction)
+const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
+const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
 
 # One compiled scalar-IR node. `kind` selects which fields are live. The
 # catch-all `payload::Any` slot carries a KIND-DEPENDENT runtime payload,
@@ -127,6 +130,92 @@ struct _ConstGatherRef
     vals::AbstractArray   # the frozen const/provider source array (read at eval time)
     name::String          # its `const_arrays` registry name — diagnostics / identity
 end
+
+# ── Runtime contraction loop (ess-runtime-contraction) ──────────────────────
+# A uniform reduction Σ_{k∈lo:step:hi} body(k, u, …) COMPILED ONCE into a single
+# loop node instead of unrolled into `length(k)` scalar terms. The tree-walk
+# default UNROLLS a contracted (reduction) index at build time — O(N) IR nodes
+# per output cell, O(N²) for a 2-D contraction — which makes `prepare` blow up
+# quadratically in the reduction size. This node keeps the body as ONE compiled
+# subtree and iterates the range at EVALUATION time, so build IR size is O(1) in
+# the reduction length and the numeric result matches the unrolled fold (the
+# accumulation order is identical; see `_eval_contraction_loop`).
+#
+# `_ContractLoop` is the eval-time payload of an `_NK_CONTRACTION_LOOP` node.
+# `ref` is the shared loop counter — the SAME `Ref{Int}` object every
+# `_NK_LOOPVAR` leaf in the body reads (its per-iteration integer value). The
+# fold's ⊕ rides on the node's `op`, seeded from 0̄ on the node's `literal`.
+struct _ContractLoop
+    ref::Base.RefValue{Int}
+    lo::Int
+    hi::Int
+    step::Int
+end
+
+# Build-time side channel carrying the loop metadata from `_resolve_scalar_arrayop`
+# (resolve pass) to `_compile` (compile pass) on a synthetic `__contract_loop`
+# marker op's `.value` slot — the exact pattern `_ConstGatherRef` uses. A resolved
+# body is never re-substituted (`_sub_preserving` runs BEFORE resolution), so the
+# `.value` survives to `_compile` intact, the same guarantee `_ConstGatherRef`
+# relies on. The single child arg of the marker op is the loop body expression.
+struct _ContractLoopBuild
+    ref::Base.RefValue{Int}
+    lo::Int
+    hi::Int
+    step::Int
+    oplus::Symbol
+    zerobar::Float64
+end
+
+# Reserved loop-variable name (Symbol) → its shared counter `Ref`, populated by
+# `_resolve_scalar_arrayop` and read by `_compile`'s `VarExpr` arm to lower a
+# loop-var reference to an `_NK_LOOPVAR` node. Cleared at the top of every build
+# (`_build_evaluator_impl`) so it never grows across builds; a loop-var name is
+# GLOBALLY UNIQUE (a monotonic counter), so a stale entry can never be confused
+# with a fresh one within a build. Build is single-threaded, so no locking.
+const _LOOPVAR_REFS = Dict{Symbol,Base.RefValue{Int}}()
+const _LOOPVAR_COUNTER = Ref(0)
+const _LOOPVAR_PREFIX = "__esm_lv_"
+_fresh_loopvar_name() = (_LOOPVAR_COUNTER[] += 1; "$(_LOOPVAR_PREFIX)$(_LOOPVAR_COUNTER[])")
+
+# ── Runtime STATE gather in a contraction-loop body (ess-runtime-contraction) ──
+# The state-source case: a loop body reads STATE at a slot that depends on the
+# (symbolic) contracted index — `q[donor(i,k)]`, where `donor` may be plain
+# arithmetic in the loop var OR an indirect const-connectivity gather
+# `index(conn, i, k)`. The unroll bakes a distinct `_NK_STATE` per k; the loop
+# instead computes the slot AT EVAL TIME from the current loop counter and reads
+# `u` there. `_StateGather` is the eval-time payload of an `_NK_STATE_GATHER` node
+# (analogous to `_ConstGatherArray`, but the frozen table holds STATE SLOTS and
+# the final read hits `u`, so the value carries a derivative). `slot_flat[off+1]`
+# is the flat `u` index of the state cell whose per-dim subscript is
+# `lo[d] + local_d` (column-major `off`); a subscript outside `[lo,hi]` is a ghost
+# cell and yields 0̄ (the state-array ghost convention, matching the unroll's
+# out-of-bounds → `NumExpr(0.0)`). The subscript expressions are the node's
+# `children` (loop-var-dependent `_Node`s), evaluated and bounds-checked here.
+struct _StateGather
+    slot_flat::Vector{Int}
+    strides::Vector{Int}
+    lo::Vector{Int}
+    hi::Vector{Int}
+    len::Int
+end
+
+# Build→compile side channel (like `_ConstGatherRef`): carries the resolved state
+# slot table on a `__state_gather` marker op's `.value`; `_compile` compiles the
+# subscript `args` as children and lowers the node to `_NK_STATE_GATHER`.
+struct _StateGatherRef
+    slot_flat::Vector{Int}
+    strides::Vector{Int}
+    lo::Vector{Int}
+    hi::Vector{Int}
+end
+
+# Build-scoped cache of a state array's flat slot table (vname → (slot_flat,
+# strides)). The table maps a state cell's per-dim logical index to its flat `u`
+# slot; it depends ONLY on the state array's `var_map` layout, so it is built once
+# per state var per build and shared across every output cell's loop node. Cleared
+# at the top of every build (`_build_evaluator_impl`).
+const _STATE_SLOT_TABLES = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
 
 # ── Per-equation build memo (ess-perf: compile one representative per group) ──
 # Within one array equation's cell loop every cell resolves/compiles against the
@@ -300,6 +389,14 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
     if sym in param_syms
         return _mknode(kind=_NK_PARAM, sym=sym)
     end
+    # A reserved runtime-contraction loop variable (ess-runtime-contraction):
+    # `_resolve_scalar_arrayop` kept the contracted index symbolic and registered
+    # its shared counter `Ref` here. Lower to an `_NK_LOOPVAR` leaf that reads the
+    # ref at eval time (the enclosing `_NK_CONTRACTION_LOOP` writes it per iteration).
+    lref = get(_LOOPVAR_REFS, sym, nothing)
+    if lref !== nothing
+        return _mknode(kind=_NK_LOOPVAR, payload=lref)
+    end
     throw(TreeWalkError("E_TREEWALK_UNBOUND_VARIABLE", name))
 end
 function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
@@ -377,6 +474,31 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     if op_sym === :fn
         return _compile_fn_node(expr,
             a -> _compile(a, var_map, param_syms, reg_funcs, memo))
+    end
+    # Runtime contraction loop marker (ess-runtime-contraction): the loop body is
+    # the single child arg, compiled ONCE here; the loop metadata rides on `.value`.
+    # Compiles iff the (unrolled) body would compile — the only leaf difference is a
+    # loop-var `VarExpr` (→ `_NK_LOOPVAR`) where the unroll puts an `IntExpr`, and no
+    # `_compile` arm treats those two leaf kinds differently — so this never fails
+    # where the unroll fallback would have succeeded.
+    if op_sym === :__contract_loop
+        lb = expr.value::_ContractLoopBuild
+        body = _compile(expr.args[1], var_map, param_syms, reg_funcs, memo)
+        return _mknode(kind=_NK_CONTRACTION_LOOP, op=lb.oplus, literal=lb.zerobar,
+                       payload=_ContractLoop(lb.ref, lb.lo, lb.hi, lb.step),
+                       children=_Node[body])
+    end
+    # Runtime state gather (ess-runtime-contraction): a state read at a
+    # loop-var-dependent slot. The subscript `args` compile as children (a loop
+    # var → `_NK_LOOPVAR`, an indirect const-connectivity subscript → a nested
+    # `_NK_CONST_GATHER`); the slot table + bounds ride on `.value`.
+    if op_sym === :__state_gather
+        ref = expr.value::_StateGatherRef
+        subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        return _mknode(kind=_NK_STATE_GATHER,
+                       payload=_StateGather(ref.slot_flat, ref.strides, ref.lo, ref.hi,
+                                            length(ref.slot_flat)),
+                       children=subs)
     end
 
     children = _Node[_compile(a, var_map, param_syms, reg_funcs, memo)
@@ -1476,9 +1598,79 @@ end
         return _cse_read(n.payload::_CSECache, n.idx, T)
     elseif k === _NK_CONTRACTION
         return _eval_contraction(n, u, p, t, T)
+    elseif k === _NK_LOOPVAR
+        # Current value of the enclosing runtime contraction loop counter
+        # (ess-runtime-contraction). Always an INTEGER (a contracted index), so
+        # `T(::Int)` is a constant of the value type — zero derivative under AD.
+        return T((n.payload::Base.RefValue{Int})[])
+    elseif k === _NK_CONTRACTION_LOOP
+        return _eval_contraction_loop(n, u, p, t, T)
+    elseif k === _NK_STATE_GATHER
+        return _eval_state_gather(n, u, p, t, T)
     else
         return _eval_node_op(n, u, p, t, T)
     end
+end
+
+# Runtime state read at a loop-var-dependent slot (ess-runtime-contraction).
+# Evaluates the subscript children to integers, bounds-checks each against the
+# state array's `[lo,hi]` (an out-of-range subscript is a ghost cell → 0̄, matching
+# the unroll), computes the column-major offset into the frozen slot table, and
+# reads `u` at that flat slot. Returns `eltype(u)` on both arms exactly as the
+# `_NK_STATE` leaf does (so the state axis stays derivative-carrying under
+# ForwardDiff and the arm is type-stable); zero per-call allocation.
+function _eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T}
+    sg = n.payload::_StateGather
+    children = n.children
+    off = 0
+    @inbounds for d in eachindex(children)
+        sub = round(Int, _eval_node(children[d], u, p, t, T))
+        (sg.lo[d] <= sub <= sg.hi[d]) || return zero(eltype(u))   # ghost cell
+        off += (sub - sg.lo[d]) * sg.strides[d]
+    end
+    slot = @inbounds sg.slot_flat[off + 1]
+    @inbounds return u[slot]
+end
+
+# Compile-once runtime ⊕-reduction (ess-runtime-contraction). Iterates the static
+# integer range `lo:step:hi`, writing the counter into the shared `Ref` every
+# iteration so the ONE compiled `body` (whose `_NK_LOOPVAR` leaves read that ref)
+# yields term(k); folds with ⊕ seeded from 0̄ (`n.literal`). The iteration order is
+# `_expand_int_range`'s order — the SAME order the unroll path (`_foreach_aggregate_term`
+# → `_combine_with_reducer`) accumulates in — so a single-index loop is bit-identical
+# to the unrolled fold (modulo the leading `0̄ ⊕ ·`, itself an identity for all four
+# semirings). Nested loops (multi-index) group the sum by the outer index, a
+# reassociation within ~length·eps of the flat unroll. Zero per-call allocation: the
+# ref is built once at compile time; the fold is stack-only and type-stable in `T`.
+function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
+    spec = n.payload::_ContractLoop
+    ref = spec.ref
+    body = @inbounds n.children[1]
+    op = n.op
+    s = T(n.literal)
+    rng = spec.lo:spec.step:spec.hi
+    if op === :+
+        @inbounds for k in rng
+            ref[] = k
+            s += _eval_node(body, u, p, t, T)
+        end
+    elseif op === :*
+        @inbounds for k in rng
+            ref[] = k
+            s *= _eval_node(body, u, p, t, T)
+        end
+    elseif op === :max
+        @inbounds for k in rng
+            ref[] = k
+            s = max(s, _eval_node(body, u, p, t, T))
+        end
+    else  # :min
+        @inbounds for k in rng
+            ref[] = k
+            s = min(s, _eval_node(body, u, p, t, T))
+        end
+    end
+    return s
 end
 
 # Runtime ⊕-reduction over a node's children, parameterized by semiring (§5.1).

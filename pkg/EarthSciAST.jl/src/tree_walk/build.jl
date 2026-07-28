@@ -2633,6 +2633,12 @@ function _build_evaluator_impl(model::Model;
                          # decl). Supplied by the `EsmFile` front-door when the
                          # document carries references; `nothing` everywhere else.
                          _template_reg=nothing)
+    # Runtime contraction-loop var registry (ess-runtime-contraction) is a
+    # build-scoped resolve→compile side channel; clear any stale entries from a
+    # prior build so it never accumulates across builds. Loop-var names are
+    # globally unique, so this only drops dead entries.
+    empty!(_LOOPVAR_REFS)
+    empty!(_STATE_SLOT_TABLES)   # build-scoped state-gather slot tables (ess-runtime-contraction)
     # ---- Compile-once template tier: expand references at the entry, keeping
     # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
     # every fallback path below sees exactly the fused expanded tree Option A
@@ -3032,6 +3038,42 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     end
 
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+
+    # ── Array-einsum runtime contraction loop (ess-runtime-contraction) ────────
+    # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` with a UNIFORM
+    # constant-bound inner reduction is compiled to ONE `_NK_CONTRACTION_LOOP` per
+    # OUTPUT cell (the contracted indices k… kept SYMBOLIC, the output indices i…
+    # concrete) instead of unrolling the body into `∏|k…|` terms per cell — so build
+    # IR is O(1) in the reduction length per cell (vs O(∏|k…|), quadratic-or-worse).
+    # The loop cells route to `percell_scalar` (→ `rhs_list`, the `ESS_STENCIL_DISABLE`
+    # scalar-walk REFERENCE path), so the loop node NEVER reaches the affine /
+    # acc-merge / access-kernel / oop-merge / codegen passes, which model unrolled
+    # scalar terms — the same safety envelope the scalar-reduction loop uses. Gated
+    # exactly as the scalar path (const integer bounds, ⊕∈{+,*,max,min}, no join /
+    # filter, total length ≥ floor) PLUS a loopability PROBE on the first output cell:
+    # if the body indexes STATE at a contracted index (no static per-k slot) the probe
+    # returns `nothing` and the einsum takes the existing affine / unroll path,
+    # unchanged. Small reductions (< floor) also keep the existing path, so the vast
+    # existing array-kernel test surface is byte-for-byte unaffected.
+    use_contraction_loop = false
+    if _contraction_loop_enabled() && !isempty(contract_names) &&
+       agg_gates === nothing && agg_filter === nothing &&
+       all(c -> c !== nothing, contract_const) &&
+       (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
+       !isempty(range_iters) && all(!isempty, range_iters)
+        total_contract = prod(length(c) for c in contract_const)
+        if total_contract >= _contraction_loop_min()
+            first_idx = Dict{String,ASTExpr}(idx_names[d] => IntExpr(Int64(first(range_iters[d])))
+                                             for d in 1:length(idx_names))
+            probe = _sub_preserving(rhs_body, first_idx)
+            probe = isempty(resolved_obs) ? probe : _sub_preserving(probe, resolved_obs)
+            pranges = [_expand_int_range(contract_ranges[d]) for d in 1:length(contract_names)]
+            use_contraction_loop = _try_build_contraction_loop(probe, contract_names,
+                pranges, rhs_oplus, rhs_zerobar, array_var_info, var_map,
+                const_registry, pgather) !== nothing
+        end
+    end
+
     # Affine polyhedral build (ess-affine, stencil_affine.jl): O(#structural
     # groups), producing `_AccKernel`s that resolve gathers at runtime. This is the
     # DEFAULT array-kernel build; it now carries its own eval-time optimization
@@ -3056,7 +3098,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
-    if !_stencil_disabled()
+    if !_stencil_disabled() && !use_contraction_loop
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
         affine_body =
@@ -3106,7 +3148,8 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     # cell entries merge into indirect-outs access kernels (acc_merge.jl) — or,
     # under ESS_STENCIL_DISABLE=1, stay plain per-cell scalar nodes (the
     # differential reference).
-    _tally_cascade!(_stencil_disabled() ? :percell_disabled : :percell_acc)
+    _tally_cascade!(use_contraction_loop ? :percell_loop :
+                    _stencil_disabled() ? :percell_disabled : :percell_acc)
     _compile_arrayop_percell!(percell_scalar, acc_kernels, covered, lhs_body, rhs_body;
         idx_names=idx_names, range_iters=range_iters,
         contract_names=contract_names, contract_ranges=contract_ranges,
@@ -3114,7 +3157,8 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
         rhs_zerobar=rhs_zerobar, agg_gates=agg_gates, agg_filter=agg_filter,
         resolved_obs=resolved_obs, array_var_info=array_var_info,
         var_map=var_map, const_registry=const_registry, pgather=pgather,
-        param_sym_set=param_sym_set, reg_funcs=reg_funcs)
+        param_sym_set=param_sym_set, reg_funcs=reg_funcs,
+        contraction_loop=use_contraction_loop)
     return nothing
 end
 
@@ -3143,9 +3187,18 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
         rhs_oplus::String, rhs_zerobar::Float64, agg_gates, agg_filter,
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs)
+        pgather::AbstractDict, param_sym_set, reg_funcs,
+        contraction_loop::Bool=false)
     cell_entries = Tuple{Int,_Node}[]
     cell_memo = _BuildMemo()
+    # A scalar aggregate NESTED in this array-equation cell body must keep
+    # unrolling: its node flows into the stencil / access-kernel merge, which
+    # models unrolled scalar terms. Mark the array-cell resolve so
+    # `_resolve_scalar_arrayop` confines the runtime contraction loop to scalar
+    # contexts (ess-runtime-contraction). try/finally: the guard must unwind even
+    # if a cell resolve throws.
+    _ARRAY_CELL_DEPTH[] += 1
+    try
     for idx_tuple in Iterators.product(range_iters...)
         idx_env  = Dict{String,Int}(idx_names[d] => idx_tuple[d]
                                     for d in 1:length(idx_names))
@@ -3182,6 +3235,27 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
                       _sub_preserving(sub_rhs_outer, resolved_obs)
             rhs_r = _resolve_indices(sub_rhs, array_var_info, var_map, const_registry, pgather, cell_memo)
             push!(cell_entries, (idx, _compile(rhs_r, var_map, param_sym_set, reg_funcs, cell_memo)))
+        elseif contraction_loop
+            # Runtime contraction loop (ess-runtime-contraction): compile the inner
+            # reduction ONCE into an `_NK_CONTRACTION_LOOP` for THIS output cell —
+            # the output indices are already concrete in `sub_rhs_outer`; the
+            # contracted indices stay symbolic and iterate at eval time. Constant
+            # bounds + no join/filter are guaranteed by the caller's gate; the
+            # loopability probe already passed, so a per-cell failure is a build
+            # invariant break (raised loudly, never silently miscompiled).
+            body2 = isempty(resolved_obs) ? sub_rhs_outer :
+                    _sub_preserving(sub_rhs_outer, resolved_obs)
+            pranges = [_expand_int_range(contract_ranges[d])
+                       for d in 1:length(contract_names)]
+            marker = _try_build_contraction_loop(body2, contract_names, pranges,
+                        rhs_oplus, rhs_zerobar, array_var_info, var_map,
+                        const_registry, pgather)
+            marker === nothing &&
+                throw(TreeWalkError("E_TREEWALK_CONTRACTION_LOOP_INTERNAL",
+                    "einsum contraction-loop build failed for a cell after the " *
+                    "loopability probe passed (build invariant break)"))
+            push!(cell_entries, (idx, _compile(marker, var_map, param_sym_set,
+                                               reg_funcs, cell_memo)))
         else
             # Generalized einsum: compile each contracted-index term
             # separately, then accumulate at runtime using _NK_CONTRACTION
@@ -3234,7 +3308,14 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
             end
         end
     end
-    if _stencil_disabled()
+    finally
+        _ARRAY_CELL_DEPTH[] -= 1
+    end
+    if contraction_loop || _stencil_disabled()
+        # Loop cells evaluate through the plain scalar walker (`_eval_node`),
+        # bypassing the affine / acc-merge / access-kernel / oop-merge / codegen
+        # passes entirely (ess-runtime-contraction) — this IS the stencil-disabled
+        # reference path, so the result is the reference result.
         append!(percell_scalar, cell_entries)
     else
         append!(acc_kernels, _acc_from_cell_entries(cell_entries))

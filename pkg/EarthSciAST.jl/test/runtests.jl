@@ -128,6 +128,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")
     include("tree_walk_observed_slots_test.jl")
+    include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     include("tree_walk_xcse_test.jl")
     include("tree_walk_const_array_boundary_test.jl")
