@@ -623,9 +623,48 @@ function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)
         return @inbounds cache[n.idx]
     elseif k === _NK_CONTRACTION
         return _oop_contraction(n, u, p, t, cache, fb)
+    elseif k === _NK_LOOPVAR
+        # ess-runtime-contraction: enclosing loop counter, an integer constant of T.
+        return convert(T, (n.payload::Base.RefValue{Int})[])
+    elseif k === _NK_CONTRACTION_LOOP
+        return _oop_contraction_loop(n, u, p, t, cache, fb)
     else
         return _oop_eval_op(n, u, p, t, cache, fb)
     end
+end
+
+# OOP twin of `_eval_contraction_loop` (ess-runtime-contraction). Same static-range
+# iteration, same 0̄-seeded ⊕-fold, so a Float64 `:oop` run stays bit-identical to
+# `f!` — the property the in-place tests use `:oop` as an oracle for.
+function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
+    spec = n.payload::_ContractLoop
+    ref = spec.ref
+    body = @inbounds n.children[1]
+    op = n.op
+    s = convert(T, n.literal)
+    rng = spec.lo:spec.step:spec.hi
+    if op === :+
+        @inbounds for k in rng
+            ref[] = k
+            s += _oop_eval(body, u, p, t, cache, fb)
+        end
+    elseif op === :*
+        @inbounds for k in rng
+            ref[] = k
+            s *= _oop_eval(body, u, p, t, cache, fb)
+        end
+    elseif op === :max
+        @inbounds for k in rng
+            ref[] = k
+            s = max(s, _oop_eval(body, u, p, t, cache, fb))
+        end
+    else  # :min
+        @inbounds for k in rng
+            ref[] = k
+            s = min(s, _oop_eval(body, u, p, t, cache, fb))
+        end
+    end
+    return s
 end
 
 function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}

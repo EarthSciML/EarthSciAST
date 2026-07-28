@@ -2633,6 +2633,11 @@ function _build_evaluator_impl(model::Model;
                          # decl). Supplied by the `EsmFile` front-door when the
                          # document carries references; `nothing` everywhere else.
                          _template_reg=nothing)
+    # Runtime contraction-loop var registry (ess-runtime-contraction) is a
+    # build-scoped resolve→compile side channel; clear any stale entries from a
+    # prior build so it never accumulates across builds. Loop-var names are
+    # globally unique, so this only drops dead entries.
+    empty!(_LOOPVAR_REFS)
     # ---- Compile-once template tier: expand references at the entry, keeping
     # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
     # every fallback path below sees exactly the fused expanded tree Option A
@@ -3146,6 +3151,14 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
         pgather::AbstractDict, param_sym_set, reg_funcs)
     cell_entries = Tuple{Int,_Node}[]
     cell_memo = _BuildMemo()
+    # A scalar aggregate NESTED in this array-equation cell body must keep
+    # unrolling: its node flows into the stencil / access-kernel merge, which
+    # models unrolled scalar terms. Mark the array-cell resolve so
+    # `_resolve_scalar_arrayop` confines the runtime contraction loop to scalar
+    # contexts (ess-runtime-contraction). try/finally: the guard must unwind even
+    # if a cell resolve throws.
+    _ARRAY_CELL_DEPTH[] += 1
+    try
     for idx_tuple in Iterators.product(range_iters...)
         idx_env  = Dict{String,Int}(idx_names[d] => idx_tuple[d]
                                     for d in 1:length(idx_names))
@@ -3233,6 +3246,9 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
                                               children=k_nodes)))
             end
         end
+    end
+    finally
+        _ARRAY_CELL_DEPTH[] -= 1
     end
     if _stencil_disabled()
         append!(percell_scalar, cell_entries)
