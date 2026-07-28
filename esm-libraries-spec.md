@@ -594,6 +594,22 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      consumers — graph construction, simulation backends, emit — resolve surviving
      `apply_expression_template` references against this registry; a consumer MAY evaluate them
      natively or via `Expand` (esm-spec §9.6.4 rule 2), whose observable behavior is identical.
+   - **Ordering (normative).** "Post-step-2 scoping" above is an ordering requirement, not a
+     parenthetical: the step-2 free-variable rename runs on each component's carried bodies
+     **before** the union is taken, and the deep-equal dedup compares the post-scoping bodies.
+     Deduplicating pre-scoping bodies is unsound — two components importing one library, each
+     supplying its own `inv_dx`, carry byte-identical entries whose free `inv_dx` denotes a
+     *different* variable in each, and the single surviving body is correct for neither. Scoping
+     the bodies also makes them non-deep-equal, so the collision rename (and its DAG propagation)
+     is what keeps such an entry per-component. A library MUST apply step 2 to the carried bodies
+     in the same pass that namespaces the component's equations, so the two stay in lockstep.
+   - **Applicability.** The requirement binds any library whose flattened representation carries
+     the merged registry. A library that expands every reference at load (esm-spec §9.6.4 rule 2)
+     reaches step 4 with no surviving registry and nothing to scope, so the requirement is vacuous
+     for it — and inherited in full the moment it grows a reference-preserving flatten path. A
+     library MAY expose the union half alone as a separate function over the un-namespaced
+     component view (the `flatten_template_registries` conformance surface); such a function
+     implements step 4 only, and a caller that goes on to namespace MUST compose it with step 2.
 
 **Example:** Given an ESM file with `SimpleOzone` (reaction system with O₃, NO, NO₂), `Advection` (model with `_var` placeholder), and `GEOSFP` (data loader providing T, u, v), coupled via `operator_compose` and `variable_map`, the flattened system contains:
 

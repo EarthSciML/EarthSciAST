@@ -491,6 +491,71 @@ func TestOOL_FlattenRegistryMergeTransitive(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
+// flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
+// the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
+// rule library; `interior_stencil`'s body references the free name `inv_dx`,
+// which is a model-local parameter and so denotes a DIFFERENT variable in each.
+//
+// flattenTemplateRegistries is the UNION half only, over the un-namespaced
+// component view: identical bodies dedupe under their bare names, and the pair
+// it returns is self-consistent with the un-namespaced document. Go reaches this
+// surface only from conformance — it is parse + validate by design and carries
+// no flattened registry at all, so no scoping step exists here and none is
+// required (§10.7, "Applicability across bindings"). The Julia twin of this test
+// also pins the scoping∘merge composition, which its reference-preserving
+// `flatten` does carry; a binding that grows that path inherits the obligation,
+// and this test is what will fail if the merge is fed unscoped bodies from it.
+// -----------------------------------------------------------------------
+
+func TestOOL_FlattenRegistryMergeIsUnionHalfOnly(t *testing.T) {
+	applyNames := func(x any) []string {
+		out := []string{}
+		collectApplyNames(&out, x)
+		return out
+	}
+	loaded := oolLoad(t, "flatten_registry_merge_transitive", "fixture_twins.esm")
+	root, merged := flattenTemplateRegistries(loaded)
+	// Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
+	gotKeys := append([]string(nil), merged.keys...)
+	sort.Strings(gotKeys)
+	if want := []string{"interior_stencil", "outer_stencil"}; !reflect.DeepEqual(gotKeys, want) {
+		t.Fatalf("merged registry keys = %v; want %v", gotKeys, want)
+	}
+	outer := merged.get("outer_stencil").(map[string]any)
+	if got, want := applyNames(outer["body"]), []string{"interior_stencil"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("outer_stencil body references %v; want %v", got, want)
+	}
+	models := root["models"].(map[string]any)
+	for _, m := range []string{"A", "B"} {
+		eqs := models[m].(map[string]any)["equations"]
+		if got, want := applyNames(eqs), []string{"outer_stencil"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("model %s equations reference %v; want %v", m, got, want)
+		}
+	}
+	// Nothing dangles at this layer.
+	for _, k := range merged.keys {
+		for _, r := range applyNames(merged.get(k)) {
+			if !merged.has(r) {
+				t.Errorf("dangling registry reference %s (from %s)", r, k)
+			}
+		}
+	}
+	// The carried body's free variable is NOT component-scoped by this surface:
+	// `inv_dx`, not `A.inv_dx`. Scoping belongs to the caller that namespaces.
+	blob, err := json.Marshal(merged.get("interior_stencil").(map[string]any)["body"])
+	if err != nil {
+		t.Fatalf("marshal interior_stencil body: %v", err)
+	}
+	body := string(blob)
+	if !strings.Contains(body, `"inv_dx"`) {
+		t.Errorf("interior_stencil body lost its free inv_dx: %s", body)
+	}
+	if strings.Contains(body, "A.inv_dx") || strings.Contains(body, "B.inv_dx") {
+		t.Errorf("the union-half surface must not component-scope free variables: %s", body)
+	}
+}
+
+// -----------------------------------------------------------------------
 // Idempotency property over every new emit fixture (RFC §12 gate 2).
 // -----------------------------------------------------------------------
 

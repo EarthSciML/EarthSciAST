@@ -255,6 +255,44 @@ def test_flatten_registry_merge_transitive_collisions_propagate():
 
 
 # ---------------------------------------------------------------------------
+# flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
+# the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
+# rule library; `interior_stencil`'s body references the free name `inv_dx`,
+# which is a model-local parameter and so denotes a DIFFERENT variable in each.
+#
+# `flatten_template_registries` is the UNION half only, over the un-namespaced
+# component view: identical bodies dedupe under their bare names, and the pair
+# it returns is self-consistent with the un-namespaced document. Python reaches
+# this surface only from conformance — `parse` runs Expand-at-build (§9.6.4 rule
+# 2) so the typed IR never carries a surviving reference and `flatten` carries no
+# registry, which is why no scoping step exists here and none is required
+# (§10.7, "Applicability across bindings"). The Julia twin of this test also
+# pins the scoping∘merge composition, which its reference-preserving `flatten`
+# does carry; if Python ever grows that path it inherits the obligation, and
+# this test is what will fail if the merge is fed unscoped bodies from it.
+# ---------------------------------------------------------------------------
+def test_flatten_registry_merge_is_the_union_half_only():
+    from earthsci_ast.template_imports import _collect_apply_names
+
+    loaded = _load("flatten_registry_merge_transitive", "fixture_twins.esm")
+    root, merged = flatten_template_registries(loaded)
+    # Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
+    assert set(merged.keys()) == {"interior_stencil", "outer_stencil"}
+    assert _collect_apply_names([], merged["outer_stencil"]["body"]) == ["interior_stencil"]
+    assert _collect_apply_names([], root["models"]["A"]["equations"]) == ["outer_stencil"]
+    assert _collect_apply_names([], root["models"]["B"]["equations"]) == ["outer_stencil"]
+    # Nothing dangles at this layer.
+    for decl in merged.values():
+        for ref in _collect_apply_names([], decl):
+            assert ref in merged, ref
+    # The carried body's free variable is NOT component-scoped by this surface:
+    # `inv_dx`, not `A.inv_dx`. Scoping belongs to the caller that namespaces.
+    body = json.dumps(merged["interior_stencil"]["body"])
+    assert '"inv_dx"' in body
+    assert "A.inv_dx" not in body and "B.inv_dx" not in body
+
+
+# ---------------------------------------------------------------------------
 # Idempotency property over every new emit fixture (RFC §12 gate 2).
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(

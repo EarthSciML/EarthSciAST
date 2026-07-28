@@ -269,6 +269,45 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   })
 
   // -------------------------------------------------------------------------
+  // flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
+  // the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
+  // rule library; `interior_stencil`'s body references the free name `inv_dx`,
+  // which is a model-local parameter and so denotes a DIFFERENT variable in each.
+  //
+  // `flattenTemplateRegistries` is the UNION half only, over the un-namespaced
+  // component view: identical bodies dedupe under their bare names, and the pair
+  // it returns is self-consistent with the un-namespaced document. TypeScript
+  // reaches this surface only from conformance — its load path expands every
+  // surviving reference (§9.6.4 rule 2) so `flatten` carries no registry, which
+  // is why no scoping step exists here and none is required (§10.7,
+  // "Applicability across bindings"). The Julia twin of this test also pins the
+  // scoping∘merge composition, which its reference-preserving `flatten` does
+  // carry; if TypeScript ever grows that path it inherits the obligation, and
+  // this test is what will fail if the merge is fed unscoped bodies from it.
+  // -------------------------------------------------------------------------
+  it('flatten_registry_merge: the shared surface is the union half only', () => {
+    const loaded = loadRefPreserving('flatten_registry_merge_transitive', 'fixture_twins.esm')
+    const { root, merged } = flattenTemplateRegistries(loaded)
+    const names = (x: unknown): string[] => collectApplyNames(x, [])
+    // Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
+    expect(new Set(Object.keys(merged))).toEqual(new Set(['interior_stencil', 'outer_stencil']))
+    expect(names((merged.outer_stencil as any).body)).toEqual(['interior_stencil'])
+    const models = root.models as Record<string, any>
+    expect(names(models.A.equations)).toEqual(['outer_stencil'])
+    expect(names(models.B.equations)).toEqual(['outer_stencil'])
+    // Nothing dangles at this layer.
+    for (const decl of Object.values(merged)) {
+      for (const r of names(decl)) expect(Object.keys(merged)).toContain(r)
+    }
+    // The carried body's free variable is NOT component-scoped by this surface:
+    // `inv_dx`, not `A.inv_dx`. Scoping belongs to the caller that namespaces.
+    const body = JSON.stringify((merged.interior_stencil as any).body)
+    expect(body).toContain('"inv_dx"')
+    expect(body).not.toContain('A.inv_dx')
+    expect(body).not.toContain('B.inv_dx')
+  })
+
+  // -------------------------------------------------------------------------
   // Idempotency property over every new emit fixture (RFC §12 gate 2).
   // -------------------------------------------------------------------------
   it.each([

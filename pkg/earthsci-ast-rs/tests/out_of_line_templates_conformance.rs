@@ -340,6 +340,50 @@ fn flatten_registry_merge_transitive_collisions_propagate() {
 }
 
 // ---------------------------------------------------------------------------
+// flatten_registry_merge_transitive/fixture_twins.esm (§9.6.4 rule 7, §10.7):
+// the SCOPING PRECONDITION, pinned. Two byte-identical models import the same
+// rule library; `interior_stencil`'s body references the free name `inv_dx`,
+// which is a model-local parameter and so denotes a DIFFERENT variable in each.
+//
+// `flatten_template_registries` is the UNION half only, over the un-namespaced
+// component view: identical bodies dedupe under their bare names, and the pair
+// it returns is self-consistent with the un-namespaced document. Rust reaches
+// this surface only from conformance — `parse` runs Expand-at-build (§9.6.4
+// rule 2) so the typed IR never carries a surviving reference and
+// `FlattenedSystem` carries no registry, which is why no scoping step exists
+// here and none is required (§10.7, "Applicability across bindings"). The Julia
+// twin of this test also pins the scoping∘merge composition, which its
+// reference-preserving `flatten` does carry; if Rust ever grows that path it
+// inherits the obligation, and this test is what will fail if the merge is fed
+// unscoped bodies from it.
+// ---------------------------------------------------------------------------
+#[test]
+fn flatten_registry_merge_is_the_union_half_only() {
+    let loaded = load_b("flatten_registry_merge_transitive", "fixture_twins.esm").unwrap();
+    let (root, merged) = oob::flatten_template_registries(&loaded);
+    // Step-4 answer on identical (unscoped) bodies: dedup under the bare names.
+    let keys: std::collections::HashSet<&str> = merged.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["interior_stencil", "outer_stencil"].into_iter().collect()
+    );
+    assert_eq!(apply_names(&merged["outer_stencil"]["body"]), ["interior_stencil"]);
+    assert_eq!(apply_names(&root["models"]["A"]["equations"]), ["outer_stencil"]);
+    assert_eq!(apply_names(&root["models"]["B"]["equations"]), ["outer_stencil"]);
+    // Nothing dangles at this layer.
+    for decl in merged.values() {
+        for r in apply_names(decl) {
+            assert!(merged.contains_key(&r), "dangling registry reference {r}");
+        }
+    }
+    // The carried body's free variable is NOT component-scoped by this surface:
+    // `inv_dx`, not `A.inv_dx`. Scoping belongs to the caller that namespaces.
+    let body = merged["interior_stencil"]["body"].to_string();
+    assert!(body.contains("\"inv_dx\""), "{body}");
+    assert!(!body.contains("A.inv_dx") && !body.contains("B.inv_dx"), "{body}");
+}
+
+// ---------------------------------------------------------------------------
 // Idempotency property (RFC §12 gate 2): emit ∘ load is a byte-wise fixed
 // point. Runs over EVERY conformance `fixture*.esm` that emits successfully
 // (error fixtures are skipped by construction — they never emit).

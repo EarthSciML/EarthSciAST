@@ -241,9 +241,11 @@ order (DFS post-order over the edges), so the first instance wins:
 
 ## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
 
-Both fixtures are consumed through the shared `flatten_template_registries`
+Every fixture here is consumed through the shared `flatten_template_registries`
 surface (Julia / Python / Rust / TypeScript / Go): load Option-B, merge the
 per-component registries, compare merged keys and the rewritten reference sites.
+Julia additionally drives its executing `flatten`, the only binding whose
+flattened representation carries the merged registry.
 
 ### `flatten_registry_merge/` (fixture.esm only)
 
@@ -269,6 +271,31 @@ mentioned. All four entries must therefore be owner-path renamed
 collision arises without any `rebind` once flatten applies the §10.7
 component-scoping to a body's free variables — which is why a document that
 loads and runs as a single model can break the moment a second model is added.
+
+### `flatten_registry_merge_transitive/fixture_twins.esm`
+
+The **scoping precondition**, isolated: the same two models with no `rebind`, so
+their registries are byte-identical. `interior_stencil`'s body references the
+free name `inv_dx`, a model-local parameter that denotes a *different* variable
+in each model. The fixture pins the two layers of §10.7 against each other:
+
+- **The union half** — `flatten_template_registries`, the surface all five
+  bindings share, working on the **un-namespaced** component view — sees
+  identical bodies and dedupes them under their bare names
+  (`{interior_stencil, outer_stencil}`), leaving the free `inv_dx` alone. The
+  pair it returns is self-consistent with the un-namespaced document.
+- **scoping ∘ merge** — Julia's executing `flatten`, the only binding whose
+  flattened representation carries a registry, applies the §10.7 component
+  scoping first. That rewrites `inv_dx` to `A.inv_dx` / `B.inv_dx`, makes the
+  copies non-deep-equal, and forces the owner-path rename of all four entries
+  (the wrapper via the reference-DAG propagation above).
+
+Deduping *before* scoping would keep one body whose `inv_dx` is correct for
+neither model, which is why the ordering is normative (esm-spec §10.7,
+esm-libraries-spec §4.7.5 step 4). The four bindings that expand every reference
+at load carry no registry into flatten and so have nothing to scope; they pin
+the union half here, and inherit the composition the moment they grow a
+reference-preserving flatten path.
 
 ## Scope-directed template injection (esm-spec §9.7.10)
 
