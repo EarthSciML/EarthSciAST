@@ -80,8 +80,33 @@
 //! per hit would eat the win. Entries therefore live in boxed slabs whose
 //! addresses are stable, and a hit is served as a borrowed
 //! [`VecValue::View`] — the same zero-copy shape a state-array read already
-//! takes, so every downstream kernel handles it unchanged. See [`CseRt::get`]
-//! for the aliasing argument.
+//! takes, so every downstream kernel handles it unchanged. See
+//! [`CseRt::slab_view`] for the aliasing argument.
+//!
+//! ## Lookup
+//!
+//! Both of the overlay's per-node questions — "is this node memoizable, and
+//! under what class?" and "is that class already evaluated in this scope?" —
+//! are asked once per node VISIT, ~483k times per RHS call and ~1.9e9 times
+//! over a 0.25-day solve of `simpleclimate.esm`. Asking them of a `HashMap` put
+//! the answer behind a hash and two cache misses, which measured at 8.6% of the
+//! solve (7.1% of it in `class_of` alone) — a third of what the overlay had left
+//! per node visit.
+//!
+//! Neither question needs a hash, because both key spaces are fixed once the
+//! analysis has run:
+//!
+//! * node → class is fixed for a rule set (that is exactly what
+//!   [`CseRt::retarget`] guarantees), so it is resolved, at [`CseRt::analyse`]
+//!   time, into [`AddrClasses`] — a flat open-addressed table keyed by a 32-bit
+//!   node ordinal, one cache line per probe.
+//! * class ids are DENSE (6,734 of them here against 662k classified nodes), so
+//!   the memo is a dense row of class-indexed cells per open scope, stamped with
+//!   the scope that wrote it. See [`Inner::memo`].
+//!
+//! Both structures are exact re-encodings, not approximations: they answer what
+//! the maps answered, and `ESS_CSE_PARANOID=1` asserts that node-visit by
+//! node-visit over a whole solve.
 
 use super::*;
 use crate::types::{Expr, ExpressionNode};
@@ -539,8 +564,13 @@ impl AddrClasses {
         let (min_new, max_new) = entries
             .iter()
             .fold((usize::MAX, 0usize), |(lo, hi), &(a, _)| (lo.min(a), hi.max(a)));
-        let lo = if self.count == 0 { min_new } else { self.lo.min(min_new) };
-        let hi = self.hi.max(max_new);
+        // `count == 0` means nothing is stored, so the recorded bounds say
+        // nothing and the new batch defines them outright.
+        let (lo, hi) = if self.count == 0 {
+            (min_new, max_new)
+        } else {
+            (self.lo.min(min_new), self.hi.max(max_new))
+        };
         let new_base = lo & !BASE_ALIGN_MASK;
         if (hi - new_base) >> ADDR_SHIFT >= EMPTY_KEY as usize {
             return false;
