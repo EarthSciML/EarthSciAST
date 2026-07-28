@@ -1,0 +1,84 @@
+{
+    "fixture": "ic_param_override",
+    "assertions": [
+        {
+            "test_id": "ic_param_default",
+            "assertion_idx": 1,
+            "variable": "u",
+            "reduce": null,
+            "actual": 0.9510565162951535
+        },
+        {
+            "test_id": "ic_param_default",
+            "assertion_idx": 2,
+            "variable": "u",
+            "reduce": null,
+            "actual": -0.9510565162951535
+        },
+        {
+            "test_id": "ic_param_default",
+            "assertion_idx": 3,
+            "variable": "u",
+            "reduce": "max",
+            "actual": 0.9510565162951535
+        },
+        {
+            "test_id": "ic_param_zero",
+            "assertion_idx": 1,
+            "variable": "u",
+            "reduce": null,
+            "actual": 0.0
+        },
+        {
+            "test_id": "ic_param_zero",
+            "assertion_idx": 2,
+            "variable": "u",
+            "reduce": "max",
+            "actual": 0.0
+        },
+        {
+            "test_id": "ic_param_zero",
+            "assertion_idx": 3,
+            "variable": "u",
+            "reduce": "min",
+            "actual": 0.0
+        },
+        {
+            "test_id": "ic_param_zero",
+            "assertion_idx": 4,
+            "variable": "u",
+            "reduce": null,
+            "actual": 0.0
+        },
+        {
+            "test_id": "ic_param_zero",
+            "assertion_idx": 5,
+            "variable": "v",
+            "reduce": "Linf_error",
+            "actual": 0.9510565162951535
+        },
+        {
+            "test_id": "ic_param_double",
+            "assertion_idx": 1,
+            "variable": "u",
+            "reduce": null,
+            "actual": 1.902113032590307
+        },
+        {
+            "test_id": "ic_param_double",
+            "assertion_idx": 2,
+            "variable": "u",
+            "reduce": "min",
+            "actual": -1.902113032590307
+        },
+        {
+            "test_id": "ic_param_double",
+            "assertion_idx": 3,
+            "variable": "v",
+            "reduce": "Linf_error",
+            "actual": 0.9510565162951535
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_pde_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/ic_param_override.esm. The `ic_param_zero` min collapse is recorded as +0.0: with A overridden to 0 the seeded field is a mix of +0.0 and -0.0 cells, and Julia's `minimum` propagates the signed zero while NumPy's `min` and the Rust fold return +0.0. IEEE `-0.0 == 0.0`, so every binding matches this golden exactly as well as within the manifest tolerance."
+}

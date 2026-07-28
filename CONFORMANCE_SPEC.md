@@ -1810,6 +1810,77 @@ callback's `post_refresh` hook — so it additionally gates the field band; Pyth
 and Rust re-materialize the state-free contraction at each segment's RHS, forcing
 frozen, so the numeric result matches Julia's materialized path).
 
+### 5.14 Inline-Test `parameter_overrides` in the Build-Time Scope (normative)
+
+§5.12 and §5.13 govern what a binding materializes at setup; this section governs
+**which parameter values that materialization sees** when the run is an inline
+test. esm-spec §6.6.5 ("Build-time evaluation scope") makes every reference
+resolved *before* the simulation runs — a coordinate-expression `ic` (§11.4.1),
+an inline analytic assertion `reference`, and the analytic materialization of a
+directly-asserted state-free array observed — bind the model's parameters to
+their **`parameter_overrides`-or-default** values. esm-spec §6.6 pins those
+overrides as "keyed by **local** parameter name". The three simulation bindings —
+**Julia, Python, Rust** — must agree on the resulting assertion actuals. The
+shared **offline** fixture lives in
+`tests/conformance/pde_inline_ic_param_override/`.
+
+This is a **quiet-wrong-answer** gate, not a feature gate. A binding that drops
+the override does not error: it builds the PRODUCTION initial state, evaluates
+the assertions against it, and still prints PASS or FAIL. Julia's tree-walk build
+resolved `parameter_overrides` by EXACT key against the *flattening-qualified*
+parameter name (`M.A`), so the spec-spelled local key (`A`) missed every consumer
+— the `ic` seed, the parameter `NamedTuple`, and `inspect.params` (the §6.6.5
+reference / observed assertion scope) — and the test silently ran the default
+configuration.
+
+#### 5.14.1 What is compared
+
+Each in-scope binding runs the fixture's inline tests through its official
+inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+every assertion's ACTUAL against the Julia-minted golden, keyed by
+`(test_id, assertion_idx)` — the three tests differ *only* in their
+`parameter_overrides`, so the pair is the identity.
+
+| Band | rtol | atol |
+|------|------|------|
+| Assertion actual (vs golden) | 1e-9 | 1e-11 |
+
+#### 5.14.2 Non-vacuity
+
+Parameter `A` (default 1.0) appears **only** inside `ic(u) = A·cos(πx)` and inside
+the analytic `reference` of two assertions — never in an equation. An override of
+`A` can therefore change the answer through the build-time scope and through
+nothing else. The three tests are `A` **defaulted** (the anchor: the field is
+demonstrably nonzero, so `0.0` elsewhere proves something), `A = 0` (the field
+collapses to zero), and `A = 2` (the override is *read*, not merely defaulted to
+zero). State `v` is seeded by the parameter-FREE `ic(v) = cos(πx)` and is the
+independent anchor the `A`-dependent `reference` is measured against, so a binding
+that ignored the override in BOTH the `ic` and the `reference` cannot have the two
+errors cancel and still pass.
+
+#### 5.14.3 Signed zero
+
+Under `A = 0` the seeded field mixes `+0.0` and `-0.0` cells. Julia's `minimum`
+propagates the signed zero while NumPy's `min` and the Rust fold return `+0.0`;
+IEEE `-0.0 == 0.0`, so the `min` collapse is recorded as `+0.0` in the golden and
+every binding matches it exactly as well as within the band.
+
+#### 5.14.4 Gate
+
+Per-binding runners drive the fixture and gate every assertion actual against the
+committed golden: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_ic_param_override_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_pde_inline_ic_param_override_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/pde_inline_ic_param_override_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]` (Julia is where the key
+canonicalization was fixed; Python already resolved exact-then-bare per parameter
+in `_resolve_override`, and Rust already stripped the single-model `<namespace>.`
+prefix in `normalize_override_keys`). Each runner additionally pins the naming
+contract directly: BOTH the local (`A`) and the qualified (`M.A`) spelling must
+bind the build-time scope, and an override naming no parameter stays inert.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
