@@ -55,12 +55,70 @@ terms — safe because const arrays are build-time read-only (the same sharing
   added to `CONFORMANCE_SPEC.md`. Other-language engines are free to (but need not)
   adopt an equivalent optimization; observable behavior is unchanged.
 
-## Deferred: the full-scale oracle number
+## CLOSED: the full-scale oracle number
 
-Reproducing `sum(deathsK)=7524.918845602511` end-to-end through `build_evaluator` needs
-~3.2 GiB of re-fetched SR data plus the multi-GiB model-build (MTK/Symbolics) footprint —
-which does not fit the 8 GiB dev machine (the build stack alone thrashes it). The
-mechanism is proven at 52,411-cell scale (Phase C probe) and on the real `deathsK`
-structure (Phase E); the definitive oracle run is deferred to a larger machine. The
-`run-model-jl-pushdown` runner Manifest is already re-pointed at this `wall2` worktree
-for that run; `L3_FIRSTN=<n> julia --project=. L3_full.jl` drives it (reduced or full).
+**Status: done.** `isrm.esm`'s `run-model-jl-pushdown/L3_full.jl` now reproduces the
+tutorial totals end-to-end through `EA.build_evaluator`'s observed graph, at full
+52,411 × 1,520 × 43,650 scale against the live `s3://inmap-model/isrm_v1.2.1.zarr`:
+
+```
+BUILD done in 634.3 s
+gated selection: layer=1  |members|=1520  rcv=Colon()   (1,520 SR rows fetched, not 52,411)
+evaluating observed deathsK ... 305.1 s   [fastpath hits=21 miss=0]
+  sum(deathsK) = 7524.918845602511   target 7524.918845602511   rel.err 0.0%
+  sum(deathsL) = 16979.63217148708   target 16979.632171487083  rel.err -0.0%
+```
+
+Peak RSS ≈ 7.8 GiB. Phase C's fast path engaged everywhere (`miss=0`).
+
+### The old diagnosis in this section was wrong — do not repeat it
+
+This section previously said the run needed "a larger machine." It did not. Moving to a
+188 GiB box did **not** make it run; it OOM-killed at ~25 GiB inside a 40 GiB cgroup.
+Three independent, unrelated causes were in play, and none of them was hardware:
+
+1. **The zarr reader buffered every chunk before assembling the output.** EarthSciIO's
+   Julia and Rust readers accumulated all decoded chunks in a `Dict`/`HashMap` keyed by
+   chunk coordinate, then assembled. For one SR pathway that is 416 chunks × ~21 MB
+   decompressed = **8.7 GiB held to produce a 0.59 GiB slab** (~15×). Fixed by scattering
+   each chunk into the output and freeing it immediately (EarthSciIO `822ee6d` Julia,
+   `ceca310` Rust; the Python reader already streamed). Measured at ISRM scale:
+   9.17 → 1.56 GiB and 193.1 → 120.8 s. Not an EarthSciAST bug at all.
+
+2. **Julia sizes its GC heap from total system RAM, not from the cgroup.** With 188 GiB
+   visible and a 40 GiB `memory.max`, the heap grows past the cap before collecting — so
+   **a larger machine makes this failure mode worse, not better**, which is exactly the
+   inversion the old text fell into. Fixed by passing `--heap-size-hint` sized to the
+   cgroup minus whatever else shares it. Never size it from `free -g`.
+
+3. **Array-valued observeds were inlined into every consumer cell** — the real blocker,
+   and the only one in this package. `deathsK` consumes `conc_*`, which consume the
+   per-source emission fields `E_VOC`/`E_NOx`/…; each of those is itself a spatial join
+   (an aggregate over source cells × all 43,650 emission records, with containment
+   comparisons). Inlined, that entire join was re-evaluated at **each of the 52,411
+   receptor cells**: ≈ 5 × 1,520 × 43,650 terms per cell ≈ 1.7e13 node evaluations, or
+   ~870 years at the measured 158 ns/node. Note this sits *upstream* of Phases B–E: the
+   compile-once path was engaging correctly, it was just compiling a body that contained
+   the whole join. Fixed by materializing array-valued observeds once and referencing the
+   result — `perf/array-observed-factor` for the runtime path, and this branch's
+   `_materialized_obs_scope` for the build-time `_observed_field` path.
+
+The lesson worth keeping: "it OOMs at scale" was three separate defects in two repos plus
+a runtime-configuration mistake. Each was found by measurement — a memory probe isolating
+a single fetch (cause 1), a two-pathway plateau test ruling out retention (cause 2), and a
+CPU profile putting 99.3% of samples under `_eval_cells → _CellEval → _eval_node` with
+`_eval_node_comparison` a top self-time frame (cause 3). Sizing hardware against the
+symptom would have fixed none of them.
+
+### Reproducing
+
+`run-model-jl-pushdown`'s Manifest must point at an EarthSciAST carrying the cause-3 fix
+and an EarthSciIO carrying the cause-1 fix. Then:
+
+```
+julia -t 2 --heap-size-hint=12G --project=. L3_full.jl     # full run
+L3_FIRSTN=<n> julia --project=. L3_full.jl                 # reduced, self-checking
+```
+
+The full run also emits a `results.json` in the isrm.esm cross-language contract shape
+with `mode="runtime_observed_graph"`.

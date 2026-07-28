@@ -477,13 +477,38 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     exts = Int[]
     for s in v.shape
         iset = get(file.index_sets, String(s), nothing)
-        (iset !== nothing && iset.kind == "interval" && iset.size !== nothing) ||
-            return nothing
-        push!(exts, Int(iset.size))
+        iset === nothing && return nothing
+        e = if iset.kind == "interval"
+            iset.size
+        elseif iset.kind == "categorical"
+            iset.members === nothing ? nothing : length(iset.members)
+        elseif iset.kind == "derived"
+            # A DERIVED axis is sized by value invention, which has already run
+            # by the time an observed field is requested. `derived_extents` is
+            # keyed by the PRODUCER id, so resolve through `from_faq` — without
+            # this an observed shaped on an invented axis (ISRM's per-source
+            # `E_VOC` over `emis_src_cells`) is simply unreadable, even though
+            # the same axis resolves fine one level down when the observed is a
+            # producer of something else.
+            iset.from_faq === nothing ? nothing :
+                get(insp.derived_extents, String(iset.from_faq), nothing)
+        else
+            nothing
+        end
+        e === nothing && return nothing
+        push!(exts, Int(e))
     end
     qualified = String(mname) * "." * String(variable)
-    expr = get(insp.observed_exprs, qualified,
-               get(insp.observed_exprs, String(variable), nothing))
+    # The fully-substituted form: self-contained, always evaluable, and the only
+    # form a build without `observed_defs` publishes. This stays the FALLBACK.
+    inlined = get(insp.observed_exprs, qualified,
+                  get(insp.observed_exprs, String(variable), nothing))
+    # The UN-inlined form: cheap when its producers can be materialized (they
+    # are then evaluated once instead of per output cell), but it references
+    # them BY NAME — so it is only usable if every one of them resolves.
+    raw = get(insp.observed_defs, qualified,
+              get(insp.observed_defs, String(variable), nothing))
+    expr = inlined === nothing ? raw : inlined
     expr === nothing && return nothing
     # `vec` flattens the comprehension to a `Vector{Vector{Int}}` for ANY rank:
     # over a rank≥2 `CartesianIndices` the comprehension yields a `Matrix`
@@ -494,9 +519,145 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # observed-field ordering, so `field`/`reference` pair cell-for-cell.
     cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
                                   for I in CartesianIndices(Tuple(exts))]))
-    field = evaluate_cellwise(expr, cells; const_arrays=insp.const_arrays,
-                              params=_param_scope_with_aliases(insp.params))
+    params = _param_scope_with_aliases(insp.params)
+    # Try the cheap path FIRST, and fall back on any failure. The un-inlined
+    # definition names its producers, so it only evaluates when every one of
+    # them was materialized; a producer this build-time scope cannot evaluate
+    # (a deferred/gated provider array that is not yet fetched, one reading
+    # STATE, an unsized axis) leaves a dangling reference and raises
+    # E_TREEWALK_UNBOUND_VARIABLE. The inlined form has no such dependency, so
+    # falling back to it makes this change strictly an optimisation: identical
+    # values when it succeeds, previous behaviour exactly when it cannot.
+    if raw !== nothing
+        try
+            ca = _materialized_obs_scope(insp, file, mname, String(variable), params)
+            if ca !== insp.const_arrays          # something actually materialized
+                return (evaluate_cellwise(raw, cells; const_arrays=ca, params=params),
+                        cells)
+            end
+        catch
+            # fall through to the inlined form below
+        end
+    end
+    field = evaluate_cellwise(expr, cells; const_arrays=insp.const_arrays, params=params)
     return (field, cells)
+end
+
+"""
+    _materialized_obs_scope(insp, file, mname, target, params) -> const-array scope
+
+Materialize the ARRAY-shaped observed producers `target` depends on, once each in
+dependency order, and return `insp.const_arrays` augmented with those buffers.
+
+Why this exists. `evaluate_cellwise` walks the expression once PER OUTPUT CELL, so
+an array observed inlined into its readers is re-executed at every cell of the
+consumer's field. The ISRM model composes `E_p[c]` — a spatial join, an aggregate
+over source cells x ALL emission records with rectangle-containment comparisons —
+into `conc_p[rcv] = Σ_s SR_p[s,rcv]·E_p[s]`, into `TotalPM25`, into `deathsK`. So
+evaluating `deathsK` re-ran the entire spatial join once per receptor cell:
+`5 · |ppl| · |records|` terms at each of 52,411 cells, ~1.7e13 evaluations at full
+scale. Materializing each producer once makes it O(1) in the consumer's cell count.
+
+This is deliberately SEPARATE from the RHS-side factoring
+(`_collect_materialized_array_obs`), which roots liveness at the `D`/`ic` equations
+and so factors nothing at all for a pure-algebraic model — no state, every result
+an observed — which is exactly the shape that suffers most here. The root for the
+build-time path is the observed the caller asked for.
+
+Values are unchanged. A buffer holds exactly what the inlined expression would have
+recomputed at that index, and the reduction order within each aggregate is
+untouched, so the consumer gathers identical numbers.
+
+Returns `insp.const_arrays` itself when there is nothing to materialize, so models
+whose observeds are scalar or independent keep the previous behaviour and cost.
+"""
+function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
+                                 mname::AbstractString, target::AbstractString,
+                                 params::AbstractDict)
+    isempty(insp.observed_defs) && return insp.const_arrays
+    model = get(file.models, String(mname), nothing)
+    model === nothing && return insp.const_arrays
+
+    lookup(n) = get(insp.observed_defs, String(mname) * "." * n,
+                    get(insp.observed_defs, n, nothing))
+    # Extents of an array observed from its declared shape. Goes through the
+    # build's own resolver so a DATA-DERIVED axis works too — the ISRM emission
+    # binning is shaped on `emis_src_cells`, whose size value invention
+    # discovers, and an interval-only lookup would skip exactly the observed
+    # that matters most. `nothing` ⇒ not materializable (scalar / unsized axis).
+    function extents(n)
+        v = get(model.variables, n, nothing)
+        (v !== nothing && v.type == ObservedVariable &&
+         v.shape !== nothing && !isempty(v.shape)) || return nothing
+        ex = Int[]
+        for s in v.shape
+            iset = get(file.index_sets, String(s), nothing)
+            iset === nothing && return nothing
+            e = if iset.kind == "interval"
+                iset.size
+            elseif iset.kind == "categorical"
+                iset.members === nothing ? nothing : length(iset.members)
+            elseif iset.kind == "derived"
+                # `derived_extents` is keyed by the PRODUCER id, so follow the
+                # set's `from_faq`. Without this the ISRM emission binning —
+                # shaped on the value-invented `emis_src_cells` — is skipped,
+                # and skipping it leaves every consumer above it unresolvable.
+                iset.from_faq === nothing ? nothing :
+                    get(insp.derived_extents, String(iset.from_faq), nothing)
+            else
+                nothing
+            end
+            (e === nothing || Int(e) <= 0) && return nothing
+            push!(ex, Int(e))
+        end
+        return isempty(ex) ? nothing : ex
+    end
+
+    # Post-order DFS from the target over observed→observed references: a name is
+    # emitted only after everything it reads, so a single left-to-right pass fills
+    # buffers in dependency order. Cycles cannot occur (the build already rejects
+    # them), but `onstack` keeps this total even if one slipped through.
+    order = String[]; done = Set{String}(); onstack = Set{String}()
+    function visit(n)
+        (n in done || n in onstack) && return
+        push!(onstack, n)
+        def = lookup(n)
+        if def !== nothing
+            for r in EarthSciAST._referenced_var_names(def)
+                lookup(String(r)) === nothing || visit(String(r))
+            end
+        end
+        delete!(onstack, n); push!(done, n); push!(order, n)
+    end
+    visit(String(target))
+
+    ca = Dict{String,Any}(insp.const_arrays)
+    materialized = 0
+    for n in order
+        n == String(target) && continue        # the caller evaluates this one
+        haskey(ca, n) && continue              # already supplied by the caller
+        def = lookup(n); def === nothing && continue
+        ex = extents(n); ex === nothing && continue
+        any(<=(0), ex) && continue
+        cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
+                                      for I in CartesianIndices(Tuple(ex))]))
+        vals = try
+            evaluate_cellwise(def, cells; const_arrays=ca, params=params)
+        catch
+            # A producer this build-time scope cannot evaluate (e.g. one reading
+            # STATE, which is out of scope here) simply stays un-materialized —
+            # its readers then inline it, exactly as before.
+            continue
+        end
+        length(vals) == length(cells) || continue
+        buf = Array{Float64}(undef, Tuple(ex)...)
+        @inbounds for (i, c) in enumerate(cells)
+            buf[CartesianIndex(Tuple(c))] = vals[i]
+        end
+        ca[n] = buf
+        materialized += 1
+    end
+    return materialized == 0 ? insp.const_arrays : ca
 end
 
 # Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
