@@ -41,59 +41,86 @@ fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Build the tape, check the expected fallback count, and assert bitwise `dy`
-/// equality against the production interpreter over several seeded states and
-/// times — for BOTH executors: the reference executor (fresh run per state)
-/// and the Step 3b fast executor (one warm taped scratch across all of them).
+/// Build BOTH tapes (fused and unfused), check the expected fallback count,
+/// and assert bitwise `dy` equality against the production interpreter over
+/// several seeded states and times — for BOTH executors on BOTH programs:
+/// the reference executor (fresh run per state) and the Step 3b fast
+/// executor (one warm taped scratch per program across all of them). Returns
+/// the FUSED program.
 fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -> TapeProgram {
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
-    assert_eq!(
-        report.fallbacks.len(),
-        expect_fallbacks,
-        "unexpected fallback set: {:?}",
-        report.fallbacks
+    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), true);
+    let (prog_uf, report_uf) = compiled.build_tape_opts(&HashSet::new(), false);
+    for rep in [&report, &report_uf] {
+        assert_eq!(
+            rep.fallbacks.len(),
+            expect_fallbacks,
+            "unexpected fallback set: {:?}",
+            rep.fallbacks
+        );
+    }
+    assert!(
+        prog_uf.fused.is_empty() && prog_uf.fuse_stats.n_groups == 0,
+        "the unfused build must not fuse"
+    );
+    assert!(
+        prog.instrs.len() <= prog_uf.instrs.len(),
+        "fusion must not grow the program"
     );
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let mut fast_scratch = compiled.debug_new_scratch_taped();
     assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
+    // A second warm fast scratch carrying the UNFUSED program.
+    let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
+    fast_uf.install_tape(
+        std::rc::Rc::new(prog_uf),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
+    let prog_uf = {
+        // Rebuild for the reference arm (the scratch consumed the first).
+        compiled.build_tape_opts(&HashSet::new(), false).0
+    };
     let mut fast_stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
         for &t in &[0.0, 0.37, 2.5] {
             let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            let mut dy = vec![0.0f64; n];
-            run_reference(&prog, &compiled, &state, &param_vec, t, &mut dy);
-            for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: tape-ref {a:?} ({:016x}) vs \
-                     interpreter {b:?} ({:016x})",
-                    a.to_bits(),
-                    b.to_bits()
-                );
+            for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
+                let mut dy = vec![0.0f64; n];
+                run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
+                for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "seed {seed} t {t}: dy[{k}] diverged: {label} tape-ref {a:?} \
+                         ({:016x}) vs interpreter {b:?} ({:016x})",
+                        a.to_bits(),
+                        b.to_bits()
+                    );
+                }
             }
-            let mut dy_fast = vec![0.0f64; n];
-            compiled.debug_eval_rhs_into(
-                &state,
-                t,
-                &param_vec,
-                &mut dy_fast,
-                &mut fast_scratch,
-                &mut fast_stats,
-            );
-            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: FAST exec {a:?} ({:016x}) vs \
-                     interpreter {b:?} ({:016x})",
-                    a.to_bits(),
-                    b.to_bits()
+            for (label, scratch) in [("fused", &mut fast_scratch), ("unfused", &mut fast_uf)] {
+                let mut dy_fast = vec![0.0f64; n];
+                compiled.debug_eval_rhs_into(
+                    &state,
+                    t,
+                    &param_vec,
+                    &mut dy_fast,
+                    scratch,
+                    &mut fast_stats,
                 );
+                for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "seed {seed} t {t}: dy[{k}] diverged: {label} FAST exec {a:?} \
+                         ({:016x}) vs interpreter {b:?} ({:016x})",
+                        a.to_bits(),
+                        b.to_bits()
+                    );
+                }
             }
         }
     }
@@ -300,11 +327,17 @@ fn ab_contraction_with_filter_mask() {
         }}
     });
     let prog = ab_check(doc, 0, -2.0, 2.0);
-    assert!(
-        prog.instrs
+    let has_select = prog
+        .instrs
+        .iter()
+        .any(|i| matches!(i, Instr::Select { .. }))
+        || prog
+            .fused
             .iter()
-            .any(|i| matches!(i, Instr::Select { .. })),
-        "the filter mask must lower to Select instructions"
+            .any(|fs| fs.micro.iter().any(|m| matches!(m, MicroOp::Select { .. })));
+    assert!(
+        has_select,
+        "the filter mask must lower to Select instructions (plain or fused)"
     );
 }
 
@@ -718,21 +751,24 @@ fn coloring_invariants() {
         }}
     });
     let compiled = compile(doc);
-    let (prog, report) = compiled.build_tape(&HashSet::new());
+    // The unfused program: this test pins the (shared) slab-coloring logic,
+    // and needs enough surviving intermediates to actually recycle (the fused
+    // program of this small fixture collapses to a couple of groups).
+    let (prog, report) = compiled.build_tape_opts(&HashSet::new(), false);
     assert!(report.fallbacks.is_empty());
 
     // def / last-use per slot (linear order, re-defs count as uses).
     let mut def = vec![usize::MAX; prog.slots.len()];
     let mut last = vec![0usize; prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        if let Some(o) = ins.out() {
+        ins.for_each_def(&prog.fused, |o| {
             if def[o as usize] == usize::MAX {
                 def[o as usize] = i;
             } else {
                 last[o as usize] = last[o as usize].max(i);
             }
-        }
-        ins.for_each_read(&prog.dy_writes, |s| {
+        });
+        ins.for_each_read(&prog.dy_writes, &prog.fused, |s| {
             last[s as usize] = last[s as usize].max(i);
         });
     }
@@ -801,12 +837,20 @@ fn value_numbering_scope_behaviour() {
         "the repeated subtree must hit the value numbering"
     );
     // Exactly one subtraction of the two gathers (plus none duplicated): count
-    // Bin(Sub) instructions — 1 for d (shared), not 2.
+    // Bin(Sub) instructions (plain or fused) — 1 for d (shared), not 2.
     let subs = prog
         .instrs
         .iter()
         .filter(|i| matches!(i, Instr::Bin { op, .. } if *op == super::super::BinCode::Sub))
-        .count();
+        .count()
+        + prog
+            .fused
+            .iter()
+            .flat_map(|fs| fs.micro.iter())
+            .filter(
+                |m| matches!(m, MicroOp::Bin { op, .. } if *op == super::super::BinCode::Sub),
+            )
+            .count();
     assert_eq!(subs, 1, "repeated subtree must be lowered once");
 }
 
@@ -1059,6 +1103,98 @@ fn ab_model_file_if_available() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Step 4: kernel fusion.
+// ---------------------------------------------------------------------------
+
+/// Shifted-read gather folding, all three fold shapes at once on a 2-D box:
+/// a periodic WRAP along the leading axis (two-segment roll), a Dirichlet
+/// GHOST-edge shift (uncovered edge rows read `+0.0`), and a LINEAR
+/// level-slice read (constant element stride from a deeper box). The A/B
+/// harness proves byte equality of the fused program (shifted reads) against
+/// the unfused program (materialized gathers) and the legacy interpreter.
+#[test]
+fn ab_shifted_read_folding_wrap_ghost_linear() {
+    let (ni, nj) = (8, 6);
+    let idx2 = |var: &str, i: serde_json::Value, j: serde_json::Value| {
+        json!({"op": "index", "args": [var, i, j]})
+    };
+    // Wrap Laplacian along i on u[i,j]; ghost Laplacian along i on v[i,j];
+    // plus a level-slice coupling w[i,3] broadcast down the j axis via a
+    // 1-D observed.
+    let lap_wrap = json!({"op": "+", "args": [
+        idx2("u", wrap(json!({"op": "-", "args": ["i", 1]}), 1, ni), json!("j")),
+        {"op": "*", "args": [-2.0, idx2("u", json!("i"), json!("j"))]},
+        idx2("u", wrap(json!({"op": "+", "args": ["i", 1]}), 1, ni), json!("j"))
+    ]});
+    let lap_ghost = json!({"op": "+", "args": [
+        idx2("v", json!({"op": "-", "args": ["i", 1]}), json!("j")),
+        {"op": "*", "args": [-2.0, idx2("v", json!("i"), json!("j"))]},
+        idx2("v", json!({"op": "+", "args": ["i", 1]}), json!("j"))
+    ]});
+    let d2 = |var: &str, rhs: serde_json::Value| {
+        json!({
+            "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+                    "expr": {"op": "D", "args": [
+                        {"op": "index", "args": [var, "i", "j"]}], "wrt": "t"},
+                    "ranges": {"i": [1, ni], "j": [1, nj]}},
+            "rhs": rhs
+        })
+    };
+    let agg2 = |body: serde_json::Value| {
+        json!({"op": "aggregate", "args": [], "output_idx": ["i", "j"],
+               "ranges": {"i": [1, ni], "j": [1, nj]}, "expr": body})
+    };
+    let doc = json!({
+        "esm": "0.1.0",
+        "metadata": {"name": "tape_fold"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "state", "shape": ["i", "j"]},
+                "v": {"type": "state", "shape": ["i", "j"]},
+                "w": {"type": "state", "shape": ["i", "j"]},
+                // s[i] = 0.5 * w[i, 3]: a linear (strided) slice read.
+                "s": {"type": "observed", "shape": ["i"],
+                      "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                          "ranges": {"i": [1, ni]},
+                          "expr": {"op": "*", "args": [0.5,
+                              {"op": "index", "args": ["w", "i", 3]}]}}}
+            },
+            "equations": [
+                d2("u", agg2(json!({"op": "*", "args": [0.25, lap_wrap]}))),
+                d2("v", agg2(json!({"op": "*", "args": [0.25, lap_ghost]}))),
+                d2("w", agg2(json!({"op": "*", "args": [
+                    {"op": "index", "args": ["s", "i"]},
+                    {"op": "index", "args": ["w", "i", "j"]}
+                ]})))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    // Folding happened: fewer materialized gathers than plans, and at least
+    // one group carries a wrap (multi-run), a ghost run, and a strided
+    // (linear) input.
+    assert!(
+        prog.fuse_stats.n_gathers_folded >= 4,
+        "expected the stencil gathers to fold: {:?}",
+        prog.fuse_stats
+    );
+    let any_multi_run = prog.fused.iter().any(|f| f.runs.len() > 1);
+    let any_ghost = prog
+        .fused
+        .iter()
+        .flat_map(|f| f.runs.iter())
+        .any(|r| r.in_off.iter().any(|&o| o == GHOST_OFF));
+    let any_strided = prog
+        .fused
+        .iter()
+        .flat_map(|f| f.inputs.iter())
+        .any(|i| i.shifted_ix.is_some() && i.elem_stride > 1);
+    assert!(any_multi_run, "wrap fold must produce a multi-run schedule");
+    assert!(any_ghost, "ghost-edge fold must produce a ghost run");
+    assert!(any_strided, "level-slice fold must produce a strided input");
 }
 
 /// Step 4 export demotion: with no fallback rules and no check mode, the

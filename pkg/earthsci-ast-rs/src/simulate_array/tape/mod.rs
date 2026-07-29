@@ -13,6 +13,7 @@
 //! the FD Jacobian closure stay on the legacy interpreter path.
 
 mod exec;
+mod fuse;
 mod ir;
 mod lower;
 #[cfg(test)]
@@ -22,6 +23,7 @@ mod tests;
 
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use exec::tape_disabled;
+pub(crate) use fuse::fuse_disabled;
 pub(crate) use ir::*;
 use lower::build_tape_program;
 
@@ -62,6 +64,8 @@ pub struct TapeBuildReport {
     pub vn_scope_hits: usize,
     /// Hits served from the cross-rule (box-pure) hoist map.
     pub vn_hoist_hits: usize,
+    /// Step 4: kernel-fusion diagnostics (all-zero when fusion is disabled).
+    pub fuse: FuseStats,
 }
 
 impl fmt::Display for TapeBuildReport {
@@ -107,7 +111,28 @@ impl fmt::Display for TapeBuildReport {
             f,
             "  value numbering: {} scope hits, {} hoist hits",
             self.vn_scope_hits, self.vn_hoist_hits
-        )
+        )?;
+        if self.fuse.n_groups > 0 {
+            writeln!(
+                f,
+                "  fusion: {} -> {} instructions; {} groups absorbing {} \
+                 ({} gathers folded, {} kept); group sizes [2-3]={} [4-7]={} \
+                 [8-15]={} [16-31]={} [32-63]={} [64+]={}",
+                self.fuse.instrs_before,
+                self.fuse.instrs_after,
+                self.fuse.n_groups,
+                self.fuse.n_member_instrs,
+                self.fuse.n_gathers_folded,
+                self.fuse.n_gathers_kept,
+                self.fuse.group_size_hist[0],
+                self.fuse.group_size_hist[1],
+                self.fuse.group_size_hist[2],
+                self.fuse.group_size_hist[3],
+                self.fuse.group_size_hist[4],
+                self.fuse.group_size_hist[5],
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -151,6 +176,7 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
         slab_bytes_recycled: prog.slab.recycled_elems * 8,
         vn_scope_hits: vn_hits.0,
         vn_hoist_hits: vn_hits.1,
+        fuse: prog.fuse_stats.clone(),
     }
 }
 
@@ -161,6 +187,16 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> (TapeProgram, TapeBuildReport) {
+        self.build_tape_opts(discrete_forcing, !fuse_disabled())
+    }
+
+    /// [`Self::build_tape`] with the Step 4 fusion pass explicitly on/off
+    /// (the env-independent entry the fused-vs-unfused A/B tests drive).
+    pub(crate) fn build_tape_opts(
+        &self,
+        discrete_forcing: &HashSet<String>,
+        fuse: bool,
+    ) -> (TapeProgram, TapeBuildReport) {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let (prog, vn_hits) = build_tape_program(
@@ -170,6 +206,7 @@ impl ArrayCompiled {
             &self.param_names,
             &const_names,
             &seg_names,
+            fuse,
         );
         let report = make_report(&prog, vn_hits);
         (prog, report)
@@ -180,5 +217,57 @@ impl ArrayCompiled {
     /// discard entry for inspection tooling (`examples/tape_report.rs`).
     pub fn debug_build_tape_report(&self) -> TapeBuildReport {
         self.build_tape(&HashSet::new()).1
+    }
+
+    /// Step 4 diagnostic: dump per-group shape statistics of the fused
+    /// program to stderr (`examples/fuse_stats.rs`).
+    pub fn debug_dump_fuse_stats(&self) {
+        let (prog, report) = self.build_tape(&HashSet::new());
+        eprintln!("{report}");
+        let mut by_regs: Vec<&FusedSpec> = prog.fused.iter().collect();
+        by_regs.sort_by_key(|f| std::cmp::Reverse(f.n_regs));
+        let max_regs = by_regs.first().map(|f| f.n_regs).unwrap_or(0);
+        let tot_runs: usize = prog.fused.iter().map(|f| f.runs.len()).sum();
+        let tot_micro: usize = prog.fused.iter().map(|f| f.micro.len()).sum();
+        let tot_inputs: usize = prog.fused.iter().map(|f| f.inputs.len()).sum();
+        let tot_outputs: usize = prog.fused.iter().map(|f| f.outputs.len()).sum();
+        let tot_elem_ops: usize = prog
+            .fused
+            .iter()
+            .map(|f| f.micro.len() * f.n_elems())
+            .sum();
+        let tot_out_elems: usize = prog
+            .fused
+            .iter()
+            .map(|f| f.outputs.len() * f.n_elems())
+            .sum();
+        eprintln!(
+            "element-ops per call: {} micro x elems | output elems stored {}",
+            tot_elem_ops, tot_out_elems
+        );
+        eprintln!(
+            "fused groups: {} | micro ops {} | inputs {} | outputs {} | runs {} | max n_regs {}",
+            prog.fused.len(),
+            tot_micro,
+            tot_inputs,
+            tot_outputs,
+            tot_runs,
+            max_regs
+        );
+        for f in by_regs.iter().take(12) {
+            eprintln!(
+                "  group: shape={:?} micro={} regs={} inputs={} (shifted {}) scalars={} \
+                 outputs={} runs={} folded_gathers={}",
+                &f.shape[..],
+                f.micro.len(),
+                f.n_regs,
+                f.inputs.len(),
+                f.inputs.iter().filter(|i| i.shifted_ix.is_some()).count(),
+                f.scalars.len(),
+                f.outputs.len(),
+                f.runs.len(),
+                f.n_folded_gathers
+            );
+        }
     }
 }

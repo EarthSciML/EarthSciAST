@@ -1788,6 +1788,9 @@ pub(super) fn build_tape_program(
     param_names: &[String],
     const_names: &HashSet<String>,
     seg_invariant_names: &HashSet<String>,
+    // Step 4: run the kernel-fusion post-pass (`false` = the unfused program,
+    // bitwise-identical results — the `ESS_TAPE_FUSE_DISABLE` arm).
+    fuse: bool,
 ) -> (TapeProgram, (usize, usize)) {
     let observed_names: HashSet<String> = observed_rules
         .iter()
@@ -1865,9 +1868,9 @@ pub(super) fn build_tape_program(
     // ---- exports -----------------------------------------------------------
     let exports = b.compute_exports(observed_rules, rhs_rules, &observed_names);
 
-    // ---- flatten + liveness + coloring -------------------------------------
+    // ---- flatten + fusion + liveness + coloring ----------------------------
     let vn_hits = b.vn_hits();
-    (b.finish(exports), vn_hits)
+    (b.finish(exports, fuse), vn_hits)
 }
 
 /// The statically-known runtime shape of a fallback observed rule's value
@@ -2272,9 +2275,9 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    /// Flatten the chunk streams, run liveness + slab coloring, and assemble
-    /// the final program.
-    fn finish(mut self, exports: Vec<(String, SlotId)>) -> TapeProgram {
+    /// Flatten the chunk streams, run the fusion post-pass (Step 4), then
+    /// liveness + slab coloring, and assemble the final program.
+    fn finish(mut self, exports: Vec<(String, SlotId)>, fuse: bool) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
         let mut provenance: Vec<u32> = Vec::new();
         let mut n_const = 0u32;
@@ -2308,7 +2311,12 @@ impl<'m> TapeBuilder<'m> {
             slab: SlabLayout::default(),
             provenance,
             params_len: self.param_names.len(),
+            fused: Vec::new(),
+            fuse_stats: FuseStats::default(),
         };
+        if fuse {
+            super::fuse::fuse_program(&mut prog);
+        }
         color_slab(&mut prog);
         prog
     }
@@ -2333,7 +2341,7 @@ fn color_slab(prog: &mut TapeProgram) {
     let mut def: Vec<usize> = vec![usize::MAX; n_slots];
     let mut last_use: Vec<usize> = vec![0; n_slots];
     for (i, instr) in prog.instrs.iter().enumerate() {
-        if let Some(out) = instr.out() {
+        instr.for_each_def(&prog.fused, |out| {
             let d = &mut def[out as usize];
             if *d == usize::MAX {
                 *d = i;
@@ -2342,8 +2350,8 @@ fn color_slab(prog: &mut TapeProgram) {
                 // storage must stay reserved through it, so count it as a use.
                 last_use[out as usize] = last_use[out as usize].max(i);
             }
-        }
-        instr.for_each_read(&prog.dy_writes, |s| {
+        });
+        instr.for_each_read(&prog.dy_writes, &prog.fused, |s| {
             last_use[s as usize] = last_use[s as usize].max(i);
         });
     }
@@ -2375,13 +2383,21 @@ fn color_slab(prog: &mut TapeProgram) {
 
     for i in 0..prog.instrs.len() {
         // Aliasing hazard: a Gather/Region reads its source through shifted
-        // offsets while writing out, so out must not reuse a source buffer
-        // freed by this very instruction. Release dying operands BEFORE
-        // allocating out only for alias-safe (index-aligned elementwise)
-        // instructions.
-        let alias_safe = !matches!(prog.instrs[i], Instr::Gather { .. } | Instr::Region { .. });
-        let out = prog.instrs[i].out();
-        let is_first_def = out.is_some_and(|o| def[o as usize] == i);
+        // offsets while writing out — and a Fused group's outputs are written
+        // run-by-run while inputs may still be read at shifted offsets by
+        // later runs — so out must not reuse a source buffer freed by this
+        // very instruction. Release dying operands BEFORE allocating out only
+        // for alias-safe (index-aligned elementwise) instructions.
+        let alias_safe = !matches!(
+            prog.instrs[i],
+            Instr::Gather { .. } | Instr::Region { .. } | Instr::Fused { .. }
+        );
+        let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
+        prog.instrs[i].for_each_def(&prog.fused, |o| {
+            if def[o as usize] == i {
+                defs_here.push(o);
+            }
+        });
         if alias_safe {
             for &s in &dying_at[i] {
                 let st = prog.slots[s as usize].storage;
@@ -2392,7 +2408,7 @@ fn color_slab(prog: &mut TapeProgram) {
                 }
             }
         }
-        if let (Some(o), true) = (out, is_first_def) {
+        for &o in &defs_here {
             let desc = &prog.slots[o as usize];
             let elems = desc.elems();
             let storage = if dedicated[o as usize] {

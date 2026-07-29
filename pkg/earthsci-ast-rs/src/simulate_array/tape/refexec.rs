@@ -249,6 +249,125 @@ pub(super) fn run_reference(
                 };
                 obs.insert(name, arr);
             }
+            Instr::Fused { spec } => {
+                // Straightforward per-element interpretation of the fused
+                // micro-program (independent of the fast executor's chunked
+                // strip-mining), pinning the fusion pass itself.
+                let fs = &prog.fused[*spec as usize];
+                let svals: Vec<f64> = fs
+                    .scalars
+                    .iter()
+                    .map(
+                        |op| match resolve(prog, &slots, &state_arrays, &obs, params, t, op) {
+                            RefVal::Scalar(s) => s,
+                            RefVal::Arr(a) if a.ndim() == 0 => a[IxDyn(&[])],
+                            other => panic!("fused scalar operand is {other:?}"),
+                        },
+                    )
+                    .collect();
+                let in_arrs: Vec<ArrayD<f64>> = fs
+                    .inputs
+                    .iter()
+                    .map(|inp| {
+                        let a = resolve_src(prog, &slots, &state_arrays, &obs, &inp.src);
+                        assert_eq!(a.shape(), &inp.src_shape[..], "fused input box");
+                        if a.is_standard_layout() {
+                            a
+                        } else {
+                            a.as_standard_layout().to_owned()
+                        }
+                    })
+                    .collect();
+                let flats: Vec<&[f64]> = in_arrs
+                    .iter()
+                    .map(|a| a.as_slice().expect("standard layout"))
+                    .collect();
+                let n = fs.n_elems();
+                let mut regs = vec![0.0f64; fs.n_regs as usize];
+                let mut outs: Vec<Vec<f64>> = fs.outputs.iter().map(|_| vec![0.0; n]).collect();
+                let mut covered = 0usize;
+                for run in &fs.runs {
+                    for k in 0..run.len as usize {
+                        let at = run.out_off as usize + k;
+                        let get = |m: &MRef, regs: &[f64]| -> f64 {
+                            match m {
+                                MRef::Reg(r) => regs[*r as usize],
+                                MRef::Scal(i) => svals[*i as usize],
+                                MRef::In(i) => {
+                                    let inp = &fs.inputs[*i as usize];
+                                    match inp.shifted_ix {
+                                        None => flats[*i as usize][at],
+                                        Some(s) => {
+                                            let o = run.in_off[s as usize];
+                                            if o == GHOST_OFF {
+                                                0.0
+                                            } else {
+                                                flats[*i as usize]
+                                                    [(o + k as i64 * inp.elem_stride) as usize]
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                        for op in &fs.micro {
+                            match op {
+                                MicroOp::Bin { op, a, b, out } => {
+                                    regs[*out as usize] =
+                                        binary_kernel_of(*op)(get(a, &regs), get(b, &regs));
+                                }
+                                MicroOp::Un { op, a, out } => {
+                                    regs[*out as usize] = unary_kernel_of(*op)(get(a, &regs));
+                                }
+                                MicroOp::Neg { a, out } => {
+                                    regs[*out as usize] = -get(a, &regs);
+                                }
+                                MicroOp::Select { cond, a, b, out } => {
+                                    regs[*out as usize] = if get(cond, &regs) != 0.0 {
+                                        get(a, &regs)
+                                    } else {
+                                        get(b, &regs)
+                                    };
+                                }
+                                MicroOp::Mov { a, out } => {
+                                    regs[*out as usize] = get(a, &regs);
+                                }
+                                MicroOp::Bin2 {
+                                    op1,
+                                    a,
+                                    b,
+                                    op2,
+                                    c,
+                                    swap,
+                                    out,
+                                } => {
+                                    let t = binary_kernel_of(*op1)(
+                                        get(a, &regs),
+                                        get(b, &regs),
+                                    );
+                                    let cv = get(c, &regs);
+                                    regs[*out as usize] = if *swap {
+                                        binary_kernel_of(*op2)(cv, t)
+                                    } else {
+                                        binary_kernel_of(*op2)(t, cv)
+                                    };
+                                }
+                            }
+                        }
+                        for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
+                            outs[oi][at] = regs[reg as usize];
+                        }
+                    }
+                    covered += run.len as usize;
+                }
+                assert_eq!(covered, n, "run schedule tiles the box");
+                for (ovals, &(_, slot)) in outs.into_iter().zip(fs.outputs.iter()) {
+                    let desc = &prog.slots[slot as usize];
+                    let arr = ArrayD::from_shape_vec(IxDyn(&desc.shape.to_vec()), ovals)
+                        .expect("output shape");
+                    slots[slot as usize] = Some(RefVal::Arr(arr));
+                }
+            }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
                 let v = slots[w.slot as usize]

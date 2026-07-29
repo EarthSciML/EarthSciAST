@@ -161,6 +161,14 @@ pub(crate) enum Instr {
     /// Scatter `dy_writes[write]` into the flat `dy` vector (column-major
     /// sub-block placement), at exactly this point in the program order.
     DyWrite { write: u32 },
+    /// Step 4: execute the fused elementwise group `fused[spec]` — a
+    /// straight-line micro-program applied once per element of the group box,
+    /// replacing a DAG segment of same-box elementwise instructions (and any
+    /// folded shifted-read gathers). Per element it applies EXACTLY the same
+    /// scalar kernels in the same order as the unfused instructions, so bit
+    /// identity is by construction (elementwise maps are independent across
+    /// elements; no reductions are ever fused).
+    Fused { spec: u32 },
 }
 
 impl Instr {
@@ -180,12 +188,35 @@ impl Instr {
             Instr::JmpIfZero { .. }
             | Instr::Fallback { .. }
             | Instr::Export { .. }
-            | Instr::DyWrite { .. } => None,
+            | Instr::DyWrite { .. }
+            | Instr::Fused { .. } => None,
+        }
+    }
+
+    /// Visit every slot this instruction DEFINES ([`Instr::out`] plus the
+    /// multi-output [`Instr::Fused`] case).
+    pub(crate) fn for_each_def(&self, fused: &[FusedSpec], mut f: impl FnMut(SlotId)) {
+        match self {
+            Instr::Fused { spec } => {
+                for &(_, slot) in &fused[*spec as usize].outputs {
+                    f(slot);
+                }
+            }
+            other => {
+                if let Some(o) = other.out() {
+                    f(o);
+                }
+            }
         }
     }
 
     /// Visit every slot this instruction READS.
-    pub(crate) fn for_each_read(&self, dy_writes: &[DyWrite], mut f: impl FnMut(SlotId)) {
+    pub(crate) fn for_each_read(
+        &self,
+        dy_writes: &[DyWrite],
+        fused: &[FusedSpec],
+        mut f: impl FnMut(SlotId),
+    ) {
         let mut op = |o: &Operand| {
             if let Operand::Slot(s) = o {
                 f(*s);
@@ -218,6 +249,17 @@ impl Instr {
             Instr::Fallback { .. } => {}
             Instr::Export { slot, .. } => f(*slot),
             Instr::DyWrite { write } => f(dy_writes[*write as usize].slot),
+            Instr::Fused { spec } => {
+                let fs = &fused[*spec as usize];
+                for inp in &fs.inputs {
+                    if let SrcRef::Slot(s) = inp.src {
+                        op(&Operand::Slot(s));
+                    }
+                }
+                for sc in &fs.scalars {
+                    op(sc);
+                }
+            }
         }
     }
 
@@ -238,8 +280,148 @@ impl Instr {
             Instr::Fallback { .. } => "Fallback",
             Instr::Export { .. } => "Export",
             Instr::DyWrite { .. } => "DyWrite",
+            Instr::Fused { .. } => "Fused",
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Step 4: fused elementwise groups.
+// ---------------------------------------------------------------------------
+
+/// Reference to a value inside a fused micro-program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MRef {
+    /// Temporary register defined by an earlier micro-op of the same group.
+    Reg(u16),
+    /// Array input `FusedSpec::inputs[i]`, read at the current element (for a
+    /// folded gather: at the current element plus the run's source offset).
+    In(u16),
+    /// Scalar input `FusedSpec::scalars[i]`, broadcast over the box.
+    Scal(u16),
+}
+
+/// One micro-op of a fused group. Element semantics are EXACTLY the scalar
+/// kernels of the corresponding [`Instr`] (`binary_kernel_of` /
+/// `unary_kernel_of` / `-x` / `vec_select`'s per-element pick / a plain move),
+/// applied in program order per element.
+#[derive(Clone, Debug)]
+pub(crate) enum MicroOp {
+    Bin { op: BinCode, a: MRef, b: MRef, out: u16 },
+    Un { op: UnCode, a: MRef, out: u16 },
+    Neg { a: MRef, out: u16 },
+    Select { cond: MRef, a: MRef, b: MRef, out: u16 },
+    /// `out = a` (a fused `Fill`/`Copy`).
+    Mov { a: MRef, out: u16 },
+    /// Superop: `t = kernel(op1)(a, b); out = swap ? kernel(op2)(c, t)
+    /// : kernel(op2)(t, c)` — two adjacent Bin micro-ops whose intermediate
+    /// `t` has exactly one consumer, merged into one loop. Element semantics
+    /// are EXACTLY the two constituent kernels applied in order (the
+    /// intermediate lives in a register instead of a chunk buffer — no value
+    /// change).
+    Bin2 {
+        op1: BinCode,
+        a: MRef,
+        b: MRef,
+        op2: BinCode,
+        c: MRef,
+        swap: bool,
+        out: u16,
+    },
+}
+
+/// One array input of a fused group.
+#[derive(Clone, Debug)]
+pub(crate) struct FusedInput {
+    pub src: SrcRef,
+    /// `Some(i)`: a folded shifted-read gather — the source flat offset for a
+    /// run lives at `FusedRun::in_off[i]`. `None`: aligned (the source is read
+    /// at the same flat offset as the output).
+    pub shifted_ix: Option<u16>,
+    /// The source array's expected shape (equals the group box for aligned
+    /// inputs; a folded gather's source box may differ — its run offsets are
+    /// flat in THIS shape's row-major layout). Validated at execution.
+    pub src_shape: DimU,
+    /// Per-element source advance within a run (1 = contiguous; a LINEAR
+    /// folded gather — e.g. a level slice of a deeper box — advances by a
+    /// constant stride). Meaningful only for shifted inputs.
+    pub elem_stride: i64,
+    /// For a shifted input with `elem_stride != 1`: the chunk register the
+    /// executor pre-loads this input into (`u16::MAX` otherwise).
+    pub load_reg: u16,
+}
+
+/// Sentinel source offset: the input reads the gather's Dirichlet ghost
+/// (`+0.0`) over the whole run.
+pub(crate) const GHOST_OFF: i64 = i64::MIN;
+
+/// One contiguous run of a fused group's precompiled schedule. Runs partition
+/// the (row-major flat) output box; within a run every shifted input is either
+/// a single constant flat offset into its source or entirely ghost.
+#[derive(Clone, Debug)]
+pub(crate) struct FusedRun {
+    pub out_off: u32,
+    pub len: u32,
+    /// Per SHIFTED input (indexed by `FusedInput::shifted_ix`): the 0-based
+    /// flat source offset of the run's first element, or [`GHOST_OFF`].
+    pub in_off: SmallVec<[i64; 2]>,
+}
+
+/// A fused elementwise group: a straight-line micro-program over virtual
+/// registers, executed once per element of `shape` (in one pass over the box),
+/// then its live-out registers stored to the slab.
+#[derive(Clone, Debug)]
+pub(crate) struct FusedSpec {
+    /// The group box shape (the run schedule is row-major flat over it).
+    pub shape: DimU,
+    pub inputs: Vec<FusedInput>,
+    /// Scalar operands (literals, params, `t`, scalar slots, 0-d state),
+    /// resolved once per call.
+    pub scalars: Vec<Operand>,
+    pub micro: Vec<MicroOp>,
+    /// Physical register count after last-use recycling. An op's `out`
+    /// register never aliases one of its operand registers.
+    pub n_regs: u16,
+    /// Additional registers appended after `n_regs` for strided-input
+    /// pre-loads (`FusedInput::load_reg` indexes into `n_regs..n_regs +
+    /// n_load_regs`).
+    pub n_load_regs: u16,
+    /// `(register, slot)` live-outs stored back to the slab.
+    pub outputs: SmallVec<[(u16, SlotId); 2]>,
+    /// Precompiled run schedule (see [`FusedRun`]); a group with no shifted
+    /// inputs has the single run `(0, n_elems, [])`.
+    pub runs: Vec<FusedRun>,
+    /// Diagnostics: original instructions replaced (members incl. deleted
+    /// folded gathers).
+    pub n_fused_instrs: u32,
+    pub n_folded_gathers: u32,
+}
+
+impl FusedSpec {
+    pub(crate) fn n_elems(&self) -> usize {
+        self.shape.iter().product::<usize>().max(1)
+    }
+}
+
+/// Fusion-pass diagnostics carried on the program for the build report.
+#[derive(Clone, Debug, Default)]
+pub struct FuseStats {
+    /// Whole-program instruction count before / after fusion.
+    pub instrs_before: usize,
+    pub instrs_after: usize,
+    /// Fused groups emitted.
+    pub n_groups: usize,
+    /// Original instructions absorbed into groups (incl. folded gathers).
+    pub n_member_instrs: usize,
+    /// Gathers folded into consumers as shifted reads (instruction deleted).
+    pub n_gathers_folded: usize,
+    /// Gathers that stayed materialized (unfoldable plan, external readers of
+    /// the gathered value are counted as folded — this counts kept Gather
+    /// instructions in the fused program).
+    pub n_gathers_kept: usize,
+    /// Group size histogram buckets: [2-3, 4-7, 8-15, 16-31, 32-63, 64+]
+    /// member instructions.
+    pub group_size_hist: [usize; 6],
 }
 
 /// Descriptor of one value slot.
@@ -410,6 +592,10 @@ pub(crate) struct TapeProgram {
     pub provenance: Vec<u32>,
     /// Length of the positional parameter vector this program binds.
     pub params_len: usize,
+    /// Step 4: fused elementwise groups (`Instr::Fused` indexes here).
+    pub fused: Vec<FusedSpec>,
+    /// Fusion-pass diagnostics (all-zero when fusion is disabled).
+    pub fuse_stats: FuseStats,
 }
 
 impl TapeProgram {
