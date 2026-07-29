@@ -1060,3 +1060,84 @@ fn ab_model_file_if_available() {
         }
     }
 }
+
+/// Step 4 export demotion: with no fallback rules and no check mode, the
+/// `Export` publish memcpys are skipped (nothing can read them); forcing
+/// them back on (the check-mode/diagnostic path) publishes the same values —
+/// and `dy` is bit-identical either way.
+#[test]
+fn export_demotion_skips_unread_publishes() {
+    let doc = json!({
+        "esm": "0.1.0",
+        "metadata": {"name": "tape_export_demote"},
+        "models": {"M": {
+            "variables": {
+                "x": {"type": "state"},
+                "s": {"type": "observed", "expression": {"op": "*", "args": [2.0, "x"]}}
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                 "rhs": {"op": "neg", "args": ["s"]}}
+            ]
+        }}
+    });
+    let compiled = compile(doc);
+    let (prog, report) = compiled.build_tape(&HashSet::new());
+    assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
+    assert!(
+        prog.exports.iter().any(|(n, _)| n == "s"),
+        "fixture must export `s`"
+    );
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let state = vec![1.5f64];
+
+    let run_call = |ctx: &mut super::exec::TapeCtx, dy: &mut [f64]| {
+        let mut stats = RhsStats::default();
+        super::exec::run_tape_call(
+            ctx,
+            &compiled.rhs_rules,
+            &compiled.var_shapes,
+            &compiled.param_names,
+            &super::super::ArrMap::default(),
+            &compiled.forcing,
+            &state,
+            &param_vec,
+            0.0,
+            dy,
+            &mut stats,
+        );
+    };
+
+    // Demoted (production default for a no-fallback model outside check
+    // mode): the export target array stays at its zero prealloc.
+    let mut ctx = super::exec::TapeCtx::new(
+        std::rc::Rc::new(prog),
+        std::rc::Rc::new(compiled.observed_rules.clone()),
+    );
+    if std::env::var("ESS_TAPE_CHECK").is_ok() {
+        return; // check mode legitimately keeps exports on
+    }
+    let mut dy = vec![0.0f64; 1];
+    run_call(&mut ctx, &mut dy);
+    assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
+    let s = ctx.exec.obs.get("s").expect("export array preallocated");
+    assert_eq!(
+        s[ndarray::IxDyn(&[])].to_bits(),
+        0.0f64.to_bits(),
+        "demoted export must not publish"
+    );
+
+    // Re-enabled (fallbacks present / ESS_TAPE_CHECK / explicit request):
+    // the same call publishes the computed value, and dy is unchanged.
+    ctx.set_exports_active(true);
+    let mut dy2 = vec![0.0f64; 1];
+    run_call(&mut ctx, &mut dy2);
+    assert_eq!(dy2[0].to_bits(), dy[0].to_bits());
+    let s = ctx.exec.obs.get("s").expect("export array");
+    assert_eq!(
+        s[ndarray::IxDyn(&[])].to_bits(),
+        3.0f64.to_bits(),
+        "active export must publish the slot value"
+    );
+}

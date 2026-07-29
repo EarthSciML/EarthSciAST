@@ -105,11 +105,18 @@ pub(crate) struct TapeExec {
     /// output box, so the ghost zero-fill can be skipped (every element is
     /// overwritten by a segment copy).
     plan_full: Vec<bool>,
-    /// CONST + SEGMENT sections have run for this scratch.
-    primed: bool,
-    /// Parameter-vector bit-hash the priming ran under (mirrors
-    /// `CseRt::bind_params`).
-    pgen: u64,
+    /// Step 4 epochs: the parameter / forcing epochs the CONST resp. SEGMENT
+    /// sections last primed under (0 = never primed; live epochs start at 1).
+    /// Checked per call as two integer compares — see `run_tape_call`.
+    primed_param_epoch: u64,
+    primed_forcing_epoch: u64,
+    /// Step 4 export demotion: `Export` instructions only execute when
+    /// something can read the published arrays — a fallback rule is present,
+    /// `ESS_TAPE_CHECK` is active, or a caller explicitly requested them
+    /// ([`TapeCtx::set_exports_active`]). With no possible reader they are
+    /// skipped (the exported values themselves are still computed — they are
+    /// ordinary slots — only the publish memcpy is elided).
+    exports_active: bool,
     /// Rule counts, cached off the program for the per-call stats.
     pub(crate) n_taped: usize,
     pub(crate) n_fallback: usize,
@@ -176,8 +183,9 @@ impl TapeExec {
             pending: Vec::with_capacity(16),
             state_rm: vec![0.0f64; n_state],
             plan_full,
-            primed: false,
-            pgen: 0,
+            primed_param_epoch: 0,
+            primed_forcing_epoch: 0,
+            exports_active: n_fallback > 0 || tape_check_calls() > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
         }
@@ -197,6 +205,17 @@ pub(in crate::simulate_array) struct TapeCtx {
     pub(crate) check_remaining: u64,
     /// Legacy-arm `dy` buffer for check mode (dropped when the check ends).
     pub(crate) check_buf: Vec<f64>,
+    /// Step 4 epoch counters (see `run_tape_call`). The parameter epoch is
+    /// bumped whenever the bit-exact generation hash of the caller's params
+    /// slice changes (the slice is the only channel callers have, so the hash
+    /// remains the epoch SOURCE — it is O(params_len) and negligible); the
+    /// forcing epoch is a driver-owned counter, bumped between segments when
+    /// the live forcing buffer is refreshed, which re-runs only the SEGMENT
+    /// section.
+    param_epoch: u64,
+    forcing_epoch: u64,
+    pgen: u64,
+    pgen_set: bool,
 }
 
 impl TapeCtx {
@@ -208,7 +227,27 @@ impl TapeCtx {
             exec,
             check_remaining: tape_check_calls(),
             check_buf: Vec::new(),
+            param_epoch: 0,
+            forcing_epoch: 1,
+            pgen: 0,
+            pgen_set: false,
         }
+    }
+
+    /// Invalidate the SEGMENT section: the driver calls this after refreshing
+    /// the live forcing buffer while keeping one warm executor. (The current
+    /// driver builds a fresh scratch per segment, so nothing calls it yet;
+    /// it is the forcing half of the Step 4 epoch machinery.)
+    #[allow(dead_code)]
+    pub(crate) fn bump_forcing_epoch(&mut self) {
+        self.forcing_epoch += 1;
+    }
+
+    /// Force `Export` instructions on/off (test/diagnostic hook — production
+    /// derives this from the fallback count and `ESS_TAPE_CHECK`).
+    #[allow(dead_code)]
+    pub(crate) fn set_exports_active(&mut self, on: bool) {
+        self.exec.exports_active = on;
     }
 }
 
@@ -242,8 +281,8 @@ fn params_gen(params: &[f64]) -> u64 {
     for p in params {
         p.to_bits().hash(&mut h);
     }
-    // Avoid the (astronomically unlikely) collision with the `pgen: 0,
-    // primed: false` initial state mattering: primed gates the first run.
+    // A collision with the fresh-context `pgen: 0` state cannot serve stale
+    // values: `pgen_set` gates the first bump.
     h.finish()
 }
 
@@ -264,6 +303,16 @@ pub(in crate::simulate_array) fn run_tape_call(
     dy: &mut [f64],
     stats: &mut RhsStats,
 ) {
+    // Parameter epoch: bit-exact generation hash of the params slice → epoch
+    // bump on change (the negative-control test in `tests/tape_exec.rs`
+    // guards this: bypassing it serves stale CONST values).
+    let g = params_gen(params);
+    if !ctx.pgen_set || ctx.pgen != g {
+        ctx.pgen = g;
+        ctx.pgen_set = true;
+        ctx.param_epoch += 1;
+    }
+    let (param_epoch, forcing_epoch) = (ctx.param_epoch, ctx.forcing_epoch);
     let prog = &*ctx.prog;
     let exec = &mut ctx.exec;
     // Refill the row-major state mirror: one strided pass per variable block
@@ -304,12 +353,18 @@ pub(in crate::simulate_array) fn run_tape_call(
         t,
     };
 
-    let g = params_gen(params);
+    // Section invalidation: two integer compares per steady-state call.
+    // CONST depends on the parameter epoch alone; SEGMENT additionally on the
+    // forcing epoch (a forcing refresh re-runs only the SEGMENT section).
+    let const_end = prog.n_const as usize;
     let prime_end = (prog.n_const + prog.n_segment) as usize;
-    if !exec.primed || exec.pgen != g {
-        exec.primed = true;
-        exec.pgen = g;
+    if exec.primed_param_epoch != param_epoch {
+        exec.primed_param_epoch = param_epoch;
+        exec.primed_forcing_epoch = forcing_epoch;
         run_range(&env, 0..prime_end, exec, dy, stats);
+    } else if exec.primed_forcing_epoch != forcing_epoch {
+        exec.primed_forcing_epoch = forcing_epoch;
+        run_range(&env, const_end..prime_end, exec, dy, stats);
     }
     run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
     drop(env);
@@ -1017,8 +1072,10 @@ fn run_range(
         obs,
         pending,
         plan_full,
+        exports_active,
         ..
     } = exec;
+    let exports_active = *exports_active;
     let prog = env.prog;
     let slab_ptr = slab.as_mut_ptr();
     let slot_off: &[usize] = slot_off;
@@ -1078,15 +1135,44 @@ fn run_range(
                 }
             }
             Instr::Un { op, a, out } => {
-                let f = unary_kernel_of(*op);
                 let desc = &prog.slots[*out as usize];
                 let off = slot_off[*out as usize];
                 if desc.scalar {
+                    let f = unary_kernel_of(*op);
                     let x = resolve_scalar(a, env, slab_ptr, slot_off, obs);
                     unsafe { *slab_ptr.add(off) = f(x) };
                 } else {
                     let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off, obs);
-                    unsafe { ew1(slab_ptr.add(off), &desc.shape, &av, f) };
+                    let dst = unsafe { slab_ptr.add(off) };
+                    let sh = &desc.shape;
+                    // Step 4: monomorphized arms for the common unaries (the
+                    // same closure bodies as `unary_kernel_of`, so a pure
+                    // dispatch hoist — one fn-pointer call per ELEMENT becomes
+                    // an inlined loop).
+                    unsafe {
+                        match op {
+                            UnCode::Abs => ew1(dst, sh, &av, |x: f64| x.abs()),
+                            UnCode::Sqrt => ew1(dst, sh, &av, |x: f64| x.sqrt()),
+                            UnCode::Exp => ew1(dst, sh, &av, |x: f64| x.exp()),
+                            UnCode::Ln => ew1(dst, sh, &av, |x: f64| x.ln()),
+                            UnCode::Log10 => ew1(dst, sh, &av, |x: f64| x.log10()),
+                            UnCode::Sin => ew1(dst, sh, &av, |x: f64| x.sin()),
+                            UnCode::Cos => ew1(dst, sh, &av, |x: f64| x.cos()),
+                            UnCode::Tanh => ew1(dst, sh, &av, |x: f64| x.tanh()),
+                            UnCode::Floor => ew1(dst, sh, &av, |x: f64| x.floor()),
+                            UnCode::Ceil => ew1(dst, sh, &av, |x: f64| x.ceil()),
+                            UnCode::Sign => ew1(dst, sh, &av, |x: f64| {
+                                if x > 0.0 {
+                                    1.0
+                                } else if x < 0.0 {
+                                    -1.0
+                                } else {
+                                    0.0
+                                }
+                            }),
+                            other => ew1(dst, sh, &av, unary_kernel_of(*other)),
+                        }
+                    }
                 }
             }
             Instr::Neg { a, out } => {
@@ -1276,6 +1362,13 @@ fn run_range(
                 }
             }
             Instr::Export { slot, export } => {
+                // Step 4 export demotion: no fallback rules, no check mode,
+                // no explicit request ⇒ nothing can read the published
+                // array — skip the publish memcpy.
+                if !exports_active {
+                    pc += 1;
+                    continue;
+                }
                 let name = &prog.exports[*export as usize].0;
                 let a = obs.get_mut(name).expect("export array preallocated");
                 let desc = &prog.slots[*slot as usize];
