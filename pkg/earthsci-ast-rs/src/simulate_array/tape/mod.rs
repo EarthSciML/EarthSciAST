@@ -14,6 +14,10 @@
 
 mod ir;
 mod lower;
+#[cfg(test)]
+mod refexec;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use ir::*;
 use lower::build_tape_program;
