@@ -95,6 +95,16 @@ pub(crate) struct TapeExec {
     /// Pending `(resume_pc, skip)` records for taken `JmpIfZero` branches
     /// (the reference executor's discipline). Capacity preallocated.
     pending: Vec<(u32, u32)>,
+    /// Row-major mirror of the flat state vector, refilled once per call
+    /// (each variable's column-major block transposed in place at the SAME
+    /// flat offset). Gathers and elementwise reads of state then run over
+    /// contiguous memory instead of stride-684 walks. Pure data movement, so
+    /// bit-identical to reading the strided view directly.
+    state_rm: Vec<f64>,
+    /// Per gather plan: `true` when its per-axis segments tile the whole
+    /// output box, so the ghost zero-fill can be skipped (every element is
+    /// overwritten by a segment copy).
+    plan_full: Vec<bool>,
     /// CONST + SEGMENT sections have run for this scratch.
     primed: bool,
     /// Parameter-vector bit-hash the priming ran under (mirrors
@@ -134,11 +144,38 @@ impl TapeExec {
             .iter()
             .filter(|r| matches!(r.status, RuleStatus::Fallback(_)))
             .count();
+        let n_state: usize = prog
+            .state_vars
+            .iter()
+            .map(|sv| sv.flat_offset + sv.shape.iter().product::<usize>().max(1))
+            .max()
+            .unwrap_or(0);
+        let plan_full = prog
+            .plans
+            .iter()
+            .map(|plan| {
+                plan.shape.iter().enumerate().all(|(d, &extent)| {
+                    let mut segs: Vec<(usize, usize)> =
+                        plan.segs[d].iter().map(|&(o, l, _)| (o, l)).collect();
+                    segs.sort_unstable();
+                    let mut next = 0usize;
+                    for (o, l) in segs {
+                        if o != next {
+                            return false;
+                        }
+                        next = o + l;
+                    }
+                    next == extent
+                })
+            })
+            .collect();
         TapeExec {
             slab,
             slot_off,
             obs,
             pending: Vec::with_capacity(16),
+            state_rm: vec![0.0f64; n_state],
+            plan_full,
             primed: false,
             pgen: 0,
             n_taped: prog.rules.len() - n_fallback,
@@ -191,6 +228,8 @@ struct Env<'a> {
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     derived_rings: &'a RefCell<HashMap<String, ArrayD<f64>>>,
     state: &'a [f64],
+    /// Row-major per-variable mirror of `state` (see `TapeExec::state_rm`).
+    state_rm: &'a [f64],
     params: &'a [f64],
     t: f64,
 }
@@ -227,9 +266,29 @@ pub(in crate::simulate_array) fn run_tape_call(
 ) {
     let prog = &*ctx.prog;
     let exec = &mut ctx.exec;
+    // Refill the row-major state mirror: one strided pass per variable block
+    // (column-major flat -> row-major at the same offset).
+    for sv in &prog.state_vars {
+        if sv.shape.is_empty() {
+            exec.state_rm[sv.flat_offset] = state[sv.flat_offset];
+        } else {
+            let rm = rm_strides(&sv.shape);
+            let cm = cm_strides(&sv.shape);
+            unsafe {
+                copy_strided(
+                    exec.state_rm.as_mut_ptr().add(sv.flat_offset),
+                    &rm,
+                    state.as_ptr().add(sv.flat_offset),
+                    &cm,
+                    &sv.shape,
+                );
+            }
+        }
+    }
     // Intra-call FAQ ring registry for fallback rules (`HashMap::new` does not
     // allocate until first insertion, so a fully-taped call touches no heap).
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+    let state_rm = std::mem::take(&mut exec.state_rm);
     let env = Env {
         prog,
         observed_rules: &ctx.observed_rules,
@@ -240,6 +299,7 @@ pub(in crate::simulate_array) fn run_tape_call(
         forcing,
         derived_rings: &derived_rings,
         state,
+        state_rm: &state_rm,
         params,
         t,
     };
@@ -252,6 +312,8 @@ pub(in crate::simulate_array) fn run_tape_call(
         run_range(&env, 0..prime_end, exec, dy, stats);
     }
     run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
+    drop(env);
+    exec.state_rm = state_rm;
 
     stats.taped_rules += exec.n_taped;
     stats.fallback_rules += exec.n_fallback;
@@ -366,8 +428,8 @@ fn resolve_rv(
             } else {
                 debug_assert_eq!(&sv.shape[..], shape, "state box mismatch");
                 Rv::V {
-                    ptr: unsafe { env.state.as_ptr().add(sv.flat_offset) },
-                    strides: cm_strides(&sv.shape),
+                    ptr: unsafe { env.state_rm.as_ptr().add(sv.flat_offset) },
+                    strides: rm_strides(&sv.shape),
                 }
             }
         }
@@ -409,9 +471,9 @@ fn resolve_src(
         SrcRef::State(ix) => {
             let sv = &env.prog.state_vars[*ix as usize];
             SrcView {
-                ptr: unsafe { env.state.as_ptr().add(sv.flat_offset) },
+                ptr: unsafe { env.state_rm.as_ptr().add(sv.flat_offset) },
                 shape: sv.shape.clone(),
-                strides: cm_strides(&sv.shape),
+                strides: rm_strides(&sv.shape),
             }
         }
         SrcRef::Obs(ix) => {
@@ -454,7 +516,7 @@ fn total(shape: &[usize]) -> usize {
 }
 
 /// `dst[k] = f(a[k])` — dst contiguous row-major over `shape`.
-unsafe fn ew1(dst: *mut f64, shape: &[usize], a: &Rv, f: fn(f64) -> f64) {
+unsafe fn ew1(dst: *mut f64, shape: &[usize], a: &Rv, f: impl Fn(f64) -> f64 + Copy) {
     let za: f64;
     let zero;
     let (ap, astr): (*const f64, &[i64]) = match a {
@@ -466,15 +528,28 @@ unsafe fn ew1(dst: *mut f64, shape: &[usize], a: &Rv, f: fn(f64) -> f64) {
         Rv::V { ptr, strides } => (*ptr, &strides[..]),
     };
     let n = total(shape);
+    // Slab/state/observed buffers either coincide EXACTLY (an alias-safe
+    // in-place reuse at the same storage offset) or are disjoint, so the
+    // contiguous fast paths can be expressed through slices — which is what
+    // lets LLVM prove no partial aliasing and vectorize the loops.
     unsafe {
         if is_contig(astr, shape) {
-            for k in 0..n {
-                *dst.add(k) = f(*ap.add(k));
+            let d = std::slice::from_raw_parts_mut(dst, n);
+            if std::ptr::eq(ap, dst as *const f64) {
+                for x in d.iter_mut() {
+                    *x = f(*x);
+                }
+            } else {
+                let a = std::slice::from_raw_parts(ap, n);
+                for (x, &v) in d.iter_mut().zip(a) {
+                    *x = f(v);
+                }
             }
         } else if astr.iter().all(|&s| s == 0) {
             let v = f(*ap);
-            for k in 0..n {
-                *dst.add(k) = v;
+            let d = std::slice::from_raw_parts_mut(dst, n);
+            for x in d.iter_mut() {
+                *x = v;
             }
         } else {
             zip_loop2(dst, shape, ap, astr, ap, astr, |x, _| f(x));
@@ -483,7 +558,7 @@ unsafe fn ew1(dst: *mut f64, shape: &[usize], a: &Rv, f: fn(f64) -> f64) {
 }
 
 /// `dst[k] = f(a[k], b[k])` — dst contiguous row-major over `shape`.
-unsafe fn ew2(dst: *mut f64, shape: &[usize], a: &Rv, b: &Rv, f: fn(f64, f64) -> f64) {
+unsafe fn ew2(dst: *mut f64, shape: &[usize], a: &Rv, b: &Rv, f: impl Fn(f64, f64) -> f64 + Copy) {
     let za: f64;
     let zb: f64;
     let zeroa;
@@ -509,20 +584,64 @@ unsafe fn ew2(dst: *mut f64, shape: &[usize], a: &Rv, b: &Rv, f: fn(f64, f64) ->
     let bc = is_contig(bstr, shape);
     let az = astr.iter().all(|&s| s == 0);
     let bz = bstr.iter().all(|&s| s == 0);
+    // See `ew1`: contiguous operands either coincide exactly with `dst` or
+    // are disjoint from it, so slice-based loops are sound and vectorizable.
     unsafe {
         if ac && bc {
-            for k in 0..n {
-                *dst.add(k) = f(*ap.add(k), *bp.add(k));
+            let d = std::slice::from_raw_parts_mut(dst, n);
+            let a_al = std::ptr::eq(ap, dst as *const f64);
+            let b_al = std::ptr::eq(bp, dst as *const f64);
+            match (a_al, b_al) {
+                (true, true) => {
+                    for x in d.iter_mut() {
+                        *x = f(*x, *x);
+                    }
+                }
+                (true, false) => {
+                    let b = std::slice::from_raw_parts(bp, n);
+                    for (x, &y) in d.iter_mut().zip(b) {
+                        *x = f(*x, y);
+                    }
+                }
+                (false, true) => {
+                    let a = std::slice::from_raw_parts(ap, n);
+                    for (x, &v) in d.iter_mut().zip(a) {
+                        *x = f(v, *x);
+                    }
+                }
+                (false, false) => {
+                    let a = std::slice::from_raw_parts(ap, n);
+                    let b = std::slice::from_raw_parts(bp, n);
+                    for k in 0..n {
+                        *d.get_unchecked_mut(k) = f(*a.get_unchecked(k), *b.get_unchecked(k));
+                    }
+                }
             }
         } else if ac && bz {
             let y = *bp;
-            for k in 0..n {
-                *dst.add(k) = f(*ap.add(k), y);
+            let d = std::slice::from_raw_parts_mut(dst, n);
+            if std::ptr::eq(ap, dst as *const f64) {
+                for x in d.iter_mut() {
+                    *x = f(*x, y);
+                }
+            } else {
+                let a = std::slice::from_raw_parts(ap, n);
+                for (x, &v) in d.iter_mut().zip(a) {
+                    *x = f(v, y);
+                }
             }
         } else if az && bc {
-            let x = *ap;
-            for k in 0..n {
-                *dst.add(k) = f(x, *bp.add(k));
+            let x0 = *ap;
+            let d = std::slice::from_raw_parts_mut(dst, n);
+            if std::ptr::eq(bp, dst as *const f64) {
+                for x in d.iter_mut() {
+                    *x = f(x0, *x);
+                }
+            } else {
+                let b = std::slice::from_raw_parts(bp, n);
+                for (x, &y) in d.iter_mut().zip(b) {
+                    *x = f(x0, y);
+                }
             }
         } else {
             zip_loop2(dst, shape, ap, astr, bp, bstr, f);
@@ -615,13 +734,43 @@ unsafe fn ew_select(dst: *mut f64, shape: &[usize], cond: &Rv, a: &Rv, b: &Rv) {
         Rv::V { ptr, strides } => (*ptr, &strides[..]),
     };
     let n = shape.len();
+    // Contiguous fast path (see `ew1`/`ew2` on why slices + exact-alias
+    // branches are sound): the mask select is the hot limiter idiom, so it
+    // deserves a vectorizable loop. Exact aliasing of `dst` with any operand
+    // is handled by reading through `dst` itself.
+    let tot = total(shape);
+    if is_contig(cstr, shape) && is_contig(astr, shape) && is_contig(bstr, shape) {
+        unsafe {
+            let d = std::slice::from_raw_parts_mut(dst, tot);
+            let dc = dst as *const f64;
+            let anyal = std::ptr::eq(cp, dc) || std::ptr::eq(ap, dc) || std::ptr::eq(bp, dc);
+            if anyal {
+                for k in 0..tot {
+                    let c = *cp.add(k);
+                    let v = if c != 0.0 { *ap.add(k) } else { *bp.add(k) };
+                    *d.get_unchecked_mut(k) = v;
+                }
+            } else {
+                let c = std::slice::from_raw_parts(cp, tot);
+                let a = std::slice::from_raw_parts(ap, tot);
+                let b = std::slice::from_raw_parts(bp, tot);
+                for k in 0..tot {
+                    *d.get_unchecked_mut(k) = if *c.get_unchecked(k) != 0.0 {
+                        *a.get_unchecked(k)
+                    } else {
+                        *b.get_unchecked(k)
+                    };
+                }
+            }
+        }
+        return;
+    }
     unsafe {
         if n == 0 {
             *dst = if *cp != 0.0 { *ap } else { *bp };
             return;
         }
         let inner = shape[n - 1];
-        let tot = total(shape);
         if tot == 0 || inner == 0 {
             return;
         }
@@ -767,7 +916,7 @@ unsafe fn fill_strided(dst: *mut f64, dstr: &[i64], shape: &[usize], v: f64) {
 /// Execute one precompiled gather plan into a contiguous row-major `out` —
 /// the raw-strides transliteration of `eval_vec_index`'s copy phase (and of
 /// the reference executor's `exec_gather`).
-unsafe fn exec_gather(plan: &GatherPlan, src: &SrcView, out: *mut f64) {
+unsafe fn exec_gather(plan: &GatherPlan, src: &SrcView, out: *mut f64, full_cover: bool) {
     assert_eq!(
         &src.shape[..],
         &plan.src_shape[..],
@@ -796,11 +945,14 @@ unsafe fn exec_gather(plan: &GatherPlan, src: &SrcView, out: *mut f64) {
             mpos += 1;
         }
     }
-    // 3. Ghost fill: `+0.0` everywhere (ArrayD::zeros semantics).
-    let out_len = total(&plan.shape);
-    unsafe {
-        for k in 0..out_len {
-            *out.add(k) = 0.0;
+    // 3. Ghost fill: `+0.0` everywhere (ArrayD::zeros semantics) — skipped
+    //    when the segment schedule provably overwrites every element.
+    if !full_cover {
+        let out_len = total(&plan.shape);
+        unsafe {
+            for k in 0..out_len {
+                *out.add(k) = 0.0;
+            }
         }
     }
     // 4. Segment-copy schedule (mixed-radix over per-axis segment picks,
@@ -864,6 +1016,7 @@ fn run_range(
         slot_off,
         obs,
         pending,
+        plan_full,
         ..
     } = exec;
     let prog = env.prog;
@@ -886,17 +1039,42 @@ fn run_range(
         }
         match &prog.instrs[pc] {
             Instr::Bin { op, a, b, out } => {
-                let f = binary_kernel_of(*op);
                 let desc = &prog.slots[*out as usize];
                 let off = slot_off[*out as usize];
                 if desc.scalar {
+                    let f = binary_kernel_of(*op);
                     let x = resolve_scalar(a, env, slab_ptr, slot_off, obs);
                     let y = resolve_scalar(b, env, slab_ptr, slot_off, obs);
                     unsafe { *slab_ptr.add(off) = f(x, y) };
                 } else {
                     let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off, obs);
                     let bv = resolve_rv(b, &desc.shape, env, slab_ptr, slot_off, obs);
-                    unsafe { ew2(slab_ptr.add(off), &desc.shape, &av, &bv, f) };
+                    let dst = unsafe { slab_ptr.add(off) };
+                    let sh = &desc.shape;
+                    // Monomorphized hot kernels, mirroring `vec_combine`'s
+                    // arms (plus the comparison relops feeding `Select`
+                    // masks): each closure computes the IDENTICAL expression
+                    // to `binary_kernel_of`'s arm, so this is a pure dispatch
+                    // hoist — one indirect call per NODE becomes an inlined,
+                    // vectorizable element loop.
+                    unsafe {
+                        match op {
+                            BinCode::Add => ew2(dst, sh, &av, &bv, |x, y| x + y),
+                            BinCode::Sub => ew2(dst, sh, &av, &bv, |x, y| x - y),
+                            BinCode::Mul => ew2(dst, sh, &av, &bv, |x, y| x * y),
+                            BinCode::Div => ew2(dst, sh, &av, &bv, |x, y| x / y),
+                            BinCode::Pow => ew2(dst, sh, &av, &bv, |x: f64, y: f64| x.powf(y)),
+                            BinCode::Min => ew2(dst, sh, &av, &bv, |x: f64, y: f64| x.min(y)),
+                            BinCode::Max => ew2(dst, sh, &av, &bv, |x: f64, y: f64| x.max(y)),
+                            BinCode::Eq => ew2(dst, sh, &av, &bv, |x, y| (x == y) as i32 as f64),
+                            BinCode::Ne => ew2(dst, sh, &av, &bv, |x, y| (x != y) as i32 as f64),
+                            BinCode::Lt => ew2(dst, sh, &av, &bv, |x, y| (x < y) as i32 as f64),
+                            BinCode::Le => ew2(dst, sh, &av, &bv, |x, y| (x <= y) as i32 as f64),
+                            BinCode::Gt => ew2(dst, sh, &av, &bv, |x, y| (x > y) as i32 as f64),
+                            BinCode::Ge => ew2(dst, sh, &av, &bv, |x, y| (x >= y) as i32 as f64),
+                            other => ew2(dst, sh, &av, &bv, binary_kernel_of(*other)),
+                        }
+                    }
                 }
             }
             Instr::Un { op, a, out } => {
@@ -938,10 +1116,11 @@ fn run_range(
                 }
             }
             Instr::Gather { src, plan, out } => {
+                let full = plan_full[*plan as usize];
                 let plan = &prog.plans[*plan as usize];
                 let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
                 let off = slot_off[*out as usize];
-                unsafe { exec_gather(plan, &sv, slab_ptr.add(off)) };
+                unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full) };
             }
             Instr::LoadElem { src, idx, out } => {
                 let sv = resolve_src(src, env, slab_ptr, slot_off, obs);
