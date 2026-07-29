@@ -401,7 +401,14 @@ pub(super) fn materialize_observeds_append(
                 if vec_trace_on() {
                     let _ = take_bail_log();
                 }
-                let t_start = std::time::Instant::now();
+                // Taken ONLY when the trace below will read it. `Instant::now()`
+                // panics on `wasm32-unknown-unknown` ("time not implemented on
+                // this platform"), so reading it unconditionally made every
+                // array/PDE `simulate` trap in the browser with an opaque
+                // `unreachable` — the scalar ODE path was unaffected, which is
+                // why it went unnoticed. `vec_trace_on()` is env-driven and so
+                // always false on wasm.
+                let t_start = vec_trace_on().then(std::time::Instant::now);
                 let mut ctx = EvalCtx {
                     state_arrays,
                     observed_arrays: &*dst,
@@ -433,7 +440,7 @@ pub(super) fn materialize_observeds_append(
                 // stencils live in observeds rather than in the `D(...)` rules.
                 if vec_trace_on() {
                     let log = take_bail_log();
-                    let us = t_start.elapsed().as_micros();
+                    let us = t_start.map(|s| s.elapsed().as_micros()).unwrap_or(0);
                     if log.is_empty() {
                         eprintln!(
                             "[vec-obs] {var}: vectorized, {us} us, {} node visits",
