@@ -66,6 +66,7 @@ fn main() -> Result<(), String> {
                 .map(|s| tspan.1 * s as f64 / (samples.max(2) - 1) as f64)
                 .collect(),
         ),
+        progress: None,
     };
     let t_start = std::time::Instant::now();
     let sol = simulate(&file, tspan, &HashMap::new(), &HashMap::new(), &opts)

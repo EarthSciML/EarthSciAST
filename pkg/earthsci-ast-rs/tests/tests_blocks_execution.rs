@@ -206,6 +206,7 @@ fn execute_component(
             reltol: 1e-10,
             max_steps: 1_000_000,
             output_times: Some(sample_times.clone()),
+            progress: None,
         };
 
         let tspan = (t.time_span.start, t.time_span.end);

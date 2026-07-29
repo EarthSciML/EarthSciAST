@@ -77,6 +77,18 @@ pub enum SimulateError {
         max_steps: usize,
     },
 
+    /// The host's [`SimulateOptions::progress`] observer asked the integrator
+    /// to stop (returned [`Flow::Cancel`]). Distinct from every other variant
+    /// in that nothing went wrong: it is the caller's own decision, surfaced as
+    /// an error only because that is how [`run_solver`] unwinds.
+    #[error("Cancelled by the caller at t = {t} (after {step} steps)")]
+    Cancelled {
+        /// Independent-variable value the integrator had reached.
+        t: f64,
+        /// Accepted steps taken before the cancel.
+        step: usize,
+    },
+
     /// The user supplied a parameter name that does not appear in the
     /// flattened system.
     #[error("Invalid parameter '{name}'")]
@@ -158,8 +170,66 @@ pub enum SolverChoice {
     Erk,
 }
 
+/// How far along an in-flight integration is, handed to
+/// [`SimulateOptions::progress`] once per accepted step.
+///
+/// `t` advances non-uniformly: an adaptive solver crawls through a stiff
+/// startup and then takes large steps, so [`Progress::fraction`] is *not*
+/// linear in wall clock. A host driving a progress bar from it should expect
+/// the early part of a stiff run to look stalled, and is usually better off
+/// showing `step` alongside the bar so a slow start still reads as alive.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Progress {
+    /// Start of the integration interval.
+    pub t0: f64,
+    /// Independent-variable value the integrator has reached.
+    pub t: f64,
+    /// End of the integration interval.
+    pub t_end: f64,
+    /// Accepted steps taken so far (`0` for the pre-loop report at `t0`).
+    pub step: usize,
+    /// The configured [`SimulateOptions::max_steps`] cap, for context.
+    pub max_steps: usize,
+}
+
+impl Progress {
+    /// Fraction of the integration interval covered, clamped to `[0, 1]`.
+    ///
+    /// Returns `0.0` for a degenerate (zero-length) interval rather than a NaN,
+    /// so a host can divide by it or feed it to a bar without a guard.
+    pub fn fraction(&self) -> f64 {
+        let span = self.t_end - self.t0;
+        if !span.is_finite() || span <= 0.0 {
+            return 0.0;
+        }
+        ((self.t - self.t0) / span).clamp(0.0, 1.0)
+    }
+}
+
+/// What a [`SimulateOptions::progress`] observer wants the integrator to do
+/// next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    /// Keep integrating.
+    Continue,
+    /// Stop now; [`run_solver`] unwinds with [`SimulateError::Cancelled`].
+    Cancel,
+}
+
+/// A progress observer. See [`SimulateOptions::progress`].
+///
+/// The `Send + Sync` bound is dropped on `wasm32`, where the natural observer
+/// wraps a `js_sys::Function` (neither `Send` nor `Sync`, and harmlessly so on
+/// a single-threaded target). Keeping the bound on native means adding this
+/// field does not cost native callers `SimulateOptions: Send + Sync`.
+#[cfg(target_arch = "wasm32")]
+pub type ProgressFn = std::sync::Arc<dyn Fn(&Progress) -> Flow>;
+/// A progress observer. See [`SimulateOptions::progress`].
+#[cfg(not(target_arch = "wasm32"))]
+pub type ProgressFn = std::sync::Arc<dyn Fn(&Progress) -> Flow + Send + Sync>;
+
 /// Tunable options for [`Compiled::simulate`] / [`simulate`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SimulateOptions {
     /// Which solver family to use. Defaults to [`SolverChoice::Bdf`].
     pub solver: SolverChoice,
@@ -173,6 +243,42 @@ pub struct SimulateOptions {
     /// at exactly these times. If `None`, the natural step times are
     /// returned.
     pub output_times: Option<Vec<f64>>,
+    /// If `Some`, called once before the first step and then after every
+    /// accepted step, with the interval covered so far. Returning
+    /// [`Flow::Cancel`] stops the integration with
+    /// [`SimulateError::Cancelled`].
+    ///
+    /// **Called on every step, deliberately unthrottled.** The integrator has
+    /// no portable clock to throttle against — `std::time::Instant::now()`
+    /// panics on `wasm32-unknown-unknown`, and taking one unconditionally is
+    /// what broke every array/PDE run in the browser until `bc52c5fa` — so the
+    /// rate limiting belongs to the host, which has a working clock. Keep the
+    /// observer cheap: a fast run can accept thousands of steps in well under a
+    /// second.
+    pub progress: Option<ProgressFn>,
+}
+
+// Hand-written because `ProgressFn` is a trait object: it cannot derive Debug,
+// and a `SimulateOptions` that no longer prints would be a regression for every
+// existing `{:?}` on a solver error path.
+impl std::fmt::Debug for SimulateOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimulateOptions")
+            .field("solver", &self.solver)
+            .field("abstol", &self.abstol)
+            .field("reltol", &self.reltol)
+            .field("max_steps", &self.max_steps)
+            .field("output_times", &self.output_times)
+            .field(
+                "progress",
+                &self
+                    .progress
+                    .as_ref()
+                    .map(|_| "<observer>")
+                    .unwrap_or("None"),
+            )
+            .finish()
+    }
 }
 
 impl Default for SimulateOptions {
@@ -183,6 +289,7 @@ impl Default for SimulateOptions {
             reltol: 1e-6,
             max_steps: 10_000,
             output_times: None,
+            progress: None,
         }
     }
 }
@@ -1148,6 +1255,30 @@ where
             details: e.to_string(),
         })?;
 
+    // Progress observer (no-op when the caller supplied none). Both loops below
+    // report through this, so a host sees the same stream whether it asked for
+    // an interpolated output grid or the solver's natural steps.
+    let report = |step: usize, t: f64| -> Result<(), SimulateError> {
+        let Some(cb) = &opts.progress else {
+            return Ok(());
+        };
+        let p = Progress {
+            t0,
+            t,
+            t_end,
+            step,
+            max_steps: opts.max_steps,
+        };
+        match cb(&p) {
+            Flow::Continue => Ok(()),
+            Flow::Cancel => Err(SimulateError::Cancelled { t, step }),
+        }
+    };
+
+    // One report before stepping, so a host can render a determinate 0% the
+    // moment the solve starts rather than after the first (possibly slow) step.
+    report(0, t0)?;
+
     let mut step_count: usize = 0;
 
     if let Some(t_eval) = &opts.output_times {
@@ -1184,6 +1315,7 @@ where
             })?;
             step_count += 1;
             let t_curr = solver.state().t;
+            report(step_count, t_curr)?;
 
             // Drain user grid points inside (t_prev, t_curr].
             while next_idx < t_eval.len() && t_eval[next_idx] <= t_curr {
@@ -1231,6 +1363,7 @@ where
             })?;
             step_count += 1;
             let t_curr = solver.state().t;
+            report(step_count, t_curr)?;
             let y_owned: Vec<f64> = solver.state().y.as_slice().to_vec();
             push_state(&mut times, &mut state_rows, t_curr, &y_owned);
             if matches!(stop, OdeSolverStopReason::TstopReached) {

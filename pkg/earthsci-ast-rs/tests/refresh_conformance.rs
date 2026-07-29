@@ -165,6 +165,7 @@ fn base_opts() -> SimulateOptions {
         reltol: 1e-8,
         max_steps: 1_000_000,
         output_times: None,
+        progress: None,
     }
 }
 

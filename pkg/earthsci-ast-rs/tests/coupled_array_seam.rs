@@ -71,6 +71,7 @@ fn fast_opts(final_t: f64) -> SimulateOptions {
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(vec![final_t]),
+        progress: None,
     }
 }
 

@@ -160,6 +160,7 @@ fn loaded_ic_bc_simulation_provider_injection() {
         reltol: 1e-10,
         max_steps: 10_000_000,
         output_times: Some(vec![0.0, 600.0]),
+        progress: None,
     };
     let sol = compiled
         .simulate((0.0, 600.0), &HashMap::new(), &HashMap::new(), &opts)

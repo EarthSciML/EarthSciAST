@@ -388,6 +388,7 @@ fn base_opts() -> SimulateOptions {
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: None, // segmented_solve pins each segment's output node
+        progress: None,
     }
 }
 

@@ -280,6 +280,7 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(vec![t_end]),
+        progress: None,
     };
     let sol = simulate(&file, (0.0, t_end), &HashMap::new(), &ic, &opts)
         .expect("advection simulate failed");

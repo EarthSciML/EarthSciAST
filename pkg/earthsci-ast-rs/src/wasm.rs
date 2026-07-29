@@ -282,6 +282,19 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 ///      "maxSteps": u32, "outputPoints": u32 }`. `outputPoints` samples the
 ///   solution at that many evenly spaced times in `[t0, t_end]` (nice for
 ///   plotting); omit it to get the solver's natural step grid.
+/// - `progress`: optional observer, called as `progress(fraction, t, step)`
+///   once before the first step and then after **every** accepted step.
+///   `fraction` is the covered share of `[t0, t_end]`, clamped to `[0, 1]`.
+///   Return **`false`** to cancel the run (it rejects with `Simulation error:
+///   Cancelled by the caller at t = …`); any other return value — including
+///   `undefined`, which is what a callback with no `return` gives — continues.
+///   A callback that throws is treated as a cancel.
+///
+///   It is called on every step and is **not throttled here**: the integrator
+///   has no portable clock (`Instant::now()` panics on `wasm32-unknown-unknown`),
+///   so a host that wants to rate-limit should do it in JS, where
+///   `performance.now()` works. Keep it cheap — a 0-D model can accept
+///   thousands of steps in a fraction of a second.
 ///
 /// Returns a JS object `{ time: number[], state: number[][],
 /// stateVariableNames: string[], metadata: {...} }` where
@@ -295,8 +308,11 @@ pub fn simulate(
     params_str: &str,
     ic_str: &str,
     opts_str: &str,
+    progress: Option<js_sys::Function>,
 ) -> Result<JsValue, JsValue> {
-    use crate::simulate::{SimulateOptions, SolverChoice, simulate as rust_simulate};
+    use crate::simulate::{
+        Flow, Progress, ProgressFn, SimulateOptions, SolverChoice, simulate as rust_simulate,
+    };
     use std::collections::HashMap;
 
     let esm_file =
@@ -348,6 +364,37 @@ pub fn simulate(
                 .map(|i| t0 + span * (i as f64) / ((n - 1) as f64))
                 .collect(),
         );
+    }
+
+    // Positional `(fraction, t, step)` rather than an options object: this fires
+    // on every accepted step, and allocating a JS object per step for values the
+    // host already knows (it passed t0/t_end/maxSteps in) is pure overhead.
+    //
+    // Cancel is an explicit `=== false` and nothing else. Treating "falsy" as
+    // cancel would make the most natural observer — `(f) => postMessage(f)`,
+    // which returns `undefined` — abort on its first call.
+    if let Some(cb) = progress {
+        let observer: ProgressFn = std::sync::Arc::new(move |p: &Progress| {
+            match cb.call3(
+                &JsValue::NULL,
+                &JsValue::from_f64(p.fraction()),
+                &JsValue::from_f64(p.t),
+                &JsValue::from_f64(p.step as f64),
+            ) {
+                Ok(v) => {
+                    if v == JsValue::FALSE {
+                        Flow::Cancel
+                    } else {
+                        Flow::Continue
+                    }
+                }
+                // The observer threw. Stopping is the conservative reading: a
+                // host whose progress reporting is broken should not be left
+                // with a run it can no longer see or interrupt.
+                Err(_) => Flow::Cancel,
+            }
+        });
+        opts.progress = Some(observer);
     }
 
     let sol = rust_simulate(&esm_file, (t0, t_end), &params, &initial_conditions, &opts)

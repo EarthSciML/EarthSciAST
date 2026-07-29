@@ -71,6 +71,7 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
         reltol: 1e-10,
         max_steps: 1_000_000,
         output_times: Some(times),
+        progress: None,
     };
     let ics = test.initial_conditions.clone().unwrap_or_default();
     simulate(
@@ -139,6 +140,7 @@ fn wildfire_regrid_trajectory_and_constant_states() {
         reltol: 1e-10,
         max_steps: 1_000_000,
         output_times: Some(vec![0.0, 3600.0]),
+        progress: None,
     };
     let sol = simulate(
         &file,

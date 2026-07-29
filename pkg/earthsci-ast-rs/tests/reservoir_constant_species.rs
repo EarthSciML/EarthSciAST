@@ -61,6 +61,7 @@ fn reservoir_reactant_held_fixed() {
         reltol: 1e-10,
         max_steps: 1_000_000,
         output_times: Some(sample_times.clone()),
+        progress: None,
     };
     let sol = compiled
         .simulate((0.0, 3.0), &par, &ic, &opts)

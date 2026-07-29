@@ -172,6 +172,7 @@ fn subsystem_loader_trajectory_matches_golden() {
         reltol: 1e-10,
         max_steps: 1_000_000,
         output_times: Some(want_times),
+        progress: None,
     };
     let sol = compiled
         .simulate((t0, t1), &HashMap::new(), &HashMap::new(), &opts)

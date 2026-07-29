@@ -6,7 +6,8 @@
 use super::tape::{TapeProgram, tape_disabled};
 use super::*;
 use crate::simulate::{
-    SimulateError, SimulateOptions, SolveStats, Solution, SolutionMetadata, SolverChoice,
+    Progress, ProgressFn, SimulateError, SimulateOptions, SolveStats, Solution, SolutionMetadata,
+    SolverChoice,
 };
 use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 use std::collections::HashSet;
@@ -602,8 +603,27 @@ impl ArrayCompiled {
             if grid.last() != Some(&b) {
                 grid.push(b);
             }
+            // Report progress against the GLOBAL interval, not the segment's.
+            // Each segment runs a fresh solver over [a, b] with its own step
+            // counter, so handing the caller's observer through unwrapped would
+            // restart the bar from 0% at every refresh boundary.
+            let seg_progress: Option<ProgressFn> = opts.progress.as_ref().map(|user| {
+                let user = user.clone();
+                let steps_before = stats.n_accepted_steps;
+                let wrapped: ProgressFn = std::sync::Arc::new(move |p: &Progress| {
+                    user(&Progress {
+                        t0,
+                        t: p.t,
+                        t_end,
+                        step: steps_before + p.step,
+                        max_steps: p.max_steps,
+                    })
+                });
+                wrapped
+            });
             let seg_opts = SimulateOptions {
                 output_times: Some(grid),
+                progress: seg_progress,
                 ..opts.clone()
             };
             let (seg_time, seg_state, seg_stats) = self.run_one_segment(

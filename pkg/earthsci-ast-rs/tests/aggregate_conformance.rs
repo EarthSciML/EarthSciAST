@@ -107,6 +107,7 @@ fn run_model_test(
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(sorted_times.clone()),
+        progress: None,
     };
     let params: HashMap<String, f64> = HashMap::new();
     let initial_conditions: HashMap<String, f64> =

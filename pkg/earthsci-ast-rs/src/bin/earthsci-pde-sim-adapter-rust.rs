@@ -107,6 +107,7 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
         reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
         max_steps: 1_000_000,
         output_times: Some(out_times.clone()),
+        progress: None,
     };
     let sol =
         simulate(&file, (t0, t1), &params, &ics, &opts).map_err(|e| format!("simulate: {e:?}"))?;
@@ -233,6 +234,7 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
         reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
         max_steps: 10_000_000,
         output_times: Some(checkpoints.clone()),
+        progress: None,
     };
     let sol = compiled
         .simulate((t0, t1), &params, &HashMap::new(), &opts)

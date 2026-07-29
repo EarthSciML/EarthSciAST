@@ -145,6 +145,7 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(times),
+        progress: None,
     };
     let params: HashMap<String, f64> = HashMap::new();
     let ics: HashMap<String, f64> = t.initial_conditions.as_ref().cloned().unwrap_or_default();
@@ -253,6 +254,7 @@ fn polygon_intersection_area_planar_fixture_area_is_one() {
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(vec![0.0, 1.0]),
+        progress: None,
     };
     let ics: HashMap<String, f64> = test
         .initial_conditions
@@ -318,6 +320,7 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(vec![0.0, 2.0]),
+        progress: None,
     };
     let ics: HashMap<String, f64> = test
         .initial_conditions

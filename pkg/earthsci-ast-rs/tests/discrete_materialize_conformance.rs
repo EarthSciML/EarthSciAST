@@ -165,6 +165,7 @@ fn discrete_materialize_trajectory_matches_golden() {
         reltol: 1e-10,
         max_steps: 1_000_000,
         output_times: None,
+        progress: None,
     };
 
     // Segment-by-segment: refresh `src` at each boundary (forcing frozen for the

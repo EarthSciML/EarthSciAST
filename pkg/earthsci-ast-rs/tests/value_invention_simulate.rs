@@ -99,6 +99,7 @@ fn opts() -> SimulateOptions {
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(vec![1.0]),
+        progress: None,
     }
 }
 

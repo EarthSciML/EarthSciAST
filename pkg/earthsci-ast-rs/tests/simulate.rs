@@ -192,6 +192,7 @@ fn test_exponential_decay_matches_analytical() {
         reltol: 1e-8,
         max_steps: 10_000,
         output_times: Some(vec![0.0, 1.0, 10.0, 100.0]),
+        progress: None,
     };
 
     let sol = simulate(&file, (0.0, 100.0), &params, &ic, &opts).expect("simulate failed");
@@ -264,6 +265,7 @@ fn test_reversible_reaction_reaches_steady_state() {
         reltol: 1e-8,
         max_steps: 10_000,
         output_times: Some(vec![10.0, 50.0]),
+        progress: None,
     };
 
     let sol = simulate(&file, (0.0, 50.0), &params, &ic, &opts).expect("simulate failed");
@@ -336,6 +338,7 @@ fn test_autocatalytic_conserves_mass() {
         reltol: 1e-8,
         max_steps: 10_000,
         output_times: Some((0..=20).map(|i| i as f64 * 0.5).collect()),
+        progress: None,
     };
 
     let sol = simulate(&file, (0.0, 10.0), &params, &ic, &opts).expect("simulate failed");
@@ -444,6 +447,7 @@ fn test_robertson_stiff_problem() {
         reltol: 1e-8,
         max_steps: 100_000,
         output_times: Some(vec![0.4, 4.0, 40.0, 400.0, 4000.0]),
+        progress: None,
     };
 
     let sol =
@@ -552,6 +556,7 @@ fn test_round_trip_simple_ode_fixture() {
         reltol: 1e-8,
         max_steps: 10_000,
         output_times: Some(vec![0.0, 1.0, 10.0, 100.0]),
+        progress: None,
     };
 
     let sol = simulate(&file, (0.0, 100.0), &params, &ic, &opts).expect("simulate failed");
@@ -606,6 +611,7 @@ fn test_round_trip_stiff_vdp_fixture() {
         reltol: 1e-6,
         max_steps: 100_000,
         output_times: None,
+        progress: None,
     };
 
     let sol = simulate(&file, (0.0, 1.0), &params, &ic, &opts).expect("VdP simulate failed");
@@ -640,6 +646,7 @@ fn test_compiled_reuse_for_parameter_sweep() {
         reltol: 1e-8,
         max_steps: 10_000,
         output_times: Some(vec![1.0]),
+        progress: None,
     };
 
     let mut ic = HashMap::new();

@@ -218,8 +218,8 @@ pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
 pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
-    Compiled, ResolvedExpr, SimulateError, SimulateOptions, Solution, SolutionMetadata,
-    SolverChoice, compile_array, fold_constant_expr, interpret, simulate,
+    Compiled, Flow, Progress, ProgressFn, ResolvedExpr, SimulateError, SimulateOptions, Solution,
+    SolutionMetadata, SolverChoice, compile_array, fold_constant_expr, interpret, simulate,
 };
 pub use units::{
     Dimension, Rational, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,

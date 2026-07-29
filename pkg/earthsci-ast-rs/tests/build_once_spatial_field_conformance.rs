@@ -130,6 +130,7 @@ fn build_once_spatial_field_trajectory_matches_golden() {
         reltol: 1e-10,
         max_steps: 1_000_000,
         output_times: Some(want_times.clone()),
+        progress: None,
     };
     let sol = simulate(&file, (t0, t1), &HashMap::new(), &HashMap::new(), &opts)
         .unwrap_or_else(|e| panic!("simulate failed: {e}"));
