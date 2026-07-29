@@ -40,6 +40,7 @@
 use super::super::*;
 use super::ir::*;
 use ndarray::ArrayD;
+use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -105,11 +106,21 @@ pub(crate) struct TapeExec {
     /// output box, so the ghost zero-fill can be skipped (every element is
     /// overwritten by a segment copy).
     plan_full: Vec<bool>,
-    /// CONST + SEGMENT sections have run for this scratch.
-    primed: bool,
-    /// Parameter-vector bit-hash the priming ran under (mirrors
-    /// `CseRt::bind_params`).
-    pgen: u64,
+    /// Step 4 epochs: the parameter / forcing epochs the CONST resp. SEGMENT
+    /// sections last primed under (0 = never primed; live epochs start at 1).
+    /// Checked per call as two integer compares — see `run_tape_call`.
+    primed_param_epoch: u64,
+    primed_forcing_epoch: u64,
+    /// Step 4: chunk register file for fused groups
+    /// (`max n_regs over specs × FCHUNK` doubles, recycled across groups).
+    fregs: Vec<f64>,
+    /// Step 4 export demotion: `Export` instructions only execute when
+    /// something can read the published arrays — a fallback rule is present,
+    /// `ESS_TAPE_CHECK` is active, or a caller explicitly requested them
+    /// ([`TapeCtx::set_exports_active`]). With no possible reader they are
+    /// skipped (the exported values themselves are still computed — they are
+    /// ordinary slots — only the publish memcpy is elided).
+    exports_active: bool,
     /// Rule counts, cached off the program for the per-call stats.
     pub(crate) n_taped: usize,
     pub(crate) n_fallback: usize,
@@ -169,6 +180,12 @@ impl TapeExec {
                 })
             })
             .collect();
+        let max_fregs = prog
+            .fused
+            .iter()
+            .map(|f| f.n_regs as usize + f.n_load_regs as usize)
+            .max()
+            .unwrap_or(0);
         TapeExec {
             slab,
             slot_off,
@@ -176,8 +193,10 @@ impl TapeExec {
             pending: Vec::with_capacity(16),
             state_rm: vec![0.0f64; n_state],
             plan_full,
-            primed: false,
-            pgen: 0,
+            primed_param_epoch: 0,
+            primed_forcing_epoch: 0,
+            fregs: vec![0.0f64; max_fregs * FCHUNK],
+            exports_active: n_fallback > 0 || tape_check_calls() > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
         }
@@ -197,6 +216,17 @@ pub(in crate::simulate_array) struct TapeCtx {
     pub(crate) check_remaining: u64,
     /// Legacy-arm `dy` buffer for check mode (dropped when the check ends).
     pub(crate) check_buf: Vec<f64>,
+    /// Step 4 epoch counters (see `run_tape_call`). The parameter epoch is
+    /// bumped whenever the bit-exact generation hash of the caller's params
+    /// slice changes (the slice is the only channel callers have, so the hash
+    /// remains the epoch SOURCE — it is O(params_len) and negligible); the
+    /// forcing epoch is a driver-owned counter, bumped between segments when
+    /// the live forcing buffer is refreshed, which re-runs only the SEGMENT
+    /// section.
+    param_epoch: u64,
+    forcing_epoch: u64,
+    pgen: u64,
+    pgen_set: bool,
 }
 
 impl TapeCtx {
@@ -208,7 +238,27 @@ impl TapeCtx {
             exec,
             check_remaining: tape_check_calls(),
             check_buf: Vec::new(),
+            param_epoch: 0,
+            forcing_epoch: 1,
+            pgen: 0,
+            pgen_set: false,
         }
+    }
+
+    /// Invalidate the SEGMENT section: the driver calls this after refreshing
+    /// the live forcing buffer while keeping one warm executor. (The current
+    /// driver builds a fresh scratch per segment, so nothing calls it yet;
+    /// it is the forcing half of the Step 4 epoch machinery.)
+    #[allow(dead_code)]
+    pub(crate) fn bump_forcing_epoch(&mut self) {
+        self.forcing_epoch += 1;
+    }
+
+    /// Force `Export` instructions on/off (test/diagnostic hook — production
+    /// derives this from the fallback count and `ESS_TAPE_CHECK`).
+    #[allow(dead_code)]
+    pub(crate) fn set_exports_active(&mut self, on: bool) {
+        self.exec.exports_active = on;
     }
 }
 
@@ -264,6 +314,16 @@ pub(in crate::simulate_array) fn run_tape_call(
     dy: &mut [f64],
     stats: &mut RhsStats,
 ) {
+    // Parameter epoch: bit-exact generation hash of the params slice → epoch
+    // bump on change (the negative-control test in `tests/tape_exec.rs`
+    // guards this: bypassing it serves stale CONST values).
+    let g = params_gen(params);
+    if !ctx.pgen_set || ctx.pgen != g {
+        ctx.pgen = g;
+        ctx.pgen_set = true;
+        ctx.param_epoch += 1;
+    }
+    let (param_epoch, forcing_epoch) = (ctx.param_epoch, ctx.forcing_epoch);
     let prog = &*ctx.prog;
     let exec = &mut ctx.exec;
     // Refill the row-major state mirror: one strided pass per variable block
@@ -304,12 +364,18 @@ pub(in crate::simulate_array) fn run_tape_call(
         t,
     };
 
-    let g = params_gen(params);
+    // Section invalidation: two integer compares per steady-state call.
+    // CONST depends on the parameter epoch alone; SEGMENT additionally on the
+    // forcing epoch (a forcing refresh re-runs only the SEGMENT section).
+    let const_end = prog.n_const as usize;
     let prime_end = (prog.n_const + prog.n_segment) as usize;
-    if !exec.primed || exec.pgen != g {
-        exec.primed = true;
-        exec.pgen = g;
+    if exec.primed_param_epoch != param_epoch {
+        exec.primed_param_epoch = param_epoch;
+        exec.primed_forcing_epoch = forcing_epoch;
         run_range(&env, 0..prime_end, exec, dy, stats);
+    } else if exec.primed_forcing_epoch != forcing_epoch {
+        exec.primed_forcing_epoch = forcing_epoch;
+        run_range(&env, const_end..prime_end, exec, dy, stats);
     }
     run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
     drop(env);
@@ -516,6 +582,7 @@ fn total(shape: &[usize]) -> usize {
 }
 
 /// `dst[k] = f(a[k])` — dst contiguous row-major over `shape`.
+#[inline(never)]
 unsafe fn ew1(dst: *mut f64, shape: &[usize], a: &Rv, f: impl Fn(f64) -> f64 + Copy) {
     let za: f64;
     let zero;
@@ -558,6 +625,7 @@ unsafe fn ew1(dst: *mut f64, shape: &[usize], a: &Rv, f: impl Fn(f64) -> f64 + C
 }
 
 /// `dst[k] = f(a[k], b[k])` — dst contiguous row-major over `shape`.
+#[inline(never)]
 unsafe fn ew2(dst: *mut f64, shape: &[usize], a: &Rv, b: &Rv, f: impl Fn(f64, f64) -> f64 + Copy) {
     let za: f64;
     let zb: f64;
@@ -702,6 +770,7 @@ unsafe fn zip_loop2(
 }
 
 /// `dst[k] = cond[k] != 0 ? a[k] : b[k]` — the `vec_select` kernel.
+#[inline(never)]
 unsafe fn ew_select(dst: *mut f64, shape: &[usize], cond: &Rv, a: &Rv, b: &Rv) {
     // A scalar condition is the filter-gate broadcast: whole-array pick.
     if let Rv::S(c) = cond {
@@ -916,6 +985,7 @@ unsafe fn fill_strided(dst: *mut f64, dstr: &[i64], shape: &[usize], v: f64) {
 /// Execute one precompiled gather plan into a contiguous row-major `out` —
 /// the raw-strides transliteration of `eval_vec_index`'s copy phase (and of
 /// the reference executor's `exec_gather`).
+#[inline(never)]
 unsafe fn exec_gather(plan: &GatherPlan, src: &SrcView, out: *mut f64, full_cover: bool) {
     assert_eq!(
         &src.shape[..],
@@ -999,6 +1069,574 @@ unsafe fn exec_gather(plan: &GatherPlan, src: &SrcView, out: *mut f64, full_cove
 }
 
 // ---------------------------------------------------------------------------
+// Step 4: fused-group execution.
+// ---------------------------------------------------------------------------
+
+/// Chunk length of the strip-mined fused executor: intermediates live in a
+/// small register file (`n_regs × FCHUNK` doubles, L1-resident) instead of
+/// round-tripping ~55 KB slab arrays between every op.
+pub(super) const FCHUNK: usize = 1024;
+
+/// `ESS_TAPE_FUSE_MODE=elem`: run fused groups through the per-element
+/// micro-op interpreter instead of the chunked one (measurement arm for the
+/// Step 4 interpreter-design comparison; bit-identical either way).
+fn fuse_elem_mode() -> bool {
+    use std::sync::OnceLock;
+    static ELEM: OnceLock<bool> = OnceLock::new();
+    *ELEM.get_or_init(|| {
+        std::env::var("ESS_TAPE_FUSE_MODE")
+            .map(|v| v.eq_ignore_ascii_case("elem"))
+            .unwrap_or(false)
+    })
+}
+
+/// A micro-op operand resolved for one chunk: a pointer to `c` contiguous
+/// values, or a constant broadcast over the chunk.
+#[derive(Clone, Copy)]
+enum MSrc {
+    P(*const f64),
+    C(f64),
+}
+
+/// `dst[k] = f(a[k])` over one chunk. `dst` is a register region; a `P`
+/// operand is either a DIFFERENT register region (the allocator never assigns
+/// an op's out register to one of its operands) or a slab/state/observed
+/// buffer (disjoint from the register file), so slice-based loops are sound —
+/// and vectorizable.
+#[inline(always)]
+unsafe fn fch1(dst: *mut f64, c: usize, a: MSrc, f: impl Fn(f64) -> f64 + Copy) {
+    unsafe {
+        let d = std::slice::from_raw_parts_mut(dst, c);
+        match a {
+            MSrc::P(pa) => {
+                let a = std::slice::from_raw_parts(pa, c);
+                for (x, &v) in d.iter_mut().zip(a) {
+                    *x = f(v);
+                }
+            }
+            MSrc::C(v) => {
+                let y = f(v);
+                for x in d.iter_mut() {
+                    *x = y;
+                }
+            }
+        }
+    }
+}
+
+/// `dst[k] = f(a[k], b[k])` over one chunk (see `fch1` for the aliasing
+/// argument; the two operands may alias EACH OTHER, which shared slices
+/// permit).
+#[inline(always)]
+unsafe fn fch2(dst: *mut f64, c: usize, a: MSrc, b: MSrc, f: impl Fn(f64, f64) -> f64 + Copy) {
+    unsafe {
+        let d = std::slice::from_raw_parts_mut(dst, c);
+        match (a, b) {
+            (MSrc::P(pa), MSrc::P(pb)) => {
+                let a = std::slice::from_raw_parts(pa, c);
+                let b = std::slice::from_raw_parts(pb, c);
+                for k in 0..c {
+                    *d.get_unchecked_mut(k) = f(*a.get_unchecked(k), *b.get_unchecked(k));
+                }
+            }
+            (MSrc::P(pa), MSrc::C(y)) => {
+                let a = std::slice::from_raw_parts(pa, c);
+                for (x, &v) in d.iter_mut().zip(a) {
+                    *x = f(v, y);
+                }
+            }
+            (MSrc::C(x0), MSrc::P(pb)) => {
+                let b = std::slice::from_raw_parts(pb, c);
+                for (x, &y) in d.iter_mut().zip(b) {
+                    *x = f(x0, y);
+                }
+            }
+            (MSrc::C(x0), MSrc::C(y0)) => {
+                let v = f(x0, y0);
+                for x in d.iter_mut() {
+                    *x = v;
+                }
+            }
+        }
+    }
+}
+
+/// `dst[k] = g(a[k], b[k], c[k])` over one chunk (the Bin2 superop; see
+/// `fch1` for the aliasing argument).
+#[inline(always)]
+unsafe fn fch3(
+    dst: *mut f64,
+    n: usize,
+    a: MSrc,
+    b: MSrc,
+    cc: MSrc,
+    g: impl Fn(f64, f64, f64) -> f64 + Copy,
+) {
+    unsafe {
+        let d = std::slice::from_raw_parts_mut(dst, n);
+        macro_rules! lp {
+            ($ax:expr, $bx:expr, $cx:expr) => {
+                for k in 0..n {
+                    *d.get_unchecked_mut(k) = g($ax(k), $bx(k), $cx(k));
+                }
+            };
+        }
+        match (a, b, cc) {
+            (MSrc::P(pa), MSrc::P(pb), MSrc::P(pc)) => {
+                let (a, b, c) = (
+                    std::slice::from_raw_parts(pa, n),
+                    std::slice::from_raw_parts(pb, n),
+                    std::slice::from_raw_parts(pc, n),
+                );
+                lp!(
+                    |k: usize| *a.get_unchecked(k),
+                    |k: usize| *b.get_unchecked(k),
+                    |k: usize| *c.get_unchecked(k)
+                );
+            }
+            (MSrc::P(pa), MSrc::P(pb), MSrc::C(z)) => {
+                let (a, b) = (
+                    std::slice::from_raw_parts(pa, n),
+                    std::slice::from_raw_parts(pb, n),
+                );
+                lp!(
+                    |k: usize| *a.get_unchecked(k),
+                    |k: usize| *b.get_unchecked(k),
+                    |_k: usize| z
+                );
+            }
+            (MSrc::P(pa), MSrc::C(y), MSrc::P(pc)) => {
+                let (a, c) = (
+                    std::slice::from_raw_parts(pa, n),
+                    std::slice::from_raw_parts(pc, n),
+                );
+                lp!(
+                    |k: usize| *a.get_unchecked(k),
+                    |_k: usize| y,
+                    |k: usize| *c.get_unchecked(k)
+                );
+            }
+            (MSrc::P(pa), MSrc::C(y), MSrc::C(z)) => {
+                let a = std::slice::from_raw_parts(pa, n);
+                lp!(|k: usize| *a.get_unchecked(k), |_k: usize| y, |_k: usize| z);
+            }
+            (MSrc::C(x), MSrc::P(pb), MSrc::P(pc)) => {
+                let (b, c) = (
+                    std::slice::from_raw_parts(pb, n),
+                    std::slice::from_raw_parts(pc, n),
+                );
+                lp!(
+                    |_k: usize| x,
+                    |k: usize| *b.get_unchecked(k),
+                    |k: usize| *c.get_unchecked(k)
+                );
+            }
+            (MSrc::C(x), MSrc::P(pb), MSrc::C(z)) => {
+                let b = std::slice::from_raw_parts(pb, n);
+                lp!(|_k: usize| x, |k: usize| *b.get_unchecked(k), |_k: usize| z);
+            }
+            (MSrc::C(x), MSrc::C(y), MSrc::P(pc)) => {
+                let c = std::slice::from_raw_parts(pc, n);
+                lp!(|_k: usize| x, |_k: usize| y, |k: usize| *c.get_unchecked(k));
+            }
+            (MSrc::C(x), MSrc::C(y), MSrc::C(z)) => {
+                let v = g(x, y, z);
+                for w in d.iter_mut() {
+                    *w = v;
+                }
+            }
+        }
+    }
+}
+
+/// The `vec_select` pick over one chunk.
+#[inline(always)]
+unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
+    // A constant condition is the filter-gate broadcast: whole-chunk pick.
+    if let MSrc::C(cv) = cond {
+        let pick = if cv != 0.0 { a } else { b };
+        unsafe { fch1(dst, c, pick, |x| x) };
+        return;
+    }
+    let MSrc::P(cp) = cond else { unreachable!() };
+    unsafe {
+        let d = std::slice::from_raw_parts_mut(dst, c);
+        let cs = std::slice::from_raw_parts(cp, c);
+        // Monomorphized over the operand kinds so each arm is a branch-free
+        // (blendable) loop rather than a per-element kind dispatch.
+        match (a, b) {
+            (MSrc::P(pa), MSrc::P(pb)) => {
+                let a = std::slice::from_raw_parts(pa, c);
+                let b = std::slice::from_raw_parts(pb, c);
+                for k in 0..c {
+                    // Load both, then select VALUES (evaluate-both semantics;
+                    // a value select vectorizes to a blend, where a pointer
+                    // select stays a scalar cmov+load).
+                    let av = *a.get_unchecked(k);
+                    let bv = *b.get_unchecked(k);
+                    *d.get_unchecked_mut(k) = if *cs.get_unchecked(k) != 0.0 { av } else { bv };
+                }
+            }
+            (MSrc::P(pa), MSrc::C(y)) => {
+                let a = std::slice::from_raw_parts(pa, c);
+                for k in 0..c {
+                    let av = *a.get_unchecked(k);
+                    *d.get_unchecked_mut(k) = if *cs.get_unchecked(k) != 0.0 { av } else { y };
+                }
+            }
+            (MSrc::C(x), MSrc::P(pb)) => {
+                let b = std::slice::from_raw_parts(pb, c);
+                for k in 0..c {
+                    let bv = *b.get_unchecked(k);
+                    *d.get_unchecked_mut(k) = if *cs.get_unchecked(k) != 0.0 { x } else { bv };
+                }
+            }
+            (MSrc::C(x), MSrc::C(y)) => {
+                for k in 0..c {
+                    *d.get_unchecked_mut(k) = if *cs.get_unchecked(k) != 0.0 { x } else { y };
+                }
+            }
+        }
+    }
+}
+
+/// Execute one fused group. Iterates the precompiled run schedule; each run
+/// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
+/// the register file, then live-out registers store to the slab. Per element
+/// this applies exactly the same scalar kernels in the same order as the
+/// unfused instructions (elementwise maps — chunking cannot change a bit).
+#[inline(never)]
+unsafe fn exec_fused(
+    fs: &FusedSpec,
+    env: &Env,
+    slab_ptr: *mut f64,
+    slot_off: &[usize],
+    obs: &ArrMap,
+    fregs: &mut [f64],
+) {
+    // Resolve scalar inputs once.
+    let mut svals: SmallVec<[f64; 8]> = SmallVec::new();
+    for op in &fs.scalars {
+        svals.push(resolve_scalar(op, env, slab_ptr, slot_off, obs));
+    }
+    // Resolve array input base pointers once.
+    let mut bases: SmallVec<[*const f64; 8]> = SmallVec::new();
+    for inp in &fs.inputs {
+        let p: *const f64 = match &inp.src {
+            SrcRef::Slot(s) => {
+                debug_assert_eq!(&env.prog.slots[*s as usize].shape, &inp.src_shape);
+                unsafe { slab_ptr.add(slot_off[*s as usize]) as *const f64 }
+            }
+            SrcRef::State(ix) => {
+                let sv = &env.prog.state_vars[*ix as usize];
+                debug_assert_eq!(&sv.shape, &inp.src_shape);
+                unsafe { env.state_rm.as_ptr().add(sv.flat_offset) }
+            }
+            SrcRef::Obs(ix) => {
+                let name = &env.prog.obs_reads[*ix as usize];
+                let a = obs
+                    .get(name)
+                    .unwrap_or_else(|| panic!("observed `{name}` not materialized before read"));
+                assert_eq!(
+                    a.shape(),
+                    &inp.src_shape[..],
+                    "fused input `{name}` box mismatch"
+                );
+                assert!(a.is_standard_layout());
+                a.as_ptr()
+            }
+        };
+        bases.push(p);
+    }
+    // Output slab pointers.
+    let mut outs: SmallVec<[(u16, *mut f64); 2]> = SmallVec::new();
+    for &(reg, slot) in &fs.outputs {
+        outs.push((reg, unsafe { slab_ptr.add(slot_off[slot as usize]) }));
+    }
+
+    if fuse_elem_mode() {
+        unsafe { exec_fused_elem(fs, &svals, &bases, &outs) };
+        return;
+    }
+
+    let rp = fregs.as_mut_ptr();
+    for run in &fs.runs {
+        let mut done = 0usize;
+        let len = run.len as usize;
+        while done < len {
+            let c = (len - done).min(FCHUNK);
+            let at = run.out_off as usize + done;
+            // Pre-load strided shifted inputs into their dedicated chunk
+            // registers (a ghost run needs no load — reads resolve to 0.0).
+            for (i, inp) in fs.inputs.iter().enumerate() {
+                if inp.load_reg == u16::MAX {
+                    continue;
+                }
+                let sx = inp.shifted_ix.expect("load_reg implies shifted");
+                let o = run.in_off[sx as usize];
+                if o == GHOST_OFF {
+                    continue;
+                }
+                unsafe {
+                    let dst = rp.add(inp.load_reg as usize * FCHUNK);
+                    let base = bases[i].offset(o as isize + done as isize * inp.elem_stride as isize);
+                    for k in 0..c {
+                        *dst.add(k) = *base.offset(k as isize * inp.elem_stride as isize);
+                    }
+                }
+            }
+            let msrc = |m: &MRef| -> MSrc {
+                match m {
+                    MRef::Reg(r) => MSrc::P(unsafe { rp.add(*r as usize * FCHUNK) as *const f64 }),
+                    MRef::Scal(i) => MSrc::C(svals[*i as usize]),
+                    MRef::In(i) => {
+                        let inp = &fs.inputs[*i as usize];
+                        match inp.shifted_ix {
+                            None => MSrc::P(unsafe { bases[*i as usize].add(at) }),
+                            Some(s) => {
+                                let o = run.in_off[s as usize];
+                                if o == GHOST_OFF {
+                                    MSrc::C(0.0)
+                                } else if inp.load_reg != u16::MAX {
+                                    MSrc::P(unsafe {
+                                        rp.add(inp.load_reg as usize * FCHUNK) as *const f64
+                                    })
+                                } else {
+                                    MSrc::P(unsafe {
+                                        bases[*i as usize].offset(o as isize + done as isize)
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            for op in &fs.micro {
+                match op {
+                    MicroOp::Bin { op, a, b, out } => {
+                        let (a, b) = (msrc(a), msrc(b));
+                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        // Monomorphized over the same kernel bodies as the
+                        // unfused `Instr::Bin` arm.
+                        unsafe {
+                            match op {
+                                BinCode::Add => fch2(dst, c, a, b, |x, y| x + y),
+                                BinCode::Sub => fch2(dst, c, a, b, |x, y| x - y),
+                                BinCode::Mul => fch2(dst, c, a, b, |x, y| x * y),
+                                BinCode::Div => fch2(dst, c, a, b, |x, y| x / y),
+                                BinCode::Pow => fch2(dst, c, a, b, |x: f64, y: f64| x.powf(y)),
+                                BinCode::Min => fch2(dst, c, a, b, |x: f64, y: f64| x.min(y)),
+                                BinCode::Max => fch2(dst, c, a, b, |x: f64, y: f64| x.max(y)),
+                                BinCode::Eq => fch2(dst, c, a, b, |x, y| (x == y) as i32 as f64),
+                                BinCode::Ne => fch2(dst, c, a, b, |x, y| (x != y) as i32 as f64),
+                                BinCode::Lt => fch2(dst, c, a, b, |x, y| (x < y) as i32 as f64),
+                                BinCode::Le => fch2(dst, c, a, b, |x, y| (x <= y) as i32 as f64),
+                                BinCode::Gt => fch2(dst, c, a, b, |x, y| (x > y) as i32 as f64),
+                                BinCode::Ge => fch2(dst, c, a, b, |x, y| (x >= y) as i32 as f64),
+                                other => fch2(dst, c, a, b, binary_kernel_of(*other)),
+                            }
+                        }
+                    }
+                    MicroOp::Un { op, a, out } => {
+                        let a = msrc(a);
+                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        unsafe {
+                            match op {
+                                UnCode::Abs => fch1(dst, c, a, |x: f64| x.abs()),
+                                UnCode::Sqrt => fch1(dst, c, a, |x: f64| x.sqrt()),
+                                UnCode::Exp => fch1(dst, c, a, |x: f64| x.exp()),
+                                UnCode::Ln => fch1(dst, c, a, |x: f64| x.ln()),
+                                UnCode::Log10 => fch1(dst, c, a, |x: f64| x.log10()),
+                                UnCode::Sin => fch1(dst, c, a, |x: f64| x.sin()),
+                                UnCode::Cos => fch1(dst, c, a, |x: f64| x.cos()),
+                                UnCode::Tanh => fch1(dst, c, a, |x: f64| x.tanh()),
+                                UnCode::Floor => fch1(dst, c, a, |x: f64| x.floor()),
+                                UnCode::Ceil => fch1(dst, c, a, |x: f64| x.ceil()),
+                                UnCode::Sign => fch1(dst, c, a, |x: f64| {
+                                    if x > 0.0 {
+                                        1.0
+                                    } else if x < 0.0 {
+                                        -1.0
+                                    } else {
+                                        0.0
+                                    }
+                                }),
+                                other => fch1(dst, c, a, unary_kernel_of(*other)),
+                            }
+                        }
+                    }
+                    MicroOp::Neg { a, out } => {
+                        let a = msrc(a);
+                        unsafe { fch1(rp.add(*out as usize * FCHUNK), c, a, |x| -x) };
+                    }
+                    MicroOp::Select { cond, a, b, out } => {
+                        let (cv, av, bv) = (msrc(cond), msrc(a), msrc(b));
+                        unsafe { fch_sel(rp.add(*out as usize * FCHUNK), c, cv, av, bv) };
+                    }
+                    MicroOp::Mov { a, out } => {
+                        let a = msrc(a);
+                        unsafe { fch1(rp.add(*out as usize * FCHUNK), c, a, |x| x) };
+                    }
+                    MicroOp::Bin2 {
+                        op1,
+                        a,
+                        b,
+                        op2,
+                        c: c3,
+                        swap,
+                        out,
+                    } => {
+                        let (av, bv, cv) = (msrc(a), msrc(b), msrc(c3));
+                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        use BinCode::{Add, Div, Mul, Sub};
+                        // Monomorphized composition of the same two kernel
+                        // bodies, applied in the same order (t = op1(a, b);
+                        // out = swap ? op2(c, t) : op2(t, c)).
+                        macro_rules! b2 {
+                            ($f1:expr, $f2:expr) => {
+                                if *swap {
+                                    unsafe {
+                                        fch3(dst, c, av, bv, cv, |x, y, z| $f2(z, $f1(x, y)))
+                                    }
+                                } else {
+                                    unsafe {
+                                        fch3(dst, c, av, bv, cv, |x, y, z| $f2($f1(x, y), z))
+                                    }
+                                }
+                            };
+                        }
+                        let add = |x: f64, y: f64| x + y;
+                        let sub = |x: f64, y: f64| x - y;
+                        let mul = |x: f64, y: f64| x * y;
+                        let div = |x: f64, y: f64| x / y;
+                        match (op1, op2) {
+                            (Add, Add) => b2!(add, add),
+                            (Add, Sub) => b2!(add, sub),
+                            (Add, Mul) => b2!(add, mul),
+                            (Add, Div) => b2!(add, div),
+                            (Sub, Add) => b2!(sub, add),
+                            (Sub, Sub) => b2!(sub, sub),
+                            (Sub, Mul) => b2!(sub, mul),
+                            (Sub, Div) => b2!(sub, div),
+                            (Mul, Add) => b2!(mul, add),
+                            (Mul, Sub) => b2!(mul, sub),
+                            (Mul, Mul) => b2!(mul, mul),
+                            (Mul, Div) => b2!(mul, div),
+                            (Div, Add) => b2!(div, add),
+                            (Div, Sub) => b2!(div, sub),
+                            (Div, Mul) => b2!(div, mul),
+                            (Div, Div) => b2!(div, div),
+                            other => unreachable!("Bin2 restricted to + - * / ({other:?})"),
+                        }
+                    }
+                }
+            }
+            for &(reg, optr) in &outs {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        rp.add(reg as usize * FCHUNK) as *const f64,
+                        optr.add(at),
+                        c,
+                    );
+                }
+            }
+            done += c;
+        }
+    }
+}
+
+/// The per-element measurement arm (`ESS_TAPE_FUSE_MODE=elem`): one scalar
+/// register file, micro-ops dispatched per element through the shared kernel
+/// tables. Bit-identical to the chunked executor (same kernels, same order).
+#[inline(never)]
+unsafe fn exec_fused_elem(
+    fs: &FusedSpec,
+    svals: &[f64],
+    bases: &[*const f64],
+    outs: &[(u16, *mut f64)],
+) {
+    let mut regs: SmallVec<[f64; 32]> = SmallVec::from_elem(0.0f64, fs.n_regs as usize);
+    for run in &fs.runs {
+        for k in 0..run.len as usize {
+            let at = run.out_off as usize + k;
+            let get = |m: &MRef, regs: &[f64]| -> f64 {
+                match m {
+                    MRef::Reg(r) => regs[*r as usize],
+                    MRef::Scal(i) => svals[*i as usize],
+                    MRef::In(i) => {
+                        let inp = &fs.inputs[*i as usize];
+                        match inp.shifted_ix {
+                            None => unsafe { *bases[*i as usize].add(at) },
+                            Some(s) => {
+                                let o = run.in_off[s as usize];
+                                if o == GHOST_OFF {
+                                    0.0
+                                } else {
+                                    unsafe {
+                                        *bases[*i as usize].offset(
+                                            o as isize + k as isize * inp.elem_stride as isize,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            for op in &fs.micro {
+                match op {
+                    MicroOp::Bin { op, a, b, out } => {
+                        let v = binary_kernel_of(*op)(get(a, &regs), get(b, &regs));
+                        regs[*out as usize] = v;
+                    }
+                    MicroOp::Un { op, a, out } => {
+                        let v = unary_kernel_of(*op)(get(a, &regs));
+                        regs[*out as usize] = v;
+                    }
+                    MicroOp::Neg { a, out } => {
+                        let v = -get(a, &regs);
+                        regs[*out as usize] = v;
+                    }
+                    MicroOp::Select { cond, a, b, out } => {
+                        let v = if get(cond, &regs) != 0.0 {
+                            get(a, &regs)
+                        } else {
+                            get(b, &regs)
+                        };
+                        regs[*out as usize] = v;
+                    }
+                    MicroOp::Mov { a, out } => {
+                        let v = get(a, &regs);
+                        regs[*out as usize] = v;
+                    }
+                    MicroOp::Bin2 {
+                        op1,
+                        a,
+                        b,
+                        op2,
+                        c,
+                        swap,
+                        out,
+                    } => {
+                        let t = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
+                        let cv = get(c, &regs);
+                        let v = if *swap {
+                            binary_kernel_of(*op2)(cv, t)
+                        } else {
+                            binary_kernel_of(*op2)(t, cv)
+                        };
+                        regs[*out as usize] = v;
+                    }
+                }
+            }
+            for &(reg, optr) in outs {
+                unsafe { *optr.add(at) = regs[reg as usize] };
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The interpreter loop.
 // ---------------------------------------------------------------------------
 
@@ -1017,8 +1655,11 @@ fn run_range(
         obs,
         pending,
         plan_full,
+        fregs,
+        exports_active,
         ..
     } = exec;
+    let exports_active = *exports_active;
     let prog = env.prog;
     let slab_ptr = slab.as_mut_ptr();
     let slot_off: &[usize] = slot_off;
@@ -1078,15 +1719,44 @@ fn run_range(
                 }
             }
             Instr::Un { op, a, out } => {
-                let f = unary_kernel_of(*op);
                 let desc = &prog.slots[*out as usize];
                 let off = slot_off[*out as usize];
                 if desc.scalar {
+                    let f = unary_kernel_of(*op);
                     let x = resolve_scalar(a, env, slab_ptr, slot_off, obs);
                     unsafe { *slab_ptr.add(off) = f(x) };
                 } else {
                     let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off, obs);
-                    unsafe { ew1(slab_ptr.add(off), &desc.shape, &av, f) };
+                    let dst = unsafe { slab_ptr.add(off) };
+                    let sh = &desc.shape;
+                    // Step 4: monomorphized arms for the common unaries (the
+                    // same closure bodies as `unary_kernel_of`, so a pure
+                    // dispatch hoist — one fn-pointer call per ELEMENT becomes
+                    // an inlined loop).
+                    unsafe {
+                        match op {
+                            UnCode::Abs => ew1(dst, sh, &av, |x: f64| x.abs()),
+                            UnCode::Sqrt => ew1(dst, sh, &av, |x: f64| x.sqrt()),
+                            UnCode::Exp => ew1(dst, sh, &av, |x: f64| x.exp()),
+                            UnCode::Ln => ew1(dst, sh, &av, |x: f64| x.ln()),
+                            UnCode::Log10 => ew1(dst, sh, &av, |x: f64| x.log10()),
+                            UnCode::Sin => ew1(dst, sh, &av, |x: f64| x.sin()),
+                            UnCode::Cos => ew1(dst, sh, &av, |x: f64| x.cos()),
+                            UnCode::Tanh => ew1(dst, sh, &av, |x: f64| x.tanh()),
+                            UnCode::Floor => ew1(dst, sh, &av, |x: f64| x.floor()),
+                            UnCode::Ceil => ew1(dst, sh, &av, |x: f64| x.ceil()),
+                            UnCode::Sign => ew1(dst, sh, &av, |x: f64| {
+                                if x > 0.0 {
+                                    1.0
+                                } else if x < 0.0 {
+                                    -1.0
+                                } else {
+                                    0.0
+                                }
+                            }),
+                            other => ew1(dst, sh, &av, unary_kernel_of(*other)),
+                        }
+                    }
                 }
             }
             Instr::Neg { a, out } => {
@@ -1276,6 +1946,13 @@ fn run_range(
                 }
             }
             Instr::Export { slot, export } => {
+                // Step 4 export demotion: no fallback rules, no check mode,
+                // no explicit request ⇒ nothing can read the published
+                // array — skip the publish memcpy.
+                if !exports_active {
+                    pc += 1;
+                    continue;
+                }
                 let name = &prog.exports[*export as usize].0;
                 let a = obs.get_mut(name).expect("export array preallocated");
                 let desc = &prog.slots[*slot as usize];
@@ -1294,6 +1971,10 @@ fn run_range(
                         );
                     }
                 }
+            }
+            Instr::Fused { spec } => {
+                let fs = &prog.fused[*spec as usize];
+                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs) };
             }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
