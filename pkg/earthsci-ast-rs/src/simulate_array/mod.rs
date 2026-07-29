@@ -70,6 +70,7 @@ mod driver;
 mod eval;
 mod layout;
 mod rhs;
+pub mod tape;
 mod vectorized;
 
 // Only `area_faq` / `pde_inline_tests` consume this re-export, and both stay
