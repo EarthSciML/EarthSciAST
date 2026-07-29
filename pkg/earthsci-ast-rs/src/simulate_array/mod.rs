@@ -319,6 +319,14 @@ pub struct RhsStats {
     /// oracle (a body op the vectorizer does not yet cover, a non-unit origin,
     /// or a forced-scalar reference run).
     pub obs_scalar_rules: usize,
+    /// Step 3b: number of rules (observed + RHS) executed through the compiled
+    /// tape's fast executor on this call. Mirrors the
+    /// `vectorized_rules`/`scalar_rules` split for the tape path; zero on the
+    /// legacy interpreter path.
+    pub taped_rules: usize,
+    /// Step 3b: number of rules the tape delegated to the interpreter
+    /// (`Instr::Fallback`) on this call.
+    pub fallback_rules: usize,
 }
 
 /// Eliminated algebraic-variable definition. Evaluated once per RHS call

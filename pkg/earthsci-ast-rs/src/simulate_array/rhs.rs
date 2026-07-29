@@ -2,6 +2,7 @@
 //! observed (algebraic) rule materialization, dependency ordering, and the
 //! per-call rule driver [`evaluate_rhs_with_scratch`].
 
+use super::tape::{TapeCtx, TapeProgram, run_tape_call};
 use super::*;
 use ndarray::ArrayViewD;
 use std::collections::HashSet;
@@ -50,6 +51,11 @@ pub struct RhsScratch {
     /// points leave it empty and pass the full rule set, so a plain `clear` +
     /// full materialize is recovered — byte-identical to the un-hoisted path).
     static_keys: HashSet<String>,
+    /// Step 3b: the compiled tape context, installed by the driver on the
+    /// production RHS closure's scratch ([`Self::install_tape`]). `None` (the
+    /// default, and the state of every debug/oracle/Jacobian scratch) means
+    /// [`evaluate_rhs_with_scratch`] runs the legacy interpreter path.
+    tape: Option<TapeCtx>,
 }
 
 impl RhsScratch {
@@ -67,7 +73,25 @@ impl RhsScratch {
             pool: Pool::default(),
             cse: CseRt::default(),
             static_keys: HashSet::new(),
+            tape: None,
         }
+    }
+
+    /// Install a compiled tape program (Step 3b). Called by the driver on the
+    /// production RHS closure's scratch; `observed_rules` is the FULL
+    /// dependency-ordered rule list the program's fallback indices resolve
+    /// against. Subsequent [`evaluate_rhs_with_scratch`] calls run the tape.
+    pub(super) fn install_tape(
+        &mut self,
+        prog: Rc<TapeProgram>,
+        observed_rules: Rc<Vec<AlgebraicRule>>,
+    ) {
+        self.tape = Some(TapeCtx::new(prog, observed_rules));
+    }
+
+    /// Whether this scratch carries a compiled tape (test observability).
+    pub fn has_tape(&self) -> bool {
+        self.tape.is_some()
     }
 
     /// Install the hoisted static observeds (see [`Self::static_keys`]): seed
@@ -561,8 +585,119 @@ pub(super) fn materialize_observeds_append(
     }
 }
 
+/// Evaluate one RHS call. Step 3b dispatcher: when the scratch carries a
+/// compiled tape ([`RhsScratch::install_tape`]) and the caller is not asking
+/// for the per-cell oracle, the call runs through the fast tape executor;
+/// otherwise the legacy interpreter path runs, byte-identical to the pre-tape
+/// driver. `ESS_TAPE_CHECK=N` runs BOTH paths for the first N calls of each
+/// taped scratch and asserts bitwise-equal `dy`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_rhs_with_scratch(
+    rhs_rules: &[RhsRule],
+    observed_rules: &[AlgebraicRule],
+    var_shapes: &IndexMap<String, VarShape>,
+    param_names: &[String],
+    state: &[f64],
+    params: &[f64],
+    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
+    t: f64,
+    dy: &mut [f64],
+    force_scalar: bool,
+    stats: &mut RhsStats,
+    scratch: &mut RhsScratch,
+) {
+    if force_scalar || scratch.tape.is_none() {
+        evaluate_rhs_legacy(
+            rhs_rules,
+            observed_rules,
+            var_shapes,
+            param_names,
+            state,
+            params,
+            forcing,
+            t,
+            dy,
+            force_scalar,
+            stats,
+            scratch,
+        );
+        return;
+    }
+    // Take the tape out so the legacy check arm below can borrow the whole
+    // scratch without recursing back onto the tape path.
+    let mut tape = scratch.tape.take().expect("tape checked Some");
+
+    // ESS_TAPE_CHECK: legacy arm first, into the (re)zeroed check buffer,
+    // using the scratch's legacy state exactly as production legacy would.
+    if tape.check_remaining > 0 {
+        tape.check_buf.resize(dy.len(), 0.0);
+        for v in tape.check_buf.iter_mut() {
+            *v = 0.0;
+        }
+        let mut check_stats = RhsStats::default();
+        evaluate_rhs_legacy(
+            rhs_rules,
+            observed_rules,
+            var_shapes,
+            param_names,
+            state,
+            params,
+            forcing,
+            t,
+            &mut tape.check_buf,
+            false,
+            &mut check_stats,
+            scratch,
+        );
+    }
+
+    // Fallback rules evaluate through the interpreter's `EvalCtx`, which
+    // reads the legacy per-variable state arrays: refill them only then (a
+    // fully-taped program reads the flat state directly through strided
+    // views and skips this entirely).
+    if tape.exec.n_fallback > 0 {
+        refill_state_arrays(&mut scratch.state_arrays, var_shapes, state);
+    }
+    run_tape_call(
+        &mut tape,
+        rhs_rules,
+        var_shapes,
+        param_names,
+        &scratch.state_arrays,
+        forcing,
+        state,
+        params,
+        t,
+        dy,
+        stats,
+    );
+
+    if tape.check_remaining > 0 {
+        for (k, (a, b)) in dy.iter().zip(tape.check_buf.iter()).enumerate() {
+            assert!(
+                a.to_bits() == b.to_bits(),
+                "ESS_TAPE_CHECK: dy[{k}] diverged at t={t}: tape {a:e} ({:016x}) vs \
+                 legacy {b:e} ({:016x})",
+                a.to_bits(),
+                b.to_bits()
+            );
+        }
+        tape.check_remaining -= 1;
+        if tape.check_remaining == 0 {
+            // The check passed for every requested call: drop the legacy
+            // comparison buffer.
+            tape.check_buf = Vec::new();
+        }
+    }
+    scratch.tape = Some(tape);
+}
+
+/// The legacy interpreter RHS path (pre-Step-3b `evaluate_rhs_with_scratch`),
+/// unchanged: the oracle for `debug_eval_rhs*`, the `ESS_TAPE_DISABLE`
+/// wholesale fallback, the `ESS_TAPE_CHECK` comparison arm, the Jacobian
+/// closure, and every scratch without an installed tape.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_rhs_legacy(
     rhs_rules: &[RhsRule],
     observed_rules: &[AlgebraicRule],
     var_shapes: &IndexMap<String, VarShape>,
