@@ -1090,7 +1090,10 @@ impl ArrayCompiled {
     /// The regridded terrain (`elev_xy`) and its slopes — forcing-derived but
     /// state-free — thus hoist and land in `setup_arrays`, matching the Julia /
     /// Python `BuildInspection`.
-    fn classify_static_observeds(&self, discrete_forcing: &HashSet<String>) -> HashSet<String> {
+    pub(super) fn classify_static_observeds(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> HashSet<String> {
         // CONST tier: state-free, `t`-free, AND forcing-free.
         self.classify_segment_invariant_observeds(discrete_forcing, false)
     }
@@ -1111,7 +1114,7 @@ impl ArrayCompiled {
     ///
     /// `observed_rules` are dependency-ordered, so the transitive
     /// `set.contains(r)` check resolves against already-classified predecessors.
-    fn classify_segment_invariant_observeds(
+    pub(super) fn classify_segment_invariant_observeds(
         &self,
         discrete_forcing: &HashSet<String>,
         allow_forcing: bool,
@@ -1199,7 +1202,7 @@ fn outobs_prune_disabled() -> bool {
 ///
 /// Anything else — a bare variable reference, an arithmetic body, a contraction
 /// with no free index — is "unknown" and gets probed.
-fn observed_rule_is_array_valued(rule: &AlgebraicRule) -> bool {
+pub(super) fn observed_rule_is_array_valued(rule: &AlgebraicRule) -> bool {
     match rule {
         AlgebraicRule::ArrayLoop { output_ranges, .. } => !output_ranges.is_empty(),
         AlgebraicRule::Scalar { body, .. } => match &**body {
@@ -1227,7 +1230,7 @@ fn observed_rule_is_array_valued(rule: &AlgebraicRule) -> bool {
 /// `simpleclimate.esm` (and any pure-stencil model) contains none of these, so
 /// pruning is live there; a conservative-regrid / relational model keeps the
 /// old un-pruned behaviour, bit-for-bit.
-fn expr_blocks_output_pruning(expr: &Expr) -> bool {
+pub(super) fn expr_blocks_output_pruning(expr: &Expr) -> bool {
     let Expr::Operator(node) = expr else {
         return false;
     };
@@ -1258,7 +1261,7 @@ fn expr_blocks_output_pruning(expr: &Expr) -> bool {
 ///
 /// `None` means "the cone is the whole slice" — the caller then keeps using the
 /// original slice rather than paying a deep AST clone of every rule for nothing.
-fn dependency_cone(
+pub(super) fn dependency_cone(
     rules: &[AlgebraicRule],
     seeds: &HashSet<String>,
 ) -> Option<Vec<AlgebraicRule>> {
