@@ -192,10 +192,27 @@ fn sample_state(n: usize) -> Vec<f64> {
 /// `debug_eval_rhs_into` borrows all its buffers, so nothing else allocates
 /// between them. Returns the allocation count (expected 0 in steady state).
 fn measure_steady_state_allocs(label: &str, compiled: &ArrayCompiled) -> usize {
+    measure_steady_state_allocs_with(label, compiled, false)
+}
+
+/// Like [`measure_steady_state_allocs`] but through a Step 3b TAPED scratch:
+/// the fast tape executor must be allocation-free in steady state too (the
+/// slab and every piece of executor state are preallocated at install time).
+fn measure_taped_steady_state_allocs(label: &str, compiled: &ArrayCompiled) -> usize {
+    measure_steady_state_allocs_with(label, compiled, true)
+}
+
+fn measure_steady_state_allocs_with(label: &str, compiled: &ArrayCompiled, taped: bool) -> usize {
     let n = compiled.state_variable_names().len();
     let state = sample_state(n);
     let params = compiled.debug_resolve_params(&HashMap::new());
-    let mut scratch = compiled.debug_new_scratch();
+    let mut scratch = if taped {
+        let s = compiled.debug_new_scratch_taped();
+        assert!(s.has_tape(), "{label}: taped scratch must carry a tape");
+        s
+    } else {
+        compiled.debug_new_scratch()
+    };
     let mut dy = vec![0.0f64; n];
     let mut stats = RhsStats::default();
 
@@ -205,11 +222,19 @@ fn measure_steady_state_allocs(label: &str, compiled: &ArrayCompiled) -> usize {
 
     let mut probe = RhsStats::default();
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut probe);
-    assert_eq!(probe.vectorized_rules, 1, "{label}: RHS did not vectorize");
-    assert_eq!(
-        probe.scalar_rules, 0,
-        "{label}: RHS fell back to the oracle"
-    );
+    if taped {
+        assert!(probe.taped_rules >= 1, "{label}: RHS did not run the tape");
+        assert_eq!(
+            probe.fallback_rules, 0,
+            "{label}: the tape fell back to the interpreter"
+        );
+    } else {
+        assert_eq!(probe.vectorized_rules, 1, "{label}: RHS did not vectorize");
+        assert_eq!(
+            probe.scalar_rules, 0,
+            "{label}: RHS fell back to the oracle"
+        );
+    }
 
     let iters = 200usize;
     let before = ALLOC_COUNT.load(Ordering::Relaxed);
@@ -246,5 +271,15 @@ fn vectorized_rhs_is_allocation_free_in_steady_state() {
     for (label, compiled) in &cases {
         let allocs = measure_steady_state_allocs(label, compiled);
         assert_eq!(allocs, 0, "{label}: expected zero steady-state allocations");
+    }
+    // Step 3b: the same fixtures through the taped scratch (the production
+    // fast executor) must also be allocation-free in steady state. Run inside
+    // the SAME test so the process-global counter stays single-threaded.
+    for (label, compiled) in &cases {
+        let allocs = measure_taped_steady_state_allocs(&format!("taped {label}"), compiled);
+        assert_eq!(
+            allocs, 0,
+            "taped {label}: expected zero steady-state allocations"
+        );
     }
 }
