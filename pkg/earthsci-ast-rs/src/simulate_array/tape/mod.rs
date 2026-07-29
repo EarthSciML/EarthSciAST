@@ -12,6 +12,7 @@
 //! ([`crate::simulate_array::ArrayCompiled::debug_build_tape_report`]) and
 //! are never called by `simulate`.
 
+mod exec;
 mod ir;
 mod lower;
 #[cfg(test)]
@@ -19,6 +20,8 @@ mod refexec;
 #[cfg(test)]
 mod tests;
 
+pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
+pub(crate) use exec::tape_disabled;
 pub(crate) use ir::*;
 use lower::build_tape_program;
 
