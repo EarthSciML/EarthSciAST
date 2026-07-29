@@ -1,11 +1,14 @@
-//! A/B verification of the tape LOWERING: build the tape for fixture models,
-//! run the reference executor ([`super::refexec`]), and assert **bitwise**
-//! equality of `dy` against `evaluate_rhs_with_scratch` — the full production
-//! path (vectorized overlay + runtime CSE), reached through
-//! `ArrayCompiled::debug_eval_rhs(force_scalar = false)` — at several
-//! random-but-seeded states and times.
+//! A/B verification of the tape: build the tape for fixture models, run BOTH
+//! executors — the slow reference executor ([`super::refexec`], which pins the
+//! LOWERING) and the production fast executor ([`super::exec`], Step 3b,
+//! reached through a taped scratch + `debug_eval_rhs_into`) — and assert
+//! **bitwise** equality of `dy` against `evaluate_rhs_with_scratch`, the full
+//! legacy production path (vectorized overlay + runtime CSE), at several
+//! random-but-seeded states and times. The fast-executor arm reuses ONE warm
+//! scratch across every state/time, so slab recycling, CONST-section
+//! retention and the section re-run discipline are all exercised.
 
-use super::super::ArrayCompiled;
+use super::super::{ArrayCompiled, RhsStats};
 use super::ir::*;
 use super::refexec::{RefVal, run_reference};
 use crate::types::EsmFile;
@@ -39,8 +42,9 @@ fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
 }
 
 /// Build the tape, check the expected fallback count, and assert bitwise `dy`
-/// equality (tape reference executor vs the production interpreter) over
-/// several seeded states and times.
+/// equality against the production interpreter over several seeded states and
+/// times — for BOTH executors: the reference executor (fresh run per state)
+/// and the Step 3b fast executor (one warm taped scratch across all of them).
 fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -> TapeProgram {
     let compiled = compile(doc);
     let (prog, report) = compiled.build_tape(&HashSet::new());
@@ -53,6 +57,9 @@ fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
+    let mut fast_scratch = compiled.debug_new_scratch_taped();
+    assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
+    let mut fast_stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
         for &t in &[0.0, 0.37, 2.5] {
@@ -63,7 +70,26 @@ fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -
                 assert_eq!(
                     a.to_bits(),
                     b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: tape {a:?} ({:016x}) vs \
+                    "seed {seed} t {t}: dy[{k}] diverged: tape-ref {a:?} ({:016x}) vs \
+                     interpreter {b:?} ({:016x})",
+                    a.to_bits(),
+                    b.to_bits()
+                );
+            }
+            let mut dy_fast = vec![0.0f64; n];
+            compiled.debug_eval_rhs_into(
+                &state,
+                t,
+                &param_vec,
+                &mut dy_fast,
+                &mut fast_scratch,
+                &mut fast_stats,
+            );
+            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "seed {seed} t {t}: dy[{k}] diverged: FAST exec {a:?} ({:016x}) vs \
                      interpreter {b:?} ({:016x})",
                     a.to_bits(),
                     b.to_bits()
@@ -71,6 +97,7 @@ fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -
             }
         }
     }
+    assert!(fast_stats.taped_rules > 0, "the fast executor must have run");
     prog
 }
 
@@ -106,6 +133,31 @@ fn agg(n: i64, body: serde_json::Value) -> serde_json::Value {
 
 fn idx(var: &str, e: serde_json::Value) -> serde_json::Value {
     json!({"op": "index", "args": [var, e]})
+}
+
+/// Evaluate through the Step 3b FAST executor (warm taped scratch) and assert
+/// bitwise `dy` equality against `dy_ref`.
+fn assert_fast_matches(
+    compiled: &ArrayCompiled,
+    scratch: &mut super::super::RhsScratch,
+    param_vec: &[f64],
+    state: &[f64],
+    t: f64,
+    dy_ref: &[f64],
+    label: &str,
+) {
+    let mut dy = vec![0.0f64; dy_ref.len()];
+    let mut stats = RhsStats::default();
+    compiled.debug_eval_rhs_into(state, t, param_vec, &mut dy, scratch, &mut stats);
+    for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "{label}: dy[{k}] diverged: FAST exec {a:?} ({:016x}) vs interpreter {b:?} ({:016x})",
+            a.to_bits(),
+            b.to_bits()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +383,17 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
             "slot {s} of the untaken branch was executed"
         );
     }
+    // FAST executor: same short-circuit, same bits, no inf/NaN leakage.
+    let mut fast = compiled.debug_new_scratch_taped();
+    assert_fast_matches(
+        &compiled,
+        &mut fast,
+        &param_vec,
+        &state,
+        0.0,
+        &dy_ref,
+        "short-circuit",
+    );
 }
 
 /// Array-condition `ifelse` (Select): a NaN in the UNCHOSEN branch (sqrt of a
@@ -359,6 +422,7 @@ fn ab_select_nan_semantics() {
     let nstates = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
+    let mut fast = compiled.debug_new_scratch_taped();
     for seed in 0..4u64 {
         let state = seeded_state(nstates, seed, -2.0, 2.0);
         assert!(state.iter().any(|&x| x < 0.0), "fixture needs negatives");
@@ -369,6 +433,15 @@ fn ab_select_nan_semantics() {
             assert_eq!(a.to_bits(), b.to_bits(), "dy[{k}]");
             assert!(!a.is_nan(), "NaN leaked through the select at cell {k}");
         }
+        assert_fast_matches(
+            &compiled,
+            &mut fast,
+            &param_vec,
+            &state,
+            0.0,
+            &dy_ref,
+            "select-nan",
+        );
     }
 }
 
@@ -552,6 +625,8 @@ fn ab_fallback_rule_interop() {
     let nstates = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
+    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast_stats = RhsStats::default();
     for seed in 0..3u64 {
         let state = seeded_state(nstates, seed, -1.0, 1.0);
         for &t in &[0.0, 1.3] {
@@ -565,8 +640,28 @@ fn ab_fallback_rule_interop() {
                     "seed {seed} t {t} dy[{k}]: {a:?} vs {b:?}"
                 );
             }
+            let mut dy_fast = vec![0.0f64; nstates];
+            compiled.debug_eval_rhs_into(
+                &state,
+                t,
+                &param_vec,
+                &mut dy_fast,
+                &mut fast,
+                &mut fast_stats,
+            );
+            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "seed {seed} t {t} dy[{k}] (FAST): {a:?} vs {b:?}"
+                );
+            }
         }
     }
+    assert!(
+        fast_stats.fallback_rules > 0,
+        "the fast executor must have exercised the fallback arm"
+    );
 }
 
 /// Scalar RHS rules (0-d states) through the scalar-`eval` mirror, including a
@@ -920,6 +1015,8 @@ fn ab_model_file_if_available() {
 
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
+    let mut fast = compiled.debug_new_scratch_taped();
+    let mut fast_stats = RhsStats::default();
     for seed in 0..3u64 {
         // Multiplicative perturbation keeps positive fields positive.
         let noise = seeded_state(n, seed, -0.01, 0.01);
@@ -938,6 +1035,28 @@ fn ab_model_file_if_available() {
                 }
             }
             assert_eq!(diverged, 0, "seed {seed} t {t}: {diverged} slots diverged");
+            let mut dy_fast = vec![0.0f64; n];
+            compiled.debug_eval_rhs_into(
+                &state,
+                t,
+                &param_vec,
+                &mut dy_fast,
+                &mut fast,
+                &mut fast_stats,
+            );
+            let mut diverged = 0usize;
+            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
+                if a.to_bits() != b.to_bits() {
+                    if diverged < 8 {
+                        eprintln!("dy[{k}] (FAST): tape {a:e} vs interpreter {b:e}");
+                    }
+                    diverged += 1;
+                }
+            }
+            assert_eq!(
+                diverged, 0,
+                "seed {seed} t {t}: {diverged} slots diverged (FAST exec)"
+            );
         }
     }
 }

@@ -3,6 +3,7 @@
 //! exposure), the `debug_*` RHS entry points, and the external forcing-channel
 //! handle ([`ArrayCompiled::forcing_handle`]).
 
+use super::tape::{TapeProgram, tape_disabled};
 use super::*;
 use crate::simulate::{
     SimulateError, SimulateOptions, SolveStats, Solution, SolutionMetadata, SolverChoice,
@@ -104,6 +105,23 @@ impl ArrayCompiled {
     #[doc(hidden)]
     pub fn debug_new_scratch(&self) -> RhsScratch {
         RhsScratch::new(&self.var_shapes)
+    }
+
+    /// Build a scratch with the compiled tape installed (Step 3b) — what the
+    /// production RHS closure carries. Honors `ESS_TAPE_DISABLE` /
+    /// `ESS_VEC_DISABLE` exactly as `simulate` does (returning a legacy
+    /// scratch), so a kill-switch test can observe the routing through
+    /// [`RhsScratch::has_tape`] / [`RhsStats::taped_rules`]. Exposed for the
+    /// fast-executor A/B, allocation-steady-state and invalidation tests,
+    /// driven through [`Self::debug_eval_rhs_into`].
+    #[doc(hidden)]
+    pub fn debug_new_scratch_taped(&self) -> RhsScratch {
+        let mut s = RhsScratch::new(&self.var_shapes);
+        if !tape_disabled() && !vec_disabled() {
+            let (prog, _report) = self.build_tape(&HashSet::new());
+            s.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
+        }
+        s
     }
 
     /// Resolve a parameter map into the positional parameter vector once, so the
@@ -492,6 +510,21 @@ impl ArrayCompiled {
             SolverChoice::Erk => "Erk",
         };
 
+        // Step 3b: compile the tape program ONCE per solve and share it across
+        // every integration segment (each segment's fresh RHS scratch gets its
+        // own slab and re-runs the CONST/SEGMENT sections — the same cadence as
+        // the static-observed hoist above). `ESS_TAPE_DISABLE=1` reverts
+        // wholesale to the legacy interpreter path; `ESS_VEC_DISABLE=1` (the
+        // pure per-cell oracle reference) implies it, since the tape compiles
+        // the vectorized overlay's semantics.
+        let tape: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
+            if tape_disabled() || vec_disabled() {
+                None
+            } else {
+                let (prog, _report) = self.build_tape(discrete_forcing);
+                Some((Rc::new(prog), Rc::new(self.observed_rules.clone())))
+            };
+
         // CONST / single-segment (or no output grid to align segment samples on):
         // the original un-segmented run — byte-identical to the pre-segmentation
         // driver (one `run_one_segment` over the whole span with `opts` verbatim).
@@ -505,6 +538,7 @@ impl ArrayCompiled {
                 &segment_static_rules,
                 &continuous_rules,
                 opts,
+                tape.as_ref(),
             )?;
             let mut state_variable_names = self.scalar_state_names.clone();
             self.append_scalar_observed_trajectories(
@@ -581,6 +615,7 @@ impl ArrayCompiled {
                 &segment_static_rules,
                 &continuous_rules,
                 &seg_opts,
+                tape.as_ref(),
             )?;
             stats += seg_stats;
             // `run_solver` pushes the REQUESTED grid time verbatim, so a float
@@ -644,6 +679,9 @@ impl ArrayCompiled {
         segment_static_rules: &[AlgebraicRule],
         continuous_rules: &[AlgebraicRule],
         opts: &SimulateOptions,
+        // Step 3b: the solve-wide tape program + the FULL observed rule list
+        // its fallback indices resolve against. `None` ⇒ legacy interpreter.
+        tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
     ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats), SimulateError> {
         let n_states = self.n_states;
         let rhs_rules = self.rhs_rules.clone();
@@ -697,6 +735,13 @@ impl ArrayCompiled {
         let seg_seed = Rc::new(seg_seed);
         let mut rhs_scratch_val = RhsScratch::new(&var_shapes);
         rhs_scratch_val.set_static((*seg_seed).clone());
+        // Step 3b: the production RHS closure's scratch gets the compiled
+        // tape (fresh slab per segment; CONST/SEGMENT sections prime on the
+        // segment's first call). The Jacobian scratch below deliberately does
+        // NOT — the FD Jacobian stays on the legacy path.
+        if let Some((prog, full_obs)) = tape {
+            rhs_scratch_val.install_tape(Rc::clone(prog), Rc::clone(full_obs));
+        }
         let rhs_scratch = RefCell::new(rhs_scratch_val);
         // The Jacobian scratch is built LAZILY on the first Jacobian call:
         // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
