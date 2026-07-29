@@ -936,7 +936,7 @@ pub(super) fn eval_vec_op<'a>(
 /// `index` axis position, a nested aggregate body, or a `makearray` region
 /// value). Used as a *conservative* dependence test: a false positive only
 /// costs the fast path, never correctness.
-fn expr_mentions(expr: &Expr, name: &str) -> bool {
+pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
     match expr {
         Expr::Variable(v) => v == name,
         Expr::Number(_) | Expr::Integer(_) => false,

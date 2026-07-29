@@ -2088,7 +2088,7 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 /// The check is one field test (`detect_prefix_scan` needs a `filter`) for the
 /// unfiltered region values that make up every stencil template, so the
 /// expensive spec build never runs on the hot path.
-fn region_value_is_prefix_scan(value: &Expr) -> bool {
+pub(super) fn region_value_is_prefix_scan(value: &Expr) -> bool {
     let Expr::Operator(n) = value else {
         return false;
     };

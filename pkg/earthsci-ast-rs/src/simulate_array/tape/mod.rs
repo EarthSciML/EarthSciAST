@@ -1,6 +1,177 @@
-//! Tape compilation (Step 3a: compile-time half) — the IR. The lowering pass,
-//! diagnostics and verification harness land in the follow-up commits.
+//! Tape compilation (Step 3a: compile-time half).
+//!
+//! Compiles a model's observed + RHS rule set into a flat instruction program
+//! ([`TapeProgram`]) with build-time value numbering (subsuming the runtime
+//! CSE overlay for taped rules), cadence-sectioned instruction streams
+//! (CONST / SEGMENT / CONTINUOUS), liveness-based slab coloring, `dy` scatter
+//! descriptors and observed exports.
+//!
+//! **No execution-path change**: the tape is built and validated (see the
+//! `#[cfg(test)]` reference executor), but `evaluate_rhs_with_scratch` still
+//! runs the existing interpreter. The entry points here are diagnostic
+//! ([`crate::simulate_array::ArrayCompiled::debug_build_tape_report`]) and
+//! are never called by `simulate`.
 
 mod ir;
+mod lower;
 
 pub(crate) use ir::*;
+use lower::build_tape_program;
+
+use super::ArrayCompiled;
+use std::collections::HashSet;
+use std::fmt;
+
+/// Human-readable summary of one tape build. Public so external diagnostics
+/// (the `tape_report` example) can print it; the program itself stays
+/// crate-internal.
+#[derive(Debug, Clone, Default)]
+pub struct TapeBuildReport {
+    /// Total rules considered (observed + RHS).
+    pub n_rules: usize,
+    /// Rules fully lowered onto the tape.
+    pub n_taped: usize,
+    /// `(rule name, deepest bail reason)` for every fallback rule.
+    pub fallbacks: Vec<(String, String)>,
+    pub n_instr_const: usize,
+    pub n_instr_segment: usize,
+    pub n_instr_continuous: usize,
+    /// Instruction counts per opcode, whole program, descending.
+    pub opcode_counts: Vec<(String, usize)>,
+    pub n_slots: usize,
+    pub n_storages: usize,
+    pub n_gather_plans: usize,
+    pub n_exports: usize,
+    pub n_dy_writes: usize,
+    /// Total slab size in bytes (all storages, `f64`).
+    pub slab_bytes: usize,
+    /// Dedicated (cross-section-live) CONST storage bytes.
+    pub slab_bytes_const: usize,
+    /// Dedicated SEGMENT storage bytes.
+    pub slab_bytes_segment: usize,
+    /// Recycled (within-section) storage bytes.
+    pub slab_bytes_recycled: usize,
+    /// Build-time value-numbering hits served from the scope-local memo.
+    pub vn_scope_hits: usize,
+    /// Hits served from the cross-rule (box-pure) hoist map.
+    pub vn_hoist_hits: usize,
+}
+
+impl fmt::Display for TapeBuildReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "tape build report")?;
+        writeln!(
+            f,
+            "  rules: {} taped / {} fallback (of {})",
+            self.n_taped,
+            self.fallbacks.len(),
+            self.n_rules
+        )?;
+        for (name, reason) in &self.fallbacks {
+            writeln!(f, "    fallback {name}: {reason}")?;
+        }
+        writeln!(
+            f,
+            "  instructions: {} CONST + {} SEGMENT + {} CONTINUOUS = {}",
+            self.n_instr_const,
+            self.n_instr_segment,
+            self.n_instr_continuous,
+            self.n_instr_const + self.n_instr_segment + self.n_instr_continuous
+        )?;
+        write!(f, "  opcodes:")?;
+        for (op, n) in &self.opcode_counts {
+            write!(f, " {op}={n}")?;
+        }
+        writeln!(f)?;
+        writeln!(
+            f,
+            "  slots: {} ({} storages, {} gather plans, {} dy writes, {} exports)",
+            self.n_slots, self.n_storages, self.n_gather_plans, self.n_dy_writes, self.n_exports
+        )?;
+        writeln!(
+            f,
+            "  slab: {:.2} MiB total ({:.2} MiB CONST + {:.2} MiB SEGMENT dedicated, {:.2} MiB recycled)",
+            self.slab_bytes as f64 / (1024.0 * 1024.0),
+            self.slab_bytes_const as f64 / (1024.0 * 1024.0),
+            self.slab_bytes_segment as f64 / (1024.0 * 1024.0),
+            self.slab_bytes_recycled as f64 / (1024.0 * 1024.0),
+        )?;
+        writeln!(
+            f,
+            "  value numbering: {} scope hits, {} hoist hits",
+            self.vn_scope_hits, self.vn_hoist_hits
+        )
+    }
+}
+
+/// Assemble the report from a finished program.
+pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBuildReport {
+    let mut opcode_counts: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::new();
+    for i in &prog.instrs {
+        *opcode_counts.entry(i.opcode()).or_insert(0) += 1;
+    }
+    let mut opcode_counts: Vec<(String, usize)> = opcode_counts
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    opcode_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let fallbacks: Vec<(String, String)> = prog
+        .rules
+        .iter()
+        .filter_map(|r| match &r.status {
+            RuleStatus::Fallback(reason) => Some((r.name.clone(), reason.clone())),
+            RuleStatus::Taped => None,
+        })
+        .collect();
+    let n_cont = prog.instrs.len() - (prog.n_const + prog.n_segment) as usize;
+    TapeBuildReport {
+        n_rules: prog.rules.len(),
+        n_taped: prog.rules.len() - fallbacks.len(),
+        fallbacks,
+        n_instr_const: prog.n_const as usize,
+        n_instr_segment: prog.n_segment as usize,
+        n_instr_continuous: n_cont,
+        opcode_counts,
+        n_slots: prog.slots.len(),
+        n_storages: prog.slab.storages.len(),
+        n_gather_plans: prog.plans.len(),
+        n_exports: prog.exports.len(),
+        n_dy_writes: prog.dy_writes.len(),
+        slab_bytes: prog.slab.total_elems * 8,
+        slab_bytes_const: prog.slab.const_elems * 8,
+        slab_bytes_segment: prog.slab.segment_elems * 8,
+        slab_bytes_recycled: prog.slab.recycled_elems * 8,
+        vn_scope_hits: vn_hits.0,
+        vn_hoist_hits: vn_hits.1,
+    }
+}
+
+impl ArrayCompiled {
+    /// Build the tape program for this model (compile-time only; nothing on
+    /// the `simulate` path calls this).
+    pub(crate) fn build_tape(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> (TapeProgram, TapeBuildReport) {
+        let const_names = self.classify_static_observeds(discrete_forcing);
+        let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
+        let (prog, vn_hits) = build_tape_program(
+            &self.rhs_rules,
+            &self.observed_rules,
+            &self.var_shapes,
+            &self.param_names,
+            &const_names,
+            &seg_names,
+        );
+        let report = make_report(&prog, vn_hits);
+        (prog, report)
+    }
+
+    /// Build the tape and return the diagnostic report (see
+    /// [`TapeBuildReport`]). Evaluation is unchanged: this is a build-and-
+    /// discard entry for inspection tooling (`examples/tape_report.rs`).
+    pub fn debug_build_tape_report(&self) -> TapeBuildReport {
+        self.build_tape(&HashSet::new()).1
+    }
+}
