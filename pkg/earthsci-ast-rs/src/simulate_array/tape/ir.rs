@@ -1,12 +1,11 @@
 //! The tape IR: a flat, straight-line instruction program compiled from the
 //! post-CSE expression graph of one model's RHS + observed rules.
 //!
-//! This is the compile-time half of tape compilation (Step 3a). The program is
-//! built and validated but NOT yet executed on the production path —
-//! `evaluate_rhs_with_scratch` still runs the existing interpreter; a later
-//! step adds the fast executor. A slow, allocation-happy *reference* executor
-//! lives in the test-support module and pins the lowering bit-for-bit against
-//! the production interpreter.
+//! This is the compile-time half of tape compilation (Step 3a). Step 3b's
+//! fast slab executor (`super::exec`) runs the program as the production RHS
+//! hot path; a slow, allocation-happy *reference* executor lives in the
+//! test-support module and pins the lowering bit-for-bit against the
+//! production interpreter independently of the slab coloring.
 //!
 //! ## Semantics contract
 //!
@@ -36,9 +35,8 @@
 //! enforces at runtime (a mismatch there bails the rule to the oracle; here it
 //! marks the rule as a fallback).
 
-// Step 3a builds and validates the program; the production executor arrives in
-// Step 3b. Until then several descriptor fields are read only by the
-// test-gated reference executor, which the lib-only dead-code pass cannot see.
+// A few descriptor fields are read only by the test-gated reference executor
+// and the diagnostics, which the lib-only dead-code pass cannot see.
 #![allow(dead_code)]
 
 use super::super::{BinCode, UnCode};

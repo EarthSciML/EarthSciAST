@@ -1,16 +1,16 @@
-//! Tape compilation (Step 3a: compile-time half).
+//! Tape compilation and execution.
 //!
 //! Compiles a model's observed + RHS rule set into a flat instruction program
 //! ([`TapeProgram`]) with build-time value numbering (subsuming the runtime
 //! CSE overlay for taped rules), cadence-sectioned instruction streams
 //! (CONST / SEGMENT / CONTINUOUS), liveness-based slab coloring, `dy` scatter
-//! descriptors and observed exports.
-//!
-//! **No execution-path change**: the tape is built and validated (see the
-//! `#[cfg(test)]` reference executor), but `evaluate_rhs_with_scratch` still
-//! runs the existing interpreter. The entry points here are diagnostic
-//! ([`crate::simulate_array::ArrayCompiled::debug_build_tape_report`]) and
-//! are never called by `simulate`.
+//! descriptors and observed exports (Step 3a), and executes it as the
+//! DEFAULT production RHS hot path through the fast slab executor in
+//! [`exec`] (Step 3b): `simulate` builds the program once per solve and each
+//! segment's RHS scratch runs it; `ESS_TAPE_DISABLE=1` reverts wholesale to
+//! the legacy interpreter, and `ESS_TAPE_CHECK=N` dual-runs and bit-compares
+//! the first N calls. The `debug_eval_rhs*` oracles, the samples pass and
+//! the FD Jacobian closure stay on the legacy interpreter path.
 
 mod exec;
 mod ir;
@@ -155,8 +155,8 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
 }
 
 impl ArrayCompiled {
-    /// Build the tape program for this model (compile-time only; nothing on
-    /// the `simulate` path calls this).
+    /// Build the tape program for this model. Called once per solve by
+    /// `simulate_core` (Step 3b) and by the diagnostic entry points below.
     pub(crate) fn build_tape(
         &self,
         discrete_forcing: &HashSet<String>,
