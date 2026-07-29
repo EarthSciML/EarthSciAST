@@ -161,6 +161,30 @@
 //! the maps answered, and `ESS_CSE_PARANOID=1` asserts that node-visit by
 //! node-visit over a whole solve.
 
+// ## Interned (shared) node addresses
+//
+// Since load-time interning (`crate::intern`), structurally identical operator
+// payloads are ONE `Arc<ExpressionNode>`: every cell below a shared payload —
+// its `args` vector, its sidecar boxes, recursively — is a single address
+// reachable from MANY rules, binder contexts, and evaluation positions. The
+// per-node state this module keys by address therefore had to be re-audited:
+//
+// * The structural CLASS of an address is context-free (same structure ⇒ same
+//   class), and the per-evaluation memo is keyed `(scope, class)` with a fresh
+//   scope per box — two rules never share a scope — so plain memoization is
+//   sound under sharing unchanged.
+// * The persistent box-pure marks (`PURE_BIT`) are NOT context-free: purity
+//   is a function of (structure, binder-name set, CONST tier), and one shared
+//   address can be evaluated under boxes binding different name sets — some
+//   never analysed under `Some(binders)` at all (`makearray` region bodies).
+//   Each mark therefore records the binder-name set it was proven under
+//   (`ClassTable::pure_binders`), and the runtime honors it only under a box
+//   binding exactly that set ([`CseRt::get`] / `pput`): equal set ⇒ same leaf
+//   resolution ⇒ the proof holds, so the check is exact.
+// * A body ROOT may now be address-identical to a marked interior cell (an
+//   `expr` sidecar cell is both its owner's child and the nested re-entry
+//   root). The root exclusion wins permanently via the [`NOT_MEMO`] tombstone.
+
 use super::*;
 use crate::types::{Expr, ExpressionNode};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -247,6 +271,19 @@ enum CseKey {
 /// before any row access, and [`CseRt::store`] refuses it outright.
 const PURE_BIT: u32 = 1 << 31;
 
+/// Tombstone class value: "this address must NEVER be memoized". Written for a
+/// BODY-ROOT address that some other body's analysis had already marked
+/// memoizable — possible since load-time interning (`crate::intern`), under
+/// which one shared node can be both a repeated interior subtree of one rule
+/// and the root of another. The root exclusion (see [`ClassTable::analyse`])
+/// must win at such an address: a memo hit at the top level of
+/// `try_eval_arrayop_vectorized` is served as a `View`, and a top-level `View`
+/// makes the overlay bail to the per-cell oracle — silently pushing the rule
+/// off the vectorized path. Every `class_of` read path filters this value to
+/// `None`; [`ClassTable::intern`] keeps real ids (with or without
+/// [`PURE_BIT`]) strictly below it.
+const NOT_MEMO: u32 = u32::MAX;
+
 /// Per-body structural analysis: which AST nodes are worth memoizing, and under
 /// which class id.
 #[derive(Default)]
@@ -281,7 +318,48 @@ struct ClassTable {
     /// hit short-circuits it), so [`Self::walk`] drops a child's entry as soon
     /// as its parent turns out pure too.
     pure_cand: FxHashMap<usize, u32>,
+    /// Binder-name-set hash under which each PURE-marked class was proven
+    /// box-pure: stripped class id → [`binder_names_hash`] of the analysing
+    /// call's `idx_binders` ∪ `c_binders`.
+    ///
+    /// Purity is a function of (structure, binder-name set, CONST tier): a
+    /// leaf is box-resolved iff its name is in the binder set. Before
+    /// load-time interning every address belonged to exactly one body, so the
+    /// mark's context was the evaluating context by construction. With
+    /// interning one address is reachable from MANY rules — and from
+    /// positions the walk never analysed under `Some(binders)` at all (a
+    /// `makearray` region body inherits the enclosing box's symbols but is
+    /// walked with `binders = None`) — so a PURE mark minted under one
+    /// binder set could be trusted under a box that resolves the same leaves
+    /// to STATE, and the persistent store would quietly serve a stale
+    /// state-dependent value. [`CseRt::get`]/[`CseRt::pput`] therefore honor
+    /// a PURE mark only when the box in force binds EXACTLY the name set the
+    /// mark was proven under; any other context refuses the mark (no serve,
+    /// no store). Equal name set ⇒ same leaf resolution ⇒ the proof holds
+    /// under that box, so this check is exact, not just conservative.
+    pure_binders: FxHashMap<u32, u64>,
     next_static_scope: u32,
+}
+
+/// Order-insensitive hash of a binder NAME SET (`syms`/`idx_binders` ∪
+/// `cnames`/`c_binders`). Both the analysis side ([`ClassTable::analyse`]) and
+/// the runtime side ([`CseRt::get`]/[`CseRt::pput`]) key by this, so the two
+/// computations must stay identical: sort the union, drop duplicates, hash the
+/// names in order. `FxHasher` is fixed-seed, so the digest is deterministic.
+fn binder_names_hash<'a>(
+    a: impl Iterator<Item = &'a str>,
+    b: impl Iterator<Item = &'a str>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut names: SmallVec<[&str; 8]> = a.chain(b).collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut h = rustc_hash::FxHasher::default();
+    names.len().hash(&mut h);
+    for n in names {
+        n.hash(&mut h);
+    }
+    h.finish()
 }
 
 impl ClassTable {
@@ -305,6 +383,21 @@ impl ClassTable {
         if !self.analysed_roots.insert(key) {
             return;
         }
+        // Since load-time interning (`crate::intern`) an address can be BOTH a
+        // body root and a marked interior position of an earlier-analysed body
+        // (e.g. an `expr` sidecar cell: walked as its owner's child, and the
+        // re-entry root of the nested aggregate). The root exclusion must win:
+        // tombstone any existing mark, permanently ([`NOT_MEMO`] is filtered to
+        // `None` on every read path, and the loops below skip every analysed
+        // root, so the address can never be re-marked).
+        if self
+            .memoizable
+            .get(&key)
+            .is_some_and(|&c| c != NOT_MEMO)
+        {
+            self.memoizable.insert(key, NOT_MEMO);
+            self.pending.push((key, NOT_MEMO));
+        }
         self.counts.clear();
         self.seen.clear();
         self.pure_cand.clear();
@@ -325,7 +418,7 @@ impl ClassTable {
             // scalarizes a bare whole-array body, so returning one would diverge)
             // — so memoizing the root could silently push a rule off the
             // vectorized path. It is a singleton in every real body anyway.
-            if addr != key
+            if !self.analysed_roots.contains(&addr)
                 && self.counts.get(&(scope, class)).copied().unwrap_or(0) >= 2
                 // An address can be RE-classified: the trees handed to
                 // `analyse` are not all long-lived (a lowered aggregate body is
@@ -346,10 +439,19 @@ impl ClassTable {
         // both the map and (via `pending`) the resolved table. Same root
         // exclusion, same reason; same re-classification contract, so an update
         // is pushed to `pending`, not just a first insert.
+        let pure_ctx = binder_names_hash(
+            idx_binders.iter().map(String::as_str),
+            c_binders.iter().map(String::as_str),
+        );
         for (addr, class) in std::mem::take(&mut self.pure_cand) {
-            if addr != key && self.memoizable.insert(addr, class | PURE_BIT) != Some(class | PURE_BIT)
-            {
-                self.pending.push((addr, class | PURE_BIT));
+            if !self.analysed_roots.contains(&addr) {
+                // Record the binder-name set this class's purity was proven
+                // under; the runtime honors the mark only under a box binding
+                // exactly that set (see `pure_binders`).
+                self.pure_binders.insert(class, pure_ctx);
+                if self.memoizable.insert(addr, class | PURE_BIT) != Some(class | PURE_BIT) {
+                    self.pending.push((addr, class | PURE_BIT));
+                }
             }
         }
     }
@@ -374,9 +476,11 @@ impl ClassTable {
             std::collections::hash_map::Entry::Occupied(e) => *e.get(),
             std::collections::hash_map::Entry::Vacant(e) => {
                 // `PURE_BIT` is stolen from the top of the class id, so the id
-                // space must stay below it. A lowered model reaches ~10^4
-                // classes; 2^31 is not approachable in practice.
-                assert!(next < PURE_BIT, "CSE class id space exhausted");
+                // space must stay below it — and strictly below `PURE_BIT - 1`,
+                // so that `class | PURE_BIT` can never collide with the
+                // [`NOT_MEMO`] tombstone (`u32::MAX`). A lowered model reaches
+                // ~10^4 classes; 2^31 is not approachable in practice.
+                assert!(next + 1 < PURE_BIT, "CSE class id space exhausted");
                 e.insert(next);
                 self.next_class += 1;
                 next
@@ -717,59 +821,54 @@ fn attrs_key(node: &ExpressionNode) -> Option<Rendered> {
 // The resolved node → class table (the hot-path lookup).
 // ============================================================================
 
-/// Free-slot marker, and therefore the one ordinal [`AddrClasses`] cannot
-/// represent. See [`AddrClasses::add`].
-const EMPTY_KEY: u32 = u32::MAX;
+/// Free-slot marker. Node addresses are non-null and 8-byte aligned, so a
+/// shifted address can never equal `u64::MAX`.
+const EMPTY_KEY: u64 = u64::MAX;
 
 /// Every `Expr` is 8-byte aligned (it holds `f64`/`i64`/pointer fields), so the
 /// low bits of a node address carry no information and are shifted out of the
 /// key. Written as a const so the shift is a compile-time constant.
 const ADDR_SHIFT: u32 = std::mem::align_of::<Expr>().trailing_zeros();
 
-/// The base address is rounded down to a 4 GiB boundary, so a body analysed
-/// later at a *lower* address almost never forces a rehash.
-const BASE_ALIGN_MASK: usize = 0xFFFF_FFFF;
-
 /// [`ClassTable::memoizable`] resolved into a flat open-addressed table.
 ///
 /// This is the hottest lookup in the whole program: `eval_vec` probes it once
 /// per node visit — ~483k times per RHS call on `simpleclimate.esm`, ~1.9e9
 /// times over a 0.25-day solve. Reading `memoizable` directly costs a
-/// `HashMap` probe over 662k entries (~17 MB, so two DRAM round-trips: the
-/// control-byte group, then the bucket). The class assignment is FIXED for a
-/// rule set — that is exactly what [`CseRt::retarget`] guarantees — so it is
-/// worth resolving it once into a shape that probes in one:
+/// `HashMap` probe (control-byte group, then bucket). The class assignment is
+/// FIXED for a rule set — that is exactly what [`CseRt::retarget`] guarantees —
+/// so it is worth resolving it once into a shape that probes in one step:
+/// open addressing with linear probing, no control bytes, no SIMD group load,
+/// and a collision costs the next slot — usually the same cache line.
 ///
-/// * the key is a 32-bit node ORDINAL, `(addr - base) >> 3`, not the 64-bit
-///   address, so key and class share a single 8-byte word and the table is
-///   less than half the size of the map it replaces (~7.6 MB here);
-/// * open addressing with linear probing: no control bytes, no SIMD group
-///   load, and a collision costs the next word — usually the same cache line.
+/// The key is the full shifted 64-bit address (`addr >> 3`). A previous
+/// incarnation compressed it to a 32-bit ordinal relative to a rebased origin,
+/// halving the slot size — but that made the table refuse address sets
+/// spanning more than ~34 GB, and since load-time interning (`crate::intern`)
+/// every node is its own small allocation, one model's marked cells routinely
+/// straddle the brk heap and an mmap'd arena (a ~45 TB span). The interning
+/// also collapsed the entry count from ~662k occurrences to a few thousand
+/// unique cells, so the table comfortably fits cache even at 16 bytes a slot,
+/// and the unrepresentable-span fallback is gone entirely.
 ///
 /// The stored key is the address, bijectively re-encoded, so this is EXACT: it
 /// cannot hand back another node's class the way a fingerprint scheme could.
 #[derive(Default)]
 struct AddrClasses {
     /// `(key, class)`, with `key == EMPTY_KEY` marking a free slot.
-    slots: Box<[(u32, u32)]>,
-    /// Address the ordinals are relative to; 4 GiB-aligned.
-    base: usize,
+    slots: Box<[(u64, u32)]>,
     /// Occupied slots, i.e. the live entry count.
     count: usize,
-    /// Lowest / highest address ever added, kept so a rebase can tell whether
-    /// the whole set still fits a `u32` ordinal.
-    lo: usize,
-    hi: usize,
 }
 
 impl AddrClasses {
     /// Multiply-shift into `[0, len)`. `len` carries no power-of-two
     /// constraint, so the table is sized to the key set rather than rounded up
-    /// to the next power of two (which at 662k entries would waste ~4 MB).
+    /// to the next power of two.
     #[inline(always)]
-    fn bucket(key: u32, len: usize) -> usize {
-        let h = key.wrapping_mul(0x9E37_79B1);
-        ((h as u64 * len as u64) >> 32) as usize
+    fn bucket(key: u64, len: usize) -> usize {
+        let h = key.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        (((h as u128) * (len as u128)) >> 64) as usize
     }
 
     /// The class recorded for the node at `addr`, or `None`.
@@ -779,13 +878,7 @@ impl AddrClasses {
         if len == 0 {
             return None;
         }
-        // `wrapping_sub` folds an address below `base` into a huge ordinal,
-        // which the range check rejects along with anything past a `u32`.
-        let ord = addr.wrapping_sub(self.base) >> ADDR_SHIFT;
-        if ord >= EMPTY_KEY as usize {
-            return None;
-        }
-        let key = ord as u32;
+        let key = (addr >> ADDR_SHIFT) as u64;
         let mut i = Self::bucket(key, len);
         loop {
             let (k, class) = self.slots[i];
@@ -802,63 +895,36 @@ impl AddrClasses {
         }
     }
 
-    /// Record `entries` (addresses not already present). Returns `false` when
-    /// the address set cannot be indexed by a `u32` ordinal — i.e. the analysed
-    /// trees are spread over more than ~34 GB of address space, which no
-    /// allocator does for one model's rule bodies (`simpleclimate.esm`'s 662k
-    /// nodes span 1.05 GB). The caller then abandons the resolved table and
-    /// reads the map, so this is a performance fallback, never a correctness
-    /// one.
-    fn add(&mut self, entries: &[(usize, u32)]) -> bool {
+    /// Record `entries` (updating any address already present).
+    fn add(&mut self, entries: &[(usize, u32)]) {
         if entries.is_empty() {
-            return true;
-        }
-        let (min_new, max_new) = entries
-            .iter()
-            .fold((usize::MAX, 0usize), |(lo, hi), &(a, _)| (lo.min(a), hi.max(a)));
-        // `count == 0` means nothing is stored, so the recorded bounds say
-        // nothing and the new batch defines them outright.
-        let (lo, hi) = if self.count == 0 {
-            (min_new, max_new)
-        } else {
-            (self.lo.min(min_new), self.hi.max(max_new))
-        };
-        let new_base = lo & !BASE_ALIGN_MASK;
-        if (hi - new_base) >> ADDR_SHIFT >= EMPTY_KEY as usize {
-            return false;
+            return;
         }
         let want = self.count + entries.len();
         // Grow geometrically: a hundred-body model then pays a handful of
         // rehashes rather than one full rebuild per body.
-        if new_base != self.base || self.slots.len() * 7 < want * 10 {
+        if self.slots.len() * 7 < want * 10 {
             let cap = (want * 10 / 7 + 16).max(self.slots.len() * 2);
-            // Addresses are recoverable from the keys, so a rebase does not
-            // need the map.
-            let carried: Vec<(usize, u32)> = self
+            let carried: Vec<(u64, u32)> = self
                 .slots
                 .iter()
                 .filter(|(k, _)| *k != EMPTY_KEY)
-                .map(|&(k, c)| (self.base + ((k as usize) << ADDR_SHIFT), c))
+                .copied()
                 .collect();
             self.slots = vec![(EMPTY_KEY, 0u32); cap].into_boxed_slice();
-            self.base = new_base;
             self.count = 0;
-            for (addr, class) in carried {
-                self.insert(addr, class);
+            for (key, class) in carried {
+                self.insert(key, class);
             }
         }
-        self.lo = lo;
-        self.hi = hi;
         for &(addr, class) in entries {
-            self.insert(addr, class);
+            self.insert((addr >> ADDR_SHIFT) as u64, class);
         }
-        true
     }
 
-    /// Insert into a table already known to have room and range for `addr`.
-    fn insert(&mut self, addr: usize, class: u32) {
+    /// Insert into a table already known to have room for `key`.
+    fn insert(&mut self, key: u64, class: u32) {
         let len = self.slots.len();
-        let key = ((addr - self.base) >> ADDR_SHIFT) as u32;
         let mut i = Self::bucket(key, len);
         loop {
             if self.slots[i].0 == EMPTY_KEY {
@@ -969,9 +1035,6 @@ struct Inner {
     classes: ClassTable,
     /// `classes.memoizable`, resolved for the hot path.
     addrs: AddrClasses,
-    /// Set when the analysed addresses could not be resolved (see
-    /// [`AddrClasses::add`]); `class_of` then reads `classes.memoizable`.
-    addrs_unusable: bool,
     /// Set from `ESS_CSE_PARANOID`; see [`CseRt::verify_class`]. Kept as a field
     /// rather than read from the environment in `class_of` so the hot path pays
     /// one perfectly-predicted branch on a byte it already has in cache.
@@ -1083,7 +1146,6 @@ impl CseRt {
             // this guard exists to prevent. The memo rows are indexed by class
             // id, and class ids restart from 0, so they go too.
             i.addrs = AddrClasses::default();
-            i.addrs_unusable = false;
             i.memo.clear();
             // The persistent box-pure store is keyed by class id, and a fresh
             // class table reassigns those ids from 0 — so an entry kept across
@@ -1191,10 +1253,7 @@ impl CseRt {
         // `class_of` never has to consult the map. Only what is new is added,
         // so the cost over a whole model is one pass plus a few rehashes.
         let pending = std::mem::take(&mut i.classes.pending);
-        if !i.addrs_unusable && !i.addrs.add(&pending) {
-            i.addrs_unusable = true;
-            i.addrs = AddrClasses::default();
-        }
+        i.addrs.add(&pending);
     }
 
     /// Open a fresh evaluation scope (a new [`VecBox`]) for as long as the
@@ -1273,13 +1332,7 @@ impl CseRt {
         if i.verify {
             return Self::verify_class(&i, addr);
         }
-        if i.addrs_unusable {
-            // The analysed trees could not be indexed by a 32-bit ordinal; the
-            // map is still authoritative, so fall back to it rather than lose
-            // the overlay.
-            return i.classes.memoizable.get(&addr).copied();
-        }
-        i.addrs.get(addr)
+        i.addrs.get(addr).filter(|&c| c != NOT_MEMO)
     }
 
     /// `ESS_CSE_PARANOID=1`: assert on EVERY node visit that the resolved table
@@ -1296,7 +1349,7 @@ impl CseRt {
             want,
             "resolved CSE class table disagrees with the map at {addr:#x}"
         );
-        want
+        want.filter(|&c| c != NOT_MEMO)
     }
 
     /// Borrow the array in slab `idx` for the caller's `'a`.
@@ -1348,6 +1401,15 @@ impl CseRt {
     pub(super) fn get<'a>(&'a self, class: u32, bx: &VecBox) -> Option<VecValue<'a>> {
         let i = self.inner.borrow();
         if class & PURE_BIT != 0 {
+            // Context validity (see `ClassTable::pure_binders`): the PURE mark
+            // was proven under one binder-name set; since load-time interning
+            // a shared address can be evaluated under a box binding a
+            // DIFFERENT set, where the same leaves resolve to state. Honor the
+            // mark only under exactly the proven set — a mismatched context
+            // neither serves nor (see `pput`) stores.
+            if !Self::pure_ctx_ok(&i, class, bx) {
+                return None;
+            }
             let slot = *i.pmemo.get(&(box_sig(bx), class & !PURE_BIT))?;
             return match slot {
                 Slot::Scalar(s) => Some(VecValue::Scalar(s)),
@@ -1429,12 +1491,39 @@ impl CseRt {
         }
     }
 
+    /// `true` when the box in force binds exactly the name set `class`'s PURE
+    /// mark was proven under — the condition for the mark to be trusted at
+    /// all. See `ClassTable::pure_binders` for why this exists.
+    fn pure_ctx_ok(i: &Inner, class: u32, bx: &VecBox) -> bool {
+        i.classes
+            .pure_binders
+            .get(&(class & !PURE_BIT))
+            .is_some_and(|&ctx| {
+                ctx == binder_names_hash(
+                    bx.syms.iter().map(String::as_str),
+                    bx.cnames.iter().map(String::as_str),
+                )
+            })
+    }
+
     /// Record a BOX-PURE value: it goes into the persistent store, which
     /// survives every subsequent RHS call. Returns the value the caller should
     /// propagate — a borrowed view of the stored array, or `v` unchanged when
     /// the store is full or the value is already a persistent borrow. See
     /// [`Self::pslab_view`] for the borrow-extension argument.
+    ///
+    /// A value computed under a box whose binder-name set is NOT the one the
+    /// PURE mark was proven under is passed through unstored (see
+    /// [`Self::pure_ctx_ok`]): under such a box the subtree may read state, so
+    /// persisting the value would serve a stale array on every later RHS call
+    /// — quietly, since the first call is right.
     fn pput<'a>(&'a self, class: u32, v: VecValue<'a>, bx: &VecBox) -> VecValue<'a> {
+        {
+            let i = self.inner.borrow();
+            if !Self::pure_ctx_ok(&i, class, bx) {
+                return v;
+            }
+        }
         let key = (box_sig(bx), class & !PURE_BIT);
         match v {
             VecValue::Scalar(s) => {
@@ -1487,7 +1576,7 @@ mod tests {
     use crate::types::ExpressionNode;
 
     fn op(name: &str, args: Vec<Expr>) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: name.to_string(),
             args,
             ..Default::default()
@@ -1550,7 +1639,7 @@ mod tests {
     #[test]
     fn repeat_across_a_binder_is_not_shared() {
         let inner = op("-", vec![Expr::Variable("a".into()), Expr::Variable("b".into())]);
-        let agg = Expr::Operator(ExpressionNode {
+        let agg = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             args: vec![],
             output_idx: Some(vec!["i".to_string()]),
@@ -1581,7 +1670,7 @@ mod tests {
     #[test]
     fn unknown_operator_blocks_classification() {
         let weird = || {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "reshape".to_string(),
                 args: vec![Expr::Variable("a".into())],
                 shape: Some(vec![2, 2]),
@@ -1647,7 +1736,6 @@ mod tests {
             rt.analyse(b, &[], &[]);
         }
         let i = rt.inner.borrow();
-        assert!(!i.addrs_unusable, "these addresses are resolvable");
         assert!(!i.classes.memoizable.is_empty(), "something was classified");
         assert_eq!(
             i.addrs.count,
@@ -1712,19 +1800,21 @@ mod tests {
         }
     }
 
-    /// The address set must be representable as a 32-bit ordinal; when it is
-    /// not, `add` refuses (and leaves what it already held intact) so the
-    /// caller can fall back to the map rather than answer wrongly.
+    /// Full 64-bit keys: addresses tens of TB apart — the brk heap and an
+    /// mmap'd arena, routine for per-node `Arc` allocations since load-time
+    /// interning — must coexist in one table with no span limit.
     #[test]
-    fn the_resolved_table_refuses_an_unrepresentable_span() {
+    fn the_resolved_table_spans_distant_regions() {
         let mut t = AddrClasses::default();
-        assert!(t.add(&[(0x5000_0000_1000, 7), (0x5000_0000_2000, 9)]));
+        t.add(&[(0x5000_0000_1000, 7), (0x5000_0000_2000, 9)]);
         assert_eq!(t.get(0x5000_0000_1000), Some(7));
         assert_eq!(t.get(0x5000_0000_2000), Some(9));
         assert_eq!(t.get(0x5000_0000_3000), None);
-        // 64 TB apart: no `u32` ordinal spans that.
-        assert!(!t.add(&[(0x1000, 11)]));
-        assert_eq!(t.get(0x5000_0000_1000), Some(7), "the refusal is non-destructive");
+        // 64 TB apart: the old 32-bit-ordinal table refused this.
+        t.add(&[(0x1000, 11)]);
+        assert_eq!(t.get(0x1000), Some(11));
+        assert_eq!(t.get(0x5000_0000_1000), Some(7));
+        assert_eq!(t.get(0x5000_0000_2000), Some(9));
     }
 
     /// Exhaustive round trip over a dense, collision-heavy address run: every
@@ -1738,7 +1828,7 @@ mod tests {
         let mut t = AddrClasses::default();
         // Fed in chunks, so the table grows and rehashes mid-stream.
         for chunk in entries.chunks(97) {
-            assert!(t.add(chunk));
+            t.add(chunk);
         }
         assert_eq!(t.count, entries.len());
         for &(addr, class) in &entries {
@@ -1960,7 +2050,7 @@ mod tests {
                 Expr::Integer(2),
             ],
         );
-        let agg = Expr::Operator(ExpressionNode {
+        let agg = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             args: vec![],
             output_idx: Some(vec!["j".to_string()]),
@@ -2062,5 +2152,175 @@ mod tests {
             let addr = e as *const Expr as usize;
             assert_eq!(i.addrs.get(addr), i.classes.memoizable.get(&addr).copied());
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Interned (shared) node addresses — see the module-doc section.
+    // ------------------------------------------------------------------
+
+    /// Build `Expr::Operator` sharing one payload across call sites, the shape
+    /// the load-time interner produces.
+    fn shared(node: ExpressionNode) -> (Expr, std::sync::Arc<ExpressionNode>) {
+        let rc = std::sync::Arc::new(node);
+        (Expr::Operator(rc.clone()), rc)
+    }
+
+    /// One shared CELL evaluated twice within one static scope is classified
+    /// and memoizable — occurrence counting is by visit, not by address
+    /// uniqueness.
+    #[test]
+    fn a_shared_cell_repeated_in_one_scope_is_memoizable() {
+        if cse_disabled() {
+            return;
+        }
+        // Q = sqrt(sin(a) - b); body = Q + Q with ONE payload, so Q's child
+        // cell (the `-` node) is a single address visited twice in the body's
+        // root scope.
+        let (q, q_rc) = shared(ExpressionNode {
+            op: "sqrt".to_string(),
+            args: vec![op(
+                "-",
+                vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
+            )],
+            ..Default::default()
+        });
+        let body = op("+", vec![q.clone(), q]);
+        let rt = CseRt::default();
+        rt.analyse(&body, &[], &[]);
+        let mut pool = Pool::default();
+        let _s = rt.scope(&mut pool);
+        let inner = &q_rc.args[0];
+        assert!(
+            rt.class_of(inner).is_some(),
+            "the shared interior cell must be memoizable"
+        );
+    }
+
+    /// A shared address that becomes a body ROOT is tombstoned: the root
+    /// exclusion must win over any earlier interior mark, permanently.
+    #[test]
+    fn a_marked_interior_cell_that_becomes_a_root_is_tombstoned() {
+        if cse_disabled() {
+            return;
+        }
+        let (q, q_rc) = shared(ExpressionNode {
+            op: "sqrt".to_string(),
+            args: vec![op(
+                "-",
+                vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
+            )],
+            ..Default::default()
+        });
+        let body = op("+", vec![q.clone(), q.clone()]);
+        let rt = CseRt::default();
+        rt.analyse(&body, &[], &[]);
+        let mut pool = Pool::default();
+        let inner = &q_rc.args[0];
+        {
+            let _s = rt.scope(&mut pool);
+            assert!(rt.class_of(inner).is_some(), "interior mark exists first");
+        }
+        // The same cell is now analysed AS a body root (the nested-aggregate
+        // re-entry shape: an `expr` sidecar cell is both its owner's child and
+        // a root).
+        rt.analyse(inner, &[], &[]);
+        {
+            let _s = rt.scope(&mut pool);
+            assert!(
+                rt.class_of(inner).is_none(),
+                "a root address must never be served from the memo"
+            );
+        }
+        // A later body repeating the same shared cell must NOT re-mark it.
+        let body2 = op("*", vec![q.clone(), q]);
+        rt.analyse(&body2, &[], &[]);
+        {
+            let _s = rt.scope(&mut pool);
+            assert!(
+                rt.class_of(inner).is_none(),
+                "the tombstone must survive re-analysis by later bodies"
+            );
+        }
+    }
+
+    /// THE cross-context hazard sharing introduces: a subtree proven box-pure
+    /// under rule A's binders (`j` bound ⇒ PURE mark) is address-identical to
+    /// one evaluated under rule B's box, where `j` is NOT bound and the same
+    /// leaves read state. The persistent store must neither SERVE nor STORE
+    /// under the mismatched context — a stored value there would be a stale
+    /// state read served on every later RHS call.
+    #[test]
+    fn a_pure_mark_is_refused_under_a_different_binder_context() {
+        if cse_disabled() {
+            return;
+        }
+        // Shared payload P = s * sin(j)^2 : `s` is state in every context, so
+        // P is never pure; the `^` child CELL (inside P's shared args vector)
+        // is maximal box-pure exactly when `j` is box-bound.
+        let (p, p_rc) = shared(ExpressionNode {
+            op: "*".to_string(),
+            args: vec![
+                Expr::Variable("s".into()),
+                op(
+                    "^",
+                    vec![
+                        op("sin", vec![Expr::Variable("j".into())]),
+                        Expr::Integer(2),
+                    ],
+                ),
+            ],
+            ..Default::default()
+        });
+        let body_a = op("+", vec![Expr::Variable("u".into()), p.clone()]);
+        let body_b = op("+", vec![Expr::Variable("q".into()), p]);
+        let rt = CseRt::default();
+        rt.set_const_names(|| (FxHashSet::default(), FxHashSet::default()));
+        // Rule A binds j; rule B binds k (j is a state read there).
+        rt.analyse(&body_a, &names(&["j"]), &[]);
+        rt.analyse(&body_b, &names(&["k"]), &[]);
+        let hot = &p_rc.args[1];
+        let mut pool = Pool::default();
+        let _s = rt.scope(&mut pool);
+        let class = rt.class_of(hot).expect("the ^ cell is classified");
+        assert!(class & PURE_BIT != 0, "PURE mark minted under rule A");
+
+        let jsyms = names(&["j"]);
+        let ksyms = names(&["k"]);
+        let box_j = VecBox {
+            syms: &jsyms,
+            lo: &[0],
+            shape: &[4],
+            cnames: &[],
+            cvals: &[],
+        };
+        let box_k = VecBox {
+            syms: &ksyms,
+            lo: &[0],
+            shape: &[4],
+            cnames: &[],
+            cvals: &[],
+        };
+        // Proven context: stores and serves.
+        rt.put(class, VecValue::Scalar(1.5), &box_j);
+        assert!(
+            matches!(rt.get(class, &box_j), Some(VecValue::Scalar(v)) if v == 1.5),
+            "the mark works under the binder set it was proven under"
+        );
+        // Mismatched context: must not serve …
+        assert!(
+            rt.get(class, &box_k).is_none(),
+            "a PURE mark must not be served under a different binder set"
+        );
+        // … and must not store (the value would be state-dependent there).
+        let out = rt.put(class, VecValue::Scalar(9.0), &box_k);
+        assert!(matches!(out, VecValue::Scalar(v) if v == 9.0), "passthrough");
+        assert!(
+            rt.get(class, &box_k).is_none(),
+            "a mismatched-context store must be refused"
+        );
+        assert!(
+            matches!(rt.get(class, &box_j), Some(VecValue::Scalar(v)) if v == 1.5),
+            "the proven-context entry is untouched"
+        );
     }
 }

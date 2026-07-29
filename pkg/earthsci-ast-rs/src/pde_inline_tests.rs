@@ -1172,7 +1172,7 @@ mod tests {
             assert!((v - want).abs() < 1e-15, "cell {i}: {v} vs {want}");
         }
         // A const-folding scalar broadcasts.
-        let two = Expr::Operator(ExpressionNode {
+        let two = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Integer(1), Expr::Integer(1)],
             ..Default::default()

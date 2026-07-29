@@ -370,7 +370,7 @@ mod tests {
     }
 
     fn op(op: &str, args: Vec<Expr>) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: op.into(),
             args,
             ..Default::default()
@@ -378,7 +378,7 @@ mod tests {
     }
 
     fn op_wrt(op: &str, args: Vec<Expr>, wrt: &str) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: op.into(),
             args,
             wrt: Some(wrt.into()),

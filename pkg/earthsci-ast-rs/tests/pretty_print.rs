@@ -12,7 +12,7 @@ fn test_basic_expression_formatting() {
         Expr::Variable("CO2".to_string()),
         Expr::Variable("CH4".to_string()),
         Expr::Number(42.0),
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             wrt: None,
@@ -47,7 +47,7 @@ fn test_operator_formatting() {
     let operators = ["+", "-", "*", "/", "^", "D", "sin", "cos", "exp", "log"];
 
     for op in &operators {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: op.to_string(),
             args: vec![Expr::Variable("x".to_string())],
             wrt: None,
@@ -99,14 +99,14 @@ fn test_chemical_formula_formatting() {
 #[test]
 fn test_complex_expression_formatting() {
     // Create a complex expression: k * (A + B)^2
-    let complex_expr = Expr::Operator(ExpressionNode {
+    let complex_expr = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
             Expr::Variable("k".to_string()),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "^".to_string(),
                 args: vec![
-                    Expr::Operator(ExpressionNode {
+                    Expr::operator(ExpressionNode {
                         op: "+".to_string(),
                         args: vec![
                             Expr::Variable("A".to_string()),
@@ -145,7 +145,7 @@ fn test_complex_expression_formatting() {
 /// Test derivative expression formatting
 #[test]
 fn test_derivative_formatting() {
-    let derivative_expr = Expr::Operator(ExpressionNode {
+    let derivative_expr = Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![Expr::Variable("x".to_string())],
         wrt: Some("t".to_string()),
@@ -269,7 +269,7 @@ fn test_edge_cases() {
         Expr::Variable("123".to_string()),   // Numeric variable name
         Expr::Variable("x_y_z".to_string()), // Underscores
         Expr::Variable("long_variable_name_with_many_underscores".to_string()),
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "unknown_op".to_string(),
             args: vec![Expr::Variable("x".to_string())],
             wrt: None,
@@ -298,7 +298,7 @@ fn test_edge_cases() {
 #[test]
 fn test_division_latex_frac() {
     // Test simple binary division: a / b should render as \frac{a}{b}
-    let division_expr = Expr::Operator(ExpressionNode {
+    let division_expr = Expr::operator(ExpressionNode {
         op: "/".to_string(),
         args: vec![
             Expr::Variable("a".to_string()),
@@ -316,7 +316,7 @@ fn test_division_latex_frac() {
     );
 
     // Test with numbers: 1 / 2
-    let number_division = Expr::Operator(ExpressionNode {
+    let number_division = Expr::operator(ExpressionNode {
         op: "/".to_string(),
         args: vec![Expr::Number(1.0), Expr::Number(2.0)],
         wrt: None,
@@ -331,10 +331,10 @@ fn test_division_latex_frac() {
     );
 
     // Test nested expressions in division: (x + y) / (z - w)
-    let nested_division = Expr::Operator(ExpressionNode {
+    let nested_division = Expr::operator(ExpressionNode {
         op: "/".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "+".to_string(),
                 args: vec![
                     Expr::Variable("x".to_string()),
@@ -344,7 +344,7 @@ fn test_division_latex_frac() {
                 dim: None,
                 ..Default::default()
             }),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "-".to_string(),
                 args: vec![
                     Expr::Variable("z".to_string()),
@@ -367,7 +367,7 @@ fn test_division_latex_frac() {
     );
 
     // Test single argument division (edge case) - should use fallback
-    let single_arg_division = Expr::Operator(ExpressionNode {
+    let single_arg_division = Expr::operator(ExpressionNode {
         op: "/".to_string(),
         args: vec![Expr::Variable("x".to_string())],
         wrt: None,
@@ -382,7 +382,7 @@ fn test_division_latex_frac() {
     );
 
     // Test empty argument division (edge case)
-    let empty_division = Expr::Operator(ExpressionNode {
+    let empty_division = Expr::operator(ExpressionNode {
         op: "/".to_string(),
         args: vec![],
         wrt: None,
@@ -400,11 +400,11 @@ fn test_division_latex_frac() {
 #[test]
 fn test_division_in_complex_expressions() {
     // Test division within multiplication: a * (b / c)
-    let complex_expr = Expr::Operator(ExpressionNode {
+    let complex_expr = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
             Expr::Variable("a".to_string()),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "/".to_string(),
                 args: vec![
                     Expr::Variable("b".to_string()),
@@ -427,10 +427,10 @@ fn test_division_in_complex_expressions() {
     );
 
     // Test nested divisions: (a / b) / c = \frac{a/b}{c} = \frac{\frac{a}{b}}{c}
-    let nested_divisions = Expr::Operator(ExpressionNode {
+    let nested_divisions = Expr::operator(ExpressionNode {
         op: "/".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "/".to_string(),
                 args: vec![
                     Expr::Variable("a".to_string()),

@@ -78,7 +78,7 @@ fn propagate_dh_equals_v() {
     env.insert("v".to_string(), parse_unit("m/s").unwrap());
     env.insert("t".to_string(), parse_unit("s").unwrap());
 
-    let dh = Expr::Operator(ExpressionNode {
+    let dh = Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![Expr::Variable("h".to_string())],
         wrt: Some("t".to_string()),
@@ -469,7 +469,7 @@ fn trig_angle_rules() {
     env.insert("mass".to_string(), parse_unit("kg").unwrap());
 
     let call = |name: &str, arg: &str| {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: name.to_string(),
             args: vec![Expr::Variable(arg.to_string())],
             ..ExpressionNode::default()

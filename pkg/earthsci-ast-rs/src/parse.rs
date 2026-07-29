@@ -198,8 +198,16 @@ pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFil
     crate::lower_enums::lower_enums(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
-    // Deserialize into our types
-    let esm_file: EsmFile = serde_json::from_value(json_value).map_err(EsmError::JsonParse)?;
+    // Deserialize into our types. The interning scope makes every
+    // structurally repeated operator subtree share ONE allocation as it is
+    // built (see `crate::intern`): the §9.7-expanded document deserializes
+    // bottom-up, so duplicates are collapsed before they can accumulate —
+    // this is where the load-phase peak used to live (~978 MiB of typed AST
+    // for `simpleclimate.esm` at the production grid; ~6 MiB deduplicated).
+    let esm_file: EsmFile = {
+        let _intern = crate::intern::InternScope::new();
+        serde_json::from_value(json_value).map_err(EsmError::JsonParse)?
+    };
 
     Ok(esm_file)
 }

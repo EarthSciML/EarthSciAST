@@ -1129,7 +1129,7 @@ mod tests {
 
     #[test]
     fn test_expression_graph() {
-        let expr = Expr::Operator(ExprNode {
+        let expr = Expr::operator(ExprNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             wrt: None,
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn test_expression_graph_to_mermaid() {
-        let expr = Expr::Operator(ExprNode {
+        let expr = Expr::operator(ExprNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             wrt: None,

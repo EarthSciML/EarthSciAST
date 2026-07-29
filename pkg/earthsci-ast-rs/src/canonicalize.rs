@@ -269,7 +269,7 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
         "-" => canon_sub(&mut work),
         "/" => canon_div(&mut work),
         "neg" => canon_neg(&mut work),
-        _ => Ok(Expr::Operator(work)),
+        _ => Ok(Expr::operator(work)),
     }
 }
 
@@ -290,7 +290,7 @@ fn canon_add(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
         return Ok(others.pop().unwrap());
     }
     sort_args(&mut others);
-    Ok(Expr::Operator(ExpressionNode {
+    Ok(Expr::operator(ExpressionNode {
         op: "+".into(),
         args: others,
         ..ExpressionNode::default()
@@ -325,7 +325,7 @@ fn canon_mul(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
         return Ok(others.pop().unwrap());
     }
     sort_args(&mut others);
-    Ok(Expr::Operator(ExpressionNode {
+    Ok(Expr::operator(ExpressionNode {
         op: "*".into(),
         args: others,
         ..ExpressionNode::default()
@@ -355,18 +355,18 @@ fn canon_sub(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
             return Ok(a);
         }
         // Restore args.
-        return Ok(Expr::Operator(ExpressionNode {
+        return Ok(Expr::operator(ExpressionNode {
             op: "-".into(),
             args: vec![a, b],
             ..ExpressionNode::default()
         }));
     }
-    Ok(Expr::Operator(std::mem::take(node)))
+    Ok(Expr::operator(std::mem::take(node)))
 }
 
 fn canon_div(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if node.args.len() != 2 {
-        return Ok(Expr::Operator(std::mem::take(node)));
+        return Ok(Expr::operator(std::mem::take(node)));
     }
     let b = node.args.pop().unwrap();
     let a = node.args.pop().unwrap();
@@ -388,7 +388,7 @@ fn canon_div(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
             Expr::Integer(0)
         });
     }
-    Ok(Expr::Operator(ExpressionNode {
+    Ok(Expr::operator(ExpressionNode {
         op: "/".into(),
         args: vec![a, b],
         ..ExpressionNode::default()
@@ -397,7 +397,7 @@ fn canon_div(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
 
 fn canon_neg(node: &mut ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if node.args.len() != 1 {
-        return Ok(Expr::Operator(std::mem::take(node)));
+        return Ok(Expr::operator(std::mem::take(node)));
     }
     let arg = node.args.pop().unwrap();
     canon_neg_value(arg)
@@ -408,9 +408,9 @@ fn canon_neg_value(arg: Expr) -> Result<Expr, CanonicalizeError> {
         Expr::Integer(i) => Ok(Expr::Integer(-i)),
         Expr::Number(f) => Ok(Expr::Number(-f)),
         Expr::Operator(n) if n.op == "neg" && n.args.len() == 1 => {
-            Ok(n.args.into_iter().next().unwrap())
+            Ok(n.args[0].clone())
         }
-        other => Ok(Expr::Operator(ExpressionNode {
+        other => Ok(Expr::operator(ExpressionNode {
             op: "neg".into(),
             args: vec![other],
             ..ExpressionNode::default()
@@ -422,7 +422,7 @@ fn flatten_same_op(args: Vec<Expr>, op: &str) -> Vec<Expr> {
     let mut out = Vec::with_capacity(args.len());
     for a in args {
         match a {
-            Expr::Operator(node) if node.op == op => out.extend(node.args),
+            Expr::Operator(node) if node.op == op => out.extend(node.args.iter().cloned()),
             other => out.push(other),
         }
     }
@@ -690,7 +690,7 @@ mod tests {
     use super::*;
 
     fn op(name: &str, args: Vec<Expr>) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: name.into(),
             args,
             ..ExpressionNode::default()
@@ -829,28 +829,28 @@ mod tests {
     #[test]
     fn non_emissible_field_fails_closed() {
         // filter (Option<Box<Expr>>).
-        let filtered = Expr::Operator(ExpressionNode {
+        let filtered = Expr::operator(ExpressionNode {
             op: "aggregate".into(),
             args: vec![Expr::Variable("x".into())],
             filter: Some(Box::new(Expr::Variable("p".into()))),
             ..ExpressionNode::default()
         });
         // expr (Option<Box<Expr>>).
-        let bodied = Expr::Operator(ExpressionNode {
+        let bodied = Expr::operator(ExpressionNode {
             op: "arrayop".into(),
             args: vec![Expr::Variable("A".into())],
             expr: Some(Box::new(Expr::Variable("A".into()))),
             ..ExpressionNode::default()
         });
         // table (Option<String>).
-        let tabled = Expr::Operator(ExpressionNode {
+        let tabled = Expr::operator(ExpressionNode {
             op: "table_lookup".into(),
             args: vec![],
             table: Some("t".into()),
             ..ExpressionNode::default()
         });
         // id (Option<String>).
-        let ided = Expr::Operator(ExpressionNode {
+        let ided = Expr::operator(ExpressionNode {
             op: "intersect_polygon".into(),
             args: vec![Expr::Variable("poly".into())],
             id: Some("g0".into()),
@@ -873,7 +873,7 @@ mod tests {
     /// in `label` canonicalized to byte-identical JSON.
     #[test]
     fn skolem_label_fails_closed() {
-        let edge = Expr::Operator(ExpressionNode {
+        let edge = Expr::operator(ExpressionNode {
             op: "skolem".into(),
             args: vec![Expr::Variable("u".into()), Expr::Variable("v".into())],
             label: Some("edge".into()),
@@ -885,7 +885,7 @@ mod tests {
 
         // The bare (label-less) skolem node still canonicalizes fine, so it is
         // specifically the `label` tag that fails closed — not the `skolem` op.
-        let bare = Expr::Operator(ExpressionNode {
+        let bare = Expr::operator(ExpressionNode {
             op: "skolem".into(),
             args: vec![Expr::Variable("u".into()), Expr::Variable("v".into())],
             ..ExpressionNode::default()
@@ -901,7 +901,7 @@ mod tests {
             "+",
             vec![
                 Expr::Variable("x".into()),
-                Expr::Operator(ExpressionNode {
+                Expr::operator(ExpressionNode {
                     op: "table_lookup".into(),
                     args: vec![],
                     table: Some("t".into()),
@@ -922,7 +922,7 @@ mod tests {
     #[test]
     fn emissible_and_tolerated_fields_round_trip() {
         // `fn` (broadcast_fn) is emissible → emitted.
-        let bc = Expr::Operator(ExpressionNode {
+        let bc = Expr::operator(ExpressionNode {
             op: "broadcast".into(),
             args: vec![Expr::Variable("u".into())],
             broadcast_fn: Some("sin".into()),
@@ -932,7 +932,7 @@ mod tests {
         assert!(got.contains(r#""fn":"sin""#), "fn not emitted: {got}");
 
         // `name` is emissible → emitted.
-        let named = Expr::Operator(ExpressionNode {
+        let named = Expr::operator(ExpressionNode {
             op: "fn".into(),
             args: vec![Expr::Variable("x".into())],
             name: Some("m.f".into()),
@@ -946,7 +946,7 @@ mod tests {
         // `arg` and `bindings` are tolerated-and-ignored → no error, not emitted.
         let mut bindings = std::collections::HashMap::new();
         bindings.insert("t".to_string(), Expr::Variable("z".into()));
-        let tolerated = Expr::Operator(ExpressionNode {
+        let tolerated = Expr::operator(ExpressionNode {
             op: "argmax".into(),
             args: vec![Expr::Variable("x".into())],
             arg: Some("i".into()),
@@ -966,7 +966,7 @@ mod tests {
     /// `validate_emissible`, not in the tree rewrite.
     #[test]
     fn canonicalize_alone_preserves_fields() {
-        let e = Expr::Operator(ExpressionNode {
+        let e = Expr::operator(ExpressionNode {
             op: "table_lookup".into(),
             args: vec![],
             table: Some("mytable".into()),

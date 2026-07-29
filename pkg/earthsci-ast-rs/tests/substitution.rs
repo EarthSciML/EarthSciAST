@@ -207,14 +207,14 @@ fn test_model_substitution() {
         name: Some("Test Model".to_string()),
         variables,
         equations: vec![Equation {
-            lhs: Expr::Operator(ExpressionNode {
+            lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![Expr::Variable("x".to_string())],
                 wrt: Some("t".to_string()),
                 dim: None,
                 ..Default::default()
             }),
-            rhs: Expr::Operator(ExpressionNode {
+            rhs: Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![
                     Expr::Variable("k".to_string()),
@@ -289,7 +289,7 @@ fn test_reaction_system_substitution() {
             species: "B".to_string(),
             coefficient: 1.0,
         }]),
-        rate: Expr::Operator(ExpressionNode {
+        rate: Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![
                 Expr::Variable("k_rate".to_string()),
@@ -333,14 +333,14 @@ fn test_reaction_system_substitution() {
 #[test]
 fn test_complex_substitution_patterns() {
     // Create a complex expression with nested operators
-    let complex_expr = Expr::Operator(ExpressionNode {
+    let complex_expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![
                     Expr::Variable("a".to_string()),
-                    Expr::Operator(ExpressionNode {
+                    Expr::operator(ExpressionNode {
                         op: "^".to_string(),
                         args: vec![Expr::Variable("x".to_string()), Expr::Number(2.0)],
                         wrt: None,
@@ -352,7 +352,7 @@ fn test_complex_substitution_patterns() {
                 dim: None,
                 ..Default::default()
             }),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![
                     Expr::Variable("b".to_string()),
@@ -472,11 +472,11 @@ fn test_substitute_self_reference_terminates() {
 /// Self-referential binding inside a nested operator must also terminate.
 #[test]
 fn test_substitute_self_reference_in_nested_expression() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![
             Expr::Variable("x".to_string()),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![Expr::Variable("x".to_string()), Expr::Number(2.0)],
                 ..Default::default()
@@ -487,7 +487,7 @@ fn test_substitute_self_reference_in_nested_expression() {
     let mut substitutions = HashMap::new();
     substitutions.insert(
         "x".to_string(),
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             ..Default::default()
@@ -520,7 +520,7 @@ fn test_substitute_self_reference_in_nested_expression() {
 /// variable is rewritten exactly once.
 #[test]
 fn test_substitute_mutual_reference_compound() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![
             Expr::Variable("a".to_string()),
@@ -554,7 +554,7 @@ fn test_substitute_deep_nesting() {
     // Build: ((((x + v0) + v1) + v2) ... + v{DEPTH-1})
     let mut expr = Expr::Variable("x".to_string());
     for i in 0..DEPTH {
-        expr = Expr::Operator(ExpressionNode {
+        expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![expr, Expr::Variable(format!("v{i}"))],
             ..Default::default()
@@ -593,7 +593,7 @@ fn test_substitute_deep_nesting() {
 /// In Rust, the closest analogue is an `ExpressionNode` with `args: vec![]`.
 #[test]
 fn test_substitute_operator_with_empty_args() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![],
         ..Default::default()
@@ -617,11 +617,11 @@ fn test_substitute_operator_with_empty_args() {
 /// Empty substitutions map: every expression is returned structurally equal.
 #[test]
 fn test_substitute_empty_substitutions_on_compound() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
             Expr::Variable("x".to_string()),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "+".to_string(),
                 args: vec![Expr::Variable("y".to_string()), Expr::Number(1.0)],
                 ..Default::default()
@@ -646,7 +646,7 @@ fn test_substitute_empty_substitutions_on_compound() {
 /// enclosing operator node.
 #[test]
 fn test_substitute_preserves_operator_metadata() {
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "D".to_string(),
         args: vec![Expr::Variable("x".to_string())],
         wrt: Some("t".to_string()),

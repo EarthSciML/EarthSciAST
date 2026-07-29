@@ -25,7 +25,7 @@ use earthsci_ast::performance::fast_parse;
 #[test]
 fn test_compact_expression_creation() {
     // Test simple expression: x + 1
-    let expr = Expr::Operator(earthsci_ast::ExpressionNode {
+    let expr = Expr::operator(earthsci_ast::ExpressionNode {
         op: "+".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
         wrt: None,
@@ -728,10 +728,10 @@ fn test_parse_performance_comparison() {
 #[test]
 fn test_compact_expr_variable_caching() {
     // Test that variable cache works correctly with multiple variables
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "+".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "*".to_string(),
                 args: vec![
                     Expr::Variable("x".to_string()),

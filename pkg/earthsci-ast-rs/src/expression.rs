@@ -115,7 +115,7 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
         ("^", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(a.powf(*b))),
         _ => None,
     };
-    folded.unwrap_or(Expr::Operator(node))
+    folded.unwrap_or(Expr::operator(node))
 }
 
 /// Evaluate a scalar AST expression against a map of float variable bindings.
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_free_variables() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![
                 Expr::Variable("x".to_string()),
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_contains() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![Expr::Number(2.0), Expr::Variable("x".to_string())],
             wrt: None,
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_simplify_zero_addition() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(0.0)],
             wrt: None,
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_simplify_one_multiplication() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![Expr::Number(1.0), Expr::Variable("x".to_string())],
             wrt: None,
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_simplify_zero_multiplication() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![Expr::Number(0.0), Expr::Variable("x".to_string())],
             wrt: None,
@@ -270,7 +270,7 @@ mod tests {
         bindings.insert("x".to_string(), Expr::Number(2.0));
         bindings.insert("y".to_string(), Expr::Number(3.0));
 
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![
                 Expr::Variable("x".to_string()),

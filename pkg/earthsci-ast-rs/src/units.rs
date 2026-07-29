@@ -1812,7 +1812,7 @@ mod tests {
     use crate::types::ExpressionNode;
 
     fn op(name: &str, args: Vec<Expr>) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: name.to_string(),
             args,
             ..ExpressionNode::default()
@@ -1820,7 +1820,7 @@ mod tests {
     }
 
     fn op_with_wrt(name: &str, args: Vec<Expr>, wrt: &str) -> Expr {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: name.to_string(),
             args,
             wrt: Some(wrt.to_string()),
@@ -2598,7 +2598,7 @@ mod tests {
             "*",
             vec![Expr::Variable("x".into()), Expr::Variable("scale".into())],
         );
-        let node = Expr::Operator(ExpressionNode {
+        let node = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             args: vec![],
             expr: Some(Box::new(body)),
@@ -2627,7 +2627,7 @@ mod tests {
     fn propagate_broadcast_dispatches_to_fn() {
         // broadcast(fn='+', a, b) with matching dims works.
         let env = env_of(&[("a", "m"), ("b", "m")]);
-        let node = Expr::Operator(ExpressionNode {
+        let node = Expr::operator(ExpressionNode {
             op: "broadcast".to_string(),
             broadcast_fn: Some("+".to_string()),
             args: vec![Expr::Variable("a".into()), Expr::Variable("b".into())],

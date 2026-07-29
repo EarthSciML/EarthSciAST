@@ -121,7 +121,7 @@ pub fn lower_reactions_to_equations(
                 } else {
                     // Covers -1.0 too: `Number(net_stoichiometry)` is exactly
                     // `Number(-1.0)` when the coefficient is -1.
-                    rate_terms.push(Expr::Operator(ExpressionNode {
+                    rate_terms.push(Expr::operator(ExpressionNode {
                         op: "*".to_string(),
                         args: vec![Expr::Number(net_stoichiometry), enhanced_rate],
                         wrt: None,
@@ -137,7 +137,7 @@ pub fn lower_reactions_to_equations(
         } else if rate_terms.len() == 1 {
             rate_terms.into_iter().next().unwrap()
         } else {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "+".to_string(),
                 args: rate_terms,
                 wrt: None,
@@ -146,7 +146,7 @@ pub fn lower_reactions_to_equations(
             })
         };
 
-        let lhs = Expr::Operator(ExpressionNode {
+        let lhs = Expr::operator(ExpressionNode {
             op: "D".to_string(),
             args: vec![Expr::Variable(sp_name.clone())],
             wrt: Some("t".to_string()),
@@ -269,7 +269,7 @@ fn enhance_rate_with_mass_action(rate: &Expr, substrates: &[crate::Stoichiometri
                 } else {
                     Expr::Number(coeff)
                 };
-            concentration_factors.push(Expr::Operator(ExpressionNode {
+            concentration_factors.push(Expr::operator(ExpressionNode {
                 op: "^".to_string(),
                 args: vec![species_var, exponent],
                 wrt: None,
@@ -286,7 +286,7 @@ fn enhance_rate_with_mass_action(rate: &Expr, substrates: &[crate::Stoichiometri
     if all_factors.len() == 1 {
         all_factors.into_iter().next().unwrap()
     } else {
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: all_factors,
             wrt: None,
@@ -456,7 +456,7 @@ mod tests {
                 create_test_reaction(
                     vec![("A", 1.0)],
                     vec![("B", 1.0)],
-                    Expr::Operator(ExpressionNode {
+                    Expr::operator(ExpressionNode {
                         op: "*".to_string(),
                         args: vec![
                             Expr::Variable("k1".to_string()),

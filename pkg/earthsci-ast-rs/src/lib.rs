@@ -48,6 +48,7 @@ pub mod analysis;
 pub mod broad_phase;
 pub mod cadence;
 pub mod canonicalize;
+pub mod intern;
 pub mod coupling;
 pub mod coupling_imports;
 pub mod dae;

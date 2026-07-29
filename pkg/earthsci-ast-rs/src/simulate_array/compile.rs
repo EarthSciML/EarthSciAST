@@ -1748,7 +1748,21 @@ pub(super) fn collect_geometry_producer_ids(expr: &Expr, out: &mut HashSet<Strin
 /// additive identity, which for a geometric narrow phase (`polygon_intersection_area`,
 /// zero on non-overlapping pairs) they already do, so the result is unchanged.
 pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
-    let Expr::Operator(node) = expr else {
+    // Sharing-aware gate: after load-time interning (`crate::intern`)
+    // operator payloads are shared `Arc`s, and a mutable descent
+    // copy-on-write splits every node it touches. Only branches actually
+    // carrying a `join` clause are descended; a join-free subtree (every
+    // subtree of a §9.7-expanded discretization) is left fully shared.
+    fn contains_join(e: &Expr) -> bool {
+        match e {
+            Expr::Operator(node) => node.join.is_some() || node.any_child(&mut contains_join),
+            _ => false,
+        }
+    }
+    if !contains_join(expr) {
+        return;
+    }
+    let Some(node) = expr.node_mut() else {
         return;
     };
     if let Some(joins) = &mut node.join {
@@ -1988,7 +2002,7 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
             })
             .collect(),
     );
-    let const_node = Expr::Operator(ExpressionNode {
+    let const_node = Expr::operator(ExpressionNode {
         op: "const".to_string(),
         value: Some(value),
         ..Default::default()
@@ -2183,7 +2197,7 @@ pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
             if binds {
                 return expr.clone();
             }
-            Expr::Operator(node.map_children(&mut |a| rename_free_symbol(a, from, to)))
+            Expr::operator(node.map_children(&mut |a| rename_free_symbol(a, from, to)))
         }
         _ => expr.clone(),
     }
@@ -2264,7 +2278,7 @@ pub(super) fn index_array_leaves_by_loops(
         for l in loops {
             args.push(Expr::Variable(l.clone()));
         }
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "index".to_string(),
             args,
             ..Default::default()
@@ -2275,7 +2289,7 @@ pub(super) fn index_array_leaves_by_loops(
         Expr::Operator(node) => {
             if is_array_producer(node) {
                 let target = if node.op == "makearray" {
-                    Expr::Operator(inline_region_aggregates(node, loops))
+                    Expr::operator(inline_region_aggregates(node, loops))
                 } else {
                     expr.clone()
                 };
@@ -2284,13 +2298,13 @@ pub(super) fn index_array_leaves_by_loops(
             if node.op == "index" || is_aggregate_op(&node.op) {
                 return expr.clone();
             }
-            let mut out = node.clone();
+            let mut out = ExpressionNode::clone(node);
             out.args = node
                 .args
                 .iter()
                 .map(|a| index_array_leaves_by_loops(a, array_ranks, loops))
                 .collect();
-            Expr::Operator(out)
+            Expr::operator(out)
         }
         _ => expr.clone(),
     }
@@ -2313,7 +2327,7 @@ pub(super) fn index_array_leaves(
                 for &c in &cell[..n] {
                     args.push(Expr::Integer(c));
                 }
-                Expr::Operator(ExpressionNode {
+                Expr::operator(ExpressionNode {
                     op: "index".to_string(),
                     args,
                     ..Default::default()
@@ -2331,7 +2345,7 @@ pub(super) fn index_array_leaves(
                 // argument expressions are rewritten.
                 out.args[0] = first.clone();
             }
-            Expr::Operator(out)
+            Expr::operator(out)
         }
         other => other.clone(),
     }

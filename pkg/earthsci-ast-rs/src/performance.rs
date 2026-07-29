@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_compact_expr_creation() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             wrt: None,

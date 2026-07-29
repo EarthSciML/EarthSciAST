@@ -164,12 +164,30 @@ pub fn resolve_aggregate_joins(
     Ok(())
 }
 
+/// `true` iff any node in `e`'s subtree carries a `join` clause. The
+/// sharing-aware gate for [`lower_expr_joins`]: after load-time interning
+/// (`crate::intern`) operator payloads are shared `Arc`s, and a mutable
+/// descent copy-on-write splits every node it touches — so a join-free
+/// subtree (every subtree of a §9.7-expanded discretization) must be left
+/// alone entirely, not walked mutably.
+fn contains_join(e: &Expr) -> bool {
+    match e {
+        Expr::Operator(node) => node.join.is_some() || node.any_child(&mut contains_join),
+        _ => false,
+    }
+}
+
 /// Recursively lower `join` clauses on a node and all its children.
 fn lower_expr_joins(
     expr: &mut Expr,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
-    let Expr::Operator(node) = expr else {
+    // Sharing-aware gate: only branches actually containing a `join` clause
+    // are descended (and thereby copy-on-write split); see `contains_join`.
+    if !contains_join(expr) {
+        return Ok(());
+    }
+    let Some(node) = expr.node_mut() else {
         return Ok(());
     };
 
@@ -283,7 +301,7 @@ fn lower_node_joins(
             let (pos_l, vals_l) = key_column(&sym_l, &ranges, index_sets)?;
             let (pos_r, vals_r) = key_column(&sym_r, &ranges, index_sets)?;
             let (codes_l, codes_r) = encode_columns(&vals_l, &vals_r);
-            conjuncts.push(Expr::Operator(ExpressionNode {
+            conjuncts.push(Expr::operator(ExpressionNode {
                 op: "==".into(),
                 args: vec![
                     code_lookup(&pos_l, &codes_l, &sym_l),
@@ -304,7 +322,7 @@ fn lower_node_joins(
         let pred = if conjuncts.len() == 1 {
             conjuncts.pop().unwrap()
         } else {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "*".into(),
                 args: conjuncts,
                 ..Default::default()
@@ -499,13 +517,13 @@ fn code_lookup(positions: &[i64], codes: &[i64], sym: &str) -> Expr {
         regions.push(vec![[p, p]]);
         values.push(Expr::Integer(code_at.get(&p).copied().unwrap_or(0)));
     }
-    let table = Expr::Operator(ExpressionNode {
+    let table = Expr::operator(ExpressionNode {
         op: "makearray".into(),
         regions: Some(regions),
         values: Some(values),
         ..Default::default()
     });
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: "index".into(),
         args: vec![table, Expr::Variable(sym.to_string())],
         ..Default::default()
@@ -684,7 +702,7 @@ mod tests {
         for r in ranges {
             range_map.insert(r.to_string(), RangeSpec::Interval([1, 2]));
         }
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "aggregate".into(),
             ranges: Some(range_map),
             output_idx: Some(vec![]),
@@ -714,7 +732,7 @@ mod tests {
                 of: None,
             },
         );
-        let mut expr = Expr::Operator(ExpressionNode {
+        let mut expr = Expr::operator(ExpressionNode {
             op: "aggregate".into(),
             ranges: Some(range_map),
             output_idx: Some(vec![]),
@@ -800,7 +818,7 @@ mod tests {
     #[test]
     fn rejects_join_on_non_aggregate_op() {
         // A `join` smuggled onto a non-aggregate op is a build error.
-        let mut bogus = Expr::Operator(ExpressionNode {
+        let mut bogus = Expr::operator(ExpressionNode {
             op: "+".into(),
             join: Some(vec![JoinClause {
                 on: vec![["a".into(), "b".into()]],
@@ -816,7 +834,7 @@ mod tests {
     fn noop_when_no_join_present() {
         // An aggregate node with no join clause resolves trivially, and the walk
         // recurses into nested children without spurious errors.
-        let mut agg = Expr::Operator(ExpressionNode {
+        let mut agg = Expr::operator(ExpressionNode {
             op: "aggregate".into(),
             ranges: Some(HashMap::from([(
                 "i".to_string(),
