@@ -376,7 +376,7 @@ by this spec.
 | `aggregate` | `output_idx`, `expr` | Functional Aggregate Query node: a semiring aggregate of a product of factors over named index sets. Specializes to Einstein-notation tensor contraction with implicit reductions over non-output indices; its full surface (`semiring`, `from`/`of` ranges, `join`, `distinct`, `key`, `filter`) is specified in RFC semiring-faq-unified-ir. See Section 4.3.1. |
 | `makearray` | `regions`, `values` | Block assembly of an array from overlapping sub-region assignments. Later regions overwrite earlier ones. See Section 4.3.2. |
 | `index` | — | Element or sub-array access. `args[0]` is the array; `args[1..]` are the index expressions. See Section 4.3.3. |
-| `broadcast` | `fn` | Element-wise application of scalar operator `fn` to broadcast-compatible operands. See Section 4.3.4. |
+| `broadcast` | `fn` | Element-wise application of scalar operator `fn` to one or more broadcast-compatible operands; means what `{op: fn, args}` means, applied element-wise (so a ONE-operand `broadcast` applies `fn` unarily). `fn` MUST name a scalar operator, applied at an arity that operator admits, else `invalid_broadcast_fn`. See Section 4.3.4. |
 | `reshape` | `shape` | Reshape `args[0]` to the given target shape. See Section 4.3.5. |
 | `transpose` | — (optional `perm`) | Axis permutation of `args[0]`. See Section 4.3.5. |
 | `concat` | `axis` | Concatenate the operand arrays along the given axis. See Section 4.3.5. |
@@ -663,7 +663,13 @@ A stencil gather of a **const array** (a pre-computed factor: Fornberg weights, 
 }
 ```
 
-The `fn` value must name a scalar operator (arithmetic, elementary function, comparison, etc.). Broadcasts do not fuse: a nested expression of broadcasts decomposes into primitive broadcast nodes. Runtimes are free to apply their own fusion.
+**Meaning.** `{ "op": "broadcast", "fn": F, "args": A }` denotes exactly what `{ "op": F, "args": A }` denotes, applied element-wise over the broadcast operands. That equivalence is the whole definition, and it settles the ONE-OPERAND case: a `broadcast` with a single operand applies `fn` **unarily**. `broadcast(fn: "-", [x])` is `-x`, `broadcast(fn: "log", [x])` is `log(x)`, and `broadcast(fn: "+", [x])` is `x` — for the same reason the bare `{"op": "+", "args": [x]}` node is `x`, because `+` is n-ary from one operand. A one-operand `broadcast` MUST NOT be treated as the identity on its operand: that discards `fn`, and a binding that folds `args` through a binary kernel degenerates to exactly that on a single-element list.
+
+The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`aggregate`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself), the closed-registry invocation `fn`, the form ops (`D`, `ic`, `Pre`, `const`, `true`, `enum`, `table_lookup`, `apply_expression_template`), or the relational and geometry ops.
+
+**Validation.** A schema-valid `broadcast` node must carry an `fn` naming a scalar operator as defined above, applied to a number of `args` that operator admits under its §4.2 arity (so `broadcast(fn: "min", [x])` and `broadcast(fn: "sin", [a, b])` are rejected for exactly the reason the bare `min(x)` and `sin(a, b)` nodes are). Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**. This mirrors the §4.4 rule for `fn`-node names: an operator name that no binding can resolve must never reach an evaluator, because the failure is otherwise silent.
+
+Broadcasts do not fuse: a nested expression of broadcasts decomposes into primitive broadcast nodes. Runtimes are free to apply their own fusion.
 
 #### 4.3.5 `reshape`, `transpose`, `concat`
 
@@ -2992,6 +2998,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name (§9.7.6). |
 | `makearray_region_inverted` | A `makearray` region bound pair on the expanded, metaparameter-folded form has `stop < start − 1` (§4.3.2). The empty spelling `stop == start − 1` is legal and contributes no elements; anything further inverted is rejected — typically a §9.6.8 interior region instantiated below the scheme’s minimum extent. |
+| `invalid_broadcast_fn` | A `broadcast` node's `fn` is absent, does not name a scalar operator, or is applied to an argument count that operator's §4.2 arity does not admit (§4.3.4). The value analogue of `unknown_closed_function`: `broadcast` is the one op whose OPERATOR is carried as data, so no `op`-keyed check reaches it, and an unchecked `fn` is discarded silently rather than failing. Loading MUST fail. |
 | `geometry_manifold_invalid` | A geometry-kernel node's `manifold` is not an admissible literal (`planar`/`spherical`/`geodesic`) on the expanded-equivalent form — the enforcement for the scalar-field substitution sites of §9.6.1 (the schema admits arbitrary strings there so template bodies may carry parameter names). Discharged per-instantiation, memoized (§9.6.9); the diagnostic reports (call-site path, template name, intra-body path). |
 | `template_constraint_unknown_index_set` | A `where` `shape` constraint (§9.6.1) names an index set the consuming document's merged `index_sets` registry (§9.7.5) does not declare. Raised at rule registration in the consuming component — a loud typo failure, mirroring `template_import_unknown_name`. A constrained rule that merely never fires is NOT an error. |
 

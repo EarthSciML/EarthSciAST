@@ -2819,5 +2819,20 @@
     ],
     "structural_errors": [],
     "is_valid": false
+  },
+  "broadcast_fn_unregistered.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/equations/0/rhs",
+        "code": "invalid_broadcast_fn",
+        "message": "'broadcast' fn 'not_a_real_op' does not name a scalar operator (esm-spec §4.3.4)",
+        "details": {
+          "broadcast_fn": "not_a_real_op",
+          "equation_index": 0
+        }
+      }
+    ],
+    "is_valid": false
   }
 }
