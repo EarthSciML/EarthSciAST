@@ -953,6 +953,46 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
     }
 }
 
+/// The enclosing binding, if any, that a nested `aggregate` genuinely depends
+/// on — the precondition for hoisting it out of the enclosing per-cell loop
+/// (see [`eval_vec_nested_aggregate`]). `None` means the hoist is sound.
+///
+/// An enclosing name that the nested aggregate REBINDS with one of its own
+/// binders (its `output_idx` symbols or its contracted indices) is *shadowed*:
+/// inside the body and the filter that name denotes the nested aggregate's own
+/// index, never the enclosing one, so evaluating the node exactly once over its
+/// own box computes precisely what the per-cell oracle computes. The oracle
+/// agrees by construction — [`eval_arrayop`] saves and rebinds exactly
+/// `idx_names ∪ contract_names` around its body walk (`saved_binds`) — and both
+/// whole-array resolvers ([`eval_vec_variable`] and the tape's `resolve_var`)
+/// consult the aggregate's own box symbols / contraction binds BEFORE any
+/// state, observed or parameter of the same name.
+///
+/// Every NON-shadowed name still disqualifies the hoist, and that half is
+/// load-bearing: the nested box drops the enclosing symbols entirely, so such a
+/// name would fall through the resolver ladder and silently rebind to a
+/// same-named state/observed/parameter instead of the enclosing index.
+///
+/// The mention test itself stays syntactic and conservative — a false positive
+/// only costs the fast path, never correctness.
+pub(super) fn nested_aggregate_capture<'n>(
+    spec: &ArrayOpSpec<'_>,
+    enclosing: impl Iterator<Item = &'n String>,
+) -> Option<&'n String> {
+    for name in enclosing {
+        // Cheap shadow test first (rank ≤ 4): it also SKIPS the full body walk,
+        // which is the dominant cost of this scan on wide stencil templates.
+        if spec.idx_names.iter().any(|n| n == name) || spec.contract_names.iter().any(|n| n == name)
+        {
+            continue;
+        }
+        if expr_mentions(spec.body, name) || spec.filter.is_some_and(|f| expr_mentions(f, name)) {
+            return Some(name);
+        }
+    }
+    None
+}
+
 /// Vectorized nested `aggregate`: materialize the sub-array once over the
 /// aggregate's OWN index box, through the same [`try_eval_arrayop_vectorized`]
 /// entry the per-cell oracle's [`eval_arrayop`] tries first. Because both paths
@@ -965,11 +1005,10 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
 /// re-evaluates this node once per enclosing output tuple, with the enclosing
 /// output symbols and contracted indices bound in `ctx.loop_binds`. Evaluating
 /// it ONCE is therefore only equivalent when the nested node does not depend on
-/// any of those bindings. We bail if the body or filter mentions any enclosing
-/// index symbol, any bound contraction name, or any name already bound in
-/// `ctx.loop_binds` (a scalar `eval` walk that reached this overlay from inside
-/// a per-cell loop). The test is syntactic and conservative — a symbol shadowed
-/// by the aggregate's own `output_idx` is rejected rather than analysed.
+/// any of those bindings — which is what [`nested_aggregate_capture`] decides,
+/// over the enclosing index symbols, the bound contraction names, and every
+/// name already in `ctx.loop_binds` (a scalar `eval` walk that reached this
+/// overlay from inside a per-cell loop).
 fn eval_vec_nested_aggregate<'a>(
     node: &ExpressionNode,
     bx: &VecBox,
@@ -984,20 +1023,17 @@ fn eval_vec_nested_aggregate<'a>(
     if spec.ranges.is_empty() {
         bail_vec!("aggregate: rank-0 output (scalar reduction)");
     }
-    for name in bx
-        .syms
-        .iter()
-        .chain(bx.cnames.iter())
-        .chain(ctx.loop_binds.keys())
-    {
-        if expr_mentions(spec.body, name)
-            || spec.filter.is_some_and(|f| expr_mentions(f, name))
-        {
-            bail_vec!(
-                "aggregate: nested body depends on an enclosing bound index",
-                name
-            );
-        }
+    if let Some(name) = nested_aggregate_capture(
+        &spec,
+        bx.syms
+            .iter()
+            .chain(bx.cnames.iter())
+            .chain(ctx.loop_binds.keys()),
+    ) {
+        bail_vec!(
+            "aggregate: nested body depends on an enclosing bound index",
+            name
+        );
     }
     let (v, sub_ops) = try_eval_arrayop_vectorized(
         spec.idx_names,

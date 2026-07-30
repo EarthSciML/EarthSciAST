@@ -253,6 +253,134 @@ fn ab_nested_aggregate() {
     ab_check(doc, 0, -2.0, 2.0);
 }
 
+/// The same nested aggregate, but the inner `output_idx` REBINDS the enclosing
+/// symbol — `i` inside `i` rather than `j` inside `i`. That is the shape a
+/// discretization template plants whenever a `D(·)` is written inline in an
+/// equation body instead of being named as its own observed (issue #98): both
+/// aggregates are keyed on the grid's index names, so they collide.
+///
+/// The collision is a SHADOW, not a dependence — inside the inner body `i` is
+/// the inner aggregate's own index — so the hoist is sound and this must tape
+/// exactly like the `j` spelling above. Before the admission test learned about
+/// shadowing, this single rename was the difference between a 4-instruction
+/// tape and one `Instr::Fallback`.
+#[test]
+fn ab_nested_aggregate_shadowing_enclosing_index() {
+    let n = 8;
+    let inner = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+    "ranges": {"i": [1, n]},
+    "expr": {"op": "-", "args": [
+        idx("u", json!({"op": "+", "args": ["i", 1]})),
+        idx("u", json!("i"))
+    ]}});
+    let doc = json!({
+        "esm": "0.1.0",
+        "metadata": {"name": "tape_nested_shadow"},
+        "models": {"M": {
+            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "equations": [
+                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]})))
+            ]
+        }}
+    });
+    ab_check(doc, 0, -2.0, 2.0);
+}
+
+/// The real `central_D_lon_*` shape: a `makearray` of boundary regions whose
+/// region VALUES are aggregates keyed on the same symbol as the enclosing
+/// output box. `lower_makearray` hands every region box the enclosing symbols
+/// (`bx.syms`), so each region value re-collides with `i` one level further
+/// down than [`ab_nested_aggregate_shadowing_enclosing_index`] — the form an
+/// expression template produces after `substitute` inlines it at a call site
+/// and the operator is lowered on the next fixpoint pass.
+#[test]
+fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
+    let n = 8;
+    let region_agg = |lo: i64, hi: i64, body: serde_json::Value| {
+        json!({"op": "aggregate", "args": [], "output_idx": ["i"],
+               "ranges": {"i": [lo, hi]}, "expr": body})
+    };
+    let interior = region_agg(
+        2,
+        n - 1,
+        json!({"op": "/", "args": [
+            {"op": "-", "args": [
+                idx("u", json!({"op": "+", "args": ["i", 1]})),
+                idx("u", json!({"op": "-", "args": ["i", 1]}))
+            ]},
+            2.0
+        ]}),
+    );
+    let left = region_agg(
+        1,
+        1,
+        json!({"op": "-", "args": [idx("u", json!(2)), idx("u", json!(1))]}),
+    );
+    let right = region_agg(
+        n,
+        n,
+        json!({"op": "-", "args": [idx("u", json!(n)), idx("u", json!(n - 1))]}),
+    );
+    let ma = json!({"op": "makearray", "args": [],
+        "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
+        "values": [interior, left, right]});
+    let doc = json!({
+        "esm": "0.1.0",
+        "metadata": {"name": "tape_nested_makearray_agg"},
+        "models": {"M": {
+            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "equations": [
+                d_eq("u", n, agg(n, json!({"op": "index", "args": [ma, "i"]})))
+            ]
+        }}
+    });
+    let prog = ab_check(doc, 0, -2.0, 2.0);
+    assert_eq!(prog.regions.len(), 3, "three makearray regions lowered");
+}
+
+/// The soundness boundary of the shadow analysis: an enclosing symbol the
+/// nested aggregate does NOT rebind is a genuine dependence and must keep
+/// bailing. Here the inner aggregate is keyed on `j` and its body multiplies by
+/// the enclosing `i`, so the oracle's value differs for every enclosing cell
+/// and hoisting it out of the loop would be wrong.
+///
+/// Widening this by accident would not merely be slow — it would be silently
+/// WRONG: the hoisted box drops the enclosing symbols, so `i` would fall
+/// through the resolver ladder onto a same-named state/observed/parameter.
+///
+/// The model carries a second, fully taped rule so both executor arms run.
+#[test]
+fn ab_nested_aggregate_capturing_enclosing_index_still_falls_back() {
+    let n = 6;
+    let inner = json!({"op": "aggregate", "args": [], "output_idx": ["j"],
+    "ranges": {"j": [1, n]},
+    "expr": {"op": "*", "args": [idx("u", json!("j")), "i"]}});
+    let doc = json!({
+        "esm": "0.1.0",
+        "metadata": {"name": "tape_nested_capture"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "state", "shape": ["i"]},
+                "v": {"type": "state", "shape": ["i"]}
+            },
+            "equations": [
+                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]}))),
+                d_eq("v", n, agg(n, json!({"op": "*", "args": [-0.5, idx("v", json!("i"))]})))
+            ]
+        }}
+    });
+    let (_prog, report) = compile(doc.clone()).build_tape(&HashSet::new());
+    let (name, reason) = report
+        .fallbacks
+        .first()
+        .expect("the captured enclosing index must produce a fallback");
+    assert!(
+        reason.contains("enclosing bound index"),
+        "fallback on `{name}` must name the captured index, got: {reason}"
+    );
+    ab_check(doc, 1, -2.0, 2.0);
+}
+
 /// Makearray with three regions (Dirichlet rows + interior stencil), the
 /// interior repeating a subexpression (exercises scope-local value numbering
 /// inside a region scope).

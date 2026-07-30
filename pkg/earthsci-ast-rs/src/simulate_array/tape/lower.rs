@@ -1064,7 +1064,10 @@ impl<'m> TapeBuilder<'m> {
     // -- nested aggregate -----------------------------------------------------
 
     /// Mirror of `eval_vec_nested_aggregate` (same `arrayop_spec`, same
-    /// binding-independence precondition).
+    /// binding-independence precondition — the SHARED
+    /// [`nested_aggregate_capture`] predicate, so the two paths cannot drift;
+    /// there is no `ctx.loop_binds` at build time, which is why only the box's
+    /// own symbols and contraction names are offered to it).
     fn lower_nested_aggregate(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         let Some(spec) = arrayop_spec(node) else {
             bail_tape!("aggregate: node carries no `expr` body");
@@ -1072,11 +1075,9 @@ impl<'m> TapeBuilder<'m> {
         if spec.ranges.is_empty() {
             bail_tape!("aggregate: rank-0 output (scalar reduction)");
         }
-        for name in bx.syms.iter().chain(bx.cnames.iter()) {
-            if expr_mentions(spec.body, name) || spec.filter.is_some_and(|f| expr_mentions(f, name))
-            {
-                bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
-            }
+        if let Some(name) = nested_aggregate_capture(&spec, bx.syms.iter().chain(bx.cnames.iter()))
+        {
+            bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
         }
         self.lower_arrayop(
             spec.idx_names,
