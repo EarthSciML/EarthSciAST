@@ -91,13 +91,13 @@
                 },
                 "mesh_lat": {
                     "type": "parameter",
-                    "units": "degrees_north",
+                    "units": "deg",
                     "shape": ["cells"],
                     "description": "Per-cell latitude; source of the `cell_lat` auxiliary coordinate (1-D over `cells`, non-monotonic)."
                 },
                 "mesh_lon": {
                     "type": "parameter",
-                    "units": "degrees_east",
+                    "units": "deg",
                     "shape": ["cells"],
                     "description": "Per-cell longitude; source of the `cell_lon` auxiliary coordinate (1-D over `cells`, non-monotonic)."
                 }
