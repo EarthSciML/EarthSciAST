@@ -410,9 +410,59 @@ pub fn simulate(
             "nJacobianCalls": sol.metadata.n_jacobian_calls,
             "nAcceptedSteps": sol.metadata.n_accepted_steps,
             "nRejectedSteps": sol.metadata.n_rejected_steps,
+            // Rules the vectorized tape could not compile, so the per-cell
+            // oracle evaluated them: `[{rule, reason}, …]`, empty when the tape
+            // covered everything. Same numbers either way — but a fallback's
+            // cost grows with the cell count, so this is the only way a browser
+            // host can tell "slow model" from "slow spelling of a fast model".
+            "tapeFallbacks": sol.metadata.tape_fallbacks.iter()
+                .map(|(rule, reason)| serde_json::json!({"rule": rule, "reason": reason}))
+                .collect::<Vec<_>>(),
         }
     });
 
+    to_js(&out)
+}
+
+/// Compile a document's RHS onto the vectorized tape and report which rules
+/// did NOT make it — WITHOUT integrating anything.
+///
+/// The companion to [`simulate`]'s `metadata.tapeFallbacks`, for the case that
+/// motivated it: a model with a fallback in a tendency equation may take hours,
+/// so the metadata that would have named the culprit never arrives. This runs
+/// the build alone (milliseconds) and answers the same question up front.
+///
+/// Returns `{ nRules, nTaped, fallbacks: [{ rule, reason }, …] }`. A non-empty
+/// `fallbacks` is not an error — the numbers are bit-identical either way — but
+/// a fallback rule is re-walked once per grid cell per RHS call, so its cost
+/// grows with the grid where a taped rule's does not. See `esm-spec.md` §9.6.10
+/// for the authoring patterns that keep rules vectorizable.
+///
+/// Files whose RHS is not array-compilable at all (pure scalar ODE systems)
+/// report `nRules: 0` — they never build a tape and have nothing to fall back
+/// from.
+#[cfg(feature = "wasm")]
+#[wasm_bindgen]
+pub fn tape_report(json_str: &str) -> Result<JsValue, JsValue> {
+    let esm_file =
+        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let compiled = match crate::simulate_array::ArrayCompiled::from_file(&esm_file) {
+        Ok(c) => c,
+        // Not an array model: no tape, nothing to report.
+        Err(_) => {
+            return to_js(&serde_json::json!({
+                "nRules": 0, "nTaped": 0, "fallbacks": [],
+            }));
+        }
+    };
+    let report = compiled.debug_build_tape_report();
+    let out = serde_json::json!({
+        "nRules": report.n_rules,
+        "nTaped": report.n_taped,
+        "fallbacks": report.fallbacks.iter()
+            .map(|(rule, reason)| serde_json::json!({"rule": rule, "reason": reason}))
+            .collect::<Vec<_>>(),
+    });
     to_js(&out)
 }
 

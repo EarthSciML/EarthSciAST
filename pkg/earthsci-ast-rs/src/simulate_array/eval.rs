@@ -2184,9 +2184,24 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // `covered_makearray_region_dispatch`), so routing to it keeps the answer
     // identical while making the work N-independent and pool-backed.
     //
-    // Gated on `loop_binds` being empty: inside a per-cell loop the nested
-    // aggregates depend on the enclosing bindings and the overlay would bail
-    // anyway — once per cell, which is pure loss.
+    // Gated on `loop_binds` being empty. That gate USED to be pure
+    // cost-avoidance — "inside a per-cell loop the nested aggregates depend on
+    // the enclosing bindings and the overlay would bail anyway, once per cell,
+    // which is pure loss". Since `nested_aggregate_capture` learned to see
+    // through shadowing, the bail is no longer certain, so the gate now earns
+    // its keep on CORRECTNESS instead, and must stay:
+    //
+    // nothing below tests the region values against `ctx.loop_binds`. A nested
+    // aggregate is still guarded (`eval_vec_nested_aggregate` scans those keys
+    // itself), but a region value that names an enclosing per-cell index
+    // DIRECTLY is not: the box carries no symbols, so `eval_vec_variable` walks
+    // past `cbind` and `syms` straight into the state/observed/parameter
+    // tables, and a loop index sharing a name with one of those would silently
+    // resolve to the wrong value. Admitting non-empty `loop_binds` therefore
+    // requires an `expr_mentions` scan of every region value against every
+    // bound name — which is exactly the per-axis, per-region body walk costed
+    // below, now paid once per cell — to buy a speed-up that only applies
+    // inside a loop something else already fell back to.
     //
     // The box carries NO output-index symbols, because a `makearray` reached
     // here is not a cell of an enclosing `arrayop`: nothing is bound around it,
