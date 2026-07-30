@@ -2707,6 +2707,16 @@ function _build_evaluator_impl(model::Model;
             "expression_templates registry reached the build; construct via " *
             "an EsmFile/document front-door (esm-spec §9.6.4 Option B)"))
     end
+    # ---- `broadcast` lowering (esm-spec §4.3.4; see `_lower_broadcast_model`) ----
+    # Rewrite every `broadcast(fn=F, …)` node to its plain scalar-op spelling
+    # `F(…)` BEFORE any other pass sees it, so `broadcast` has exactly the
+    # element-wise semantics of the op it names — one node kind for the fold /
+    # CSE / stencil / evaluator ladders, and the spec identity
+    # `broadcast(fn=F,[x]) ≡ F(x)` holds by construction. Runs AFTER template
+    # expansion (a template body may produce a `broadcast`) and BEFORE interning
+    # (so the interned DAG is the lowered one). Identity — hence byte-identical —
+    # for a model with no `broadcast` node.
+    model = _lower_broadcast_model(model)
     # ---- Structural interning (hash-consing) of the expression AST (perf
     # plan A1; src/intern.jl). Every build pass below is identity-memoized;
     # interning makes textually identical subtrees (which template inlining
