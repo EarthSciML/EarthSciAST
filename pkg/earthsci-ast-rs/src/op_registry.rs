@@ -275,6 +275,35 @@ pub fn is_core_op(op: &str) -> bool {
     arity_of(op).is_some()
 }
 
+/// Is `op` a SCALAR operator that maps elementwise over array operands —
+/// arithmetic, the elementary functions, and the conditionals/logic of §4.2?
+///
+/// This is the set over which an ARRAY-LEVEL expression is defined: `a * b` on
+/// two arrays means "multiply corresponding elements", so the operands must be
+/// brought onto a common index space first (esm-spec §4.3.4). Every other op
+/// consumes its operands WHOLE and defines its own operand contract — an
+/// `aggregate` and a `makearray` name their axes, an `index` gathers, the
+/// shape ops (`reshape` / `transpose` / `concat` / `broadcast`) restructure,
+/// the relational and geometry kernels (`skolem`, `argmin`,
+/// `intersect_polygon`, …) take arrays as arguments and return arrays of an
+/// unrelated shape — so element alignment does not apply inside them, and the
+/// array runtime must not try to align there.
+#[must_use]
+pub fn is_elementwise_op(op: &str) -> bool {
+    matches!(
+        op,
+        // Arithmetic (§4.2).
+        "+" | "-" | "*" | "/" | "^" | "neg"
+        // Elementary functions (§4.2).
+        | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+        | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh"
+        | "atan2" | "min" | "max"
+        // Conditionals / logic (§4.2).
+        | "ifelse" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
+    )
+}
+
 /// Is this node a **rewrite-target** `D` — a derivative whose `wrt` names a
 /// SPATIAL axis rather than the time variable (esm-spec §4.2 / §9.6.8)?
 ///

@@ -665,6 +665,22 @@ A stencil gather of a **const array** (a pre-computed factor: Fornberg weights, 
 
 The `fn` value must name a scalar operator (arithmetic, elementary function, comparison, etc.). Broadcasts do not fuse: a nested expression of broadcasts decomposes into primitive broadcast nodes. Runtimes are free to apply their own fusion.
 
+**Broadcast compatibility.** The same rule governs every **array-level expression** — an elementwise operator (arithmetic, elementary function, conditional, comparison) whose operands are arrays, whether spelled with an explicit `broadcast` node or written bare (`{"op": "*", "args": ["w2", "z1"]}`). Two regimes apply, chosen by whether the operands carry **declared index sets**:
+
+1. **Named operands align by index-set NAME.** An operand that is a reference to a variable with a declared `shape` (Section 6.3 — an ordered list of index-set names) carries a *name* for each of its axes, and so does the expression's result: the state or observed variable the array-level equation defines. Alignment is then by name, never by position:
+
+   - The result's index sets are those of the equation's target. An operand whose declared index sets are a **subset** of the result's is broadcast-compatible: it supplies the axes it declares and **replicates** along every result axis it does not. A `["lat"]` operand in a `["lon","lat","lev"]` result contributes the same value to all `lon` and all `lev` positions.
+   - **Axis order is immaterial.** A `["lat","lon"]` operand in a `["lon","lat","lev"]` result aligns `lat` to `lat` and `lon` to `lon` — i.e. it transposes. It is never reinterpreted positionally.
+   - An operand carrying an index set that is **not** among the result's is **not** broadcast-compatible. It has no axis to align to, so bindings MUST reject the document with the structural diagnostic `array_shape_mismatch` (Section 7). Both shapes are declared, so this is decidable statically and MUST be decided at validation time — it is not a runtime concern and not a warning.
+
+   The name-aligned result is by construction identical, element for element, to the explicit `aggregate` spelling of the same expression over the result's axes: `{"op":"*","args":["w2","z1"]}` with `w2: ["lon","lat"]`, `z1: ["lev"]` and a `["lon","lat","lev"]` result denotes exactly `sum_{i,j,k} index(w2,i,j) * index(z1,k)` (a full map, contracting nothing). The two spellings MUST agree bit for bit. Positionally flattening the operands into the result's linear layout — padding the shorter one — is **not** conforming: it produces finite, plausible, wrong values.
+
+2. **Anonymous operands align positionally.** An operand with no declared index sets — the result of a `reshape`, `transpose`, `concat`, or `makearray`, a `const` literal array, or a variable whose shape was never declared — names no axes, so there is nothing to align by. Such operands broadcast **positionally**, left-aligned, with the lower-rank operand padded on the **trailing** axes with singletons (the `SymbolicUtils.jl` / Julia convention, not the NumPy one): a `(3,)` operand against a `(1,3)` operand pads to `(3,1)` and the pair broadcasts to `(3,3)`, so `broadcast(+, a, reshape(b,[1,3]))[i,j] = a[i] + b[j]`. Two operands whose extents disagree on an axis where neither is 1 are incompatible.
+
+An expression mixing the two regimes aligns each operand under its own: a named operand is placed by name, an anonymous one positionally.
+
+These rules apply only where element correspondence is what the expression *means* — that is, under the elementwise operators. Every other op consumes its operands whole under its own contract: `aggregate` and `makearray` name their axes, `index` gathers, the shape ops of Section 4.3.5 restructure, and the relational and geometry ops (Section 4.2) may return a result of an entirely unrelated shape.
+
 #### 4.3.5 `reshape`, `transpose`, `concat`
 
 **`reshape`.** `args[0]` is the array; `shape` is the target shape. Each entry of `shape` is an integer (concrete length) or a string (a symbolic length reference — resolved at runtime against the domain or operand shapes). The total number of elements must be preserved.
@@ -1437,7 +1453,7 @@ Optional arrayed-variable fields:
 
 | Field | Description |
 |---|---|
-| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. |
+| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
 
 ### 6.4 Advection Model Example

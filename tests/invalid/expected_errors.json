@@ -2819,5 +2819,24 @@
     ],
     "structural_errors": [],
     "is_valid": false
+  },
+  "operand_index_set_not_in_result.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/OperandIndexSetNotInResult/equations/0/rhs",
+        "code": "array_shape_mismatch",
+        "message": "Operand 'z1' of the array-level expression for 'dp' is declared over index set 'lev', which 'dp' is not shaped over",
+        "details": {
+          "variable": "dp",
+          "operand": "z1",
+          "operand_shape": ["lev"],
+          "result_shape": ["lon", "lat"],
+          "missing_index_set": "lev"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.3.4 (issue #100). Operands of a BARE array-level expression align by index-set NAME: an operand declared over a SUBSET of the result's index sets broadcasts along the missing ones, and axis order is immaterial. An operand carrying an index set the result does NOT have \u2014 `z1: [lev]` against `dp: [lon,lat]` \u2014 has no axis to align to, so it is a hard structural error rather than a positional flatten. Both shapes are declared, so the finding is static; the file is SCHEMA-VALID on purpose."
   }
 }

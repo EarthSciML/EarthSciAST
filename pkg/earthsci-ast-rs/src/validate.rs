@@ -141,6 +141,15 @@ pub enum StructuralErrorCode {
     /// of the document `index_sets` registry (RFC semiring-faq-unified-ir §5.2):
     /// no implicit interval is inferred for an undeclared name.
     UndefinedIndexSet,
+    /// A BARE array-level expression whose operand is declared over an index set
+    /// the result does not have (esm-spec §4.3.4). Operands of an array-level
+    /// expression align by index-set NAME, so an operand declared over a SUBSET
+    /// of the result's index sets broadcasts along the missing ones; one
+    /// carrying an index set the result does not carry has no axis to align to.
+    /// Both shapes are declared, so this is decidable here — and it must be
+    /// decided here, because the alternative is a positional flatten that
+    /// produces plausible, non-`NaN`, zero-padded garbage.
+    ArrayShapeMismatch,
 }
 
 impl std::fmt::Display for StructuralErrorCode {
@@ -170,6 +179,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::JoinKeyInvalidType => "join_key_invalid_type",
             Self::RelationalNodeInContinuous => "relational_node_in_continuous",
             Self::UndefinedIndexSet => "undefined_index_set",
+            Self::ArrayShapeMismatch => "array_shape_mismatch",
         };
         write!(f, "{s}")
     }

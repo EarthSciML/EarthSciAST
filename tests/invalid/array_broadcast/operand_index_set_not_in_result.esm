@@ -1,0 +1,88 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "OperandIndexSetNotInResult",
+    "description": "INVALID cross-binding fixture for esm-spec \u00a74.3.4 (issue #100): a bare array-level equation whose operand carries an index set the result does NOT have. `dp` is shaped over [lon,lat]; the operand `z1` is shaped over [lev], which is absent from the result, so there is no axis to align it to and no defensible value for it to contribute. Operands of a bare array-level expression align by index-set NAME and may only be MISSING result axes (which they broadcast along) \u2014 carrying an extra one is a hard structural error, `array_shape_mismatch`, reported at the containing expression field. Both shapes are declared, so this is decidable statically; the alternative \u2014 a positional flatten \u2014 validates clean and then silently integrates zero-padded garbage.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "tags": [
+      "array-level",
+      "broadcast",
+      "index-set",
+      "shape",
+      "invalid",
+      "issue-100"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "OperandIndexSetNotInResult": {
+      "variables": {
+        "dp": {
+          "type": "state",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "default": 0.0,
+          "description": "Rank-2 result over [lon,lat]. It is not shaped over `lev`."
+        },
+        "z1": {
+          "type": "observed",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Rank-1 field over `lev` \u2014 an index set the result is not shaped over.",
+          "expression": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                100,
+                "k"
+              ]
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(dp)/dt = z1 is unalignable: z1's `lev` axis has no counterpart in dp's [lon,lat].",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dp"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "z1"
+        }
+      ]
+    }
+  }
+}
