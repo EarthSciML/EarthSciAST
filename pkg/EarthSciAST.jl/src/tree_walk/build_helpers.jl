@@ -205,6 +205,93 @@ function _wrap_bounded_const(arr::Array{Float64,N}, boundary, name::AbstractStri
     return BoundedConstArray{N}(arr, NTuple{N,Symbol}(syms))
 end
 
+# ---- `broadcast` lowering (esm-spec §4.3.4) -----------------------------------
+# `{"op":"broadcast","fn":F,"args":[…]}` applies the SCALAR operator `F`
+# element-wise to its operands. That is exactly what a bare `{"op":F,"args":[…]}`
+# node already means on this path — the leaf-indexing rewrites gather every array
+# operand per cell (name-aligned, see `_AxisAlign`) and leave genuine scalars
+# alone — so `broadcast` is LOWERED to its `fn` op at the entry to the build and
+# never reaches the evaluator as a distinct node. Lowering (rather than teaching
+# every ladder a `broadcast` arm) is what makes the spec's identity
+# `broadcast(fn=F, [x]) ≡ F(x)` true BY CONSTRUCTION: one node kind, one set of
+# arms, one CSE/fold/stencil classification.
+#
+# The `fn` contract is checked here (`_broadcast_fn_problem`, op_registry.jl —
+# the same predicate `validate()` reports as `invalid_broadcast_fn`), so a bogus
+# `fn` is a BUILD error even for a caller that never ran `validate()`.
+# `reshape`/`transpose`/`concat` are NOT lowered — they are genuine shape ops
+# with no scalar-operator spelling, and keep their `E_TREEWALK_UNSUPPORTED_OP`
+# rejection in `_compile_op`.
+function _lower_broadcast(expr::ASTExpr)::ASTExpr
+    expr isa OpExpr || return expr
+    e = map_children(_lower_broadcast, expr)
+    (e isa OpExpr && (e::OpExpr).op == "broadcast") || return e
+    b = e::OpExpr
+    prob = _broadcast_fn_problem(b.fn, length(b.args))
+    prob === nothing || throw(TreeWalkError("E_TREEWALK_BROADCAST_FN", prob.message))
+    # Only `op`/`fn`/`args` are meaningful on a broadcast node; the lowered node
+    # is the plain scalar-op spelling of the same expression.
+    return OpExpr(String(b.fn), copy(b.args))
+end
+
+# Lower every `broadcast` node in a Model's expression-bearing fields (variable
+# `expression`s, equations, initialization equations, guesses) and, recursively,
+# in its Model subsystems. Returns the SAME model object when nothing changed.
+# Shaped after `_intern_model` (src/intern.jl).
+function _lower_broadcast_model(model::Model)::Model
+    vars = model.variables
+    nvars = vars
+    for (name, v) in vars
+        v.expression === nothing && continue
+        ne = _lower_broadcast(v.expression)
+        if ne !== v.expression
+            nvars === vars && (nvars = copy(vars))
+            nvars[name] = reconstruct(v; expression=ne)
+        end
+    end
+    lower_eqs(eqs) = begin
+        out = eqs
+        for (i, eq) in enumerate(eqs)
+            nl = _lower_broadcast(eq.lhs)
+            nr = _lower_broadcast(eq.rhs)
+            if nl !== eq.lhs || nr !== eq.rhs
+                out === eqs && (out = copy(eqs))
+                out[i] = Equation(nl, nr; _comment=eq._comment)
+            end
+        end
+        out
+    end
+    eqs = lower_eqs(model.equations)
+    ieqs = lower_eqs(model.initialization_equations)
+    guesses = model.guesses
+    ng = guesses
+    for (k, g) in guesses
+        g isa ASTExpr || continue
+        r = _lower_broadcast(g)
+        if r !== g
+            ng === guesses && (ng = copy(guesses))
+            ng[k] = r
+        end
+    end
+    subs = model.subsystems
+    nsubs = subs
+    for (k, s) in subs
+        s isa Model || continue
+        ns = _lower_broadcast_model(s)
+        if ns !== s
+            nsubs === subs && (nsubs = copy(subs))
+            nsubs[k] = ns
+        end
+    end
+    (nvars === vars && eqs === model.equations &&
+     ieqs === model.initialization_equations && ng === guesses &&
+     nsubs === subs) && return model
+    return Model(nvars, eqs, model.discrete_events, model.continuous_events,
+                 nsubs; tolerance=model.tolerance, tests=model.tests,
+                 initialization_equations=ieqs, guesses=ng,
+                 system_kind=model.system_kind)
+end
+
 # ---- Whole-array declared-shape derivative lift -------------------------------
 # A declared array-shaped state may be integrated by a WHOLE-ARRAY equation
 # `D(SST) = <array-valued rhs>` (bare `VarExpr` LHS, no per-cell `index`). The
@@ -264,7 +351,13 @@ function _lift_wholearray_deriv_equations(eqs::Vector{Equation},
             new_lhs = OpExpr("arrayop", ASTExpr[];
                              output_idx=Any[l for l in loops], ranges=ranges,
                              expr_body=lhs_body)
-            new_rhs = _index_array_leaves(eq.rhs, arrayvars, loops)
+            # Name-based operand alignment (esm-spec §4.3.4): each array-variable
+            # leaf is gathered at the loops bound to ITS OWN declared index sets,
+            # so a lower-rank operand broadcasts along the missing axes and a
+            # name-permuted operand transposes instead of being reinterpreted.
+            # Anonymous-shape nodes (producers, literals) stay positional.
+            new_rhs = _index_array_leaves(eq.rhs, arrayvars, loops;
+                                          align = _AxisAlign(shape, var_shapes))
             push!(out, Equation(new_lhs, new_rhs; _comment=eq._comment))
         else
             push!(out, eq)

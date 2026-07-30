@@ -256,23 +256,36 @@ function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
     return getindex(arr, idxs...)
 end
 
-# The broadcast vocabulary. Membership is BEHAVIOR (a fn outside this set
-# must keep erroring), and it is intentionally NARROWER than the registry's
-# `_UNARY_ELEMENTWISE_OPS` (no tan/asin/floor/…), so the supported set stays
-# explicit here — only the name→function mapping is delegated to the op
-# registry, which records the same scalar function for every one of these.
+# The broadcast vocabulary, DERIVED from the op registry: every ARITHMETIC or
+# ELEMENTARY row with a recorded scalar function — `+ - * / ^ pow neg` plus the
+# full unary/binary elementary set (`exp`/`log`/`sin`/…/`tan`/`floor`/`min`/
+# `max`/`atan2`). It used to be a hand-listed dozen, which made a perfectly
+# ordinary `broadcast(fn:"tan", …)` an exporter-only failure while the tree-walk
+# path evaluated it; deriving it keeps the two back ends speaking the same
+# `fn` vocabulary (esm-spec §4.3.4).
+#
+# Deliberately EXCLUDED, and still erroring: the comparison, logical, control
+# and niladic-constant rows. `Base.broadcasted(<, …)` yields a symbolic BOOLEAN,
+# not the spec's 1.0/0.0 comparison value, and `and`/`or`/`not`/`ifelse`/`Pre`
+# record no single Base scalar function at all — so admitting them here would
+# silently diverge from the evaluator rather than extend it.
 const _BROADCAST_FNS = Dict{String,Function}(
-    name => EarthSciAST._op_spec(name).scalar_fn
-    for name in ("+", "-", "*", "/", "^",
-                 "exp", "log", "log10", "sin", "cos", "sqrt", "abs"))
+    s.name => s.scalar_fn for s in EarthSciAST._OP_TABLE
+    if s.scalar_fn !== nothing &&
+       (s.category === :arithmetic || s.category === :elementary))
 
 function _build_broadcast(expr::OpExpr, var_dict::Dict{String,Any},
                           t_sym, dim_dict::Dict{String,Any})
-    expr.fn === nothing && throw(ArgumentError("broadcast node missing 'fn'"))
-    fn_name = expr.fn
-    operands = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
+    # The §4.3.4 `fn` contract, from the SAME predicate `validate()` reports as
+    # `invalid_broadcast_fn` and the tree-walk build enforces: a missing /
+    # unregistered / structural `fn`, or an operand count outside the named op's
+    # registry arity, is rejected before any operand is lowered.
+    prob = EarthSciAST._broadcast_fn_problem(expr.fn, length(expr.args))
+    prob === nothing || throw(ArgumentError(prob.message))
+    fn_name = String(expr.fn)
     fn = get(_BROADCAST_FNS, fn_name, nothing)
     fn === nothing && throw(ArgumentError("Unsupported broadcast fn: $fn_name"))
+    operands = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
     return Base.materialize(Base.broadcasted(fn, operands...))
 end
 

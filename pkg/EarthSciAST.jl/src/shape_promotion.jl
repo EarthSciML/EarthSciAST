@@ -42,9 +42,16 @@ function _infer_expr_shape(expr::ASTExpr,
             return expr.output_idx === nothing ? String[] :
                    String[string(x) for x in expr.output_idx]
         else
-            # Elementwise: broadcast — all non-scalar operands must agree, the
-            # result takes that shape. `lower`/`upper` (integral bounds) and
-            # `filter` don't shape the elementwise result.
+            # Elementwise: broadcast over the operands' index-set NAMES
+            # (esm-spec §4.3.4). Operand shapes are compared as name SETS, not
+            # positionally: an operand whose index sets are a SUBSET of another's
+            # broadcasts along the missing axes, so the result takes the SUPERSET
+            # shape; two shapes naming the same sets in a different ORDER are the
+            # same shape (the leaf-indexing rewrite below aligns them by name, so
+            # this is a transpose, not a conflict). Only genuinely incomparable
+            # name sets — neither a subset of the other — are a conflict.
+            # `lower`/`upper` (integral bounds) and `filter` don't shape the
+            # elementwise result.
             sh = String[]
             for a in expr.args
                 s = _infer_expr_shape(a, shapes)
@@ -52,12 +59,22 @@ function _infer_expr_shape(expr::ASTExpr,
                 if isempty(sh)
                     sh = s
                 elseif sh != s
-                    # Typed error from the flatten taxonomy (§4.7.6): a shape
-                    # conflict is a failed dimension promotion, not a generic
-                    # argument error.
-                    throw(DimensionPromotionError(
-                        "shape-promotion: conflicting operand shapes $(sh) vs $(s) " *
-                        "in op '$(op)' — array sources must resolve to one grid shape"))
+                    ssh = Set(sh); ss = Set(s)
+                    if issubset(ss, ssh)
+                        # `s` broadcasts into `sh` (including the equal-set,
+                        # permuted-order case: the FIRST operand's axis order
+                        # wins, deterministically).
+                    elseif issubset(ssh, ss)
+                        sh = s                      # widen to the superset
+                    else
+                        # Typed error from the flatten taxonomy (§4.7.6): a shape
+                        # conflict is a failed dimension promotion, not a generic
+                        # argument error.
+                        throw(DimensionPromotionError(
+                            "shape-promotion: conflicting operand shapes $(sh) vs $(s) " *
+                            "in op '$(op)' — neither operand's index sets are a subset " *
+                            "of the other's, so no broadcast result shape exists"))
+                    end
                 end
             end
             return sh
@@ -77,6 +94,47 @@ const _ARRAY_PRODUCER_OPS = _ops_with(:array_producer)
 # gather): the leaf-indexing rewrites never descend into them.
 const _SELF_INDEXED_OPS = _ops_with(:self_indexed)
 
+"""
+    _AxisAlign
+
+Name-based broadcast alignment context for the leaf-indexing rewrites
+(esm-spec §4.3.4). `axes` are the RESULT's declared index-set names, positionally
+parallel to the rewrite's `loops`; `var_shapes` maps a variable name to its
+DECLARED index-set names.
+
+An operand leaf whose declared index sets are a SUBSET of `axes` is gathered at
+the loop bound to each of ITS OWN axis names — so a `[lat]` operand in a
+`[lon,lat,lev]` result replicates along `lon`/`lev`, and a `[lat,lon]` operand in
+a `[lon,lat]` result TRANSPOSES rather than being reinterpreted positionally. An
+operand naming an axis absent from `axes` is unalignable and raises
+`E_TREEWALK_ARRAY_SHAPE_MISMATCH` (the build-time twin of `validate()`'s
+`array_shape_mismatch`, esm-spec §4.3.4 "Broadcast compatibility").
+
+Alignment is NAME-based only where names exist. Nodes with an ANONYMOUS shape —
+an `index`-wrapped producer (`makearray`, an `arrayop`/`aggregate` whose
+`output_idx` symbols are node-local, `reshape`/`transpose`/`concat`, a literal
+array) and any variable with no recorded declared shape — keep the historical
+POSITIONAL gather over all `loops`. `nothing` (or an unusable context, see
+[`_usable_align`](@ref)) disables name alignment entirely, restoring the
+pre-alignment behaviour exactly.
+"""
+struct _AxisAlign
+    axes::Vector{String}
+    var_shapes::Dict{String,Vector{String}}
+end
+
+# An alignment context is USABLE only when its axis names are positionally
+# parallel to `loops` and mutually DISTINCT: a result that names the same index
+# set on two axes (`[x,x]`, a square operator field) has no unambiguous
+# name→axis map, so such a rewrite stays positional.
+function _usable_align(align::Union{Nothing,_AxisAlign},
+                       loops::Vector{String})::Union{Nothing,_AxisAlign}
+    align === nothing && return nothing
+    length(align.axes) == length(loops) || return nothing
+    allunique(align.axes) || return nothing
+    return align
+end
+
 # Shared typed bare-array-reference rewrite: wrap array references in
 # `index(ref, loops…)` gathers. A `VarExpr` leaf naming a variable in
 # `arrayvars` is wrapped; an `OpExpr` for which `wrap_node` is true is wrapped
@@ -95,41 +153,85 @@ const _SELF_INDEXED_OPS = _ops_with(:self_indexed)
 # folded elementwise array-observed chain, whose sharing `_substitute_shared`
 # deliberately preserves) into an exponentially large output TREE. The memo
 # is fresh per top-level call; only `OpExpr` nodes are memoized (leaves are
-# immutable, childless, and O(1) to re-handle).
+# immutable, childless, and O(1) to re-handle). The memo is SPLIT by alignment
+# state (`_WrapMemo`): the rewrite of a shared node differs between element-wise
+# position (name-aligned) and the interior of a non-element-wise op (positional),
+# so one memo would let the first visit's answer leak into the other context.
+struct _WrapMemo
+    aligned::IdDict{OpExpr,ASTExpr}
+    plain::IdDict{OpExpr,ASTExpr}
+end
+_WrapMemo() = _WrapMemo(IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,ASTExpr}())
+_wrap_memo(m::_WrapMemo, align) = align === nothing ? m.plain : m.aligned
+
 function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
                                loops::Vector{String};
-                               wrap_node, stop_node)::ASTExpr
+                               wrap_node, stop_node,
+                               align::Union{Nothing,_AxisAlign}=nothing)::ASTExpr
     return _wrap_bare_array_refs(expr, arrayvars, loops, wrap_node, stop_node,
-                                 IdDict{OpExpr,ASTExpr}())
+                                 _WrapMemo(), _usable_align(align, loops))
 end
 function _wrap_bare_array_refs(expr::ASTExpr, arrayvars::Set{String},
                                loops::Vector{String}, wrap_node, stop_node,
-                               memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+                               memo::_WrapMemo,
+                               align::Union{Nothing,_AxisAlign}=nothing)::ASTExpr
     if expr isa VarExpr
         expr.name in arrayvars || return expr
-        return _index_wrap(expr, loops)
+        return _index_wrap_var(expr, loops, align)
     elseif expr isa OpExpr
-        cached = get(memo, expr, nothing)
+        tbl = _wrap_memo(memo, align)
+        cached = get(tbl, expr, nothing)
         cached === nothing || return cached
         result = if wrap_node(expr)
             _index_wrap(expr, loops)
         elseif stop_node(expr)
             expr
         else
+            # Name-based alignment applies in ELEMENT-WISE position only: a
+            # scalar operator lifted over the grid. Any other op — a geometry
+            # kernel leaf (`intersect_polygon`), an unlowered rewrite target
+            # (`div`/`grad`/a user op), a closed-function call — consumes WHOLE
+            # arrays under its own contract, not name-aligned cells, so its
+            # operands keep the historical positional gather.
+            inner = _is_scalar_op(expr.op) ? align : nothing
             new_args = ASTExpr[_wrap_bare_array_refs(a, arrayvars, loops,
-                                                     wrap_node, stop_node, memo)
+                                                     wrap_node, stop_node, memo, inner)
                                for a in expr.args]
             reconstruct(expr; args=new_args)
         end
-        memo[expr] = result
+        tbl[expr] = result
         return result
     end
     return expr
 end
 
-# `index(node, loops…)`: gather `node`'s element at the current cell.
+# `index(node, loops…)`: gather `node`'s element at the current cell, positionally.
 _index_wrap(node::ASTExpr, loops::Vector{String})::OpExpr =
     OpExpr("index", ASTExpr[node, (VarExpr(l) for l in loops)...])
+
+# Gather an array VARIABLE leaf at the current cell, aligning its DECLARED
+# index-set names against the result axes when a usable `_AxisAlign` is in scope
+# (esm-spec §4.3.4). Falls back to the positional whole-loop gather for a
+# variable with no declared shape, a shape identical to the result's, or a shape
+# that repeats an index set (no unambiguous name→axis map).
+function _index_wrap_var(v::VarExpr, loops::Vector{String},
+                         align::Union{Nothing,_AxisAlign})::OpExpr
+    align === nothing && return _index_wrap(v, loops)
+    vs = get(align.var_shapes, v.name, nothing)
+    (vs === nothing || isempty(vs) || vs == align.axes || !allunique(vs)) &&
+        return _index_wrap(v, loops)
+    subs = Vector{ASTExpr}(undef, length(vs) + 1)
+    subs[1] = v
+    for (d, ax) in enumerate(vs)
+        p = findfirst(isequal(ax), align.axes)
+        p === nothing && throw(TreeWalkError("E_TREEWALK_ARRAY_SHAPE_MISMATCH",
+            "Operand '$(v.name)' of an array-level expression is declared over " *
+            "index set '$(ax)' (shape $(vs)), which the result shape " *
+            "$(align.axes) is not shaped over (esm-spec §4.3.4)"))
+        subs[d + 1] = VarExpr(loops[p])
+    end
+    return OpExpr("index", subs)
+end
 
 # Replace each VarExpr leaf naming a promoted ARRAY variable with `index(v, loops…)`,
 # leaving scalar leaves (params, constants, reductions' results) untouched. Does
@@ -143,11 +245,17 @@ _index_wrap(node::ASTExpr, loops::Vector{String})::OpExpr =
 # `D(u, x)` to a `makearray`, and the surrounding equation (`rhs = -c * D(u,x)`)
 # multiplies that array elementwise. A genuine scalar reduction (empty
 # `output_idx`) and an `index` gather stay untouched — they are already scalar.
+#
+# `align` (optional) turns the array-VARIABLE gathers name-based (esm-spec
+# §4.3.4 / [`_AxisAlign`](@ref)); without it every leaf is gathered positionally
+# over all `loops`, the pre-alignment behaviour.
 function _index_array_leaves(expr::ASTExpr,
-                             arrayvars::Set{String}, loops::Vector{String})::ASTExpr
+                             arrayvars::Set{String}, loops::Vector{String};
+                             align::Union{Nothing,_AxisAlign}=nothing)::ASTExpr
     return _wrap_bare_array_refs(expr, arrayvars, loops;
         wrap_node = _is_array_producer,
-        stop_node = e -> e.op in _SELF_INDEXED_OPS)
+        stop_node = e -> e.op in _SELF_INDEXED_OPS,
+        align = align)
 end
 
 # True iff `expr` is an array-PRODUCING node: a `makearray`, or an
@@ -170,10 +278,13 @@ end
 # names (`{from: …}`); dimension sizes are declared via `index_sets` since the
 # removal of the Domain.spatial spec, so the domain contributes none here.
 function _lift_to_arrayop(expr::ASTExpr, shape::Vector{String},
-                          arrayvars::Set{String})::OpExpr
+                          arrayvars::Set{String},
+                          var_shapes::Dict{String,Vector{String}}=
+                              Dict{String,Vector{String}}())::OpExpr
     loops = String["_p$(i-1)" for i in 1:length(shape)]
     ranges = Dict{String,Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
-    body = _index_array_leaves(expr, arrayvars, loops)
+    body = _index_array_leaves(expr, arrayvars, loops;
+                               align = _AxisAlign(shape, var_shapes))
     return OpExpr("arrayop", ASTExpr[];
                   output_idx=Any[l for l in loops], ranges=ranges, expr_body=body)
 end
@@ -363,7 +474,7 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
            (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
             name = (eq.lhs::VarExpr).name
             push!(new_eqs, Equation(eq.lhs,
-                _lift_to_arrayop(eq.rhs, shapes[name], arrayvars);
+                _lift_to_arrayop(eq.rhs, shapes[name], arrayvars, shapes);
                 _comment=eq._comment))
         else
             push!(new_eqs, eq)

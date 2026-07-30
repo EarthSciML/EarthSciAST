@@ -462,6 +462,17 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # Each attaches at the containing expression FIELD, matching the corpus pins.
     append!(errors, validate_aggregate_semantics(file))
 
+    # 5c'. Array broadcast semantics (esm-spec §4.3.4). Two statically decidable
+    # defects the schema cannot express:
+    #   • `invalid_broadcast_fn` — a `broadcast` node whose `fn` is missing,
+    #     names no operator, names a STRUCTURAL operator, or is handed the wrong
+    #     number of operands. `fn` is an opaque string on the wire, so nothing
+    #     checked it at all until now.
+    #   • `array_shape_mismatch` — an element-wise operand declared over an
+    #     index set the RESULT does not have, which no name-based broadcast can
+    #     align (esm-spec §4.3.4 "Broadcast compatibility").
+    append!(errors, validate_broadcast_semantics(file))
+
     # 5d. `variable_map` identity-coupling declared-unit mismatch (esm-spec §4.7.6).
     # The flatten path already rejects this via `_check_variable_map_units`
     # (`DomainUnitMismatchError`); mirror it as a `domain_unit_mismatch` structural
@@ -1000,6 +1011,185 @@ function _check_relational_in_continuous!(errors::Vector{StructuralError}, agg::
         "relational_node_in_continuous",
         Dict{String,Any}("variable" => hit)
     ))
+    return errors
+end
+
+"""
+    validate_broadcast_semantics(file::EsmFile) -> Vector{StructuralError}
+
+Array broadcast semantics (esm-spec §4.3.4), document-wide. Two families:
+
+**The `broadcast.fn` contract.** `fn` is parsed as an opaque string, so a
+`broadcast` naming a nonexistent operator (`"not_a_real_op"`), naming a
+STRUCTURAL operator (`aggregate`, `index`, `makearray`, `grad`, …), carrying no
+`fn` at all, or handing its operator the wrong number of operands used to
+validate clean and only fail (if at all) at evaluation. The contract itself is
+[`_broadcast_fn_problem`](@ref) (op_registry.jl) — the same predicate the
+tree-walk build lowering and the MTK exporter enforce, and the rule is simply
+"`broadcast(fn: F, args)` is legal exactly when `{op: F, args}` is legal".
+All four defects report under the one cross-binding code
+`invalid_broadcast_fn` (esm-spec §9.6.6); `details["reason"]` is
+`missing` / `unknown` / `non_scalar` / `arity`.
+
+**Name-based operand alignment** (esm-spec §4.3.4 "Broadcast compatibility").
+An element-wise operand aligns with the result by index-set NAME: an operand
+whose declared index sets are a SUBSET of the result's broadcasts along the
+missing axes (and a name-PERMUTED operand transposes). An operand declared over
+an index set the result does NOT have has no alignment at all — reported as
+`array_shape_mismatch`. The result shape is the declared shape of the equation's
+whole-array LHS (`D(v)` or a bare `v`) or of the array observed being defined,
+and is used only when its axis names do not repeat. The walk descends ONLY
+through element-wise (scalar) operators; an explicit `index` gather, an
+`aggregate`/`arrayop`/`makearray`/`reshape`/`transpose`/`concat`/`broadcast`, a
+relational or geometry kernel, and an unlowered rewrite target each consume
+their operands WHOLE under their own contract and are not element-wise
+positions.
+"""
+function validate_broadcast_semantics(file::EsmFile)::Vector{StructuralError}
+    errors = StructuralError[]
+    file.models === nothing && return errors
+    for model_name in sort!(collect(keys(file.models)))
+        _check_model_broadcasts!(errors, file.models[model_name], "/models/$model_name")
+    end
+    return errors
+end
+
+# Per-model driver for `validate_broadcast_semantics`: the `fn` contract over
+# EVERY expression-bearing field, plus the element-wise axis check wherever the
+# expression has a declared array RESULT shape. Recurses into Model subsystems.
+function _check_model_broadcasts!(errors::Vector{StructuralError}, model::Model,
+                                  path::String)
+    var_shapes = Dict{String,Vector{String}}()
+    for (name, v) in model.variables
+        v.shape === nothing && continue
+        s = String[String(x) for x in v.shape]
+        isempty(s) || (var_shapes[name] = s)
+    end
+
+    for (i, eq) in enumerate(model.equations)
+        _walk_broadcast_fns!(errors, eq.lhs, "$path/equations/$(i-1)/lhs")
+        anchor = "$path/equations/$(i-1)/rhs"
+        _walk_broadcast_fns!(errors, eq.rhs, anchor)
+        tgt = _wholearray_result_axes(eq.lhs, var_shapes)
+        tgt === nothing ||
+            _check_broadcast_axes!(errors, eq.rhs, tgt[1], tgt[2], var_shapes, anchor)
+    end
+    for name in sort!(collect(keys(model.variables)))
+        expr = model.variables[name].expression
+        expr === nothing && continue
+        anchor = "$path/variables/$name/expression"
+        _walk_broadcast_fns!(errors, expr, anchor)
+        axes = get(var_shapes, name, nothing)
+        axes === nothing ||
+            _check_broadcast_axes!(errors, expr, name, axes, var_shapes, anchor)
+    end
+    for (i, eq) in enumerate(model.initialization_equations)
+        _walk_broadcast_fns!(errors, eq.lhs, "$path/initialization_equations/$(i-1)/lhs")
+        _walk_broadcast_fns!(errors, eq.rhs, "$path/initialization_equations/$(i-1)/rhs")
+    end
+    for name in sort!(collect(keys(model.guesses)))
+        g = model.guesses[name]
+        isa(g, ASTExpr) || continue
+        _walk_broadcast_fns!(errors, g, "$path/guesses/$name")
+    end
+
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_model_broadcasts!(errors, subsys, "$path/subsystems/$subsys_name")
+    end
+    return errors
+end
+
+# Descend `expr`; at every `broadcast` node apply the §4.3.4 `fn` contract, then
+# recurse into the full expression-bearing child set (so a NESTED broadcast is
+# checked too). `anchor` is the field pointer and stays constant through the
+# descent — a finding attaches at the field, not the leaf.
+function _walk_broadcast_fns!(errors::Vector{StructuralError}, expr::ASTExpr,
+                              anchor::String)
+    isa(expr, OpExpr) || return errors
+    if expr.op == "broadcast"
+        prob = _broadcast_fn_problem(expr.fn, length(expr.args))
+        if prob !== nothing
+            # ONE cross-binding diagnostic code (esm-spec §9.6.6) for all four
+            # defects; `details["reason"]` carries which one.
+            push!(errors, StructuralError(
+                anchor, prob.message, "invalid_broadcast_fn",
+                Dict{String,Any}("fn" => expr.fn === nothing ? "" : String(expr.fn),
+                                 "reason" => String(prob.kind),
+                                 "operands" => length(expr.args))))
+        end
+    end
+    for c in _expr_children(expr)
+        _walk_broadcast_fns!(errors, c, anchor)
+    end
+    return errors
+end
+
+# `(target name, declared index-set names)` for an equation whose LHS is a
+# WHOLE-ARRAY write, or `nothing` otherwise (a scalar equation, or a per-cell
+# `D(index(v,…))` / `arrayop(…)` LHS, which carries its own indexing). Mirrors
+# `_lift_wholearray_deriv_equations`' `is_wholearray_D` plus the bare
+# array-observed definition `v = <array rhs>`.
+function _wholearray_result_axes(lhs::ASTExpr,
+                                 var_shapes::Dict{String,Vector{String}})
+    name = lhs isa VarExpr ? (lhs::VarExpr).name :
+           (lhs isa OpExpr && (lhs::OpExpr).op == "D" &&
+            length((lhs::OpExpr).args) == 1 &&
+            (lhs::OpExpr).args[1] isa VarExpr) ?
+               ((lhs::OpExpr).args[1]::VarExpr).name : nothing
+    name === nothing && return nothing
+    axes = get(var_shapes, name, nothing)
+    axes === nothing && return nothing
+    return (name, axes)
+end
+
+# Walk `expr` in ELEMENT-WISE position — descending ONLY through SCALAR
+# operators ([`_is_scalar_op`](@ref)) — and report every array-variable leaf
+# declared over an index set absent from the result `axes`. Anything that is not
+# a scalar operator ends the walk: an `index` gather and the array producers
+# carry their own indexing, and a geometry kernel leaf (`intersect_polygon`), an
+# unlowered rewrite target (`div`/`grad`/a user op) or a closed-function call
+# consumes WHOLE arrays under its own contract — none of them is a broadcast, so
+# an operand of a different rank there is not a defect. This mirrors exactly
+# where `_wrap_bare_array_refs` (shape_promotion.jl) applies its `_AxisAlign`.
+# Skipped entirely when `axes` repeats a name, and per-leaf when the operand's
+# own shape does, matching `_usable_align` / `_index_wrap_var`: without a unique
+# name→axis map the rewrite stays POSITIONAL, so there is nothing name-based to
+# reject.
+function _check_broadcast_axes!(errors::Vector{StructuralError}, expr::ASTExpr,
+                                target::String, axes::Vector{String},
+                                var_shapes::Dict{String,Vector{String}},
+                                anchor::String)
+    allunique(axes) || return errors
+    axset = Set{String}(axes)
+    reported = Set{Tuple{String,String}}()   # one finding per (operand, axis)
+    function walk(e::ASTExpr)
+        if e isa VarExpr
+            vs = get(var_shapes, (e::VarExpr).name, nothing)
+            (vs === nothing || !allunique(vs)) && return nothing
+            for ax in vs
+                (ax in axset || ((e::VarExpr).name, ax) in reported) && continue
+                push!(reported, ((e::VarExpr).name, ax))
+                push!(errors, StructuralError(
+                    anchor,
+                    "Operand '$((e::VarExpr).name)' of the array-level expression " *
+                    "for '$target' is declared over index set '$ax', which " *
+                    "'$target' is not shaped over (esm-spec §4.3.4)",
+                    "array_shape_mismatch",
+                    Dict{String,Any}("variable" => (e::VarExpr).name,
+                                     "target" => target,
+                                     "index_set" => ax,
+                                     "operand_shape" => vs,
+                                     "result_shape" => axes)))
+            end
+        elseif e isa OpExpr
+            _is_scalar_op((e::OpExpr).op) || return nothing
+            for a in (e::OpExpr).args
+                walk(a)
+            end
+        end
+        return nothing
+    end
+    walk(expr)
     return errors
 end
 
