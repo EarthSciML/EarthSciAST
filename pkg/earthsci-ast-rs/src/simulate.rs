@@ -324,6 +324,22 @@ pub struct SolutionMetadata {
     pub n_accepted_steps: usize,
     /// Number of rejected integrator steps (best-effort).
     pub n_rejected_steps: usize,
+    /// `(rule name, reason)` for every rule the array driver could NOT compile
+    /// onto the vectorized tape and therefore evaluated with the per-cell
+    /// oracle — one full re-walk of the rule body per grid cell per RHS call.
+    ///
+    /// A non-empty list is a performance diagnosis, not an error: the answer is
+    /// bit-identical either way, but the cost of a fallback rule grows with the
+    /// cell count while a taped rule's does not, so a single fallback in a
+    /// tendency equation can be the difference between a second and an hour.
+    /// See `esm-spec.md` §9.6.10 for the authoring patterns that keep rules
+    /// vectorizable.
+    ///
+    /// Always empty for the scalar interpreter path (which has no tape) and
+    /// when the tape is switched off with `ESS_TAPE_DISABLE` / `ESS_VEC_DISABLE`
+    /// — an empty list means "nothing to report", not "the tape covered
+    /// everything".
+    pub tape_fallbacks: Vec<(String, String)>,
 }
 
 // ============================================================================
@@ -528,6 +544,9 @@ impl Compiled {
                 n_jacobian_calls: stats.n_jacobian_calls,
                 n_accepted_steps: stats.n_accepted_steps,
                 n_rejected_steps: stats.n_rejected_steps,
+                // The scalar interpreter builds no tape, so there is nothing to
+                // fall back FROM.
+                tape_fallbacks: Vec::new(),
             },
         })
     }
@@ -1872,6 +1891,9 @@ fn resolve_expr(
                 }
                 crate::op_registry::OpError::MakearrayRegion { reason } => {
                     CompileError::MakearrayRegionInvalid { reason }
+                }
+                crate::op_registry::OpError::BroadcastFn { reason, .. } => {
+                    CompileError::InvalidBroadcastFn { reason }
                 }
             })?;
             // Closed-registry function call (esm-spec §9.2): resolve to the

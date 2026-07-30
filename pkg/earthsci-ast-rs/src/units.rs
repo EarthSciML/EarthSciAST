@@ -999,7 +999,15 @@ fn propagate_array_dim(
         "broadcast" => {
             // Elementwise map over arrays with `fn` naming the scalar
             // operator. Construct a synthetic scalar node and recurse so we
-            // reuse the same dimensional rules.
+            // reuse the same dimensional rules. (That synthetic node is the
+            // same identity the EVALUATORS now implement: `broadcast(fn=F, A)`
+            // means `{op: F, args: A}` applied element-wise — see
+            // `op_registry::check_broadcast_fn`.)
+            //
+            // A missing or unusable `fn` is a HARD `invalid_broadcast_fn`
+            // structural error raised by `structural.rs`; what is reported here
+            // is only the consequence for the DIMENSION, which the checker
+            // genuinely cannot determine.
             let Some(fn_name) = op.broadcast_fn.as_deref() else {
                 findings.push(UnitFinding::analysis(
                     "'broadcast' is missing its 'fn'; its dimension is unknown".to_string(),

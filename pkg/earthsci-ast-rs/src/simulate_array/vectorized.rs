@@ -797,7 +797,25 @@ pub(super) fn eval_vec_op<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    match vec_op_code(&node.op) {
+    eval_vec_op_code(vec_op_code(&node.op), node, bx, ctx, pool, ops)
+}
+
+/// [`eval_vec_op`] with the operator already resolved to a [`VecOp`].
+///
+/// Splitting the resolution from the dispatch is what lets the `Broadcast` arm
+/// re-enter with the code of its `fn` against the SAME node, so
+/// `broadcast(fn = F, args)` runs the identical arm as `{"op": F, "args": args}`
+/// — the overlay's half of the issue-#101 fix, and the exact mirror of the
+/// oracle's [`super::eval::eval_op_named`].
+fn eval_vec_op_code<'a>(
+    code: VecOp,
+    node: &ExpressionNode,
+    bx: &VecBox,
+    ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
+    ops: &mut usize,
+) -> Option<VecValue<'a>> {
+    match code {
         // Elementwise / n-ary arithmetic, plus `atan2` (binary) and the logical
         // connectives `and`/`or` (n-ary). All fold left-to-right through
         // `vec_combine` → `apply_binary` — the SAME kernel and order the per-cell
@@ -907,20 +925,26 @@ pub(super) fn eval_vec_op<'a>(
             Some(vec_unary(code, v, pool))
         }
         // Elementwise `broadcast(fn; a, b, …)` — the whole-array analogue of
-        // `eval_broadcast`, folding operands with the SAME `apply_binary` kernel
-        // (via `vec_combine`) in the SAME left-to-right order, so it is
-        // bit-identical to the oracle. `vec_combine` returns `None` for a
-        // `broadcast_fn` it does not vectorize (e.g. `atan2`), bailing safely.
+        // `eval_broadcast`, and implemented the same way: re-dispatch on the
+        // code of `fn` against this same node, so the arm that runs is the arm
+        // that would run for the bare `{"op": fn, "args": args}` node and the
+        // result is bit-identical to the oracle by construction.
+        //
+        // This used to resolve `fn` through `BinCode::of` and left-fold, which
+        // made a ONE-operand broadcast the identity — `broadcast(fn="-",[x])`
+        // returned `x` — and NaN'd every unary `fn` at arity 2+ (issue #101).
         VecOp::Broadcast => {
-            let code = BinCode::of(node.broadcast_fn.as_deref().unwrap_or("+"));
-            let mut it = node.args.iter();
-            let first = it.next()?;
-            let mut acc = eval_vec(first, bx, ctx, pool, ops)?;
-            for a in it {
-                let v = eval_vec(a, bx, ctx, pool, ops)?;
-                acc = vec_combine(code, acc, v, pool)?;
+            let fn_name = node.broadcast_fn.as_deref()?;
+            // `is_scalar_operator` excludes `broadcast`, so this recursion is
+            // one level deep. A non-scalar or unregistered `fn` should have been
+            // rejected by `op_registry::check_broadcast_fn` at build time; on the
+            // ungated `eval_expression` path, bail to the oracle rather than
+            // guess (the oracle then reports it).
+            if !crate::op_registry::is_scalar_operator(fn_name) {
+                note_bail(|| format!("op: broadcast fn `{fn_name}` is not a scalar operator"));
+                return None;
             }
-            Some(acc)
+            eval_vec_op_code(vec_op_code(fn_name), node, bx, ctx, pool, ops)
         }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
         // concat, `fn` closed-registry calls, atan2, D, …) falls back.
@@ -953,6 +977,46 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
     }
 }
 
+/// The enclosing binding, if any, that a nested `aggregate` genuinely depends
+/// on — the precondition for hoisting it out of the enclosing per-cell loop
+/// (see [`eval_vec_nested_aggregate`]). `None` means the hoist is sound.
+///
+/// An enclosing name that the nested aggregate REBINDS with one of its own
+/// binders (its `output_idx` symbols or its contracted indices) is *shadowed*:
+/// inside the body and the filter that name denotes the nested aggregate's own
+/// index, never the enclosing one, so evaluating the node exactly once over its
+/// own box computes precisely what the per-cell oracle computes. The oracle
+/// agrees by construction — [`eval_arrayop`] saves and rebinds exactly
+/// `idx_names ∪ contract_names` around its body walk (`saved_binds`) — and both
+/// whole-array resolvers ([`eval_vec_variable`] and the tape's `resolve_var`)
+/// consult the aggregate's own box symbols / contraction binds BEFORE any
+/// state, observed or parameter of the same name.
+///
+/// Every NON-shadowed name still disqualifies the hoist, and that half is
+/// load-bearing: the nested box drops the enclosing symbols entirely, so such a
+/// name would fall through the resolver ladder and silently rebind to a
+/// same-named state/observed/parameter instead of the enclosing index.
+///
+/// The mention test itself stays syntactic and conservative — a false positive
+/// only costs the fast path, never correctness.
+pub(super) fn nested_aggregate_capture<'n>(
+    spec: &ArrayOpSpec<'_>,
+    enclosing: impl Iterator<Item = &'n String>,
+) -> Option<&'n String> {
+    for name in enclosing {
+        // Cheap shadow test first (rank ≤ 4): it also SKIPS the full body walk,
+        // which is the dominant cost of this scan on wide stencil templates.
+        if spec.idx_names.iter().any(|n| n == name) || spec.contract_names.iter().any(|n| n == name)
+        {
+            continue;
+        }
+        if expr_mentions(spec.body, name) || spec.filter.is_some_and(|f| expr_mentions(f, name)) {
+            return Some(name);
+        }
+    }
+    None
+}
+
 /// Vectorized nested `aggregate`: materialize the sub-array once over the
 /// aggregate's OWN index box, through the same [`try_eval_arrayop_vectorized`]
 /// entry the per-cell oracle's [`eval_arrayop`] tries first. Because both paths
@@ -965,11 +1029,10 @@ pub(super) fn expr_mentions(expr: &Expr, name: &str) -> bool {
 /// re-evaluates this node once per enclosing output tuple, with the enclosing
 /// output symbols and contracted indices bound in `ctx.loop_binds`. Evaluating
 /// it ONCE is therefore only equivalent when the nested node does not depend on
-/// any of those bindings. We bail if the body or filter mentions any enclosing
-/// index symbol, any bound contraction name, or any name already bound in
-/// `ctx.loop_binds` (a scalar `eval` walk that reached this overlay from inside
-/// a per-cell loop). The test is syntactic and conservative — a symbol shadowed
-/// by the aggregate's own `output_idx` is rejected rather than analysed.
+/// any of those bindings — which is what [`nested_aggregate_capture`] decides,
+/// over the enclosing index symbols, the bound contraction names, and every
+/// name already in `ctx.loop_binds` (a scalar `eval` walk that reached this
+/// overlay from inside a per-cell loop).
 fn eval_vec_nested_aggregate<'a>(
     node: &ExpressionNode,
     bx: &VecBox,
@@ -984,20 +1047,17 @@ fn eval_vec_nested_aggregate<'a>(
     if spec.ranges.is_empty() {
         bail_vec!("aggregate: rank-0 output (scalar reduction)");
     }
-    for name in bx
-        .syms
-        .iter()
-        .chain(bx.cnames.iter())
-        .chain(ctx.loop_binds.keys())
-    {
-        if expr_mentions(spec.body, name)
-            || spec.filter.is_some_and(|f| expr_mentions(f, name))
-        {
-            bail_vec!(
-                "aggregate: nested body depends on an enclosing bound index",
-                name
-            );
-        }
+    if let Some(name) = nested_aggregate_capture(
+        &spec,
+        bx.syms
+            .iter()
+            .chain(bx.cnames.iter())
+            .chain(ctx.loop_binds.keys()),
+    ) {
+        bail_vec!(
+            "aggregate: nested body depends on an enclosing bound index",
+            name
+        );
     }
     let (v, sub_ops) = try_eval_arrayop_vectorized(
         spec.idx_names,

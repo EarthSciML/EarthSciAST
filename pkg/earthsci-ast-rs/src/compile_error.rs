@@ -99,6 +99,17 @@ pub enum CompileError {
         reason: String,
     },
 
+    /// A `broadcast` node whose `fn` field is absent or does not name a scalar
+    /// operator (esm-spec §4.3.4). `broadcast` is the one op whose OPERATOR is
+    /// data — the node says `broadcast`, the arithmetic is named by a sibling
+    /// string — and nothing used to check that string, so a typo'd or missing
+    /// `fn` was silently evaluated as `+` (issue #101).
+    #[error("invalid_broadcast_fn: {reason}")]
+    InvalidBroadcastFn {
+        /// Why the `fn` is rejected.
+        reason: String,
+    },
+
     /// An evaluable-core operator (esm-spec §4.2) that this interpreter has no
     /// evaluation rule for reached the evaluator.
     ///
@@ -122,6 +133,37 @@ pub enum CompileError {
     UnevaluableOperatorError {
         /// The offending operator name (e.g. `"skolem"`).
         op: String,
+    },
+
+    /// A BARE array-level expression whose operand is declared over an index
+    /// set the result does not have (esm-spec §4.3.4).
+    ///
+    /// Operands of an array-level expression align by index-set NAME: an
+    /// operand declared over a SUBSET of the result's index sets broadcasts
+    /// along the ones it is missing. An operand carrying an index set the
+    /// result does not carry has no axis to align to and no defensible value to
+    /// take, so it is rejected rather than reinterpreted positionally — the
+    /// positional flatten this replaces produced plausible, non-`NaN`,
+    /// zero-padded garbage (issue #100).
+    ///
+    /// The shapes are fully known statically, so `validate()` reports the same
+    /// defect as an `array_shape_mismatch` structural error before any build is
+    /// attempted; this is the build-time backstop for a model compiled without
+    /// being validated first.
+    #[error(
+        "array_shape_mismatch: operand '{operand}' of the array-level expression for '{result}' \
+         is declared over index set '{axis}', which '{result}' (shape {result_axes:?}) does not \
+         have — an operand's index sets must be a subset of the result's (esm-spec §4.3.4)"
+    )]
+    UnalignableArrayShape {
+        /// The offending operand's variable name.
+        operand: String,
+        /// The index set the operand carries and the result does not.
+        axis: String,
+        /// The name of the array-level expression's result.
+        result: String,
+        /// The result's declared index sets, in declaration order.
+        result_axes: Vec<String>,
     },
 
     /// The convenience constructors flattened the input first; that step

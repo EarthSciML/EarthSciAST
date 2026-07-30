@@ -193,10 +193,64 @@ fn covered_makearray_region_dispatch() {
     check("makearray regions", &rule_model(6, rhs), true);
 }
 
+/// A nested `aggregate` whose own `output_idx` SHADOWS the enclosing output
+/// symbol (issue #98).
+///
+/// `index(aggregate[i](u[i+1] − u[i]), i)` inside `aggregate[i](…)` is what a
+/// discretization template expands to when the `D(·)` is written inline in an
+/// equation body rather than named as its own observed. The two aggregates
+/// collide on `i` because both are keyed on the grid's index names.
+///
+/// The overlay's hoisting precondition is "the nested body must not depend on
+/// an enclosing binding". A shadowed name is not a dependence — inside the
+/// inner body `i` IS the inner index — and both whole-array resolvers consult
+/// the aggregate's own box symbols first, exactly as the per-cell oracle
+/// rebinds `idx_names ∪ contract_names` around its body walk. Rejecting it cost
+/// three to four orders of magnitude, and unlike the overlay the per-cell cost
+/// grows with the cell count.
+#[test]
+fn covered_nested_aggregate_shadowing_enclosing_index() {
+    let rhs = r#"{"op": "index", "args": [
+        {"op": "aggregate", "args": [], "output_idx": ["i"],
+         "ranges": {"i": [1, 6]},
+         "expr": {"op": "-", "args": [
+            {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]},
+            {"op": "index", "args": ["u", "i"]}
+         ]}},
+        "i"]}"#;
+    check(
+        "nested aggregate, shadowed index",
+        &rule_model(6, rhs),
+        true,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // FRONTIER — constructs still on the per-cell oracle. Each is an inventory
 // entry; a failure here means the gate was implemented.
 // ---------------------------------------------------------------------------
+
+/// **Not a gate — the soundness boundary of the shadow analysis above.**
+///
+/// The inner aggregate is keyed on `j` and its body multiplies by the ENCLOSING
+/// `i`, which it does not rebind. That is a real dependence: the oracle
+/// produces a different sub-array for every enclosing cell, so the node cannot
+/// be materialized once. Unlike the other entries below, this one must NOT be
+/// "implemented" — the hoisted box drops the enclosing symbols, so accepting it
+/// would silently rebind `i` to a same-named state/observed/parameter.
+#[test]
+fn frontier_nested_aggregate_capturing_enclosing_index_falls_back() {
+    let rhs = r#"{"op": "index", "args": [
+        {"op": "aggregate", "args": [], "output_idx": ["j"],
+         "ranges": {"j": [1, 6]},
+         "expr": {"op": "*", "args": [{"op": "index", "args": ["u", "j"]}, "i"]}},
+        "i"]}"#;
+    check(
+        "nested aggregate, captured index",
+        &rule_model(6, rhs),
+        false,
+    );
+}
 
 /// **Gate C1 — clamped ("replicate-edge") index.**
 ///

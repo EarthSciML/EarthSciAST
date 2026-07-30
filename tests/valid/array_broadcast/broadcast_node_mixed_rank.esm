@@ -1,0 +1,231 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "broadcast_node_mixed_rank",
+    "description": "Cross-binding conformance fixture pinning that the explicit `broadcast` node and the BARE spelling of one array-level expression are the SAME expression (esm-spec \u00a74.3.4; issue #100). This is `bare_mixed_rank_product` written as `{\"op\":\"broadcast\",\"fn\":\"*\",\"args\":[\"w2\",\"z1\"]}` instead of `{\"op\":\"*\",...}`, and it MUST produce identical values: `broadcast(fn: F, args)` applies the scalar operator F element by element, so its operands align by index-set NAME exactly as F's would \u2014 `w2: [lon,lat]` broadcasts along `lev`, `z1: [lev]` along `lon` and `lat`, giving dp[i,j,k](t=1) = (i + 10 j) * 100 k. A binding that treats `broadcast` as opaque to alignment reproduces the original #100 defect one spelling over: it returns dp[2,1,1]=2400 and dp[3,1,1]=0 where the bare spelling correctly returns 1200 and 1300. Same index sets, same variables, same expected values as bare_mixed_rank_product.esm \u2014 only the spelling differs, which is the whole point.",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "tags": [
+      "array-level",
+      "broadcast",
+      "broadcast-node",
+      "index-set",
+      "shape",
+      "conformance",
+      "issue-100"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "models": {
+    "broadcast_node_mixed_rank": {
+      "tolerance": {
+        "rel": 1e-08,
+        "abs": 1e-10
+      },
+      "variables": {
+        "dp": {
+          "type": "state",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 0.0,
+          "description": "Rank-3 accumulator over the full grid. Its tendency is CONSTANT in time and its initial value is 0, so dp(t=1) reads back the array-level RHS cell by cell."
+        },
+        "w2": {
+          "type": "observed",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "description": "Rank-2 field over `lon`,`lat`: w2[i,j] = i + 10 j.",
+          "expression": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "i",
+                {
+                  "op": "*",
+                  "args": [
+                    10,
+                    "j"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "z1": {
+          "type": "observed",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Rank-1 field over `lev` only: z1[k] = 100 k, i.e. [100, 200].",
+          "expression": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                100,
+                "k"
+              ]
+            }
+          }
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(dp)/dt = broadcast(fn:*, [w2, z1]) \u2014 the explicit spelling of `w2 * z1`. dp[i,j,k](1) = (i + 10 j) * 100 k, identical to the bare form.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dp"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "broadcast",
+            "fn": "*",
+            "args": [
+              "w2",
+              "z1"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "broadcast_node_mixed_rank_t1",
+          "description": "Same probes as bare_mixed_rank_product: the `broadcast` node must not change a single value.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 1100.0,
+              "coords": {
+                "lon": 1,
+                "lat": 1,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 1300.0,
+              "coords": {
+                "lon": 3,
+                "lat": 1,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 2100.0,
+              "coords": {
+                "lon": 1,
+                "lat": 2,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 2300.0,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 1
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 2200.0,
+              "coords": {
+                "lon": 1,
+                "lat": 1,
+                "lev": 2
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 2600.0,
+              "coords": {
+                "lon": 3,
+                "lat": 1,
+                "lev": 2
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 4400.0,
+              "coords": {
+                "lon": 2,
+                "lat": 2,
+                "lev": 2
+              }
+            },
+            {
+              "variable": "dp",
+              "time": 1.0,
+              "expected": 4600.0,
+              "coords": {
+                "lon": 3,
+                "lat": 2,
+                "lev": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

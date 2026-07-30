@@ -126,7 +126,9 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
 /// [`CompileError::UnloweredOperatorError`] for a rewrite-target op (sugar, a
 /// spatial `D`, a user op, or a misspelling); [`CompileError::InvalidOperatorArity`]
 /// for a core op with the wrong argument count;
-/// [`CompileError::MakearrayRegionInvalid`] for a ragged or inverted `makearray`.
+/// [`CompileError::MakearrayRegionInvalid`] for a ragged or inverted `makearray`;
+/// [`CompileError::InvalidBroadcastFn`] for a `broadcast` whose `fn` is absent
+/// or names no scalar operator.
 pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
     crate::op_registry::check_expr(expr).map_err(|e| match e {
         OpError::Unlowered { op } => CompileError::UnloweredOperatorError { op },
@@ -134,6 +136,7 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
             CompileError::InvalidOperatorArity { op, got, expected }
         }
         OpError::MakearrayRegion { reason } => CompileError::MakearrayRegionInvalid { reason },
+        OpError::BroadcastFn { reason, .. } => CompileError::InvalidBroadcastFn { reason },
     })
 }
 
@@ -676,7 +679,8 @@ impl ArrayCompiled {
 
         // (6)+(6b) Build the dependency-ordered observed algebraic rules,
         // MOVING each declared observed's body expression out of the model.
-        let observed_rules = build_observed_rules(&mut model_owned, &observed_names, &eliminated);
+        let observed_rules =
+            build_observed_rules(&mut model_owned, &observed_names, &eliminated, index_sets)?;
 
         let model = &model_owned;
 
@@ -1231,8 +1235,10 @@ fn build_observed_rules(
     model: &mut Model,
     observed_names: &[String],
     eliminated: &HashSet<String>,
-) -> Vec<AlgebraicRule> {
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
+    let array_axes = declared_axis_names(model);
 
     // Declared observed variables with an `expression` field. An array-shaped
     // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
@@ -1255,10 +1261,7 @@ fn build_observed_rules(
             .get_mut(name)
             .and_then(|var| var.expression.take())
         {
-            observed_rules.push(AlgebraicRule::Scalar {
-                var: name.clone(),
-                body: Rc::new(expr),
-            });
+            observed_rules.push(lower_algebraic_body(name, expr, &array_axes, index_sets)?);
         }
     }
 
@@ -1279,13 +1282,69 @@ fn build_observed_rules(
         if let Expr::Variable(name) = &eq.lhs
             && eliminated.contains(name)
         {
-            observed_rules.push(AlgebraicRule::Scalar {
-                var: name.clone(),
-                body: Rc::new(eq.rhs.clone()),
-            });
+            observed_rules.push(lower_algebraic_body(
+                name,
+                eq.rhs.clone(),
+                &array_axes,
+                index_sets,
+            )?);
         }
     }
-    dependency_order_observed(observed_rules)
+    Ok(dependency_order_observed(observed_rules))
+}
+
+/// Wrap one algebraic body — a declared observed's `expression`, or the RHS of
+/// a bare-`Variable`-LHS equation — in the rule form that evaluates it
+/// correctly.
+///
+/// The default, and what every already-correct model keeps byte for byte, is
+/// the WHOLESALE [`AlgebraicRule::Scalar`]: `eval` materializes the body's
+/// arrays and broadcasts the elementwise ops over them. That broadcast is
+/// POSITIONAL, so it is only right when the operands already sit on the
+/// result's axes in the result's order.
+///
+/// When the target declares a `shape` and an operand does not carry all of it
+/// (`p3: [lon,lat,lev] = w2 * z1` with `w2: [lon,lat]` and `z1: [lev]`),
+/// positional broadcasting cannot express what the index-set names mean — each
+/// operand must replicate along the axes it does NOT carry (esm-spec §4.3.4).
+/// Such a body is lowered to the per-cell [`AlgebraicRule::ArrayLoop`] form
+/// instead, which gathers each operand at its own axes exactly as the
+/// equivalent `aggregate` spelling would. An operand carrying an index set the
+/// result does not have is rejected by [`build_gather_plan`].
+fn lower_algebraic_body(
+    name: &str,
+    body: Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<AlgebraicRule, CompileError> {
+    let scalar_rule = |body: Expr| AlgebraicRule::Scalar {
+        var: name.to_string(),
+        body: Rc::new(body),
+    };
+    let Some(target_axes) = array_axes.get(name) else {
+        return Ok(scalar_rule(body));
+    };
+    let plan = build_gather_plan(&body, array_axes, name, Some(target_axes.as_slice()), false)?;
+    if plan_is_identity(&plan, target_axes.len()) {
+        return Ok(scalar_rule(body));
+    }
+    // Name alignment IS needed, but the declared axes cannot be densely sized
+    // (a derived / ragged index set): keep the wholesale rule rather than
+    // fabricate loop bounds.
+    let Some(extents) = resolve_declared_shape(target_axes, index_sets) else {
+        return Ok(scalar_rule(body));
+    };
+    let loops: Vec<String> = (0..extents.len())
+        .map(|d| format!("_lp{d}_{name}"))
+        .collect();
+    let output_ranges: Vec<(i64, i64)> = extents.iter().map(|n| (1i64, *n as i64)).collect();
+    let looped = index_array_leaves_by_loops(&body, array_axes, Some(&plan), &loops);
+    Ok(AlgebraicRule::ArrayLoop {
+        var: name.to_string(),
+        output_idx_names: loops,
+        output_ranges,
+        body: Rc::new(looped),
+    })
 }
 
 /// Classify scoped-reference / array `ic` equations (esm-spec §11.4.1) out of
@@ -1320,19 +1379,10 @@ fn build_rhs_rules(
     let mut rhs_rules: Vec<RhsRule> = Vec::new();
     let mut covered_slots: HashSet<usize> = HashSet::new();
 
-    // Declared rank of every array-shaped variable (state / parameter /
-    // observed), used to lower a whole-array `D(state)` RHS into per-cell
-    // gathers.
-    let array_ranks: HashMap<String, usize> = model
-        .variables
-        .iter()
-        .filter_map(|(k, v)| {
-            v.shape
-                .as_ref()
-                .filter(|s| !s.is_empty())
-                .map(|s| (k.clone(), s.len()))
-        })
-        .collect();
+    // Declared index-set axis NAMES of every array-shaped variable (state /
+    // parameter / observed), used to lower a whole-array `D(state)` RHS into
+    // per-cell gathers that align each operand BY NAME (esm-spec §4.3.4).
+    let array_axes = declared_axis_names(model);
 
     for eq in &model.equations {
         if let Some(DerivArrayop {
@@ -1411,6 +1461,17 @@ fn build_rhs_rules(
                         ),
                     })?
                     .clone();
+                // The result's declared index-set axis names, when they line up
+                // with the shape actually compiled for it. This is what makes
+                // the bare RHS's operands alignable BY NAME below; a state
+                // whose shape was inferred from index usage rather than
+                // declared (or declared at a different rank) has no usable
+                // names and keeps the positional lowering.
+                let target_axes: Option<&[String]> = model
+                    .variables
+                    .get(&var)
+                    .and_then(|v| v.shape.as_deref())
+                    .filter(|d| d.len() == shape.shape.len());
                 if shape.shape.is_empty() {
                     // Plain scalar D(var, t) = rhs.
                     let slot = shape.flat_offset;
@@ -1440,7 +1501,9 @@ fn build_rhs_rules(
                         .collect();
                     let lhs_idx_exprs: Vec<Expr> =
                         loops.iter().map(|l| Expr::Variable(l.clone())).collect();
-                    let body = index_array_leaves_by_loops(&eq.rhs, &array_ranks, &loops);
+                    let plan = build_gather_plan(&eq.rhs, &array_axes, &var, target_axes, false)?;
+                    let body =
+                        index_array_leaves_by_loops(&eq.rhs, &array_axes, Some(&plan), &loops);
                     let total = shape.shape.iter().copied().product::<usize>().max(1);
                     for flat in 0..total {
                         covered_slots.insert(shape.flat_offset + flat);
@@ -1462,6 +1525,7 @@ fn build_rhs_rules(
                     // rule, indexing each array-shaped RHS leaf by that cell
                     // (elementwise semantics). This is the array-runtime analog
                     // of the Julia `_lift_wholearray_deriv_equations` lift.
+                    let plan = build_gather_plan(&eq.rhs, &array_axes, &var, target_axes, true)?;
                     let total = shape.shape.iter().copied().product::<usize>().max(1);
                     for flat in 0..total {
                         let multi0 = flat_to_multi_col_major(flat, &shape.shape);
@@ -1470,7 +1534,7 @@ fn build_rhs_rules(
                             .zip(shape.origin.iter())
                             .map(|(m, o)| *m as i64 + *o)
                             .collect();
-                        let body = index_array_leaves(&eq.rhs, &array_ranks, &cell);
+                        let body = index_array_leaves(&eq.rhs, &array_axes, Some(&plan), &cell);
                         let slot = shape.flat_offset + flat;
                         covered_slots.insert(slot);
                         rhs_rules.push(RhsRule::IndexedScalar {
@@ -2260,6 +2324,149 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
     out
 }
 
+/// Declared index-set axis NAMES of every array-shaped variable — the ordered
+/// `shape` list (esm-spec §6.3), which names the index set each axis ranges
+/// over. [`resolve_declared_shape`] throws these names away in favour of
+/// extents; the whole-array lowering below needs them, because a BARE
+/// array-level expression aligns its operands by index-set NAME, not by
+/// position (esm-spec §4.3.4).
+pub(super) fn declared_axis_names(model: &Model) -> HashMap<String, Vec<String>> {
+    model
+        .variables
+        .iter()
+        .filter_map(|(k, v)| {
+            v.shape
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|s| (k.clone(), s.clone()))
+        })
+        .collect()
+}
+
+/// Where each array-shaped operand's axes sit in the RESULT's axis list.
+///
+/// A bare array-level expression is lowered by enumerating the result's cells
+/// and gathering every operand at that cell. WHICH of the cell's coordinates an
+/// operand is gathered by is decided by index-set NAME (esm-spec §4.3.4): axis
+/// `d` of an operand declared over `["lat"]` is the result's `lat` axis
+/// wherever that sits, and every result axis the operand does not declare is
+/// one it BROADCASTS along. A name-keyed plan makes `D(dp) = w1` (with
+/// `dp: [lon,lat,lev]`, `w1: [lat]`) compute exactly what the `aggregate`
+/// spelling `sum_{i,j,k} w1[j]` computes, and makes axis ORDER immaterial — a
+/// `[lat,lon]` operand transposes rather than being reinterpreted.
+///
+/// An entry is present only for a leaf that aligns by name. A leaf ABSENT from
+/// the plan keeps the legacy POSITIONAL lowering (leading axes) — the fallback
+/// for an operand, or a result, that carries no declared index-set names.
+type GatherPlan = HashMap<String, Vec<usize>>;
+
+/// Collect the array-shaped `Variable` leaves that a whole-array lowering will
+/// wrap in a NAME-ALIGNED `index(…)` gather: the ones standing in genuinely
+/// ELEMENTWISE position (see [`crate::op_registry::is_elementwise_node`]),
+/// which is the only place element alignment is defined. That includes a
+/// `broadcast` node, whose `fn` IS the scalar operator, so the `broadcast` and
+/// bare spellings of one expression align identically. A leaf reached through
+/// an op that consumes its operands whole — an `aggregate`, a `makearray`, an
+/// `index` target, a shape op, a relational or geometry kernel — is left to
+/// that op's own operand contract and keeps the legacy positional lowering.
+///
+/// The descent otherwise follows the lowering it serves, so the plan covers
+/// exactly the leaves that get rewritten: [`index_array_leaves`] rewrites
+/// every child (`into_binders = true`), while [`index_array_leaves_by_loops`]
+/// stops at an `index` gather, an aggregate node, or an array producer
+/// (`into_binders = false`).
+fn collect_wrapped_array_leaves(
+    expr: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+    into_binders: bool,
+    out: &mut Vec<String>,
+) {
+    match expr {
+        Expr::Variable(v) => {
+            if array_axes.contains_key(v) {
+                out.push(v.clone());
+            }
+        }
+        Expr::Operator(node) => {
+            if !crate::op_registry::is_elementwise_node(node) {
+                return;
+            }
+            if !into_binders
+                && (is_array_producer(node) || node.op == "index" || is_aggregate_op(&node.op))
+            {
+                return;
+            }
+            node.for_each_child(&mut |c| {
+                collect_wrapped_array_leaves(c, array_axes, into_binders, out)
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Build the [`GatherPlan`] for lowering `rhs` onto a result declared over
+/// `target_axes`, and REJECT an operand that cannot be aligned.
+///
+/// An operand whose declared index sets are a SUBSET of the result's aligns by
+/// name and broadcasts along the axes it does not carry. An operand carrying an
+/// index set the result does NOT have has no axis to align to and no defensible
+/// value to take, so it is a hard build error rather than a positional
+/// reinterpretation (esm-spec §4.3.4; issue #100). The shapes are fully known
+/// statically, so `validate()` reports the same defect as an
+/// `array_shape_mismatch` structural error before a build is ever attempted.
+///
+/// `target_axes` is `None` — and the plan consequently empty, keeping the
+/// legacy positional lowering everywhere — when the result carries no usable
+/// declared names.
+fn build_gather_plan(
+    rhs: &Expr,
+    array_axes: &HashMap<String, Vec<String>>,
+    target: &str,
+    target_axes: Option<&[String]>,
+    into_binders: bool,
+) -> Result<GatherPlan, CompileError> {
+    let Some(target_axes) = target_axes else {
+        return Ok(GatherPlan::new());
+    };
+    // A repeated axis name offers no unambiguous position to align to; keep the
+    // positional lowering rather than guess which occurrence was meant.
+    if (1..target_axes.len()).any(|d| target_axes[..d].contains(&target_axes[d])) {
+        return Ok(GatherPlan::new());
+    }
+    let mut leaves: Vec<String> = Vec::new();
+    collect_wrapped_array_leaves(rhs, array_axes, into_binders, &mut leaves);
+    let mut plan = GatherPlan::new();
+    for leaf in leaves {
+        let Some(leaf_axes) = array_axes.get(&leaf) else {
+            continue;
+        };
+        let mut positions = Vec::with_capacity(leaf_axes.len());
+        for axis in leaf_axes {
+            match target_axes.iter().position(|t| t == axis) {
+                Some(p) => positions.push(p),
+                None => {
+                    return Err(CompileError::UnalignableArrayShape {
+                        operand: leaf.clone(),
+                        axis: axis.clone(),
+                        result: target.to_string(),
+                        result_axes: target_axes.to_vec(),
+                    });
+                }
+            }
+        }
+        plan.insert(leaf, positions);
+    }
+    Ok(plan)
+}
+
+/// True iff every planned operand already sits on exactly the result's axes in
+/// the result's order, so the name-aligned lowering and the legacy positional
+/// one agree cell for cell and no rewrite is needed.
+fn plan_is_identity(plan: &GatherPlan, target_rank: usize) -> bool {
+    plan.values()
+        .all(|pos| pos.len() == target_rank && pos.iter().enumerate().all(|(d, &p)| d == p))
+}
+
 /// Rewrite a whole-array `D(state)` RHS into its per-cell body over the given
 /// LOOP SYMBOLS (the loop-name dual of [`index_array_leaves`], mirroring the
 /// Julia `_index_array_leaves` in shape_promotion.jl): each bare array-shaped
@@ -2268,14 +2475,23 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
 /// — or an `aggregate`/`arrayop` with output axes) is wrapped in
 /// `index(node, loops…)`; `index` gathers and scalar reductions stay
 /// untouched; other operators recurse elementwise.
+///
+/// A declared leaf listed in `plan` is gathered by the loop symbols of ITS OWN
+/// axes (esm-spec §4.3.4), so a rank-1 `[lat]` operand under a rank-3
+/// `[lon,lat,lev]` result reads `index(w1, <lat loop>)` and replicates along
+/// the other two. Handing it all three loops — what this did before — indexed
+/// axes it does not have, which `index_into` reads as out of bounds and
+/// resolves to the ghost value 0.0 everywhere. An ANONYMOUS operand (no
+/// declared names) and every array PRODUCER keep the positional lowering.
 pub(super) fn index_array_leaves_by_loops(
     expr: &Expr,
-    array_ranks: &HashMap<String, usize>,
+    array_axes: &HashMap<String, Vec<String>>,
+    plan: Option<&GatherPlan>,
     loops: &[String],
 ) -> Expr {
-    let wrap = |target: Expr| {
+    let wrap = |target: Expr, ix: Vec<&String>| {
         let mut args = vec![target];
-        for l in loops {
+        for l in ix {
             args.push(Expr::Variable(l.clone()));
         }
         Expr::operator(ExpressionNode {
@@ -2285,7 +2501,18 @@ pub(super) fn index_array_leaves_by_loops(
         })
     };
     match expr {
-        Expr::Variable(v) if array_ranks.contains_key(v) => wrap(expr.clone()),
+        Expr::Variable(v) if array_axes.contains_key(v) => {
+            let ix: Vec<&String> = match plan.and_then(|p| p.get(v)) {
+                // `positions` is built against this same result, so every entry
+                // indexes `loops`.
+                Some(positions) => positions.iter().map(|&p| &loops[p]).collect(),
+                None => {
+                    let rank = array_axes[v].len().min(loops.len());
+                    loops[..rank].iter().collect()
+                }
+            };
+            wrap(expr.clone(), ix)
+        }
         Expr::Operator(node) => {
             if is_array_producer(node) {
                 let target = if node.op == "makearray" {
@@ -2293,16 +2520,20 @@ pub(super) fn index_array_leaves_by_loops(
                 } else {
                     expr.clone()
                 };
-                return wrap(target);
+                return wrap(target, loops.iter().collect());
             }
             if node.op == "index" || is_aggregate_op(&node.op) {
                 return expr.clone();
             }
+            // Element alignment is defined only under elementwise nodes (a
+            // `broadcast` included — its `fn` IS the scalar op); below anything
+            // else the operand contract is that op's own.
+            let child_plan = plan.filter(|_| crate::op_registry::is_elementwise_node(node));
             let mut out = ExpressionNode::clone(node);
             out.args = node
                 .args
                 .iter()
-                .map(|a| index_array_leaves_by_loops(a, array_ranks, loops))
+                .map(|a| index_array_leaves_by_loops(a, array_axes, child_plan, loops))
                 .collect();
             Expr::operator(out)
         }
@@ -2314,18 +2545,34 @@ pub(super) fn index_array_leaves_by_loops(
 /// into an `index(var, cell…)` gather at the given 1-based cell, so the
 /// elementwise array equation compiles to one per-cell scalar rule. The array
 /// target of an existing `index` node is left untouched (it is already a gather).
+///
+/// A declared leaf listed in `plan` is gathered at the cell coordinates of ITS
+/// OWN axes (esm-spec §4.3.4) — a `[lat]` operand under a `[lon,lat,lev]`
+/// result takes the cell's `lat` coordinate and replicates along `lon`/`lev`,
+/// and a `[lat,lon]` operand transposes. Taking the LEADING coordinates — what
+/// this did before — laid the operand's elements along the wrong axes and
+/// zero-filled the overhang. An ANONYMOUS operand (no declared names, or a
+/// result with none) keeps the leading-axes lowering.
 pub(super) fn index_array_leaves(
     expr: &Expr,
-    array_ranks: &HashMap<String, usize>,
+    array_axes: &HashMap<String, Vec<String>>,
+    plan: Option<&GatherPlan>,
     cell: &[i64],
 ) -> Expr {
     match expr {
         Expr::Variable(v) => {
-            if let Some(&rank) = array_ranks.get(v) {
-                let n = rank.min(cell.len());
+            if let Some(axes) = array_axes.get(v) {
                 let mut args = vec![Expr::Variable(v.clone())];
-                for &c in &cell[..n] {
-                    args.push(Expr::Integer(c));
+                match plan.and_then(|p| p.get(v)) {
+                    // `positions` is built against this same result, so every
+                    // entry indexes `cell`.
+                    Some(positions) => {
+                        args.extend(positions.iter().map(|&p| Expr::Integer(cell[p])));
+                    }
+                    None => {
+                        let n = axes.len().min(cell.len());
+                        args.extend(cell[..n].iter().map(|&c| Expr::Integer(c)));
+                    }
                 }
                 Expr::operator(ExpressionNode {
                     op: "index".to_string(),
@@ -2337,7 +2584,12 @@ pub(super) fn index_array_leaves(
             }
         }
         Expr::Operator(node) => {
-            let mut out = node.map_children(&mut |a| index_array_leaves(a, array_ranks, cell));
+            // Element alignment is defined only under elementwise nodes (a
+            // `broadcast` included — its `fn` IS the scalar op); below anything
+            // else the operand contract is that op's own.
+            let child_plan = plan.filter(|_| crate::op_registry::is_elementwise_node(node));
+            let mut out =
+                node.map_children(&mut |a| index_array_leaves(a, array_axes, child_plan, cell));
             if node.op == "index"
                 && let Some(first) = node.args.first()
             {

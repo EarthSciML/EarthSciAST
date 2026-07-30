@@ -376,7 +376,7 @@ by this spec.
 | `aggregate` | `output_idx`, `expr` | Functional Aggregate Query node: a semiring aggregate of a product of factors over named index sets. Specializes to Einstein-notation tensor contraction with implicit reductions over non-output indices; its full surface (`semiring`, `from`/`of` ranges, `join`, `distinct`, `key`, `filter`) is specified in RFC semiring-faq-unified-ir. See Section 4.3.1. |
 | `makearray` | `regions`, `values` | Block assembly of an array from overlapping sub-region assignments. Later regions overwrite earlier ones. See Section 4.3.2. |
 | `index` | — | Element or sub-array access. `args[0]` is the array; `args[1..]` are the index expressions. See Section 4.3.3. |
-| `broadcast` | `fn` | Element-wise application of scalar operator `fn` to broadcast-compatible operands. See Section 4.3.4. |
+| `broadcast` | `fn` | Element-wise application of scalar operator `fn` to one or more broadcast-compatible operands; means what `{op: fn, args}` means, applied element-wise (so a ONE-operand `broadcast` applies `fn` unarily). `fn` MUST name a scalar operator, applied at an arity that operator admits, else `invalid_broadcast_fn`. See Section 4.3.4. |
 | `reshape` | `shape` | Reshape `args[0]` to the given target shape. See Section 4.3.5. |
 | `transpose` | — (optional `perm`) | Axis permutation of `args[0]`. See Section 4.3.5. |
 | `concat` | `axis` | Concatenate the operand arrays along the given axis. See Section 4.3.5. |
@@ -663,7 +663,29 @@ A stencil gather of a **const array** (a pre-computed factor: Fornberg weights, 
 }
 ```
 
-The `fn` value must name a scalar operator (arithmetic, elementary function, comparison, etc.). Broadcasts do not fuse: a nested expression of broadcasts decomposes into primitive broadcast nodes. Runtimes are free to apply their own fusion.
+**Meaning.** `{ "op": "broadcast", "fn": F, "args": A }` denotes exactly what `{ "op": F, "args": A }` denotes, applied element-wise over the broadcast operands. That equivalence is the whole definition, and it settles the ONE-OPERAND case: a `broadcast` with a single operand applies `fn` **unarily**. `broadcast(fn: "-", [x])` is `-x`, `broadcast(fn: "log", [x])` is `log(x)`, and `broadcast(fn: "+", [x])` is `x` — for the same reason the bare `{"op": "+", "args": [x]}` node is `x`, because `+` is n-ary from one operand. A one-operand `broadcast` MUST NOT be treated as the identity on its operand: that discards `fn`, and a binding that folds `args` through a binary kernel degenerates to exactly that on a single-element list.
+
+The `fn` value must name a **scalar operator** — one whose meaning is a pointwise map from scalar operands to a scalar result: the §4.2 arithmetic (`+ - * / ^ neg`), elementary functions (`exp log log10 sqrt abs sign floor ceil`, the trigonometric and hyperbolic families, `atan2`, `min`, `max`), comparisons (`== != < <= > >=`), logical connectives (`and or not`), and `ifelse`. It may NOT name an op whose meaning is not pointwise — the array/tensor ops (`aggregate`, `makearray`, `index`, `reshape`, `transpose`, `concat`, and `broadcast` itself), the closed-registry invocation `fn`, the form ops (`D`, `ic`, `Pre`, `const`, `true`, `enum`, `table_lookup`, `apply_expression_template`), or the relational and geometry ops.
+
+**Validation.** A schema-valid `broadcast` node must carry an `fn` naming a scalar operator as defined above, applied to a number of `args` that operator admits under its §4.2 arity (so `broadcast(fn: "min", [x])` and `broadcast(fn: "sin", [a, b])` are rejected for exactly the reason the bare `min(x)` and `sin(a, b)` nodes are). Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**. This mirrors the §4.4 rule for `fn`-node names: an operator name that no binding can resolve must never reach an evaluator, because the failure is otherwise silent.
+
+Broadcasts do not fuse: a nested expression of broadcasts decomposes into primitive broadcast nodes. Runtimes are free to apply their own fusion.
+
+**Broadcast compatibility.** The same rule governs every **array-level expression** — an elementwise operator (arithmetic, elementary function, conditional, comparison) whose operands are arrays, whether spelled with an explicit `broadcast` node or written bare (`{"op": "*", "args": ["w2", "z1"]}`). Two regimes apply, chosen by whether the operands carry **declared index sets**:
+
+1. **Named operands align by index-set NAME.** An operand that is a reference to a variable with a declared `shape` (Section 6.3 — an ordered list of index-set names) carries a *name* for each of its axes, and so does the expression's result: the state or observed variable the array-level equation defines. Alignment is then by name, never by position:
+
+   - The result's index sets are those of the equation's target. An operand whose declared index sets are a **subset** of the result's is broadcast-compatible: it supplies the axes it declares and **replicates** along every result axis it does not. A `["lat"]` operand in a `["lon","lat","lev"]` result contributes the same value to all `lon` and all `lev` positions.
+   - **Axis order is immaterial.** A `["lat","lon"]` operand in a `["lon","lat","lev"]` result aligns `lat` to `lat` and `lon` to `lon` — i.e. it transposes. It is never reinterpreted positionally.
+   - An operand carrying an index set that is **not** among the result's is **not** broadcast-compatible. It has no axis to align to, so bindings MUST reject the document with the structural diagnostic `array_shape_mismatch` (Section 7). Both shapes are declared, so this is decidable statically and MUST be decided at validation time — it is not a runtime concern and not a warning.
+
+   The name-aligned result is by construction identical, element for element, to the explicit `aggregate` spelling of the same expression over the result's axes: `{"op":"*","args":["w2","z1"]}` with `w2: ["lon","lat"]`, `z1: ["lev"]` and a `["lon","lat","lev"]` result denotes exactly `sum_{i,j,k} index(w2,i,j) * index(z1,k)` (a full map, contracting nothing). The two spellings MUST agree bit for bit. Positionally flattening the operands into the result's linear layout — padding the shorter one — is **not** conforming: it produces finite, plausible, wrong values.
+
+2. **Anonymous operands align positionally.** An operand with no declared index sets — the result of a `reshape`, `transpose`, `concat`, or `makearray`, a `const` literal array, or a variable whose shape was never declared — names no axes, so there is nothing to align by. Such operands broadcast **positionally**, left-aligned, with the lower-rank operand padded on the **trailing** axes with singletons (the `SymbolicUtils.jl` / Julia convention, not the NumPy one): a `(3,)` operand against a `(1,3)` operand pads to `(3,1)` and the pair broadcasts to `(3,3)`, so `broadcast(+, a, reshape(b,[1,3]))[i,j] = a[i] + b[j]`. Two operands whose extents disagree on an axis where neither is 1 are incompatible.
+
+An expression mixing the two regimes aligns each operand under its own: a named operand is placed by name, an anonymous one positionally.
+
+These rules apply only where element correspondence is what the expression *means* — that is, under the elementwise operators. Every other op consumes its operands whole under its own contract: `aggregate` and `makearray` name their axes, `index` gathers, the shape ops of Section 4.3.5 restructure, and the relational and geometry ops (Section 4.2) may return a result of an entirely unrelated shape.
 
 #### 4.3.5 `reshape`, `transpose`, `concat`
 
@@ -1437,7 +1459,7 @@ Optional arrayed-variable fields:
 
 | Field | Description |
 |---|---|
-| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. |
+| `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
 
 ### 6.4 Advection Model Example
@@ -2992,6 +3014,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `metaparameter_type_error` | A metaparameter binding is not an integer; a fold divides inexactly or overflows 64-bit; or a metaparameter expression uses an op outside `+ - * /` (§9.7.6). |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name (§9.7.6). |
 | `makearray_region_inverted` | A `makearray` region bound pair on the expanded, metaparameter-folded form has `stop < start − 1` (§4.3.2). The empty spelling `stop == start − 1` is legal and contributes no elements; anything further inverted is rejected — typically a §9.6.8 interior region instantiated below the scheme’s minimum extent. |
+| `invalid_broadcast_fn` | A `broadcast` node's `fn` is absent, does not name a scalar operator, or is applied to an argument count that operator's §4.2 arity does not admit (§4.3.4). The value analogue of `unknown_closed_function`: `broadcast` is the one op whose OPERATOR is carried as data, so no `op`-keyed check reaches it, and an unchecked `fn` is discarded silently rather than failing. Loading MUST fail. |
 | `geometry_manifold_invalid` | A geometry-kernel node's `manifold` is not an admissible literal (`planar`/`spherical`/`geodesic`) on the expanded-equivalent form — the enforcement for the scalar-field substitution sites of §9.6.1 (the schema admits arbitrary strings there so template bodies may carry parameter names). Discharged per-instantiation, memoized (§9.6.9); the diagnostic reports (call-site path, template name, intra-body path). |
 | `template_constraint_unknown_index_set` | A `where` `shape` constraint (§9.6.1) names an index set the consuming document's merged `index_sets` registry (§9.7.5) does not declare. Raised at rule registration in the consuming component — a loud typo failure, mirroring `template_import_unknown_name`. A constrained rule that merely never fires is NOT an error. |
 
@@ -3133,6 +3156,25 @@ A document is valid iff `Expand(document)` (§9.6.4 rule 2) is valid. Bindings M
 | Units and shape checks | expanded form | per-instantiation, memoized on `(template id, scalar-field values, per-param unit+shape signature)` |
 | `unlowered_operator` | pre-evaluation walk of the expanded tree | the same walk on the reference-preserving tree; sound by eager expansion (§9.6.4 rule 3) |
 | `rewrite_rule_nonterminating` | fixpoint | unchanged; the eager pre-pass consumes no pass budget |
+
+#### 9.6.10 Authoring for whole-array evaluation (non-normative)
+
+Nothing in this subsection changes what a document *means*. Two spellings of the same discretization always produce the same numbers — that is what §9.6.3's determinism contract requires. They can nonetheless differ enormously in what they *cost*, because a binding is free to evaluate a rule either as whole-array kernels (work proportional to the grid, once per RHS call) or by walking the rule body once per grid cell. The guidance below keeps a rule on the first path.
+
+**Prefer naming a discretization operator as the whole expression of an observed.**
+
+```json
+"dqdlon": { "type": "observed", "shape": ["lon","lat","lev"],
+            "expression": { "op": "D", "wrt": "lon", "args": ["q"] } }
+```
+
+and then read `dqdlon` where the derivative is needed, rather than writing the `D` inline inside an `aggregate` body and indexing it per cell. A named observed is materialized once over its own box; the inline form asks for a sub-array *per cell of the enclosing aggregate*, which a binding must recognize as loop-invariant before it can hoist it.
+
+**Prefer array-level template bodies.** A template whose `body` is array-level arithmetic composes cleanly at every call site. A template whose body is a per-cell `aggregate` wrapping an operator re-creates the nested shape one layer down at each site, even where every application is correctly named.
+
+**Why this is guidance and not a requirement.** A nested `aggregate` whose own `output_idx` (or contracted index) *rebinds* an enclosing index symbol only shadows it: inside the nested body that name denotes the nested aggregate's own index, so the node does not depend on the enclosing loop and a binding may materialize it once. Bindings are expected to recognize that case, and the common collision — a discretization template keyed on the grid's index names, inlined inside an equation body keyed on the same names — is exactly it. What remains genuinely per-cell is a nested body that reads an enclosing index it does **not** rebind, e.g. `aggregate[j](u[j] · i)` inside `aggregate[i](…)`: its value differs for every enclosing cell, so it cannot be hoisted at all, and no spelling rule can rescue it.
+
+Bindings that compile rules ahead of evaluation SHOULD report, per solve, which rules they could not compile and why, so that a costly spelling is diagnosable rather than merely slow. In this repository's Rust binding that list is `SolutionMetadata::tape_fallbacks` (`metadata.tapeFallbacks` over the wasm/JS boundary), the `tape_report` wasm entry point answers the same question without integrating, and `cargo run --release --example tape_report -- <model.esm>` does so natively.
 
 ### 9.7 Template libraries, cross-file imports, and metaparameters
 

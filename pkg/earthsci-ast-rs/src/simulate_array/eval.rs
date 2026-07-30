@@ -207,10 +207,27 @@ fn check_evaluable_ops(expr: &Expr) -> Result<(), CompileError> {
 }
 
 pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    match node.op.as_str() {
+    eval_op_named(node.op.as_str(), node, ctx)
+}
+
+/// [`eval_op`] with the operator NAME supplied separately from the node.
+///
+/// Every arm below reads the operator from `op` and its operands from `node`,
+/// which is what makes `broadcast` expressible without duplicating a single
+/// kernel: a `broadcast` node re-enters this function with `op` replaced by its
+/// `fn` and the SAME node, so `broadcast(fn = F, args)` is evaluated by
+/// literally the code that evaluates `{"op": F, "args": args}` — bit-identity
+/// by construction rather than by a parallel table that can drift.
+///
+/// (`display.rs` and `units.rs` already model `broadcast` this way, by building
+/// a synthetic `{op: fn, args}` node. Passing the name alongside the real node
+/// gets the same semantics without cloning `args` per cell — this is the
+/// hottest node in the per-cell profile.)
+fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
+    match op {
         // Elementwise / scalar arithmetic. If any operand is an array,
         // return an array (with ndarray broadcasting).
-        "+" | "-" | "*" | "/" | "^" => eval_arith(&node.op, &node.args, ctx),
+        "+" | "-" | "*" | "/" | "^" => eval_arith(op, &node.args, ctx),
 
         // Canonical unary negation: `canonicalize.rs` emits `neg`, so a
         // canonicalized expression can reach this oracle, and the vectorized
@@ -228,14 +245,14 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // Unary / scalar transcendentals.
         "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin"
         | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
-        | "acosh" | "atanh" => eval_unary(&node.op, &node.args, ctx),
+        | "acosh" | "atanh" => eval_unary(op, &node.args, ctx),
 
-        "atan2" => eval_binary(&node.op, &node.args, ctx),
+        "atan2" => eval_binary(op, &node.args, ctx),
 
         // n-ary min/max (esm-spec §4.2 — arity ≥ 2). Reuse the n-ary
         // arithmetic combiner so array operands broadcast through the same
         // ndarray path as `+`/`*`.
-        "min" | "max" => eval_arith(&node.op, &node.args, ctx),
+        "min" | "max" => eval_arith(op, &node.args, ctx),
 
         // Comparison operators — return 1.0 (true) or 0.0 (false) via the same
         // [`scalar_compare`] kernel the vectorized overlay uses (bit-identity by
@@ -246,14 +263,14 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             if node.args.len() != 2 {
                 return Value::Scalar(f64::NAN);
             }
-            eval_binary(&node.op, &node.args, ctx)
+            eval_binary(op, &node.args, ctx)
         }
 
         // Logical connectives (esm-spec §4.2): nonzero is true, the result is a
         // strict 1.0/0.0 flag, broadcast over array operands like arithmetic —
         // e.g. `and(code >= 1, code <= 13)` over an [x,y] fuel grid.
-        "and" | "or" => eval_arith(&node.op, &node.args, ctx),
-        "not" => eval_unary(&node.op, &node.args, ctx),
+        "and" | "or" => eval_arith(op, &node.args, ctx),
+        "not" => eval_unary(op, &node.args, ctx),
 
         "ifelse" => eval_ifelse(node, ctx),
 
@@ -293,6 +310,11 @@ pub(super) fn eval_op(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         "reshape" => eval_reshape(node, ctx),
         "transpose" => eval_transpose(node, ctx),
         "concat" => eval_concat(node, ctx),
+
+        // Element-wise application of the scalar operator named in `fn`
+        // (esm-spec §4.3.4). Re-enter with that name against the SAME node —
+        // see [`eval_op_named`]. Because the scalar-operator set excludes
+        // `broadcast` itself, this recursion is one level deep.
         "broadcast" => eval_broadcast(node, ctx),
 
         // Closed-registry function call (esm-spec §9.2): `datetime.*` calendar
@@ -2162,9 +2184,24 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // `covered_makearray_region_dispatch`), so routing to it keeps the answer
     // identical while making the work N-independent and pool-backed.
     //
-    // Gated on `loop_binds` being empty: inside a per-cell loop the nested
-    // aggregates depend on the enclosing bindings and the overlay would bail
-    // anyway — once per cell, which is pure loss.
+    // Gated on `loop_binds` being empty. That gate USED to be pure
+    // cost-avoidance — "inside a per-cell loop the nested aggregates depend on
+    // the enclosing bindings and the overlay would bail anyway, once per cell,
+    // which is pure loss". Since `nested_aggregate_capture` learned to see
+    // through shadowing, the bail is no longer certain, so the gate now earns
+    // its keep on CORRECTNESS instead, and must stay:
+    //
+    // nothing below tests the region values against `ctx.loop_binds`. A nested
+    // aggregate is still guarded (`eval_vec_nested_aggregate` scans those keys
+    // itself), but a region value that names an enclosing per-cell index
+    // DIRECTLY is not: the box carries no symbols, so `eval_vec_variable` walks
+    // past `cbind` and `syms` straight into the state/observed/parameter
+    // tables, and a loop index sharing a name with one of those would silently
+    // resolve to the wrong value. Admitting non-empty `loop_binds` therefore
+    // requires an `expr_mentions` scan of every region value against every
+    // bound name — which is exactly the per-axis, per-region body walk costed
+    // below, now paid once per cell — to buy a speed-up that only applies
+    // inside a loop something else already fell back to.
     //
     // The box carries NO output-index symbols, because a `makearray` reached
     // here is not a cell of an enclosing `arrayop`: nothing is bound around it,
@@ -2387,22 +2424,39 @@ pub(super) fn eval_concat(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     }
 }
 
+/// `broadcast` (esm-spec §4.3.4): apply the scalar operator named in `fn`
+/// element-wise to the operands in `args`.
+///
+/// The whole implementation is one delegation, and that is the fix for issue
+/// #101. It used to left-fold `args` through the BINARY kernel table, which
+/// made a one-operand `broadcast` the IDENTITY: `broadcast(fn = "-", [x])`
+/// returned `x`, unnegated, with no error — and so did `fn: "neg"`,
+/// `fn: "log"`, and even `fn: "not_a_real_op"`, because a missing kernel simply
+/// never got the chance to run. A missing `fn` silently became `"+"`.
+///
+/// Delegating to [`eval_op_named`] makes `broadcast(fn = F, args)` evaluate
+/// through EXACTLY the arm that evaluates `{"op": F, "args": args}` — unary
+/// maps, `neg`, `ifelse` and the n-ary folds alike — so the two spellings agree
+/// bit for bit and cannot drift.
 pub(super) fn eval_broadcast(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
-    // Fold the operands left-to-right without materializing a `Vec<Value>`:
-    // evaluate the first arg, then combine each subsequent one in place. This is
-    // the hottest node in the per-cell profile; the old `.collect()` allocated a
-    // temporary vector per node per cell.
-    let fn_name = node.broadcast_fn.as_deref().unwrap_or("+");
-    let mut args = node.args.iter();
-    let Some(first) = args.next() else {
-        return Value::Scalar(f64::NAN);
+    // Both gates below are `unreachable!` for the same reason the operator-name
+    // catch-all in `eval_op_named` is: every entry point into this evaluator
+    // runs `op_registry::check_broadcast_fn` first (via `check_no_spatial_ops`
+    // / `check_evaluable`), so reaching one means a gate was bypassed — a bug
+    // in THIS crate. The alternative, a NaN sentinel, is indistinguishable from
+    // a legitimate result, which is precisely how #101 stayed invisible.
+    let Some(fn_name) = node.broadcast_fn.as_deref() else {
+        unreachable!(
+            "`broadcast` reached the evaluator with no `fn`; every entry point must gate \
+             with op_registry::check_broadcast_fn() first"
+        )
     };
-    let mut out = eval(first, ctx);
-    for next in args {
-        let v = eval(next, ctx);
-        out = combine(fn_name, out, v);
-    }
-    out
+    assert!(
+        crate::op_registry::is_scalar_operator(fn_name),
+        "`broadcast` fn '{fn_name}' is not a scalar operator and reached the evaluator; \
+         every entry point must gate with op_registry::check_broadcast_fn() first"
+    );
+    eval_op_named(fn_name, node, ctx)
 }
 
 /// Evaluate a simple index expression given concrete loop variable bindings.

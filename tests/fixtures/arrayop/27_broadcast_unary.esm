@@ -1,0 +1,85 @@
+{
+  "esm": "0.1.0",
+  "metadata": {
+    "name": "arrayop_27_broadcast_unary",
+    "description": "Exercises `broadcast` with a SINGLE operand (esm-spec §4.3.4: 'applies a scalar operator element-wise to one or more broadcast-compatible arrays'). `a` is a (3,) vector holding [1, 4, 9]; each probe integrates a constant tendency read out of a one-operand broadcast, so its value at t = 1 IS that element. broadcast(fn, [a]) MUST equal the bare {op: fn, args: [a]} node applied element-wise — for the unary functions (neg, -, sqrt, log) and for a genuinely n-ary fn applied to one operand (+), which folds to the identity exactly as the bare `+(a)` node does. Regression for issue #101: a one-operand broadcast used to discard its `fn` and return the operand unchanged, so `negated` came out +4 instead of -4.",
+    "authors": ["EarthSciAST"],
+    "tags": ["arrayop", "conformance", "broadcast", "unary"]
+  },
+  "models": {
+    "BroadcastUnary": {
+      "variables": {
+        "a": { "type": "state" },
+        "negated": { "type": "state" },
+        "minused": { "type": "state" },
+        "rooted": { "type": "state" },
+        "logged": { "type": "state" },
+        "identity": { "type": "state" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["a", 1] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["a", 2] }], "wrt": "t" }, "rhs": 0.0 },
+        { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["a", 3] }], "wrt": "t" }, "rhs": 0.0 },
+        {
+          "_comment": "negated = broadcast(neg, a)[2] = -a[2] = -4. Under the #101 bug this was +4.",
+          "lhs": { "op": "D", "args": ["negated"], "wrt": "t" },
+          "rhs": {
+            "op": "index",
+            "args": [{ "op": "broadcast", "args": ["a"], "fn": "neg" }, 2]
+          }
+        },
+        {
+          "_comment": "minused = broadcast(-, a)[3] = -a[3] = -9. A single-operand `-` is unary negation, exactly as for the bare node (esm-spec §4.2: `-` is unary OR binary).",
+          "lhs": { "op": "D", "args": ["minused"], "wrt": "t" },
+          "rhs": {
+            "op": "index",
+            "args": [{ "op": "broadcast", "args": ["a"], "fn": "-" }, 3]
+          }
+        },
+        {
+          "_comment": "rooted = broadcast(sqrt, a)[3] = sqrt(9) = 3.",
+          "lhs": { "op": "D", "args": ["rooted"], "wrt": "t" },
+          "rhs": {
+            "op": "index",
+            "args": [{ "op": "broadcast", "args": ["a"], "fn": "sqrt" }, 3]
+          }
+        },
+        {
+          "_comment": "logged = broadcast(log, a)[2] = ln(4) = 1.3862943611198906.",
+          "lhs": { "op": "D", "args": ["logged"], "wrt": "t" },
+          "rhs": {
+            "op": "index",
+            "args": [{ "op": "broadcast", "args": ["a"], "fn": "log" }, 2]
+          }
+        },
+        {
+          "_comment": "identity = broadcast(+, a)[2] = a[2] = 4. `+` IS n-ary from one operand, so folding to the identity is correct here — and is the reason the arity rule is derived from the operator rather than hard-coded to 'two or more'.",
+          "lhs": { "op": "D", "args": ["identity"], "wrt": "t" },
+          "rhs": {
+            "op": "index",
+            "args": [{ "op": "broadcast", "args": ["a"], "fn": "+" }, 2]
+          }
+        }
+      ],
+      "tolerance": { "rel": 1.0e-6 },
+      "tests": [
+        {
+          "id": "broadcast_unary_applies_fn",
+          "description": "Each probe equals the corresponding element of the bare unary node applied to `a`. A binding that discards `fn` on a one-operand broadcast returns the operand instead, so `negated` reads +4, `minused` reads +9, `rooted` reads 9 and `logged` reads 4 — every assertion below fails, and by a wide margin rather than a tolerance hair.",
+          "initial_conditions": {
+            "a[1]": 1.0, "a[2]": 4.0, "a[3]": 9.0,
+            "negated": 0.0, "minused": 0.0, "rooted": 0.0, "logged": 0.0, "identity": 0.0
+          },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "negated",  "time": 1.0, "expected": -4.0 },
+            { "variable": "minused",  "time": 1.0, "expected": -9.0 },
+            { "variable": "rooted",   "time": 1.0, "expected": 3.0 },
+            { "variable": "logged",   "time": 1.0, "expected": 1.3862943611198906 },
+            { "variable": "identity", "time": 1.0, "expected": 4.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -433,6 +433,97 @@ function _ops_with_dim_class(class::Symbol)::Set{String}
 end
 
 """
+    _SCALAR_OP_CATEGORIES
+
+The registry [`_OpSpec`](@ref) categories whose ops are SCALAR operators — the
+ops that consume and produce scalars and therefore apply element-wise when
+lifted over an array. This is the positive half of esm-spec §4.3.4's
+"`fn` must name a scalar operator (arithmetic, elementary function,
+comparison, etc.)"; its complement is the STRUCTURAL half of the vocabulary —
+`:array` (`index`/`makearray`/`broadcast`/`reshape`/`transpose`/`concat`),
+`:aggregate` (`arrayop`/`aggregate`), `:calculus` (`D`/`ic`/`grad`/`div`/
+`laplacian`), `:function` (`fn`/`call`), `:data` (`const`/`enum`),
+`:geometry`, `:value_invention` — none of which is a scalar operator.
+
+`:constant` (the niladic `pi`/`e`/`true`/`false`) IS a scalar category; a
+`broadcast` naming one is nonetheless rejected, by the ARITY half of the
+contract (`0:0` admits no operands). Consumers: [`_is_scalar_op`](@ref) and
+[`_broadcast_fn_problem`](@ref).
+"""
+const _SCALAR_OP_CATEGORIES =
+    (:arithmetic, :comparison, :logical, :control, :elementary, :constant)
+
+"""
+    _is_scalar_op(name::AbstractString) -> Bool
+
+True iff `name` is a REGISTERED op whose category is one of
+[`_SCALAR_OP_CATEGORIES`](@ref). An op outside the registry (an open-namespace
+rewrite target, a registered-function name, a template op) is NOT a scalar op:
+its meaning is supplied by a rewrite rule, so it cannot be applied element-wise
+by a `broadcast`.
+"""
+function _is_scalar_op(name::AbstractString)::Bool
+    s = _op_spec(name)
+    return s !== nothing && s.category in _SCALAR_OP_CATEGORIES
+end
+
+"""
+    _broadcast_fn_problem(fn, nargs::Int) -> Union{Nothing,NamedTuple}
+
+The `broadcast.fn` contract of esm-spec §4.3.4, as pure data: `nothing` when
+`fn` is a legal scalar operator for `nargs` operands, otherwise a
+`(kind::Symbol, message::String)` naming the defect. `kind` is one of
+
+- `:missing`    — the `broadcast` node carries no `fn` field (or an empty one),
+- `:unknown`    — `fn` names no registry op,
+- `:non_scalar` — `fn` names a STRUCTURAL op (`aggregate`, `index`,
+                  `makearray`, `grad`, …), not a scalar operator,
+- `:arity`      — `fn` is a scalar op but `nargs` is outside its arity.
+
+**The rule is `broadcast(fn: F, args)` is legal exactly when `{op: F, args}`
+is legal** — the arity bound is the REGISTRY's, not a broadcast-specific one.
+Two consequences are deliberate, not accidents of the table:
+
+- a 1-operand `+` / `*` is LEGAL (arity `1:typemax`) and means the identity,
+  `+(x) ≡ x` — the shared property corpus emits exactly this node; while
+- a 1-operand `min` / `max` is an ERROR (arity `2:typemax`), because esm-spec
+  §4.2 says conforming bindings MUST reject `min`/`max` with fewer than two
+  arguments; and
+- a 2-operand `sin` is an ERROR (arity `1:1`) rather than a silent NaN.
+
+This is the SINGLE source of the contract, shared by the `validate()` finding
+`invalid_broadcast_fn` (validate.jl), the build-time lowering
+`E_TREEWALK_BROADCAST_FN` (tree_walk/build_helpers.jl), and the MTK exporter's
+`_build_broadcast` (ext/mtk_ext/lowering.jl) — so a document `validate()`
+accepts is exactly one both back ends lower. `kind` distinguishes the four
+defects for diagnostics (`details["reason"]`); the DIAGNOSTIC CODE is the single
+cross-binding `invalid_broadcast_fn` registered in esm-spec §9.6.6.
+"""
+function _broadcast_fn_problem(fn, nargs::Int)
+    if fn === nothing || (fn isa AbstractString && isempty(fn))
+        return (kind = :missing,
+                message = "'broadcast' requires an 'fn' field naming a scalar " *
+                          "operator (esm-spec §4.3.4)")
+    end
+    name = String(fn)
+    spec = _op_spec(name)
+    if spec === nothing || !(spec.category in _SCALAR_OP_CATEGORIES)
+        return (kind = spec === nothing ? :unknown : :non_scalar,
+                message = "'broadcast' fn '$name' does not name a scalar " *
+                          "operator (esm-spec §4.3.4)")
+    end
+    ar = spec.arity
+    if ar !== nothing && !(nargs in ar)
+        want = first(ar) == last(ar) ? "$(first(ar))" :
+               (last(ar) == typemax(Int) ? "$(first(ar))+" : "$(first(ar))-$(last(ar))")
+        return (kind = :arity,
+                message = "'broadcast' fn '$name' takes $want operand(s) but " *
+                          "the node has $nargs (esm-spec §4.3.4)")
+    end
+    return nothing
+end
+
+"""
     _UNARY_ELEMENTWISE_OPS
 
 Ordered table of the MECHANICAL unary elementwise ops — exactly the ops whose

@@ -540,7 +540,15 @@ impl<'m> TapeBuilder<'m> {
 
     /// Mirror of `eval_vec_op`'s dispatch (via the SAME `vec_op_code`).
     fn lower_op(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
-        match vec_op_code(&node.op) {
+        self.lower_op_code(vec_op_code(&node.op), node, bx)
+    }
+
+    /// [`Self::lower_op`] with the operator already resolved to a [`VecOp`], so
+    /// the `Broadcast` arm can re-enter with the code of its `fn` against the
+    /// SAME node (mirroring `eval_vec_op_code` and the oracle's
+    /// `eval_op_named` — the tape's half of the issue-#101 fix).
+    fn lower_op_code(&mut self, code: VecOp, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
+        match code {
             VecOp::Arith(code) => {
                 let Some((first, rest)) = node.args.split_first() else {
                     bail_tape!("op: `{}` with no arguments", node.op);
@@ -590,18 +598,20 @@ impl<'m> TapeBuilder<'m> {
                 let v = self.lower_expr(&node.args[0], bx)?;
                 Ok(self.emit_un(code, v))
             }
+            // esm-spec §4.3.4: apply the scalar operator named in `fn`
+            // element-wise. Lower it as the bare `{"op": fn, "args": args}` node
+            // would be lowered, so the tape emits the same instructions the
+            // overlay and the oracle evaluate (issue #101 — this arm used to
+            // resolve `fn` through the BINARY table and left-fold, so a
+            // one-operand `broadcast` lowered to a bare copy of `args[0]`).
             VecOp::Broadcast => {
-                let code = BinCode::of(node.broadcast_fn.as_deref().unwrap_or("+"));
-                let mut it = node.args.iter();
-                let Some(first) = it.next() else {
-                    bail_tape!("op: `broadcast` with no operands");
+                let Some(fn_name) = node.broadcast_fn.as_deref() else {
+                    bail_tape!("op: `broadcast` with no `fn`");
                 };
-                let mut acc = self.lower_expr(first, bx)?;
-                for a in it {
-                    let v = self.lower_expr(a, bx)?;
-                    acc = self.emit_bin(code, acc, v)?;
+                if !crate::op_registry::is_scalar_operator(fn_name) {
+                    bail_tape!("op: broadcast fn `{fn_name}` is not a scalar operator");
                 }
-                Ok(acc)
+                self.lower_op_code(vec_op_code(fn_name), node, bx)
             }
             VecOp::Unsupported => {
                 bail_tape!("op: unsupported operator `{}`/{}", node.op, node.args.len())
@@ -1064,7 +1074,10 @@ impl<'m> TapeBuilder<'m> {
     // -- nested aggregate -----------------------------------------------------
 
     /// Mirror of `eval_vec_nested_aggregate` (same `arrayop_spec`, same
-    /// binding-independence precondition).
+    /// binding-independence precondition — the SHARED
+    /// [`nested_aggregate_capture`] predicate, so the two paths cannot drift;
+    /// there is no `ctx.loop_binds` at build time, which is why only the box's
+    /// own symbols and contraction names are offered to it).
     fn lower_nested_aggregate(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         let Some(spec) = arrayop_spec(node) else {
             bail_tape!("aggregate: node carries no `expr` body");
@@ -1072,11 +1085,9 @@ impl<'m> TapeBuilder<'m> {
         if spec.ranges.is_empty() {
             bail_tape!("aggregate: rank-0 output (scalar reduction)");
         }
-        for name in bx.syms.iter().chain(bx.cnames.iter()) {
-            if expr_mentions(spec.body, name) || spec.filter.is_some_and(|f| expr_mentions(f, name))
-            {
-                bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
-            }
+        if let Some(name) = nested_aggregate_capture(&spec, bx.syms.iter().chain(bx.cnames.iter()))
+        {
+            bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
         }
         self.lower_arrayop(
             spec.idx_names,

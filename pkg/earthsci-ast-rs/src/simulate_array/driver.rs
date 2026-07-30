@@ -518,11 +518,21 @@ impl ArrayCompiled {
         // wholesale to the legacy interpreter path; `ESS_VEC_DISABLE=1` (the
         // pure per-cell oracle reference) implies it, since the tape compiles
         // the vectorized overlay's semantics.
+        //
+        // The build report's fallback list is kept, not dropped: a rule the
+        // tape could not compile is evaluated by the per-cell oracle, whose
+        // cost grows with the cell count, and that is invisible from the
+        // outside (the numbers are bit-identical — only the runtime differs).
+        // It rides out on [`SolutionMetadata::tape_fallbacks`] so a caller —
+        // including the wasm/JS host, which has no other window into the
+        // build — can name the offending rule and the reason.
+        let mut tape_fallbacks: Vec<(String, String)> = Vec::new();
         let tape: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
             if tape_disabled() || vec_disabled() {
                 None
             } else {
-                let (prog, _report) = self.build_tape(discrete_forcing);
+                let (prog, report) = self.build_tape(discrete_forcing);
+                tape_fallbacks = report.fallbacks;
                 Some((Rc::new(prog), Rc::new(self.observed_rules.clone())))
             };
 
@@ -560,6 +570,7 @@ impl ArrayCompiled {
                     n_jacobian_calls: stats.n_jacobian_calls,
                     n_accepted_steps: stats.n_accepted_steps,
                     n_rejected_steps: stats.n_rejected_steps,
+                    tape_fallbacks,
                 },
             });
         }
@@ -679,6 +690,7 @@ impl ArrayCompiled {
                 n_jacobian_calls: stats.n_jacobian_calls,
                 n_accepted_steps: stats.n_accepted_steps,
                 n_rejected_steps: stats.n_rejected_steps,
+                tape_fallbacks,
             },
         })
     }
