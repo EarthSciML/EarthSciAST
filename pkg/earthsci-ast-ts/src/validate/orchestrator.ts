@@ -41,6 +41,7 @@ import {
   validateAggregateIndexSets,
   validateRelationalNodesInContinuous,
 } from './model-checks.js'
+import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import {
   validateReactionConsistency,
   validateReactionReferenceIntegrity,
@@ -189,6 +190,16 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateAggregateIndexSets(model, modelPath, esmFile))
       errors.push(...validateRelationalNodesInContinuous(model, modelPath))
 
+      // esm-spec §4.3.4. Two rules about ARRAY-LEVEL expressions, both static:
+      // a `broadcast` node's `fn` must name a scalar operator at an arity that
+      // operator admits (`invalid_broadcast_fn`), and an operand of an
+      // array-level expression must be alignable to the result by index-set
+      // NAME (`array_shape_mismatch`). Independent of coupling — an operand
+      // carrying an axis the result lacks is unalignable however the model is
+      // wired — so both run on every model.
+      errors.push(...validateBroadcastFns(model, modelPath))
+      errors.push(...validateArrayBroadcastShapes(model, modelPath))
+
       // Recursively validate subsystems
       if (model.subsystems) {
         for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
@@ -212,6 +223,8 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateAggregateJoinKeys(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateIndexSets(subsystem, subsystemPath, esmFile))
           errors.push(...validateRelationalNodesInContinuous(subsystem, subsystemPath))
+          errors.push(...validateBroadcastFns(subsystem, subsystemPath))
+          errors.push(...validateArrayBroadcastShapes(subsystem, subsystemPath))
         }
       }
     }
@@ -240,6 +253,11 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       )
       errors.push(...validateReactionRateUnits(reactionSystem, systemPath))
       errors.push(...validateReactionSystemICs(reactionSystem, systemName, systemPath))
+      // §4.3.4: a reaction system's `constraint_equations` and event bodies are
+      // expression positions like any other, so a `broadcast` node hiding in
+      // one gets the same `fn` check. (Species have no `shape`, so the
+      // index-set alignment rule has nothing to bind to here.)
+      errors.push(...validateBroadcastFns(reactionSystem, systemPath))
 
       // Recursively validate subsystems (unresolved SubsystemRef
       // entries carry no species/reactions — validating them is a

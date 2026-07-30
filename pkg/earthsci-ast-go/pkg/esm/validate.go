@@ -390,7 +390,11 @@ type structuralScan struct {
 	// name in a `rate`) instead of the generic `undefined_variable`. Empty means
 	// `undefined_variable`.
 	undefCode string
-	errors    []StructuralError
+	// eqIndex is the index of the equation whose expression tree is currently
+	// being walked, recorded in the `equation_index` detail of the findings that
+	// carry one (invalid_broadcast_fn). It is 0 outside an equation walk.
+	eqIndex int
+	errors  []StructuralError
 }
 
 // undefinedNameCode is the code for an undeclared bare name in the current
@@ -409,6 +413,15 @@ func (s *structuralScan) withUndefinedCode(code string, fn func()) {
 	prev := s.undefCode
 	s.undefCode = code
 	defer func() { s.undefCode = prev }()
+	fn()
+}
+
+// withEqIndex runs fn with the current equation index set, restoring it
+// afterwards so a later non-equation walk never inherits a stale value.
+func (s *structuralScan) withEqIndex(i int, fn func()) {
+	prev := s.eqIndex
+	s.eqIndex = i
+	defer func() { s.eqIndex = prev }()
 	fn()
 }
 
@@ -727,7 +740,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 
 	// Reference integrity runs for EVERY model (F-1).
 	for i, eq := range model.Equations {
-		s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/equations/%d", basePath, i), modelName)
+		s.withEqIndex(i, func() {
+			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/equations/%d", basePath, i), modelName)
+		})
 	}
 
 	// An OBSERVED variable's defining expression is a reference site like any
@@ -750,7 +765,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// `initialization_equations` hold at t=0 but are ordinary equations, and
 	// `guesses` seed a nonlinear solve. Both name variables; neither was reached.
 	for i, eq := range model.InitializationEquations {
-		s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), modelName)
+		s.withEqIndex(i, func() {
+			s.validateEquationRefs(eq, allVars, fmt.Sprintf("%s/initialization_equations/%d", basePath, i), modelName)
+		})
 	}
 	s.validateGuesses(model.Guesses, allVars, basePath, modelName)
 
@@ -812,6 +829,12 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// variables and the document `index_sets` registry) and run regardless of
 	// whether the model is coupled. See validate_static_checks.go.
 	s.validateModelStaticAggregateChecks(modelName, model, basePath)
+
+	// esm-spec §4.3.4 "Broadcast compatibility": the operands of a bare
+	// array-level expression align by index-set NAME, and one carrying a set the
+	// result does not have is `array_shape_mismatch`. Both shapes are declared,
+	// so the finding is static. See validate_array_shapes.go.
+	s.validateArrayBroadcastShapes(model, basePath)
 }
 
 // validateExpressionVariables checks that every variable referenced in an
@@ -1057,6 +1080,21 @@ func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[str
 	// enum `season` and the symbol `summer` as undefined variables.
 	if node.Op == OpEnum {
 		return
+	}
+
+	// esm-spec §4.3.4: a `broadcast` node's `fn` MUST name a scalar operator, and
+	// the operand count must be one that operator accepts.
+	//
+	// This rides the reference walker deliberately. `broadcast.fn` is a NAME
+	// embedded in an expression, exactly like the variable names this walk
+	// resolves, and every expression-bearing block of the document already routes
+	// through here — model equations, `initialization_equations`, `guesses`,
+	// `tests[].reference`, observed expressions, event conditions and affects,
+	// reaction rates, constraint equations, and data-loader `unit_conversion`s. A
+	// separate pass would have had to re-enumerate all of them, and would have
+	// drifted. Mirrors Rust structural.rs `check_broadcast_fn_node`.
+	if node.Op == opBroadcast {
+		s.checkBroadcastFnNode(node, path)
 	}
 
 	// The error path stays at the containing expression FIELD: a bad reference
