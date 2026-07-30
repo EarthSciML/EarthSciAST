@@ -295,12 +295,30 @@ pub fn is_core_op(op: &str) -> bool {
 /// scalar operands to a scalar result (esm-spec §4.2 "arithmetic, elementary
 /// functions, comparisons")?
 ///
-/// This is exactly the set a `broadcast` node's `fn` may name (§4.3.4: "the
-/// `fn` value must name a scalar operator"), and it is what makes the
-/// `broadcast` contract stateable in one line:
+/// One set answers two questions the format asks in two different places,
+/// because they are the same question:
 ///
-/// > `{"op": "broadcast", "fn": F, "args": A}` means what `{"op": F, "args": A}`
-/// > means, applied element-wise.
+/// * **What may a `broadcast` node's `fn` name?** §4.3.4: "the `fn` value must
+///   name a scalar operator". That is what makes the `broadcast` contract
+///   stateable in one line —
+///
+///   > `{"op": "broadcast", "fn": F, "args": A}` means what `{"op": F, "args": A}`
+///   > means, applied element-wise
+///
+///   — and [`check_broadcast_fn`] enforces exactly it.
+/// * **Does element alignment descend into a node's operands?** An ARRAY-LEVEL
+///   `a * b` means "multiply corresponding elements", so the operands must first
+///   be brought onto a common index space (§4.3.4). Every other op consumes its
+///   operands WHOLE and defines its own operand contract — an `aggregate` and a
+///   `makearray` name their axes, an `index` gathers, the shape ops restructure,
+///   the relational and geometry kernels return arrays of an unrelated shape —
+///   so alignment must not reach inside them. [`is_elementwise_node`] lifts this
+///   predicate to nodes.
+///
+/// Keeping ONE list rather than two is deliberate: issues #100 and #101 each
+/// arrived carrying its own copy, the two copies agreed on all forty names, and
+/// two hand-maintained spellings of one question is precisely how they would
+/// eventually stop agreeing.
 ///
 /// Everything whose meaning is NOT pointwise is excluded, and each exclusion is
 /// load-bearing:
@@ -317,8 +335,16 @@ pub fn is_core_op(op: &str) -> bool {
 /// * the build-time relational and geometry ops (`skolem`, `rank`, `distinct`,
 ///   `argmin`, `argmax`, `intersect_polygon`, `polygon_intersection_area`).
 ///
-/// Every name here is also in [`arity_of`], which [`check_broadcast_fn`] relies
-/// on (pinned by `every_scalar_operator_has_an_arity`).
+/// Every name here is also in [`arity_of`]: this is a SUBSET of the evaluable
+/// core, never an extension of it (pinned by `every_scalar_operator_has_an_arity`
+/// and `the_scalar_operator_set_partitions_the_core`), which is the invariant
+/// [`check_broadcast_fn`] relies on when it derives the `fn`'s legal arity. In
+/// particular the registry has no alias mechanism and no alias entries — `pow`,
+/// `**`, `power` are NOT spellings of `^`, `=` is not a spelling of `==`, and
+/// none of them is an operator in this format at all (they are open-tier names
+/// that [`crate::simulate_array`] rejects as `unlowered_operator`). Adding one
+/// here would invent an operator rather than classify one;
+/// `the_registry_has_no_operator_aliases` pins that.
 #[must_use]
 pub fn is_scalar_operator(op: &str) -> bool {
     matches!(
@@ -333,6 +359,41 @@ pub fn is_scalar_operator(op: &str) -> bool {
         // Comparisons, logic and the pointwise conditional (§4.2).
         | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not" | "ifelse"
     )
+}
+
+/// Does element alignment see THROUGH this node to its `args` — i.e. are the
+/// node's operands in elementwise position (esm-spec §4.3.4)?
+///
+/// This is [`is_scalar_operator`] lifted from op NAMES to NODES, plus the one
+/// node whose elementwise-ness lives in a FIELD rather than in its name:
+/// `broadcast` applies the scalar operator named in `fn` element by element, so
+/// `{"op":"broadcast","fn":"*","args":[w2,z1]}` MEANS `{"op":"*","args":[w2,z1]}`
+/// and its operands must align exactly as the bare spelling's do. Treating
+/// `broadcast` as opaque made the two spellings disagree — the bare form aligned
+/// by index-set name while the `broadcast` form silently kept the positional
+/// flatten, which is the very divergence issue #100 exists to close.
+///
+/// The node-level / name-level split is exactly why [`is_scalar_operator`] must
+/// keep EXCLUDING `broadcast`: a `broadcast` NODE is elementwise in its `args`,
+/// but the STRING `"broadcast"` is not a kernel name, and any caller handed it
+/// as one — as an `fn`, or as a re-dispatch target in the evaluators — recurses
+/// forever. Ask the node question of a node and the name question of a name.
+///
+/// The `fn` guard is deliberately conservative: alignment descends only when
+/// `fn` names a scalar operator the evaluators actually have a kernel for. A
+/// `broadcast` carrying some other `fn` has no elementwise meaning to preserve —
+/// it is now rejected outright (issue #101) — so it keeps the legacy positional
+/// lowering rather than being reinterpreted. An ABSENT `fn` likewise keeps the
+/// historical `+` classification: since #101 such a node is a hard
+/// `invalid_broadcast_fn` error ([`check_broadcast_fn`]) and never reaches an
+/// evaluator, so this arm decides only how an UNVALIDATED document is aligned,
+/// and it keeps aligning it the way it always did.
+#[must_use]
+pub fn is_elementwise_node(node: &ExpressionNode) -> bool {
+    if node.op == "broadcast" {
+        return is_scalar_operator(node.broadcast_fn.as_deref().unwrap_or("+"));
+    }
+    is_scalar_operator(&node.op)
 }
 
 /// Validate a `broadcast` node's `fn` field (esm-spec §4.3.4).
@@ -651,19 +712,72 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Issue #101 — `broadcast.fn` is an operator name and must be checked.
+    // Issues #100 / #101 — the scalar-operator set. ONE list answers both
+    // "what may a `broadcast.fn` name?" and "does element alignment descend
+    // through this node?", so both branches' pins run against it.
     // -----------------------------------------------------------------------
+
+    /// Every op this registry knows, partitioned by [`is_scalar_operator`].
+    ///
+    /// The list is exhaustive over [`arity_of`] as of this commit. Adding an op
+    /// to `arity_of` without deciding which side it falls on will fail
+    /// `the_scalar_operator_set_partitions_the_core`, which is the point: both
+    /// `broadcast.fn` legality and array-level element alignment (esm-spec
+    /// §4.3.4) are defined by this partition, and a new op silently defaulting
+    /// to "not scalar" is a decision, not an accident.
+    const SCALAR: &[&str] = &[
+        "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
+        "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+        "asinh", "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=", ">",
+        ">=", "and", "or", "not",
+    ];
+    const NOT_SCALAR: &[&str] = &[
+        "D",
+        "ic",
+        "Pre",
+        "const",
+        "true",
+        "fn",
+        "enum",
+        "table_lookup",
+        "apply_expression_template",
+        "aggregate",
+        "makearray",
+        "index",
+        "broadcast",
+        "reshape",
+        "transpose",
+        "concat",
+        "skolem",
+        "rank",
+        "distinct",
+        "argmin",
+        "argmax",
+        "intersect_polygon",
+        "polygon_intersection_area",
+    ];
+
+    /// [`is_scalar_operator`] may only CLASSIFY registry ops, never invent them.
+    #[test]
+    fn the_scalar_operator_set_partitions_the_core() {
+        for op in SCALAR {
+            assert!(is_core_op(op), "`{op}` is scalar but not a core op");
+            assert!(is_scalar_operator(op), "`{op}` should be a scalar operator");
+        }
+        for op in NOT_SCALAR {
+            assert!(is_core_op(op), "`{op}` is listed but not a core op");
+            assert!(
+                !is_scalar_operator(op),
+                "`{op}` should not be a scalar operator"
+            );
+        }
+    }
 
     /// Every scalar operator must have an entry in `arity_of` — the invariant
     /// `check_broadcast_fn` relies on when it derives the `fn`'s legal arity.
     #[test]
     fn every_scalar_operator_has_an_arity() {
-        for op in [
-            "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
-            "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
-            "asinh", "acosh", "atanh", "atan2", "min", "max", "==", "!=", "<", "<=", ">", ">=",
-            "and", "or", "not", "ifelse",
-        ] {
+        for op in SCALAR {
             assert!(is_scalar_operator(op), "`{op}` must be a scalar operator");
             assert!(
                 arity_of(op).is_some(),
@@ -672,39 +786,46 @@ mod tests {
         }
     }
 
+    /// The registry has NO alias mechanism and no alias entries. `pow`, `**` and
+    /// `power` are not spellings of `^`; `=` is not a spelling of `==`; `false`
+    /// is not the counterpart of the nullary `true`. None of them is an operator
+    /// in this format — they are open-tier names, rejected as
+    /// `unlowered_operator` when a model carrying one is built.
+    ///
+    /// This is pinned because the obvious "fix" — adding them to
+    /// [`is_scalar_operator`] so array-level alignment covers them — would
+    /// invent operators the spec's §4.2 table does not have, and would not make
+    /// them runnable either.
+    #[test]
+    fn the_registry_has_no_operator_aliases() {
+        for op in ["pow", "**", "power", "=", "false"] {
+            assert!(!is_core_op(op), "`{op}` must not be a registry op");
+            assert!(
+                !is_scalar_operator(op),
+                "`{op}` must not be a scalar operator"
+            );
+            assert!(
+                matches!(
+                    check_node(&ExpressionNode {
+                        op: op.to_string(),
+                        args: vec![Expr::Variable("z".into()), Expr::Number(2.0)],
+                        ..Default::default()
+                    }),
+                    Err(OpError::Unlowered { .. })
+                ),
+                "`{op}` must be reported as an open-tier / unlowered operator"
+            );
+        }
+    }
+
     /// The exclusions are the load-bearing half of `is_scalar_operator`: none of
     /// these has a pointwise meaning, so none may be spelled as a `broadcast.fn`.
-    /// `broadcast` itself heads the list — allowing it would make the
-    /// evaluators' `fn` re-dispatch recurse forever.
+    /// `broadcast` itself is in [`NOT_SCALAR`] — allowing it would make the
+    /// evaluators' `fn` re-dispatch recurse forever. The two trailing names are
+    /// not registry ops at all: an open-tier rewrite target and a typo.
     #[test]
     fn non_pointwise_ops_are_not_scalar_operators() {
-        for op in [
-            "broadcast",
-            "aggregate",
-            "makearray",
-            "index",
-            "reshape",
-            "transpose",
-            "concat",
-            "fn",
-            "D",
-            "ic",
-            "Pre",
-            "const",
-            "true",
-            "enum",
-            "table_lookup",
-            "apply_expression_template",
-            "skolem",
-            "rank",
-            "distinct",
-            "argmin",
-            "argmax",
-            "intersect_polygon",
-            "polygon_intersection_area",
-            "grad",
-            "not_a_real_op",
-        ] {
+        for op in NOT_SCALAR.iter().copied().chain(["grad", "not_a_real_op"]) {
             assert!(
                 !is_scalar_operator(op),
                 "`{op}` must NOT be usable as a `broadcast` fn"
@@ -819,5 +940,43 @@ mod tests {
             "op": "broadcast", "fn": "exp", "args": ["A"]
         })))
         .expect("`broadcast(fn=\"exp\", [A])` is pinned by tests/display/structural_ops.json");
+    }
+
+    /// [`is_elementwise_node`] sees through a `broadcast` to its `args`, because
+    /// `broadcast(fn: F, args)` MEANS `{op: F, args}` — so the two spellings of
+    /// one array-level expression align their operands identically (issue #100).
+    /// The `fn` guard keeps that conservative: a `broadcast` whose `fn` is not a
+    /// scalar operator has no elementwise meaning to preserve.
+    #[test]
+    fn is_elementwise_node_sees_through_broadcast() {
+        let bcast = |f: Option<&str>| ExpressionNode {
+            op: "broadcast".to_string(),
+            broadcast_fn: f.map(str::to_string),
+            args: vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
+            ..Default::default()
+        };
+        assert!(is_elementwise_node(&bcast(Some("*"))));
+        assert!(is_elementwise_node(&bcast(Some("atan2"))));
+        // An absent `fn` keeps the historical `+` classification; the node
+        // itself is now rejected by `check_broadcast_fn` (issue #101).
+        assert!(is_elementwise_node(&bcast(None)));
+        // Not a scalar operator: stay out.
+        assert!(!is_elementwise_node(&bcast(Some("pow"))));
+        assert!(!is_elementwise_node(&bcast(Some("aggregate"))));
+
+        // The NODE question and the NAME question differ on exactly one input:
+        // a `broadcast` node is elementwise in its args, but the string
+        // "broadcast" is not a legal kernel name.
+        assert!(!is_scalar_operator("broadcast"));
+
+        // Non-`broadcast` nodes are classified by name alone, as before.
+        let named = |op: &str| ExpressionNode {
+            op: op.to_string(),
+            args: vec![Expr::Variable("a".into())],
+            ..Default::default()
+        };
+        assert!(is_elementwise_node(&named("*")));
+        assert!(!is_elementwise_node(&named("index")));
+        assert!(!is_elementwise_node(&named("intersect_polygon")));
     }
 }

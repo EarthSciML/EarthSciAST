@@ -152,6 +152,15 @@ pub enum StructuralErrorCode {
     /// `{"op":"broadcast","fn":"not_a_real_op","args":[x]}` validated clean and
     /// then evaluated to `x` (issue #101).
     InvalidBroadcastFn,
+    /// A BARE array-level expression whose operand is declared over an index set
+    /// the result does not have (esm-spec §4.3.4). Operands of an array-level
+    /// expression align by index-set NAME, so an operand declared over a SUBSET
+    /// of the result's index sets broadcasts along the missing ones; one
+    /// carrying an index set the result does not carry has no axis to align to.
+    /// Both shapes are declared, so this is decidable here — and it must be
+    /// decided here, because the alternative is a positional flatten that
+    /// produces plausible, non-`NaN`, zero-padded garbage.
+    ArrayShapeMismatch,
 }
 
 impl std::fmt::Display for StructuralErrorCode {
@@ -182,6 +191,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::RelationalNodeInContinuous => "relational_node_in_continuous",
             Self::UndefinedIndexSet => "undefined_index_set",
             Self::InvalidBroadcastFn => "invalid_broadcast_fn",
+            Self::ArrayShapeMismatch => "array_shape_mismatch",
         };
         write!(f, "{s}")
     }

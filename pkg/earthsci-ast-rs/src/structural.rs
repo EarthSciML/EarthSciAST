@@ -244,6 +244,13 @@ pub(crate) fn validate_model(
     let state_var_set: HashSet<String> = state_vars.iter().cloned().collect();
     validate_aggregate_constraints(esm_file, model_name, model, &state_var_set, errors);
 
+    // Bare array-level expressions align their operands by index-set NAME
+    // (esm-spec §4.3.4). An operand carrying an index set the result does not
+    // have cannot be aligned at all — decidable from the declared shapes alone,
+    // so it is decided here rather than being flattened positionally at run
+    // time into plausible, zero-padded garbage.
+    validate_array_broadcast_shapes(model_name, model, errors);
+
     // A `default_units` that names a unit OTHER than the declared `units` means
     // the `default` NUMBER is expressed in the wrong unit — `units: "K"` with
     // `default: 25.0, default_units: "degC"` stores 25 for a variable that
@@ -719,6 +726,177 @@ fn validate_aggregate_constraints(
             let field_path = format!("{model_path}/equations/{eq_idx}/{field}");
             check_aggregates_in_expr(expr, &field_path, esm_file, state_vars, errors);
         }
+    }
+}
+
+/// Reject a BARE array-level expression whose operand carries an index set the
+/// result does not (esm-spec §4.3.4; issue #100).
+///
+/// A **bare** array-level expression is one written over whole arrays with no
+/// explicit index symbols — `D(dp) ~ w2 * z1`, `p3 ~ w2 * z1` — as opposed to
+/// the `aggregate` spelling, where the author names the axes and there is
+/// nothing to infer. Its operands align by index-set NAME: an operand declared
+/// over a SUBSET of the result's index sets broadcasts along the ones it is
+/// missing (a `[lat]` operand replicates along `lon` and `lev` in a
+/// `[lon,lat,lev]` result), and axis ORDER is immaterial (a `[lat,lon]` operand
+/// transposes). An operand carrying an index set the result does NOT have has
+/// no axis to align to and no defensible value to take.
+///
+/// Both shapes are declared, so the check is static. It is deliberately
+/// CONSERVATIVE: it fires only where both the result and the operand carry
+/// declared, non-repeating index-set names, and it descends only through
+/// ELEMENTWISE operators. Anonymous shapes (the results of `reshape` /
+/// `transpose` / `concat` / `makearray` / literal arrays) keep the positional
+/// `broadcast` convention of §4.3.4 and are not checked here.
+fn validate_array_broadcast_shapes(
+    model_name: &str,
+    model: &crate::Model,
+    errors: &mut Vec<StructuralError>,
+) {
+    let model_path = format!("/models/{model_name}");
+    let declared_axes: HashMap<&str, &Vec<String>> = model
+        .variables
+        .iter()
+        .filter_map(|(name, var)| {
+            var.shape
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|s| (name.as_str(), s))
+        })
+        .collect();
+    if declared_axes.is_empty() {
+        return;
+    }
+
+    // Equations whose LHS names a whole array: `D(var) ~ rhs` and `var ~ rhs`.
+    // An INDEXED LHS (`D(var[i]) ~ …`) is a per-cell equation whose RHS axes are
+    // the author's to spell, so it is left alone.
+    for (eq_idx, equation) in model.equations.iter().enumerate() {
+        let Some(target) = whole_array_lhs_target(&equation.lhs) else {
+            continue;
+        };
+        check_operand_axes(
+            &equation.rhs,
+            target,
+            &declared_axes,
+            &format!("{model_path}/equations/{eq_idx}/rhs"),
+            errors,
+        );
+    }
+
+    // A declared array-shaped observed's defining expression is the same bare
+    // array-level form with the same alignment rule.
+    for (var_name, variable) in &model.variables {
+        let Some(expr) = &variable.expression else {
+            continue;
+        };
+        check_operand_axes(
+            expr,
+            var_name,
+            &declared_axes,
+            &format!("{model_path}/variables/{var_name}/expression"),
+            errors,
+        );
+    }
+}
+
+/// The whole-array variable an equation LHS defines: `D(var, t)` or a bare
+/// `var`. `None` for an indexed / aggregate / expression LHS.
+fn whole_array_lhs_target(lhs: &crate::Expr) -> Option<&str> {
+    match lhs {
+        crate::Expr::Variable(name) => Some(name.as_str()),
+        crate::Expr::Operator(node) if node.op == "D" => match node.args.first() {
+            Some(crate::Expr::Variable(name)) => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Report every operand of the bare array-level expression `expr` whose
+/// declared index sets are not a subset of `target`'s. See
+/// [`validate_array_broadcast_shapes`] for the rule and its deliberate limits.
+fn check_operand_axes(
+    expr: &crate::Expr,
+    target: &str,
+    declared_axes: &HashMap<&str, &Vec<String>>,
+    path: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    let Some(target_axes) = declared_axes.get(target) else {
+        return;
+    };
+    // A repeated axis name gives no unambiguous position to align to; the
+    // runtime keeps the positional lowering there, so do not reject it here.
+    if (1..target_axes.len()).any(|d| target_axes[..d].contains(&target_axes[d])) {
+        return;
+    }
+    let mut operands: Vec<&str> = Vec::new();
+    collect_bare_array_operands(expr, declared_axes, &mut operands);
+    for operand in operands {
+        let Some(operand_axes) = declared_axes.get(operand) else {
+            continue;
+        };
+        for axis in operand_axes.iter() {
+            if target_axes.contains(axis) {
+                continue;
+            }
+            errors.push(StructuralError {
+                path: path.to_string(),
+                code: StructuralErrorCode::ArrayShapeMismatch,
+                message: format!(
+                    "Operand '{operand}' of the array-level expression for '{target}' is \
+                     declared over index set '{axis}', which '{target}' is not shaped over"
+                ),
+                details: serde_json::json!({
+                    "variable": target,
+                    "operand": operand,
+                    "operand_shape": operand_axes,
+                    "result_shape": target_axes,
+                    "missing_index_set": axis,
+                }),
+            });
+            break;
+        }
+    }
+}
+
+/// Collect the declared array-shaped variables an expression references in BARE
+/// (whole-array, elementwise) position.
+///
+/// The descent enters only ELEMENTWISE nodes
+/// ([`crate::op_registry::is_elementwise_node`]) — arithmetic, the elementary
+/// functions, the conditionals, and a `broadcast` whose `fn` names one of them
+/// — because those are the only ones for which "corresponding elements" is
+/// what the expression means. Every other op consumes its operands whole under
+/// its own contract: an `aggregate` and a `makearray` name their axes, an
+/// `index` gathers, the shape ops restructure, and a geometry kernel like
+/// `intersect_polygon` legitimately takes `[src_verts, coord]` operands and
+/// returns a `[clip_ring, coord]` result.
+/// This mirrors the descent the array-runtime lowering uses when it wraps
+/// leaves in per-cell gathers
+/// (`simulate_array::compile::collect_wrapped_array_leaves`) — the two must
+/// agree on WHICH references the alignment rule governs.
+fn collect_bare_array_operands<'a>(
+    expr: &'a crate::Expr,
+    declared_axes: &HashMap<&str, &Vec<String>>,
+    out: &mut Vec<&'a str>,
+) {
+    match expr {
+        crate::Expr::Variable(name) => {
+            if declared_axes.contains_key(name.as_str()) {
+                out.push(name.as_str());
+            }
+        }
+        crate::Expr::Operator(node) => {
+            if !crate::op_registry::is_elementwise_node(node) {
+                return;
+            }
+            node.for_each_child(&mut |child| {
+                collect_bare_array_operands(child, declared_axes, out)
+            });
+        }
+        _ => {}
     }
 }
 
