@@ -171,10 +171,28 @@ class OpSpec:
 # through the OPS dict below.
 _ALL: tuple[OpSpec, ...] = (
     # --- arithmetic (esm-spec §4.2 Arithmetic) ---
-    OpSpec("+", "arithmetic", "nary", arity_bounds=(2, None)),
+    OpSpec("+", "arithmetic", "nary", arity_bounds=(1, None),
+           note="n-ary with NO lower bound beyond one operand (esm-spec §4.2 says "
+                "simply \"n-ary\"). A one-operand `+` folds to the identity — `+(x)` "
+                "IS `x` — so it is degenerate, not wrong, and the shared property "
+                "corpus already contains the form. Python pinned (2, None) here while "
+                "Rust (`Arity::AtLeast(1)`) and Julia (`arity=1:typemax(Int)`) both "
+                "allow one; Python was the outlier and is now reconciled. Contrast "
+                "`min`/`max`, which the spec explicitly floors at two."),
     OpSpec("-", "arithmetic", "variadic", arity_bounds=(1, None),
            note="unary negation .. n-ary subtraction (corpus has a 3-operand `-`)"),
-    OpSpec("*", "arithmetic", "nary", arity_bounds=(2, None)),
+    OpSpec("neg", "arithmetic", "unary", arity_bounds=(1, 1),
+           note="explicit unary negation. NOT a spelling alias of `-`: `-` is variadic "
+                "(1..n operands) while `neg` is strictly unary, so the two carry "
+                "different arity contracts. `canonicalize()` REWRITES a 1-operand `-` "
+                "into `neg`, so a canonicalized document contains `neg` nodes and every "
+                "consumer (evaluator, display, broadcast `fn` resolution) must accept "
+                "it. Registered in the Rust (`Arity::Exact(1)`) and Julia "
+                "(`category=:arithmetic, arity=1:1`) registries too; Python's omission "
+                "was a binding-local gap that made its own canonicalizer's output "
+                "unevaluable."),
+    OpSpec("*", "arithmetic", "nary", arity_bounds=(1, None),
+           note="n-ary with no lower bound beyond one operand; see `+`."),
     OpSpec("/", "arithmetic", "binary", arity_bounds=(2, 2)),
     OpSpec("^", "arithmetic", "binary", arity_bounds=(2, 2), note="power"),
     OpSpec("**", "arithmetic", "binary", alias_of="^", note="Python-style power spelling"),
@@ -200,9 +218,14 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("acosh", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("atanh", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("min", "elementary", "nary", arity_bounds=(2, None),
-           note="n-ary (>= 2); clamp/clip primitive"),
+           note="n-ary (>= 2); clamp/clip primitive. The floor of two is SPEC-MANDATED "
+                "-- \"Conforming bindings MUST reject `min`/`max` nodes with fewer than "
+                "two arguments\" (esm-spec §4.2) -- which is why these keep a lower "
+                "bound where the other n-ary ops (`+`, `*`) do not. A one-operand "
+                "`min` has no meaningful identity to fold to, unlike `+(x) = x`."),
     OpSpec("max", "elementary", "nary", arity_bounds=(2, None),
-           note="n-ary (>= 2); clamp/clip primitive"),
+           note="n-ary (>= 2); clamp/clip primitive. Floor of two is spec-mandated; "
+                "see `min`."),
     OpSpec("floor", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("ceil", "elementary", "unary", arity_bounds=(1, 1)),
     # --- comparison (esm-spec §4.2 Conditionals) ---
@@ -318,6 +341,69 @@ def unary_elementary() -> frozenset[str]:
         name for name, spec in OPS.items()
         if spec.category == "elementary" and spec.arity == "unary"
     )
+
+
+#: The categories esm-spec §4.3.4 admits as a ``broadcast`` ``fn``: "The `fn`
+#: value must name a scalar operator (arithmetic, elementary function,
+#: comparison, etc.)". The "etc." is closed here to the remaining SCALAR
+#: categories — the logical connectives and the ternary ``ifelse`` — because they
+#: are exactly the ops that map operand cells to a result cell. Every other
+#: category is deliberately excluded: ``array`` (``aggregate``/``index``/
+#: ``makearray``/``reshape``/``transpose``/``concat``/``broadcast`` itself) and
+#: ``relational``/``geometry`` RESHAPE their operands, ``calculus``/``event`` are
+#: structural, and ``closed_registry``/``template``/``constant`` carry their
+#: payload in dedicated fields rather than in ``args``.
+SCALAR_FN_CATEGORIES: frozenset[str] = frozenset(
+    {"arithmetic", "elementary", "comparison", "logical", "conditional"}
+)
+
+
+def scalar_fn_names() -> frozenset[str]:
+    """Ops that may legally appear as a ``broadcast`` node's ``fn`` (spec §4.3.4).
+
+    The scalar categories (:data:`SCALAR_FN_CATEGORIES`) minus the NULLARY
+    boolean literals ``true``/``false``, which name a constant rather than an
+    operator and so cannot be applied to operands. Spelling aliases are included
+    (``**`` and ``pow`` are as legal an ``fn`` as ``^``) and resolve through
+    :func:`resolve_alias`.
+
+    This is the single source both the ``broadcast`` VALIDATION check
+    (``structural_checks._check_broadcast_fn``) and the ``broadcast`` EVALUATOR
+    (``numpy_interpreter._eval_broadcast``) consult, so a bogus ``fn`` is
+    rejected by ``validate()`` rather than surviving to become a run-time table
+    miss (or, for a one-operand node, a silent no-op).
+    """
+    return frozenset(
+        name
+        for name, spec in OPS.items()
+        if spec.category in SCALAR_FN_CATEGORIES and spec.arity != "nullary"
+    )
+
+
+def resolve_alias(op: str) -> str:
+    """The canonical op ``op`` spells (``**``/``pow`` -> ``^``, ``=`` -> ``==``).
+
+    Returns ``op`` unchanged for a canonical op or an unregistered one.
+    """
+    spec = OPS.get(op)
+    return spec.alias_of if spec is not None and spec.alias_of is not None else op
+
+
+def effective_arity_bounds(op: str) -> tuple[int, int | None] | None:
+    """Arity bounds for ``op``, following a spelling alias to its canonical op.
+
+    :attr:`OpSpec.arity_bounds` is deliberately unset on an alias entry (the
+    canonical op owns the contract), so a caller that must arity-check an op it
+    received by ANY spelling — the ``broadcast`` ``fn`` field is the one such
+    caller — has to resolve the alias first. ``None`` when neither the op nor its
+    canonical form carries a structural arity contract.
+    """
+    bounds = OPS[op].arity_bounds if op in OPS else None
+    if bounds is None:
+        canonical = resolve_alias(op)
+        if canonical != op:
+            bounds = OPS[canonical].arity_bounds if canonical in OPS else None
+    return bounds
 
 
 def arity_bounds_map() -> dict[str, tuple[int, int | None]]:

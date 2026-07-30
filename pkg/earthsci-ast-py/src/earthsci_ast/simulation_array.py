@@ -12,7 +12,7 @@ and join-key buffers, the :class:`BuildInspection` observability sink,
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import numpy as np
@@ -27,6 +27,7 @@ from .flatten import (
     flatten,
     infer_variable_shapes,
 )
+from .index_alignment import align_expression, axis_sizes, declared_axes
 from .numpy_interpreter import (
     EvalContext,
     NumpyInterpreterError,
@@ -444,11 +445,23 @@ def _apply_equation_to_dy(
                 # state's flat slots (a scalar RHS broadcasts to every cell).
                 n = int(np.prod(shape))
                 start = state_layout[inner].start
-                arr = np.asarray(eval_expr(rhs, ctx), dtype=float).reshape(-1)
+                arr = np.asarray(eval_expr(rhs, ctx), dtype=float)
                 if arr.size == 1:
-                    dy[start : start + n] = float(arr[0])
+                    dy[start : start + n] = float(arr.reshape(-1)[0])
+                elif arr.ndim == len(shape) and all(a in (1, s) for a, s in zip(arr.shape, shape)):
+                    # RANK-MATCHED broadcast. A whole-array RHS already carries
+                    # the state's rank, with extent 1 on any axis it does not
+                    # vary over — the frame `index_alignment` puts a declared
+                    # operand into (a `[lat]` field in a `[lon,lat,lev]` state
+                    # arrives as `(1,2,1)`). Replicating it here is what makes
+                    # the bare array-level spelling agree with the explicit
+                    # `aggregate` spelling. The rank test is what keeps this from
+                    # swallowing the ANONYMOUS mismatches below: a bare `(2,)`
+                    # result for a 3-D state has the wrong rank and still errors
+                    # rather than being right-aligned onto the last axis.
+                    dy[start : start + n] = np.broadcast_to(arr, shape).reshape(-1)
                 elif arr.size == n:
-                    dy[start : start + n] = arr
+                    dy[start : start + n] = arr.reshape(-1)
                 else:
                     raise SimulationError(
                         f"D({inner}): RHS produced {arr.size} elements for a "
@@ -1404,6 +1417,76 @@ def _partition_and_materialize_observeds(
     return varying_observed, static_observed_values, static_derived_rings
 
 
+def _declared_axes_map(flat: FlattenedSystem) -> dict[str, tuple[str, ...]]:
+    """``flattened variable name -> declared index-set axis names``.
+
+    Covers states and observeds — the two kinds that can carry a declared
+    ``shape`` and appear as an array-level operand. Variables with no usable
+    name frame (scalars, integer-extent shapes, repeated axis names) are absent,
+    which is what makes alignment decline for them.
+    """
+    out: dict[str, tuple[str, ...]] = {}
+    for table in (flat.state_variables, flat.observed_variables):
+        for name, var in table.items():
+            axes = declared_axes(getattr(var, "shape", None))
+            if axes:
+                out[name] = axes
+    return out
+
+
+def _align_named_operands(
+    driver_equations: list[FlattenedEquation],
+    ordered_observed: list[tuple[str, Expr]],
+    flat: FlattenedSystem,
+) -> tuple[list[FlattenedEquation], list[tuple[str, Expr]]]:
+    """Put every named array-level operand into its result's index-set frame.
+
+    NumPy aligns operand shapes positionally and right-to-left, which for a
+    declared-shape operand is simply the wrong rule: a ``[lat]`` field used in a
+    ``[lon, lat, lev]`` result was being varied along ``lev``, silently, with no
+    error and no warning (issue #100). Rewrite each such operand — statically,
+    once, here at build time — into the transpose/reshape that places it on the
+    axes it actually names, so the bare array-level spelling computes what the
+    explicit ``aggregate`` spelling computes.
+
+    Two result frames carry names, and both are handled:
+
+    * a whole-array state derivative ``D(var) = rhs``, whose frame is ``var``'s
+      declared shape; and
+    * an observed assignment ``obs = body``, whose frame is ``obs``'s.
+
+    An ``aggregate``-LHS equation is deliberately NOT rewritten: it already
+    states its own index frame explicitly via ``output_idx``/``ranges``, and it
+    is the oracle this alignment is defined to reproduce. Everything else —
+    scalar states, undeclared shapes, anonymous operands — is returned untouched
+    and keeps NumPy's positional behaviour.
+    """
+    var_axes = _declared_axes_map(flat)
+    if not var_axes:
+        return driver_equations, ordered_observed
+    sizes = axis_sizes(flat.index_sets)
+
+    aligned_observed = [
+        (name, align_expression(rhs, var_axes.get(name), var_axes, sizes))
+        for name, rhs in ordered_observed
+    ]
+
+    aligned_equations: list[FlattenedEquation] = []
+    for eq in driver_equations:
+        lhs = eq.lhs
+        target = None
+        if (
+            isinstance(lhs, ExprNode)
+            and lhs.op == "D"
+            and lhs.args
+            and isinstance(lhs.args[0], str)
+        ):
+            target = var_axes.get(lhs.args[0])
+        new_rhs = align_expression(eq.rhs, target, var_axes, sizes)
+        aligned_equations.append(eq if new_rhs is eq.rhs else replace(eq, rhs=new_rhs))
+    return aligned_equations, aligned_observed
+
+
 def _build_numpy_rhs(
     flat: FlattenedSystem,
     parameters: dict[str, float],
@@ -1511,6 +1594,13 @@ def _build_numpy_rhs(
         else:
             driver_equations.append(eq)
     ordered_observed = _order_observed_equations(observed_eqs, observed_names)
+
+    # Index-set NAME alignment (esm-spec §4.3; issue #100). Runs BEFORE the
+    # algebraic elimination and the compile below so the substituted/compiled
+    # trees already carry the aligned operands.
+    driver_equations, ordered_observed = _align_named_operands(
+        driver_equations, ordered_observed, flat
+    )
 
     # Algebraic elimination: eliminate simple ``v[i] = <body>`` equations.
     working_equations, _eliminated = _collect_algebraic_substitutions(driver_equations)

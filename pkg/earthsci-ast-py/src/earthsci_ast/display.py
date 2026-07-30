@@ -610,6 +610,26 @@ def _latex_mult_sep(args) -> str:
     return " " if any(isinstance(a, str) and "\\" in a for a in args) else " \\cdot "
 
 
+def _unary_negation_operand(node):
+    """``x`` if ``node`` is a unary negation of ``x``, else ``None``.
+
+    Both spellings count: the 1-operand ``-`` an author writes and the ``neg``
+    :func:`earthsci_ast.canonicalize.canonicalize` rewrites it into. Accepts
+    either representation (typed :class:`ExprNode` or raw dict), which is why
+    the four near-identical inline sniffs this replaced existed. Used to render
+    ``a + (-b)`` as ``a − b``.
+    """
+    if isinstance(node, ExprNode):
+        op, args = node.op, node.args or []
+    elif isinstance(node, dict):
+        op, args = node.get("op"), node.get("args") or []
+    else:
+        return None
+    if op in ("-", "neg") and len(args) == 1:
+        return args[0]
+    return None
+
+
 def _get_operator_precedence(op: str) -> int:
     """Get operator precedence for proper parenthesization."""
     precedence_map = {
@@ -624,6 +644,11 @@ def _get_operator_precedence(op: str) -> int:
         ">=": 3,
         "+": 4,
         "-": 4,
+        # `neg` is the canonicalizer's spelling of a 1-operand `-` and renders
+        # identically to it, so it MUST carry the same precedence — otherwise
+        # `canonicalize()` (which rewrites unary `-` to `neg`) would silently
+        # change a document's parenthesization.
+        "neg": 4,
         "*": 5,
         "/": 5,
         "not": 6,  # Unary
@@ -1130,15 +1155,7 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
                 result = format_arg(args[0])
                 for a in args[1:]:
                     # a + (-b) → a − b (per-term, mirroring the 2-arg branch).
-                    neg_inner = None
-                    if isinstance(a, ExprNode) and a.op == "-" and len(a.args) == 1:
-                        neg_inner = a.args[0]
-                    elif (
-                        isinstance(a, dict)
-                        and a.get("op") == "-"
-                        and len(a.get("args", [])) == 1
-                    ):
-                        neg_inner = a["args"][0]
+                    neg_inner = _unary_negation_operand(a)
                     if neg_inner is not None:
                         sep = " − " if format_type == "unicode" else " - "
                         result = f"{result}{sep}{_fmt(neg_inner)}"
@@ -1164,18 +1181,8 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
 
         if op == "+":
             # Detect a + (-b) → render as a − b
-            is_neg = False
-            if isinstance(right, ExprNode) and right.op == "-" and len(right.args) == 1:
-                is_neg = True
-                neg_inner = right.args[0]
-            elif (
-                isinstance(right, dict)
-                and right.get("op") == "-"
-                and len(right.get("args", [])) == 1
-            ):
-                is_neg = True
-                neg_inner = right["args"][0]
-            if is_neg:
+            neg_inner = _unary_negation_operand(right)
+            if neg_inner is not None:
                 sep = " − " if format_type == "unicode" else " - "
                 return f"{format_arg(left)}{sep}{_fmt(neg_inner)}"
             return f"{format_arg(left)} + {format_arg(right, True)}"
@@ -1265,7 +1272,10 @@ def _format_expression_node(node: ExprNode, format_type: str) -> str:
         arg = args[0]
         fa = _fmt(arg)
 
-        if op == "-":
+        # `neg` renders identically to a 1-operand `-`: it IS that node, in the
+        # spelling `canonicalize()` produces (esm-spec §4.2 arithmetic), so
+        # canonicalizing a document must not change how it reads.
+        if op in ("-", "neg"):
             if format_type == "unicode":
                 return f"−{format_arg(arg)}"
             return f"-{format_arg(arg)}"

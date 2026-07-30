@@ -98,6 +98,37 @@ def test_registry_arity_bounds_pin_load_bearing_ops():
     assert reg.OPS["-"].arity_bounds == (1, None)
 
 
+def test_nary_arithmetic_accepts_one_operand_like_rust_and_julia():
+    """`+` and `*` have NO lower bound beyond one operand.
+
+    Python pinned these at ``(2, None)`` while Rust (``Arity::AtLeast(1)``,
+    `op_registry.rs`) and Julia (``arity=1:typemax(Int)``, `op_registry.jl`)
+    both allowed one — a binding-local divergence, and Python was the outlier
+    of the three. esm-spec §4.2 says only "n-ary" for both, and the shared
+    property corpus (`tests/property_corpus/expressions/expr_039.json`,
+    `expr_040.json`) already contains a one-operand ``+``.
+
+    A one-operand ``+`` or ``*`` folds to the identity — ``+(x)`` IS ``x`` — so
+    it is degenerate rather than wrong. The bound became load-bearing when
+    ``broadcast``'s ``fn`` arity started deriving from this registry.
+    """
+    assert reg.OPS["+"].arity_bounds == (1, None)
+    assert reg.OPS["*"].arity_bounds == (1, None)
+
+
+def test_min_max_keep_their_spec_mandated_floor_of_two():
+    """`min`/`max` are the deliberate exception to the rule above.
+
+    esm-spec §4.2 is explicit where it is silent for ``+``/``*``: "Conforming
+    bindings MUST reject `min`/`max` nodes with fewer than two arguments." A
+    one-operand ``min`` has no identity to fold to, so unlike ``+`` there is
+    nothing sensible for it to mean. Rust and Julia both floor these at two as
+    well, so all three bindings agree on the asymmetry.
+    """
+    assert reg.OPS["min"].arity_bounds == (2, None)
+    assert reg.OPS["max"].arity_bounds == (2, None)
+
+
 def test_open_tier_sugar_ops_are_unregistered():
     # The demoted open-tier sugar ops are NOT in the registry at all: they are
     # ordinary unregistered rewrite-target ops with no privilege over any other
