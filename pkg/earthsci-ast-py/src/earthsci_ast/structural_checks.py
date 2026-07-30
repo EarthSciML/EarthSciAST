@@ -44,7 +44,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from . import op_registry
+from . import index_alignment, op_registry
 from .json_walk import iter_child_values
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -531,6 +531,156 @@ def _check_expression_arity(expr, errors: list[str], path: str) -> None:
                 errors.append(f"{path}: operator '{op}' accepts at most {max_args} args, got {n}")
         for i, arg in enumerate(args):
             _check_expression_arity(arg, errors, f"{path}/args[{i}]")
+
+
+def _check_broadcast_fn(data: dict[str, Any], errors: list, path: str = "") -> None:
+    """``broadcast`` nodes name a real scalar operator, applied at a legal arity
+    (esm-spec §4.3.4).
+
+    ``broadcast`` is the one op whose OPERATOR lives in a field (``fn``) rather
+    than in ``op``, and every arity/vocabulary check walked ``args`` only — so
+    ``fn`` was never validated by anything. A ``fn`` naming an op that does not
+    exist (``"not_a_real_op"``), no ``fn`` at all, or a ``fn`` naming a
+    non-scalar op such as ``aggregate`` all passed ``validate()`` cleanly and, at
+    best, became a run-time table miss much later. Worse, a ONE-operand node
+    silently returned its operand unchanged, so ``{"fn": "-", "args": [x]}``
+    evaluated to ``+x`` — a dropped sign, no diagnostic anywhere (issue #101).
+
+    Arity is checked against the registry's contract for the named op, so a
+    ``fn`` requiring two operands given one is an error rather than a degenerate
+    single-element fold. The n-ary ops keep folding over any operand count their
+    bounds admit.
+    """
+    if isinstance(data, dict):
+        if data.get("op") == "broadcast":
+            fn = data.get("fn")
+            n = len(data.get("args") or [])
+            legal = op_registry.scalar_fn_names()
+            if fn is None:
+                errors.append(
+                    f"{path}: `broadcast` node has no `fn` field naming the scalar "
+                    f"operator to apply (esm-spec §4.3.4)"
+                )
+            elif not isinstance(fn, str) or fn not in legal:
+                if isinstance(fn, str) and fn in op_registry.names():
+                    errors.append(
+                        f"{path}: `broadcast` fn {fn!r} names the non-scalar "
+                        f"{op_registry.OPS[fn].category} op {fn!r}; `fn` must name a "
+                        f"scalar operator (esm-spec §4.3.4)"
+                    )
+                else:
+                    errors.append(
+                        f"{path}: `broadcast` fn {fn!r} is not a registered operator; "
+                        f"`fn` must name a scalar operator (esm-spec §4.3.4)"
+                    )
+            else:
+                bounds = op_registry.effective_arity_bounds(fn)
+                if bounds is not None:
+                    lo, hi = bounds
+                    if n < lo:
+                        errors.append(
+                            f"{path}: `broadcast` fn {fn!r} requires at least {lo} "
+                            f"operand(s), got {n}"
+                        )
+                    elif hi is not None and n > hi:
+                        errors.append(
+                            f"{path}: `broadcast` fn {fn!r} accepts at most {hi} "
+                            f"operand(s), got {n}"
+                        )
+        for key, value in data.items():
+            _check_broadcast_fn(value, errors, f"{path}/{key}")
+    elif isinstance(data, list):
+        for i, value in enumerate(data):
+            _check_broadcast_fn(value, errors, f"{path}[{i}]")
+
+
+def _index_frame_sites(m: dict[str, Any], mname: str, var_axes: dict):
+    """Every expression whose RESULT has a declared index-set frame, as
+    ``(location, expression, target_axes)``.
+
+    Two such sites exist, and they are exactly the two places an array-level
+    operand is combined into a declared-shape result:
+
+    * a whole-array state derivative ``D(var) = rhs`` (the frame is ``var``'s
+      declared shape); and
+    * an observed variable's ``expression`` (the frame is its own).
+
+    An ``aggregate``-LHS equation is excluded: it declares its own frame through
+    ``output_idx``/``ranges`` and is the oracle name-alignment reproduces.
+    """
+    for i, eq in enumerate(m.get("equations", []) or []):
+        lhs = eq.get("lhs")
+        if not (isinstance(lhs, dict) and lhs.get("op") == "D" and lhs.get("args")):
+            continue
+        target_name = lhs["args"][0]
+        if not isinstance(target_name, str):
+            continue
+        target_axes = var_axes.get(target_name)
+        if target_axes and "rhs" in eq:
+            yield f"models/{mname}/equations[{i}]/rhs", eq["rhs"], target_axes
+
+    for vname, vdef in (m.get("variables") or {}).items():
+        if not isinstance(vdef, dict) or vdef.get("expression") is None:
+            continue
+        target_axes = var_axes.get(vname)
+        if target_axes:
+            yield (
+                f"models/{mname}/variables/{vname}/expression",
+                vdef["expression"],
+                target_axes,
+            )
+
+
+def _check_index_set_alignment(data: dict[str, Any], errors: list) -> None:
+    """An array-level operand must be alignable to its result by index-set NAME
+    (esm-spec §4.3; issue #100).
+
+    Shapes are fully known statically — ``ModelVariable.shape`` names index sets
+    and the document registry gives their extents — so an operand carrying an
+    axis the result does not have is decidable here, at validate() time. It used
+    to be decided by arithmetic luck at RUN time instead: an operand whose
+    element count happened not to divide the result's raised a size error, and
+    one whose count happened to match was silently mis-broadcast onto whichever
+    axes NumPy's right-to-left positional rule landed it on. A ``[lat]`` field in
+    a ``[lon,lat,lev]`` result came out varying along ``lev``, with
+    ``valid=True``, ``success=True`` and no warning.
+
+    Only the UNALIGNABLE case is an error. A subset of the result's axes (which
+    broadcasts) and a permutation of them (which transposes) are both legal and
+    are handled by :mod:`earthsci_ast.index_alignment`.
+    """
+    for mname, m in (data.get("models") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        var_axes: dict[str, tuple[str, ...]] = {}
+        for vname, vdef in (m.get("variables") or {}).items():
+            if isinstance(vdef, dict):
+                axes = index_alignment.declared_axes(vdef.get("shape"))
+                if axes:
+                    var_axes[vname] = axes
+        if not var_axes:
+            continue
+        for location, expr, target_axes in _index_frame_sites(m, mname, var_axes):
+            for leaf, axes in index_alignment.iter_named_operands(expr, var_axes):
+                extra = index_alignment.unalignable_axes(axes, target_axes)
+                if not extra:
+                    continue
+                errors.append(
+                    (
+                        _pointer(location),
+                        f"{location}: operand {leaf!r} is declared over index "
+                        f"set(s) {list(extra)} that the result does not have "
+                        f"(result index sets: {list(target_axes)}); an "
+                        f"array-level operand must be alignable to its result "
+                        f"by index-set name (esm-spec §4.3)",
+                        {
+                            "operand": leaf,
+                            "operand_index_sets": list(axes),
+                            "result_index_sets": list(target_axes),
+                            "unalignable_index_sets": list(extra),
+                        },
+                    )
+                )
 
 
 def _normalize_unit(unit: str) -> str:
@@ -2148,6 +2298,16 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
                 walk_for_arity(errors, v, f"{path}[{i}]")
 
     collect("operator_arity", lambda sub: walk_for_arity(sub, data, ""))
+    # `broadcast` names its operator in a `fn` FIELD, which the arity walk above
+    # (it reads `args` only) never looked at — so an `fn` naming a nonexistent or
+    # non-scalar op, or none at all, validated clean and became a run-time table
+    # miss or, for a one-operand node, a silently dropped operator (issue #101).
+    collect("broadcast_fn_invalid", lambda sub: _check_broadcast_fn(data, sub))
+    # An array-level operand must be alignable to its result by index-set NAME.
+    # Statically decidable from declared shapes + the index-set registry; used to
+    # be left to NumPy's positional right-align at run time, which silently
+    # mis-broadcast or transposed the operand (issue #100).
+    collect("index_set_misalignment", lambda sub: _check_index_set_alignment(data, sub))
 
     tables = _build_symbol_tables(data)
 

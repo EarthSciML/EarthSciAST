@@ -342,22 +342,6 @@ _CMP_UFUNCS: dict[str, Callable] = {
 _EVALUABLE_CORE_OPS: frozenset[str] = op_registry.by_tier("core")
 
 
-def _broadcast_fn(fn: str) -> Callable:
-    table = {
-        "+": np.add,
-        "-": np.subtract,
-        "*": np.multiply,
-        "/": np.true_divide,
-        "^": np.power,
-        "**": np.power,
-        "min": np.minimum,
-        "max": np.maximum,
-    }
-    if fn not in table:
-        raise NumpyInterpreterError(f"Unsupported broadcast fn: {fn}")
-    return table[fn]
-
-
 # Closed semiring registry (RFC semiring-faq-unified-ir §5.1). Each entry fixes
 # the (⊕, ⊗) operator pair AND both identity elements: ``zero`` (0̄) is the value
 # of an empty ⊕-reduction and ``one`` (1̄) the value of an empty ⊗-product. The
@@ -651,6 +635,111 @@ def _apply_cmp(a: Any, b: Any, uf: Callable) -> np.ndarray:
     return uf(a, b).astype(float)
 
 
+def _apply_neg(v: Any) -> Any:
+    """Unary negation — the ``neg`` op (esm-spec §4.2 arithmetic).
+
+    ``canonicalize()`` rewrites every 1-operand ``-`` into ``neg``, so this is
+    the same computation ``_apply_sub`` performs on a single operand and the two
+    MUST agree.
+    """
+    return -v
+
+
+# --- the scalar-op application layer -------------------------------------
+#
+# ``op -> (values -> value)`` for every op that may be applied CELL-WISE to
+# already-evaluated operands. This is the single kernel table shared by the two
+# places a scalar op can be applied:
+#
+#   1. :func:`eval_expr` / :func:`_build_compiled_node`, which reach it through
+#      the individual ``_apply_*`` helpers named below, and
+#   2. :func:`_eval_broadcast`, which reaches it through
+#      :func:`_apply_scalar_op` because a ``broadcast`` node names its operator
+#      in a `fn` FIELD rather than in `op`.
+#
+# Routing (2) through the same kernels is what makes
+# ``{"op": "broadcast", "fn": F, "args": A}`` compute exactly what
+# ``{"op": F, "args": A}`` computes, for every F and every operand count —
+# including a ONE-operand node, which the former hand-written 8-entry
+# binary-only ``_broadcast_fn`` table could not express at all (it returned
+# ``args[0]`` unchanged, silently discarding `fn`; issue #101).
+#
+# VALUES are local (op_registry is a numpy-free leaf); the KEY SET is DERIVED
+# from :func:`op_registry.scalar_fn_names`, so a scalar op added to the registry
+# without a kernel here is a loud import-time KeyError rather than a silent
+# run-time table miss.
+def _binary_kernel(uf: Callable) -> Callable[[list[Any]], Any]:
+    """``vals -> _apply_cmp(vals[0], vals[1], uf)`` for one comparison ufunc."""
+
+    def apply(vals: list[Any]) -> Any:
+        return _apply_cmp(vals[0], vals[1], uf)
+
+    return apply
+
+
+def _unary_kernel(f: Callable) -> Callable[[list[Any]], Any]:
+    """``vals -> f(vals[0])`` for one unary elementary function."""
+
+    def apply(vals: list[Any]) -> Any:
+        return f(vals[0])
+
+    return apply
+
+
+_SCALAR_OP_IMPL: dict[str, Callable[[list[Any]], Any]] = {
+    "+": _apply_add,
+    "-": _apply_sub,
+    "neg": lambda vals: _apply_neg(vals[0]),
+    "*": _apply_mul,
+    "/": lambda vals: _apply_div(vals[0], vals[1]),
+    "^": lambda vals: _apply_pow(vals[0], vals[1]),
+    "atan2": lambda vals: _apply_atan2(vals[0], vals[1]),
+    "min": lambda vals: _apply_minmax(vals, np.minimum),
+    "max": lambda vals: _apply_minmax(vals, np.maximum),
+    "and": lambda vals: _apply_bool_reduce(vals, np.logical_and),
+    "or": lambda vals: _apply_bool_reduce(vals, np.logical_or),
+    "not": lambda vals: _apply_not(vals[0]),
+    "ifelse": lambda vals: _apply_ifelse(vals[0], vals[1], vals[2]),
+    **{op: _binary_kernel(uf) for op, uf in _CMP_UFUNCS.items()},
+    **{op: _unary_kernel(f) for op, f in _SCALAR_FUNCS.items()},
+}
+
+#: Live ``op -> kernel`` map, keyed by EVERY legal ``broadcast`` ``fn`` spelling
+#: (aliases included: ``**``/``pow`` resolve to ``^``'s kernel).
+_SCALAR_OP_APPLY: dict[str, Callable[[list[Any]], Any]] = {
+    op: _SCALAR_OP_IMPL[op_registry.resolve_alias(op)] for op in op_registry.scalar_fn_names()
+}
+
+
+def _apply_scalar_op(op: str, vals: list[Any], *, where: str) -> Any:
+    """Apply the scalar operator ``op`` to already-evaluated operand ``vals``.
+
+    Enforces the registry's arity contract FIRST, so a wrong operand count is a
+    named error instead of a degenerate fold (a 1-operand ``min`` silently
+    returning its operand) or an ``IndexError``. ``where`` names the calling
+    site for the message.
+    """
+    kernel = _SCALAR_OP_APPLY.get(op)
+    if kernel is None:
+        raise NumpyInterpreterError(
+            f"{where}: {op!r} does not name a scalar operator "
+            f"(esm-spec §4.3.4); expected one of {sorted(_SCALAR_OP_APPLY)}"
+        )
+    bounds = op_registry.effective_arity_bounds(op)
+    if bounds is not None:
+        lo, hi = bounds
+        n = len(vals)
+        if n < lo:
+            raise NumpyInterpreterError(
+                f"{where}: operator {op!r} requires at least {lo} operand(s), got {n}"
+            )
+        if hi is not None and n > hi:
+            raise NumpyInterpreterError(
+                f"{where}: operator {op!r} accepts at most {hi} operand(s), got {n}"
+            )
+    return kernel(vals)
+
+
 def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
     """Recursively evaluate an ESM expression against ``ctx``.
 
@@ -716,6 +805,15 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         return _apply_add([eval_expr(a, ctx) for a in expr.args])
     if op == "-":
         return _apply_sub([eval_expr(a, ctx) for a in expr.args])
+    if op == "neg":
+        # `canonicalize()` rewrites every 1-operand `-` into `neg`, so a
+        # canonicalized document reaches the evaluator carrying `neg` nodes.
+        # Python's registry used to omit the op, which meant its OWN
+        # canonicalizer produced trees its own evaluator rejected as an
+        # "unlowered rewrite-target" (Rust and Julia both register it).
+        if len(expr.args) != 1:
+            raise NumpyInterpreterError("neg expects 1 arg")
+        return _apply_neg(eval_expr(expr.args[0], ctx))
     if op == "*":
         if not expr.args:
             return 1.0
@@ -831,7 +929,7 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
 #: arithmetic / index / elementwise-math layer that a discretized stencil body
 #: is overwhelmingly made of.
 _COMPILED_OPS: frozenset = frozenset(
-    {"index", "+", "-", "*", "/", "^", "**", "pow", "atan2", "and", "or", "not",
+    {"index", "+", "-", "neg", "*", "/", "^", "**", "pow", "atan2", "and", "or", "not",
      "min", "max", "ifelse", "true", "false"}
     | set(_SCALAR_FUNCS)
     | set(_CMP_UFUNCS)
@@ -930,6 +1028,12 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
     if op == "-":
         cs = [_compile_expr(a) for a in args]
         return lambda ctx: _apply_sub([c(ctx) for c in cs])
+
+    if op == "neg":
+        if len(args) != 1:
+            return _compile_delegate(expr)  # eval_expr raises the arity error
+        c0 = _compile_expr(args[0])
+        return lambda ctx: _apply_neg(c0(ctx))
 
     if op == "*":
         if not args:
@@ -2766,31 +2870,46 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
 
 
 def _eval_broadcast(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
-    """Element-wise combine operands under Julia-style broadcasting.
+    """Apply the scalar operator named in ``fn`` element-wise to ``args``
+    (esm-spec §4.3.4).
 
-    Julia left-aligns shapes when broadcasting (trailing 1s are added to
-    shorter shapes), whereas NumPy right-aligns. To match the Julia binding's
-    semantics we pad every operand's shape with trailing 1s to the maximum
-    rank, then combine via NumPy's own broadcasting. A ``(3,) .+ (1,3)``
-    pair becomes ``(3,1) .+ (1,3) = (3,3)``.
+    ``broadcast`` is pure notation: ``{"op": "broadcast", "fn": F, "args": A}``
+    denotes exactly what ``{"op": F, "args": A}`` denotes. That equivalence is
+    enforced BY CONSTRUCTION here — the operands are evaluated and handed to
+    :func:`_apply_scalar_op`, the same kernel table :func:`eval_expr` uses — so
+    the two spellings cannot compute different answers. In particular a
+    ONE-operand node applies ``fn`` as a unary operator (``fn: "-"`` negates,
+    ``fn: "log"`` takes a log); the previous implementation folded pairwise from
+    ``args[0]`` and so returned a lone operand UNCHANGED, silently discarding
+    ``fn`` (issue #101).
+
+    **Operand alignment.** Operands that carry DECLARED index-set names have
+    already been aligned BY NAME (transposed / rank-lifted into the result's
+    axis frame) by :mod:`earthsci_ast.index_alignment` before evaluation, so for
+    them this is a plain element-wise combine and ``broadcast`` agrees with
+    ``{"op": F, ...}`` exactly. What remains here is the ANONYMOUS-shape case —
+    ``reshape``/``transpose``/``concat``/``makearray`` results and literal
+    arrays, which carry no axis names — where ``broadcast`` keeps its
+    established Julia-parity rule: LEFT-align (pad every operand's shape with
+    trailing 1s to the maximum rank) rather than NumPy's right-align, so
+    ``(3,) .+ (1,3)`` is ``(3,3)``. That padding is a no-op on name-aligned
+    operands (already at full rank), which is precisely why the two rules
+    coexist without the one contradicting the other.
     """
-    fn_name = expr.fn or "+"
-    fn = _broadcast_fn(fn_name)
-    vals = [eval_expr(a, ctx) for a in expr.args]
-    if not vals:
+    fn_name = expr.fn
+    if fn_name is None:
+        raise NumpyInterpreterError(
+            "broadcast node has no `fn` field naming its scalar operator (esm-spec §4.3.4)"
+        )
+    if not expr.args:
         raise NumpyInterpreterError("broadcast requires at least 1 arg")
-    arrs = [_as_array(v) for v in vals]
-    max_ndim = max(a.ndim for a in arrs) if arrs else 0
-    aligned: list[np.ndarray] = []
-    for a in arrs:
-        if a.ndim < max_ndim:
-            new_shape = list(a.shape) + [1] * (max_ndim - a.ndim)
-            aligned.append(a.reshape(new_shape))
-        else:
-            aligned.append(a)
-    result = aligned[0]
-    for a in aligned[1:]:
-        result = fn(result, a)
+    arrs = [_as_array(eval_expr(a, ctx)) for a in expr.args]
+    max_ndim = max(a.ndim for a in arrs)
+    aligned = [
+        a.reshape(list(a.shape) + [1] * (max_ndim - a.ndim)) if a.ndim < max_ndim else a
+        for a in arrs
+    ]
+    result = _apply_scalar_op(fn_name, aligned, where="broadcast `fn`")
     return np.asarray(result, dtype=float)
 
 
