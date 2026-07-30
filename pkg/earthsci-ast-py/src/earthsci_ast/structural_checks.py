@@ -596,7 +596,7 @@ def _check_broadcast_fn(data: dict[str, Any], errors: list, path: str = "") -> N
 
 def _index_frame_sites(m: dict[str, Any], mname: str, var_axes: dict):
     """Every expression whose RESULT has a declared index-set frame, as
-    ``(location, expression, target_axes)``.
+    ``(location, expression, target_name, target_axes)``.
 
     Two such sites exist, and they are exactly the two places an array-level
     operand is combined into a declared-shape result:
@@ -617,7 +617,7 @@ def _index_frame_sites(m: dict[str, Any], mname: str, var_axes: dict):
             continue
         target_axes = var_axes.get(target_name)
         if target_axes and "rhs" in eq:
-            yield f"models/{mname}/equations[{i}]/rhs", eq["rhs"], target_axes
+            yield f"models/{mname}/equations[{i}]/rhs", eq["rhs"], target_name, target_axes
 
     for vname, vdef in (m.get("variables") or {}).items():
         if not isinstance(vdef, dict) or vdef.get("expression") is None:
@@ -627,13 +627,21 @@ def _index_frame_sites(m: dict[str, Any], mname: str, var_axes: dict):
             yield (
                 f"models/{mname}/variables/{vname}/expression",
                 vdef["expression"],
+                vname,
                 target_axes,
             )
 
 
 def _check_index_set_alignment(data: dict[str, Any], errors: list) -> None:
     """An array-level operand must be alignable to its result by index-set NAME
-    (esm-spec §4.3; issue #100).
+    (esm-spec §4.3.4 "Broadcast compatibility"; issue #100).
+
+    Emitted as ``array_shape_mismatch``, the spelling registered in esm-spec
+    §4.3.4 / CONFORMANCE_SPEC §7.1 and pinned by the shared fixture
+    ``tests/invalid/array_broadcast/operand_index_set_not_in_result.esm``. The
+    message and ``details`` payload deliberately mirror Rust's on that fixture
+    (one finding per operand, naming the FIRST offending axis) so the two
+    bindings' records compare equal rather than merely agreeing on the code.
 
     Shapes are fully known statically — ``ModelVariable.shape`` names index sets
     and the document registry gives their extents — so an operand carrying an
@@ -660,24 +668,27 @@ def _check_index_set_alignment(data: dict[str, Any], errors: list) -> None:
                     var_axes[vname] = axes
         if not var_axes:
             continue
-        for location, expr, target_axes in _index_frame_sites(m, mname, var_axes):
+        for location, expr, target, target_axes in _index_frame_sites(m, mname, var_axes):
             for leaf, axes in index_alignment.iter_named_operands(expr, var_axes):
                 extra = index_alignment.unalignable_axes(axes, target_axes)
                 if not extra:
                     continue
+                # First offending axis only, one finding per operand — Rust
+                # reports the same way, and a per-axis fan-out would make the
+                # two bindings' record COUNTS differ on the shared fixture.
+                axis = extra[0]
                 errors.append(
                     (
                         _pointer(location),
-                        f"{location}: operand {leaf!r} is declared over index "
-                        f"set(s) {list(extra)} that the result does not have "
-                        f"(result index sets: {list(target_axes)}); an "
-                        f"array-level operand must be alignable to its result "
-                        f"by index-set name (esm-spec §4.3)",
+                        f"Operand '{leaf}' of the array-level expression for "
+                        f"'{target}' is declared over index set '{axis}', which "
+                        f"'{target}' is not shaped over",
                         {
+                            "variable": target,
                             "operand": leaf,
-                            "operand_index_sets": list(axes),
-                            "result_index_sets": list(target_axes),
-                            "unalignable_index_sets": list(extra),
+                            "operand_shape": list(axes),
+                            "result_shape": list(target_axes),
+                            "missing_index_set": axis,
                         },
                     )
                 )
@@ -2307,7 +2318,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # Statically decidable from declared shapes + the index-set registry; used to
     # be left to NumPy's positional right-align at run time, which silently
     # mis-broadcast or transposed the operand (issue #100).
-    collect("index_set_misalignment", lambda sub: _check_index_set_alignment(data, sub))
+    collect("array_shape_mismatch", lambda sub: _check_index_set_alignment(data, sub))
 
     tables = _build_symbol_tables(data)
 

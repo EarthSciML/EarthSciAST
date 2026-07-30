@@ -38,7 +38,7 @@ over axes ``T``:
   ``[lat, lon]`` operand in a ``[lon, lat, lev]`` result TRANSPOSES into the
   result's frame. It is never reinterpreted.
 * An operand carrying an axis ABSENT from ``T`` cannot be aligned at all. That
-  is a hard structural error from ``validate()`` (``index_set_misalignment``),
+  is a hard structural error from ``validate()`` (``array_shape_mismatch``),
   not a run-time size error and not a warning: shapes are fully known statically
   from ``ModelVariable.shape`` plus the document ``index_sets``, so there is
   nothing to wait for.
@@ -102,6 +102,20 @@ __all__ = [
 #: ``concat``), the relational and geometry ops, ``fn``, ``D`` — terminates the
 #: walk, because it re-indexes or reshapes its operands rather than combining
 #: them cell-wise, and so its operands are NOT in the enclosing result's frame.
+#:
+#: CROSS-BINDING: this is Python's counterpart to Rust's
+#: ``op_registry::is_elementwise_op``. The two agree on all 39 ops that matter,
+#: and differ in four ways, none of them accidental:
+#:
+#: * ``broadcast`` — Python descends, Rust does not. esm-spec §4.3.4 says the
+#:   rule governs an array-level expression "whether spelled with an explicit
+#:   `broadcast` node or written bare", so Python follows the normative text.
+#: * ``pow`` / ``**`` — registry ALIASES of ``^``, equally elementwise. Python
+#:   descends; Rust matches raw op strings and lists only ``^``.
+#: * ``true`` / ``false`` / ``=`` — Python-side only, and inert: the literals
+#:   are nullary (descending yields no operands) and ``=`` is an alias of ``==``.
+#: * ``ln`` — Rust lists it; it is not in the spec's §4.2 elementary-function
+#:   table and Python does not register it, so it never occurs.
 ELEMENTWISE_OPS: frozenset[str] = frozenset({"broadcast"}).union(
     *(op_registry.by_category(c) for c in op_registry.SCALAR_FN_CATEGORIES)
 )
@@ -159,6 +173,11 @@ def iter_named_operands(expr: Any, var_axes: dict[str, tuple[str, ...]]):
     Descends only through :data:`ELEMENTWISE_OPS`, so a name appearing under an
     ``index`` / ``aggregate`` / reshaping op — where it is NOT an operand of the
     enclosing element-wise expression — is correctly skipped.
+
+    Yields in LEFT-TO-RIGHT pre-order. The order is observable — it decides
+    which operand a multi-operand defect is reported against — and Rust's
+    equivalent walk (``structural::collect_bare_array_operands``) is a
+    left-to-right recursive descent, so the stack is fed reversed to match it.
     """
     stack = [expr]
     while stack:
@@ -170,13 +189,13 @@ def iter_named_operands(expr: Any, var_axes: dict[str, tuple[str, ...]]):
             continue
         op, args = _op_and_args(node)
         if op is not None and op in ELEMENTWISE_OPS:
-            stack.extend(args)
+            stack.extend(reversed(args))
 
 
 def unalignable_axes(axes: tuple[str, ...], target_axes: tuple[str, ...]) -> tuple[str, ...]:
     """The operand axes that do not appear in the result — empty if alignable.
 
-    A non-empty result is the ``index_set_misalignment`` defect: there is no
+    A non-empty result is the ``array_shape_mismatch`` defect: there is no
     replication, transpose or reshape that can put such an operand into the
     result's frame, so the expression has no meaning under name-based alignment.
     """

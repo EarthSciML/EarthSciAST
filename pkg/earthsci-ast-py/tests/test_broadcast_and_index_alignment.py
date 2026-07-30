@@ -567,9 +567,92 @@ def test_operand_with_an_index_set_absent_from_the_result_is_rejected() -> None:
     )
     report = validate(doc)
     assert not report.is_valid
-    assert "index_set_misalignment" in _codes(doc)
+    assert "array_shape_mismatch" in _codes(doc)
     message = "\n".join(_errors(doc))
     assert "'z1'" in message and "lev" in message
+
+
+def test_the_emitted_record_matches_the_shared_fixture_contract() -> None:
+    """Path, code, message and details are pinned to the cross-binding fixture.
+
+    ``tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`` has an
+    entry in ``tests/invalid/expected_errors.json`` naming all four fields, and
+    the conformance comparator checks Python's record against it. Pinning them
+    here means a reworded message fails in Python's own suite instead of only
+    surfacing as a cross-language diff.
+    """
+    doc = _doc(
+        {"dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
+        _bare_eq({"op": "*", "args": ["dp", "z1"]}),
+    )
+    records = [e for e in validate(doc).structural_errors if e.code == "array_shape_mismatch"]
+    assert len(records) == 1, "one finding per operand, not one per offending axis"
+    r = records[0]
+    assert r.path == "/models/M/equations/0/rhs"  # JSON Pointer: /0/, not [0]
+    assert r.message == (
+        "Operand 'z1' of the array-level expression for 'dp' is declared over "
+        "index set 'lev', which 'dp' is not shaped over"
+    )
+    assert r.details == {
+        "variable": "dp",
+        "operand": "z1",
+        "operand_shape": ["lev"],
+        "result_shape": ["lon", "lat"],
+        "missing_index_set": "lev",
+    }
+
+
+def test_the_broadcast_spelling_is_governed_by_the_same_rule() -> None:
+    """esm-spec §4.3.4: the alignment rule governs an array-level expression
+    "whether spelled with an explicit ``broadcast`` node or written bare".
+
+    So ``broadcast(fn="*", [w2, z1])`` must be rejected exactly as
+    ``{"op": "*", "args": ["w2", "z1"]}`` is, and a named operand under a
+    ``broadcast`` must be name-aligned exactly as a bare one is. Python
+    implements that by including ``broadcast`` in ``ELEMENTWISE_OPS``.
+
+    NOTE: Rust's ``is_elementwise_op`` does NOT list ``broadcast``, so as of
+    this writing Rust applies the rule only to the bare spelling. Python follows
+    the normative text here; if the two are reconciled the other way, the spec
+    sentence has to change with it.
+    """
+    variables = {
+        "dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0},
+        "z1": _Z1,
+        "w2": _W2,
+    }
+    for rhs in (
+        {"op": "*", "args": ["w2", "z1"]},
+        {"op": "broadcast", "fn": "*", "args": ["w2", "z1"]},
+    ):
+        assert "array_shape_mismatch" in _codes(_doc(variables, _bare_eq(rhs))), rhs
+
+    # ...and the two spellings produce identical NUMBERS when they are legal.
+    v3 = {"dp": _STATE3, "w1": _W1, "ones3": _ONES3}
+    bare = _run(_doc(v3, _bare_eq({"op": "*", "args": ["w1", "ones3"]})), (3, 2, 2))
+    bcast = _run(
+        _doc(v3, _bare_eq({"op": "broadcast", "fn": "*", "args": ["w1", "ones3"]})), (3, 2, 2)
+    )
+    np.testing.assert_array_equal(bare, bcast)
+    np.testing.assert_allclose(
+        [bare[0, 0, 0], bare[0, 0, 1], bare[0, 1, 0], bare[0, 1, 1]], [10, 10, 20, 20]
+    )
+
+
+@pytest.mark.parametrize("op", ["^", "pow", "**"])
+def test_power_aliases_are_all_elementwise(op: str) -> None:
+    """``pow`` and ``**`` are registry ALIASES of ``^`` and are just as
+    elementwise, so the walk must descend through all three spellings.
+
+    Rust's ``is_elementwise_op`` matches the raw op string and lists only ``^``,
+    so a ``pow``/``**`` node terminates its descent — a second, smaller instance
+    of the same scope question as ``broadcast`` above.
+    """
+    doc = _doc(
+        {"dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
+        _bare_eq({"op": op, "args": ["z1", 2.0]}),
+    )
+    assert "array_shape_mismatch" in _codes(doc)
 
 
 def test_unalignable_operand_is_rejected_inside_a_compound_expression() -> None:
