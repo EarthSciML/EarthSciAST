@@ -42,6 +42,21 @@ export const ERROR_CODES = {
   //   naming an index set absent from the document `index_sets` registry
   //   (RFC semiring-faq-unified-ir §5.2; no implicit interval is inferred).
   UNDEFINED_INDEX_SET: 'undefined_index_set',
+  // `invalid_broadcast_fn` — a `broadcast` node's `fn` is absent, does not name
+  //   a SCALAR operator, or is applied to an argument count that operator's
+  //   §4.2 arity does not admit (esm-spec §4.3.4 / §9.6.6). The value analogue
+  //   of `unknown_closed_function`: `broadcast` is the one op whose OPERATOR is
+  //   carried as data, so no `op`-keyed check reaches it and an unchecked `fn`
+  //   is discarded silently rather than failing. Loading MUST fail.
+  INVALID_BROADCAST_FN: 'invalid_broadcast_fn',
+  // `array_shape_mismatch` — an operand of an array-level expression is
+  //   declared over an index set the result is not shaped over (esm-spec
+  //   §4.3.4 / CONFORMANCE_SPEC §7.1). Operands align by index-set NAME: one
+  //   declared over a SUBSET of the result's sets broadcasts along the missing
+  //   axes and axis ORDER is immaterial, but one carrying an EXTRA set has no
+  //   axis to align to. Both shapes are declared, so this is static — a hard
+  //   error, not a warning and not a runtime concern.
+  ARRAY_SHAPE_MISMATCH: 'array_shape_mismatch',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   EVENT_VAR_UNDECLARED: 'event_var_undeclared',
   FACTOR_WITH_EXPRESSION_TRANSFORM: 'factor_with_expression_transform',
