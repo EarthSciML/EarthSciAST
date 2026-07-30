@@ -93,8 +93,13 @@ export const FUNCTION_PRECEDENCE = 8
 
 export const OPS: Record<string, OpInfo> = {
   // ---- arithmetic -------------------------------------------------------
+  // n-ary FROM ONE OPERAND, not from zero: `{op:'+', args:[x]}` is `x` (the
+  // identity §4.3.4 relies on to settle the one-operand `broadcast` case), but
+  // an EMPTY `+` denotes nothing the spec defines. Rust, Julia and Python all
+  // floor these at 1; TS alone accepted `args: []` and folded it to the
+  // semiring identity, so the same document loaded here and failed elsewhere.
   '+': {
-    arity: { min: 0, max: null },
+    arity: { min: 1, max: null },
     scalar: true,
     precedence: 4,
     cost: 1,
@@ -110,8 +115,9 @@ export const OPS: Record<string, OpInfo> = {
         ? -args[0]
         : args.reduce((diff, val, idx) => (idx === 0 ? val : diff - val)),
   },
+  // Floored at 1 for the same reason as `+` — see the note there.
   '*': {
-    arity: { min: 0, max: null },
+    arity: { min: 1, max: null },
     scalar: true,
     precedence: 5,
     cost: 2,
@@ -343,15 +349,22 @@ export const OPS: Record<string, OpInfo> = {
     evaluate: (args) => (args[0] !== args[1] ? 1 : 0),
   },
   '=': { arity: { min: 2, max: 2 }, precedence: 3 },
+  // A CONNECTIVE needs two things to connect. The §4.2 conditionals table reads
+  // "| `and`, `or`, `not` | `[a, b]` or `[a]` |" — one Args cell shared by three
+  // ops, where `[a]` is `not`'s unary form and `[a, b]` is `and`/`or`'s binary
+  // one. It is not a licence for a one-operand `and`: Rust, Julia and Python all
+  // floor these at 2, and a `broadcast(fn:'and', [x])` that loads here and is
+  // rejected by the other three is exactly the silent registry divergence
+  // §4.3.4's `fn` rule exists to close.
   and: {
-    arity: { min: 0, max: null },
+    arity: { min: 2, max: null },
     scalar: true,
     precedence: 2,
     cost: 2,
     evaluate: (args) => (args.every((x) => x !== 0) ? 1 : 0),
   },
   or: {
-    arity: { min: 0, max: null },
+    arity: { min: 2, max: null },
     scalar: true,
     precedence: 1,
     cost: 2,

@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { validate } from './validate.js'
-import { checkBroadcastFn } from './op-registry.js'
+import { checkArity, checkBroadcastFn, getOpInfo } from './op-registry.js'
 import { readFixture } from './test-helpers.js'
 import type { EsmFile, Expression } from './types.js'
 
@@ -145,6 +145,8 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     ['atan2', 1],
     ['ifelse', 2],
     ['^', 1],
+    ['and', 1],
+    ['or', 1],
   ])('rejects fn %s at arity %i', (fn, argc) => {
     const args = Array.from({ length: argc as number }, () => 'x')
     const result = validate(scalarModel({ op: 'broadcast', fn, args } as Expression))
@@ -191,6 +193,27 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
       },
     } as unknown as EsmFile
     expect(findings(file)).toContain('invalid_broadcast_fn @ /models/M/variables/y/expression')
+  })
+})
+
+describe('registry arity floors are the cross-binding ones (esm-spec §4.2)', () => {
+  // These four bounds are what `checkBroadcastFn` derives the legal operand
+  // count from, so a drift here silently changes which documents this binding
+  // accepts relative to Rust / Julia / Python. Pinned as VALUES, with the
+  // agreeing bindings named, so a future edit has to argue with the other three.
+  it.each([
+    // op, min, max — Rust op_registry.rs, Julia op_registry.jl, Python op_registry.py
+    ['+', 1, null], // n-ary FROM ONE operand; an empty sum denotes nothing
+    ['*', 1, null],
+    ['and', 2, null], // a connective needs two things to connect
+    ['or', 2, null],
+  ])('%s is %i..%s', (op, min, max) => {
+    expect(getOpInfo(op as string)?.arity).toEqual({ min, max })
+  })
+
+  it.each(['+', '*', 'and', 'or'])('checkArity rejects a degenerate %s node', (op) => {
+    const below = op === 'and' || op === 'or' ? 1 : 0
+    expect(() => checkArity(op, below)).toThrow(/requires at least/)
   })
 })
 
