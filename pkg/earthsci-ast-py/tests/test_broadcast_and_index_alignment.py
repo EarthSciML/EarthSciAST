@@ -211,7 +211,7 @@ def test_unregistered_broadcast_fn_is_a_validation_error() -> None:
     doc = _broadcast_doc({"op": "broadcast", "fn": "not_a_real_op", "args": ["q"]})
     report = validate(doc)
     assert not report.is_valid
-    assert "broadcast_fn_invalid" in _codes(doc)
+    assert "invalid_broadcast_fn" in _codes(doc)
     assert any("not_a_real_op" in e and "not a registered operator" in e for e in _errors(doc))
 
 
@@ -244,12 +244,56 @@ def test_non_scalar_broadcast_fn_is_a_validation_error(fn: str) -> None:
 def test_broadcast_fn_arity_mismatch_is_a_validation_error() -> None:
     """An ``fn``/operand-count mismatch is an error, not a degenerate fold.
 
-    ``min`` is n-ary with a floor of two operands; handed one it used to return
-    that operand unchanged, which looks exactly like a correct answer.
+    ``min`` is n-ary with a SPEC-MANDATED floor of two operands (esm-spec §4.2:
+    "Conforming bindings MUST reject `min`/`max` nodes with fewer than two
+    arguments"); handed one it used to return that operand unchanged, which
+    looks exactly like a correct answer.
     """
     doc = _broadcast_doc({"op": "broadcast", "fn": "min", "args": ["q"]})
     assert not validate(doc).is_valid
     assert any("requires at least 2 operand" in e for e in _errors(doc))
+
+
+@pytest.mark.parametrize("fn", ["+", "*"])
+def test_one_operand_nary_arithmetic_is_legal_and_is_the_identity(fn: str) -> None:
+    """``+`` and ``*`` accept ONE operand and fold to the identity.
+
+    The contrast with ``min``/``max`` above is deliberate and cross-binding:
+    esm-spec §4.2 floors ``min``/``max`` at two explicitly but says only
+    "n-ary" for ``+``/``*``, and ``+(x)`` genuinely IS ``x``. Rust and Julia
+    both allow one operand here; Python's registry pinned ``(2, None)`` and was
+    the outlier, which only became load-bearing once ``broadcast``'s ``fn``
+    arity started deriving from the registry.
+
+    Two shared property-corpus fixtures depend on this —
+    ``tests/property_corpus/expressions/expr_039.json`` and ``expr_040.json``
+    both spell ``broadcast(fn="+", args=[1])``.
+    """
+    assert validate(_broadcast_doc({"op": "broadcast", "fn": fn, "args": ["q"]})).is_valid
+    assert validate(_broadcast_doc({"op": fn, "args": ["q"]})).is_valid
+
+    x = np.array([3.0, -4.0])
+    ctx = _ctx({"x": x})
+    bare = np.asarray(eval_expr(ExprNode(op=fn, args=["x"]), ctx), dtype=float)
+    broadcast = eval_expr(ExprNode(op="broadcast", args=["x"], fn=fn), ctx)
+    np.testing.assert_array_equal(bare, x)
+    np.testing.assert_array_equal(broadcast, x)
+
+
+def test_the_property_corpus_one_operand_broadcast_validates() -> None:
+    """The exact node from the two corpus fixtures, checked directly.
+
+    Those files are round-trip-only fixtures that nothing validates today, but
+    pinning the node here means a future re-tightening of ``+``'s lower bound
+    fails in Python's own suite rather than surfacing as a cross-binding
+    conformance diff.
+    """
+    from earthsci_ast.structural_checks import _check_broadcast_fn
+
+    node = {"op": "broadcast", "fn": "+", "args": [1]}
+    errors: list = []
+    _check_broadcast_fn(node, errors)
+    assert errors == []
 
 
 def test_broadcast_fn_over_arity_is_a_validation_error() -> None:

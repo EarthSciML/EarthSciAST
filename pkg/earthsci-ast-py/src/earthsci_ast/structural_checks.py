@@ -2302,7 +2302,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # (it reads `args` only) never looked at — so an `fn` naming a nonexistent or
     # non-scalar op, or none at all, validated clean and became a run-time table
     # miss or, for a one-operand node, a silently dropped operator (issue #101).
-    collect("broadcast_fn_invalid", lambda sub: _check_broadcast_fn(data, sub))
+    collect("invalid_broadcast_fn", lambda sub: _check_broadcast_fn(data, sub))
     # An array-level operand must be alignable to its result by index-set NAME.
     # Statically decidable from declared shapes + the index-set registry; used to
     # be left to NumPy's positional right-align at run time, which silently

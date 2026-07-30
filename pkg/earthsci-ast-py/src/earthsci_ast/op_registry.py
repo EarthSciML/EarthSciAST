@@ -171,7 +171,14 @@ class OpSpec:
 # through the OPS dict below.
 _ALL: tuple[OpSpec, ...] = (
     # --- arithmetic (esm-spec §4.2 Arithmetic) ---
-    OpSpec("+", "arithmetic", "nary", arity_bounds=(2, None)),
+    OpSpec("+", "arithmetic", "nary", arity_bounds=(1, None),
+           note="n-ary with NO lower bound beyond one operand (esm-spec §4.2 says "
+                "simply \"n-ary\"). A one-operand `+` folds to the identity — `+(x)` "
+                "IS `x` — so it is degenerate, not wrong, and the shared property "
+                "corpus already contains the form. Python pinned (2, None) here while "
+                "Rust (`Arity::AtLeast(1)`) and Julia (`arity=1:typemax(Int)`) both "
+                "allow one; Python was the outlier and is now reconciled. Contrast "
+                "`min`/`max`, which the spec explicitly floors at two."),
     OpSpec("-", "arithmetic", "variadic", arity_bounds=(1, None),
            note="unary negation .. n-ary subtraction (corpus has a 3-operand `-`)"),
     OpSpec("neg", "arithmetic", "unary", arity_bounds=(1, 1),
@@ -184,7 +191,8 @@ _ALL: tuple[OpSpec, ...] = (
                 "(`category=:arithmetic, arity=1:1`) registries too; Python's omission "
                 "was a binding-local gap that made its own canonicalizer's output "
                 "unevaluable."),
-    OpSpec("*", "arithmetic", "nary", arity_bounds=(2, None)),
+    OpSpec("*", "arithmetic", "nary", arity_bounds=(1, None),
+           note="n-ary with no lower bound beyond one operand; see `+`."),
     OpSpec("/", "arithmetic", "binary", arity_bounds=(2, 2)),
     OpSpec("^", "arithmetic", "binary", arity_bounds=(2, 2), note="power"),
     OpSpec("**", "arithmetic", "binary", alias_of="^", note="Python-style power spelling"),
@@ -210,9 +218,14 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("acosh", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("atanh", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("min", "elementary", "nary", arity_bounds=(2, None),
-           note="n-ary (>= 2); clamp/clip primitive"),
+           note="n-ary (>= 2); clamp/clip primitive. The floor of two is SPEC-MANDATED "
+                "-- \"Conforming bindings MUST reject `min`/`max` nodes with fewer than "
+                "two arguments\" (esm-spec §4.2) -- which is why these keep a lower "
+                "bound where the other n-ary ops (`+`, `*`) do not. A one-operand "
+                "`min` has no meaningful identity to fold to, unlike `+(x) = x`."),
     OpSpec("max", "elementary", "nary", arity_bounds=(2, None),
-           note="n-ary (>= 2); clamp/clip primitive"),
+           note="n-ary (>= 2); clamp/clip primitive. Floor of two is spec-mandated; "
+                "see `min`."),
     OpSpec("floor", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("ceil", "elementary", "unary", arity_bounds=(1, 1)),
     # --- comparison (esm-spec §4.2 Conditionals) ---

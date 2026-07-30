@@ -295,7 +295,22 @@ class TestStructuralValidation:
         assert result.is_valid or not result.is_valid
 
     def test_expression_type_validation(self, fixtures_dir):
-        """Test expression type validation."""
+        """An operand count below the operator's registry floor is rejected.
+
+        The example used to be a one-operand ``+``. That was wrong, and
+        Python-local: esm-spec §4.2 calls ``+`` simply "n-ary" with no lower
+        bound, ``+(x)`` folds to the identity, and Rust (``Arity::AtLeast(1)``)
+        and Julia (``arity=1:typemax(Int)``) both accept it — Python's
+        ``(2, None)`` was the outlier of the three, and the shared property
+        corpus already contains the form. One-operand ``+`` is now VALID and is
+        pinned as such in ``test_op_registry`` and
+        ``test_broadcast_and_index_alignment``.
+
+        ``min`` is the correct example instead: §4.2 states outright that
+        "Conforming bindings MUST reject `min`/`max` nodes with fewer than two
+        arguments", so it is a genuine floor rather than a binding's guess, and
+        it keeps this test testing what it was written to test.
+        """
         invalid_esm = {
             "esm": "0.1.0",
             "metadata": {"name": "Test"},
@@ -306,8 +321,8 @@ class TestStructuralValidation:
                         {
                             "lhs": "x",
                             "rhs": {
-                                "op": "+",
-                                "args": [1],  # Invalid: + operator requires at least 2 arguments
+                                "op": "min",
+                                "args": [1],  # Invalid: min requires >= 2 args (§4.2)
                             },
                         }
                     ],
@@ -320,6 +335,25 @@ class TestStructuralValidation:
 
         error = str(exc_info.value).lower()
         assert any(keyword in error for keyword in ["arg", "operator", "expression", "invalid"])
+
+    def test_one_operand_nary_arithmetic_is_accepted(self, fixtures_dir):
+        """The other half of the change above: one-operand ``+``/``*`` load fine.
+
+        Pinned here, next to the rejection case, so the boundary between the two
+        is visible in one place.
+        """
+        for op in ("+", "*"):
+            doc = {
+                "esm": "0.1.0",
+                "metadata": {"name": "Test"},
+                "models": {
+                    "test_model": {
+                        "variables": {"x": {"type": "state"}},
+                        "equations": [{"lhs": "x", "rhs": {"op": op, "args": [1]}}],
+                    }
+                },
+            }
+            assert load(json.dumps(doc)) is not None
 
     def test_placeholder_expansion_errors(self, fixtures_dir):
         """Test placeholder expansion validation."""
