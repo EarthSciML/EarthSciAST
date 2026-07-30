@@ -297,25 +297,44 @@ func unaryMath(fn func(float64) float64) arithOp {
 
 func powApply(a []float64) (float64, error) { return math.Pow(a[0], a[1]), nil }
 
+// logApply is the natural logarithm, shared by the `log` and `ln` spellings.
+func logApply(a []float64) (float64, error) {
+	if a[0] <= 0 {
+		return 0, fmt.Errorf("log of non-positive number: %g", a[0])
+	}
+	return math.Log(a[0]), nil
+}
+
 // arithOpTable is the single source of truth for the scalar-evaluable /
-// foldable operator set (esm-spec §4.2). Non-evaluable ops handled before
-// argument evaluation (const/enum/fn/D/grad/div/laplacian) are intentionally
-// absent.
+// foldable operator set (esm-spec §4.2) AND for the arity of every SCALAR
+// operator the format admits. Non-evaluable ops handled before argument
+// evaluation (const/enum/fn/D/grad/div/laplacian) are intentionally absent.
+//
+// The structural validator reads the bounds here through scalarOpArity
+// (op_registry.go) to decide whether a `broadcast` node's `fn`/`args` pair is
+// legal (esm-spec §4.3.4), so the evaluator and validate() cannot disagree about
+// how many operands an operator takes. The arities below are therefore the
+// SPEC's, not a lenient superset: `+`/`*` are n-ary from ONE operand (`+(x)` is
+// `x`), `and`/`or` from two, `min`/`max` from two ("Conforming bindings MUST
+// reject `min`/`max` nodes with fewer than two arguments", §4.2).
 var arithOpTable = map[string]arithOp{
-	"+": {0, -1, func(a []float64) (float64, error) {
+	"+": {1, -1, func(a []float64) (float64, error) {
 		s := 0.0
 		for _, x := range a {
 			s += x
 		}
 		return s, nil
 	}},
-	"*": {0, -1, func(a []float64) (float64, error) {
+	"*": {1, -1, func(a []float64) (float64, error) {
 		p := 1.0
 		for _, x := range a {
 			p *= x
 		}
 		return p, nil
 	}},
+	// `neg` is the canonical unary negation canonicalize.go emits, and a legal
+	// `broadcast` fn (tests/fixtures/arrayop/27_broadcast_unary.esm).
+	"neg": {1, 1, func(a []float64) (float64, error) { return -a[0], nil }},
 	"-": {1, 2, func(a []float64) (float64, error) {
 		if len(a) == 1 {
 			return -a[0], nil
@@ -331,12 +350,11 @@ var arithOpTable = map[string]arithOp{
 	"^":   {2, 2, powApply},
 	"**":  {2, 2, powApply}, // §4.2 alias of ^; now folds identically
 	"exp": unaryMath(math.Exp),
-	"log": {1, 1, func(a []float64) (float64, error) {
-		if a[0] <= 0 {
-			return 0, fmt.Errorf("log of non-positive number: %g", a[0])
-		}
-		return math.Log(a[0]), nil
-	}},
+	"log": {1, 1, logApply},
+	// `ln` is the §4.3.4 spelling of the natural logarithm (it appears in the
+	// schema's scalar-operator enumeration and in units.go's dimensionless-
+	// argument set); it denotes exactly what `log` denotes here.
+	"ln": {1, 1, logApply},
 	"log10": {1, 1, func(a []float64) (float64, error) {
 		if a[0] <= 0 {
 			return 0, fmt.Errorf("log10 of non-positive number: %g", a[0])
@@ -410,7 +428,7 @@ var arithOpTable = map[string]arithOp{
 	"not": {1, 1, func(a []float64) (float64, error) {
 		return boolValue(a[0] == 0), nil
 	}},
-	"and": {0, -1, func(a []float64) (float64, error) {
+	"and": {2, -1, func(a []float64) (float64, error) {
 		for _, x := range a {
 			if x == 0 {
 				return 0, nil
@@ -418,7 +436,7 @@ var arithOpTable = map[string]arithOp{
 		}
 		return 1, nil
 	}},
-	"or": {0, -1, func(a []float64) (float64, error) {
+	"or": {2, -1, func(a []float64) (float64, error) {
 		for _, x := range a {
 			if x != 0 {
 				return 1, nil
