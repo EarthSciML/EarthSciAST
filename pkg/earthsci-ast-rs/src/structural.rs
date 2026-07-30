@@ -864,14 +864,15 @@ fn check_operand_axes(
 /// Collect the declared array-shaped variables an expression references in BARE
 /// (whole-array, elementwise) position.
 ///
-/// The descent enters only ELEMENTWISE operators
-/// ([`crate::op_registry::is_elementwise_op`]) — arithmetic, the elementary
-/// functions, the conditionals — because those are the only ones for which
-/// "corresponding elements" is what the expression means. Every other op
-/// consumes its operands whole under its own contract: an `aggregate` and a
-/// `makearray` name their axes, an `index` gathers, the shape ops restructure,
-/// and a geometry kernel like `intersect_polygon` legitimately takes
-/// `[src_verts, coord]` operands and returns a `[clip_ring, coord]` result.
+/// The descent enters only ELEMENTWISE nodes
+/// ([`crate::op_registry::is_elementwise_node`]) — arithmetic, the elementary
+/// functions, the conditionals, and a `broadcast` whose `fn` names one of them
+/// — because those are the only ones for which "corresponding elements" is
+/// what the expression means. Every other op consumes its operands whole under
+/// its own contract: an `aggregate` and a `makearray` name their axes, an
+/// `index` gathers, the shape ops restructure, and a geometry kernel like
+/// `intersect_polygon` legitimately takes `[src_verts, coord]` operands and
+/// returns a `[clip_ring, coord]` result.
 /// This mirrors the descent the array-runtime lowering uses when it wraps
 /// leaves in per-cell gathers
 /// (`simulate_array::compile::collect_wrapped_array_leaves`) — the two must
@@ -888,7 +889,7 @@ fn collect_bare_array_operands<'a>(
             }
         }
         crate::Expr::Operator(node) => {
-            if !crate::op_registry::is_elementwise_op(&node.op) {
+            if !crate::op_registry::is_elementwise_node(node) {
                 return;
             }
             node.for_each_child(&mut |child| {

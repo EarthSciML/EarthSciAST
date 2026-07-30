@@ -2359,9 +2359,11 @@ type GatherPlan = HashMap<String, Vec<usize>>;
 
 /// Collect the array-shaped `Variable` leaves that a whole-array lowering will
 /// wrap in a NAME-ALIGNED `index(…)` gather: the ones standing in genuinely
-/// ELEMENTWISE position (see [`crate::op_registry::is_elementwise_op`]), which
-/// is the only place element alignment is defined. A leaf reached through an
-/// op that consumes its operands whole — an `aggregate`, a `makearray`, an
+/// ELEMENTWISE position (see [`crate::op_registry::is_elementwise_node`]),
+/// which is the only place element alignment is defined. That includes a
+/// `broadcast` node, whose `fn` IS the scalar operator, so the `broadcast` and
+/// bare spellings of one expression align identically. A leaf reached through
+/// an op that consumes its operands whole — an `aggregate`, a `makearray`, an
 /// `index` target, a shape op, a relational or geometry kernel — is left to
 /// that op's own operand contract and keeps the legacy positional lowering.
 ///
@@ -2383,7 +2385,7 @@ fn collect_wrapped_array_leaves(
             }
         }
         Expr::Operator(node) => {
-            if !crate::op_registry::is_elementwise_op(&node.op) {
+            if !crate::op_registry::is_elementwise_node(node) {
                 return;
             }
             if !into_binders
@@ -2520,9 +2522,10 @@ pub(super) fn index_array_leaves_by_loops(
             if node.op == "index" || is_aggregate_op(&node.op) {
                 return expr.clone();
             }
-            // Element alignment is defined only under elementwise ops; below
-            // anything else the operand contract is that op's own.
-            let child_plan = plan.filter(|_| crate::op_registry::is_elementwise_op(&node.op));
+            // Element alignment is defined only under elementwise nodes (a
+            // `broadcast` included — its `fn` IS the scalar op); below anything
+            // else the operand contract is that op's own.
+            let child_plan = plan.filter(|_| crate::op_registry::is_elementwise_node(node));
             let mut out = ExpressionNode::clone(node);
             out.args = node
                 .args
@@ -2578,9 +2581,10 @@ pub(super) fn index_array_leaves(
             }
         }
         Expr::Operator(node) => {
-            // Element alignment is defined only under elementwise ops; below
-            // anything else the operand contract is that op's own.
-            let child_plan = plan.filter(|_| crate::op_registry::is_elementwise_op(&node.op));
+            // Element alignment is defined only under elementwise nodes (a
+            // `broadcast` included — its `fn` IS the scalar op); below anything
+            // else the operand contract is that op's own.
+            let child_plan = plan.filter(|_| crate::op_registry::is_elementwise_node(node));
             let mut out =
                 node.map_children(&mut |a| index_array_leaves(a, array_axes, child_plan, cell));
             if node.op == "index"

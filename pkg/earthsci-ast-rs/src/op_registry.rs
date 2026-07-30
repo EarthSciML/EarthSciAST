@@ -283,11 +283,25 @@ pub fn is_core_op(op: &str) -> bool {
 /// brought onto a common index space first (esm-spec §4.3.4). Every other op
 /// consumes its operands WHOLE and defines its own operand contract — an
 /// `aggregate` and a `makearray` name their axes, an `index` gathers, the
-/// shape ops (`reshape` / `transpose` / `concat` / `broadcast`) restructure,
-/// the relational and geometry kernels (`skolem`, `argmin`,
-/// `intersect_polygon`, …) take arrays as arguments and return arrays of an
-/// unrelated shape — so element alignment does not apply inside them, and the
-/// array runtime must not try to align there.
+/// shape ops (`reshape` / `transpose` / `concat`) restructure, the relational
+/// and geometry kernels (`skolem`, `argmin`, `intersect_polygon`, …) take
+/// arrays as arguments and return arrays of an unrelated shape — so element
+/// alignment does not apply inside them, and the array runtime must not try to
+/// align there.
+///
+/// Every name here is an op [`arity_of`] knows: this is a SUBSET of the
+/// evaluable core, never an extension of it. In particular the registry has no
+/// alias mechanism and no alias entries — `pow`, `**`, `power` are NOT spellings
+/// of `^`, `=` is not a spelling of `==`, and none of them is an operator in
+/// this format at all (they are open-tier names that
+/// [`crate::simulate_array`] rejects as `unlowered_operator`). Adding one here
+/// would invent an operator rather than classify one; `op_registry_partition`
+/// in the tests below pins that.
+///
+/// This predicate is about the op NAME. Use [`is_elementwise_node`] when
+/// deciding whether element alignment descends into a NODE — a `broadcast`
+/// node is elementwise in its `args` even though `broadcast` is not itself a
+/// scalar operator.
 #[must_use]
 pub fn is_elementwise_op(op: &str) -> bool {
     matches!(
@@ -302,6 +316,32 @@ pub fn is_elementwise_op(op: &str) -> bool {
         // Conditionals / logic (§4.2).
         | "ifelse" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
     )
+}
+
+/// Does element alignment see THROUGH this node to its `args` — i.e. are the
+/// node's operands in elementwise position (esm-spec §4.3.4)?
+///
+/// This is [`is_elementwise_op`] plus the one node whose elementwise-ness lives
+/// in a FIELD rather than in its name: `broadcast` applies the scalar operator
+/// named in `fn` element by element, so `{"op":"broadcast","fn":"*","args":[w2,z1]}`
+/// MEANS `{"op":"*","args":[w2,z1]}` and its operands must align exactly as the
+/// bare spelling's do. Treating `broadcast` as opaque made the two spellings
+/// disagree — the bare form aligned by index-set name while the `broadcast`
+/// form silently kept the positional flatten, which is the very divergence
+/// issue #100 exists to close.
+///
+/// The `fn` guard is deliberately conservative: alignment descends only when
+/// `fn` names a scalar operator the evaluators actually have a kernel for (an
+/// absent `fn` defaults to `+`, matching `eval_broadcast`). A `broadcast`
+/// carrying some other `fn` has no elementwise meaning to preserve — every
+/// evaluator folds it to `NaN` — so it keeps the legacy positional lowering
+/// rather than being reinterpreted.
+#[must_use]
+pub fn is_elementwise_node(node: &ExpressionNode) -> bool {
+    if node.op == "broadcast" {
+        return is_elementwise_op(node.broadcast_fn.as_deref().unwrap_or("+"));
+    }
+    is_elementwise_op(&node.op)
 }
 
 /// Is this node a **rewrite-target** `D` — a derivative whose `wrt` names a
@@ -554,5 +594,118 @@ mod tests {
             matches!(check_expr(&agg), Err(OpError::Arity { .. })),
             "an arity error inside `aggregate.expr` must be found"
         );
+    }
+
+    /// Every op this registry knows, partitioned by [`is_elementwise_op`].
+    ///
+    /// The list is exhaustive over [`arity_of`] as of this commit. Adding an op
+    /// to `arity_of` without deciding which side it falls on will fail
+    /// `is_elementwise_op_is_a_subset_of_the_core`, which is the point: element
+    /// alignment (esm-spec §4.3.4) is defined by this partition, and a new op
+    /// silently defaulting to "not elementwise" is a decision, not an accident.
+    const ELEMENTWISE: &[&str] = &[
+        "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
+        "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+        "asinh", "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=", ">",
+        ">=", "and", "or", "not",
+    ];
+    const NOT_ELEMENTWISE: &[&str] = &[
+        "D",
+        "ic",
+        "Pre",
+        "const",
+        "true",
+        "fn",
+        "enum",
+        "table_lookup",
+        "apply_expression_template",
+        "aggregate",
+        "makearray",
+        "index",
+        "broadcast",
+        "reshape",
+        "transpose",
+        "concat",
+        "skolem",
+        "rank",
+        "distinct",
+        "argmin",
+        "argmax",
+        "intersect_polygon",
+        "polygon_intersection_area",
+    ];
+
+    /// [`is_elementwise_op`] may only CLASSIFY registry ops, never invent them.
+    #[test]
+    fn is_elementwise_op_is_a_subset_of_the_core() {
+        for op in ELEMENTWISE {
+            assert!(is_core_op(op), "`{op}` is elementwise but not a core op");
+            assert!(is_elementwise_op(op), "`{op}` should be elementwise");
+        }
+        for op in NOT_ELEMENTWISE {
+            assert!(is_core_op(op), "`{op}` is listed but not a core op");
+            assert!(!is_elementwise_op(op), "`{op}` should not be elementwise");
+        }
+    }
+
+    /// The registry has NO alias mechanism and no alias entries. `pow`, `**` and
+    /// `power` are not spellings of `^`; `=` is not a spelling of `==`; `false`
+    /// is not the counterpart of the nullary `true`. None of them is an operator
+    /// in this format — they are open-tier names, rejected as
+    /// `unlowered_operator` when a model carrying one is built.
+    ///
+    /// This is pinned because the obvious "fix" — adding them to
+    /// [`is_elementwise_op`] so array-level alignment covers them — would invent
+    /// operators the spec's §4.2 table does not have, and would not make them
+    /// runnable either.
+    #[test]
+    fn the_registry_has_no_operator_aliases() {
+        for op in ["pow", "**", "power", "=", "false"] {
+            assert!(!is_core_op(op), "`{op}` must not be a registry op");
+            assert!(!is_elementwise_op(op), "`{op}` must not be elementwise");
+            assert!(
+                matches!(
+                    check_node(&ExpressionNode {
+                        op: op.to_string(),
+                        args: vec![Expr::Variable("z".into()), Expr::Number(2.0)],
+                        ..Default::default()
+                    }),
+                    Err(OpError::Unlowered { .. })
+                ),
+                "`{op}` must be reported as an open-tier / unlowered operator"
+            );
+        }
+    }
+
+    /// [`is_elementwise_node`] sees through a `broadcast` to its `args`, because
+    /// `broadcast(fn: F, args)` MEANS `{op: F, args}` — so the two spellings of
+    /// one array-level expression align their operands identically (issue #100).
+    /// The `fn` guard keeps that conservative: a `broadcast` whose `fn` is not a
+    /// scalar operator has no elementwise meaning to preserve.
+    #[test]
+    fn is_elementwise_node_sees_through_broadcast() {
+        let bcast = |f: Option<&str>| ExpressionNode {
+            op: "broadcast".to_string(),
+            broadcast_fn: f.map(str::to_string),
+            args: vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
+            ..Default::default()
+        };
+        assert!(is_elementwise_node(&bcast(Some("*"))));
+        assert!(is_elementwise_node(&bcast(Some("atan2"))));
+        // An absent `fn` defaults to `+`, matching the evaluators.
+        assert!(is_elementwise_node(&bcast(None)));
+        // Not a scalar operator: stay out.
+        assert!(!is_elementwise_node(&bcast(Some("pow"))));
+        assert!(!is_elementwise_node(&bcast(Some("aggregate"))));
+
+        // Non-`broadcast` nodes are classified by name alone, as before.
+        let named = |op: &str| ExpressionNode {
+            op: op.to_string(),
+            args: vec![Expr::Variable("a".into())],
+            ..Default::default()
+        };
+        assert!(is_elementwise_node(&named("*")));
+        assert!(!is_elementwise_node(&named("index")));
+        assert!(!is_elementwise_node(&named("intersect_polygon")));
     }
 }

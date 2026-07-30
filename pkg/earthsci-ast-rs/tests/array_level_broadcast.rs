@@ -89,6 +89,14 @@ fn bare_axis_permuted_operand_fixture() {
     run_shared_fixture("bare_axis_permuted_operand.esm");
 }
 
+/// The same mixed-rank product written with an explicit `broadcast` node —
+/// same index sets, same operands, same expected values. Only the spelling
+/// differs, and it must not change a single number.
+#[test]
+fn broadcast_node_mixed_rank_fixture() {
+    run_shared_fixture("broadcast_node_mixed_rank.esm");
+}
+
 /// An operand carrying an index set the result does not have is a HARD
 /// structural error at `validate()` — both shapes are declared, so it is
 /// decidable without running anything.
@@ -114,6 +122,104 @@ fn operand_index_set_absent_from_result_is_a_structural_error() {
 
     // …and the build refuses it too, for a caller that skipped validation.
     let e = run(&file).expect_err("compile must reject the unalignable operand");
+    assert!(
+        format!("{e}").contains("array_shape_mismatch"),
+        "unexpected error: {e}"
+    );
+}
+
+/// Load a shared fixture with its single equation's RHS replaced.
+fn fixture_with_rhs(name: &str, rhs: serde_json::Value) -> earthsci_ast::EsmFile {
+    let path = common::repo_fixture("valid/array_broadcast").join(name);
+    let mut doc: serde_json::Value = serde_json::from_str(&read(&path)).expect("fixture is JSON");
+    let models = doc["models"].as_object_mut().expect("models");
+    let model = models.values_mut().next().expect("one model");
+    model["equations"][0]["rhs"] = rhs;
+    load(&doc.to_string()).unwrap_or_else(|e| panic!("{name} (rewritten): {e}"))
+}
+
+/// Assert two documents integrate to bit-identical trajectories.
+fn assert_same_trajectory(label: &str, a: &earthsci_ast::EsmFile, b: &earthsci_ast::EsmFile) {
+    let sa = run(a).unwrap_or_else(|e| panic!("{label} (a): {e}"));
+    let sb = run(b).unwrap_or_else(|e| panic!("{label} (b): {e}"));
+    assert_eq!(sa.state_variable_names, sb.state_variable_names, "{label}");
+    for (slot, name) in sa.state_variable_names.iter().enumerate() {
+        for (t, va) in sa.state[slot].iter().enumerate() {
+            let vb = sb.state[slot][t];
+            assert_eq!(
+                va.to_bits(),
+                vb.to_bits(),
+                "{label}: {name} at sample {t}: {va} vs {vb}"
+            );
+        }
+    }
+}
+
+/// `broadcast(fn: F, args)` MEANS `{op: F, args}`, so the two spellings of one
+/// array-level expression must align their operands identically and produce
+/// bit-identical trajectories (esm-spec §4.3.4).
+///
+/// Treating `broadcast` as opaque made the implementation narrower than the
+/// normative text: the bare form aligned by index-set name while the
+/// `broadcast` form silently kept the positional flatten — `w2 * z1` over
+/// `[lon,lat,lev]` returned 1100, 2400, 0 instead of 1100, 1200, 1300. That is
+/// the exact divergence issue #100 exists to close, reappearing one spelling
+/// over.
+#[test]
+fn broadcast_and_bare_spellings_are_bit_identical() {
+    for (fixture, bare, broadcast) in [
+        // A rank-1 `[lat]` operand lifted into a `[lon,lat,lev]` result.
+        (
+            "bare_rank_lift.esm",
+            serde_json::json!({"op": "*", "args": ["w1", 1.0]}),
+            serde_json::json!({"op": "broadcast", "fn": "*", "args": ["w1", 1.0]}),
+        ),
+        // Two operands missing DIFFERENT axes — the case no positional
+        // convention can express.
+        (
+            "bare_mixed_rank_product.esm",
+            serde_json::json!({"op": "*", "args": ["w2", "z1"]}),
+            serde_json::json!({"op": "broadcast", "fn": "*", "args": ["w2", "z1"]}),
+        ),
+        // A `[lat,lon]` operand that must transpose, not be reinterpreted.
+        (
+            "bare_axis_permuted_operand.esm",
+            serde_json::json!({"op": "*", "args": ["wT", 1.0]}),
+            serde_json::json!({"op": "broadcast", "fn": "*", "args": ["wT", 1.0]}),
+        ),
+    ] {
+        assert_same_trajectory(
+            fixture,
+            &fixture_with_rhs(fixture, bare),
+            &fixture_with_rhs(fixture, broadcast),
+        );
+    }
+}
+
+/// The unalignable-operand rejection reaches through a `broadcast` too — the
+/// checker and the builder must not disagree with the bare spelling about
+/// whether a document is well-formed.
+#[test]
+fn broadcast_spelled_unalignable_operand_is_rejected() {
+    let path =
+        common::repo_fixture("invalid/array_broadcast").join("operand_index_set_not_in_result.esm");
+    let mut doc: serde_json::Value = serde_json::from_str(&read(&path)).expect("fixture is JSON");
+    let models = doc["models"].as_object_mut().expect("models");
+    let model = models.values_mut().next().expect("one model");
+    model["equations"][0]["rhs"] =
+        serde_json::json!({"op": "broadcast", "fn": "*", "args": ["z1", 1.0]});
+    let file = load(&doc.to_string()).expect("still schema-valid");
+
+    let report = validate(&file);
+    assert!(
+        report
+            .structural_errors
+            .iter()
+            .any(|e| matches!(e.code, StructuralErrorCode::ArrayShapeMismatch)),
+        "a `broadcast`-spelled unalignable operand must be reported too: {:?}",
+        report.structural_errors
+    );
+    let e = run(&file).expect_err("compile must reject it as well");
     assert!(
         format!("{e}").contains("array_shape_mismatch"),
         "unexpected error: {e}"
@@ -266,6 +372,7 @@ fn shared_fixtures_are_bare_array_level_equations() {
         "bare_rank_lift.esm",
         "bare_mixed_rank_product.esm",
         "bare_axis_permuted_operand.esm",
+        "broadcast_node_mixed_rank.esm",
     ] {
         let path = common::repo_fixture("valid/array_broadcast").join(name);
         let file = load(&read(&path)).unwrap_or_else(|e| panic!("{name}: {e}"));
