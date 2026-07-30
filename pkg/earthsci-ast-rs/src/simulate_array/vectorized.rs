@@ -797,7 +797,25 @@ pub(super) fn eval_vec_op<'a>(
     pool: &mut Pool,
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
-    match vec_op_code(&node.op) {
+    eval_vec_op_code(vec_op_code(&node.op), node, bx, ctx, pool, ops)
+}
+
+/// [`eval_vec_op`] with the operator already resolved to a [`VecOp`].
+///
+/// Splitting the resolution from the dispatch is what lets the `Broadcast` arm
+/// re-enter with the code of its `fn` against the SAME node, so
+/// `broadcast(fn = F, args)` runs the identical arm as `{"op": F, "args": args}`
+/// — the overlay's half of the issue-#101 fix, and the exact mirror of the
+/// oracle's [`super::eval::eval_op_named`].
+fn eval_vec_op_code<'a>(
+    code: VecOp,
+    node: &ExpressionNode,
+    bx: &VecBox,
+    ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
+    ops: &mut usize,
+) -> Option<VecValue<'a>> {
+    match code {
         // Elementwise / n-ary arithmetic, plus `atan2` (binary) and the logical
         // connectives `and`/`or` (n-ary). All fold left-to-right through
         // `vec_combine` → `apply_binary` — the SAME kernel and order the per-cell
@@ -907,20 +925,26 @@ pub(super) fn eval_vec_op<'a>(
             Some(vec_unary(code, v, pool))
         }
         // Elementwise `broadcast(fn; a, b, …)` — the whole-array analogue of
-        // `eval_broadcast`, folding operands with the SAME `apply_binary` kernel
-        // (via `vec_combine`) in the SAME left-to-right order, so it is
-        // bit-identical to the oracle. `vec_combine` returns `None` for a
-        // `broadcast_fn` it does not vectorize (e.g. `atan2`), bailing safely.
+        // `eval_broadcast`, and implemented the same way: re-dispatch on the
+        // code of `fn` against this same node, so the arm that runs is the arm
+        // that would run for the bare `{"op": fn, "args": args}` node and the
+        // result is bit-identical to the oracle by construction.
+        //
+        // This used to resolve `fn` through `BinCode::of` and left-fold, which
+        // made a ONE-operand broadcast the identity — `broadcast(fn="-",[x])`
+        // returned `x` — and NaN'd every unary `fn` at arity 2+ (issue #101).
         VecOp::Broadcast => {
-            let code = BinCode::of(node.broadcast_fn.as_deref().unwrap_or("+"));
-            let mut it = node.args.iter();
-            let first = it.next()?;
-            let mut acc = eval_vec(first, bx, ctx, pool, ops)?;
-            for a in it {
-                let v = eval_vec(a, bx, ctx, pool, ops)?;
-                acc = vec_combine(code, acc, v, pool)?;
+            let fn_name = node.broadcast_fn.as_deref()?;
+            // `is_scalar_operator` excludes `broadcast`, so this recursion is
+            // one level deep. A non-scalar or unregistered `fn` should have been
+            // rejected by `op_registry::check_broadcast_fn` at build time; on the
+            // ungated `eval_expression` path, bail to the oracle rather than
+            // guess (the oracle then reports it).
+            if !crate::op_registry::is_scalar_operator(fn_name) {
+                note_bail(|| format!("op: broadcast fn `{fn_name}` is not a scalar operator"));
+                return None;
             }
-            Some(acc)
+            eval_vec_op_code(vec_op_code(fn_name), node, bx, ctx, pool, ops)
         }
         // Everything else (array-valued ifelse, aggregate, reshape, transpose,
         // concat, `fn` closed-registry calls, atan2, D, …) falls back.

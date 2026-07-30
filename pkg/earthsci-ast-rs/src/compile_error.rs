@@ -99,6 +99,17 @@ pub enum CompileError {
         reason: String,
     },
 
+    /// A `broadcast` node whose `fn` field is absent or does not name a scalar
+    /// operator (esm-spec §4.3.4). `broadcast` is the one op whose OPERATOR is
+    /// data — the node says `broadcast`, the arithmetic is named by a sibling
+    /// string — and nothing used to check that string, so a typo'd or missing
+    /// `fn` was silently evaluated as `+` (issue #101).
+    #[error("invalid_broadcast_fn: {reason}")]
+    InvalidBroadcastFn {
+        /// Why the `fn` is rejected.
+        reason: String,
+    },
+
     /// An evaluable-core operator (esm-spec §4.2) that this interpreter has no
     /// evaluation rule for reached the evaluator.
     ///

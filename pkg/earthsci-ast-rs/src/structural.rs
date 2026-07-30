@@ -1777,6 +1777,20 @@ pub(crate) fn validate_expression_references_with_systems(
             }
         }
         crate::Expr::Operator(op_node) => {
+            // esm-spec §4.3.4: a `broadcast` node's `fn` MUST name a scalar
+            // operator, and the operand count must be one that operator accepts.
+            //
+            // This rides the reference walker deliberately. `broadcast.fn` is a
+            // NAME embedded in an expression, exactly like the variable names
+            // this function resolves, and every expression-bearing block of the
+            // document already routes through here — model equations,
+            // `initialization_equations`, `guesses`, `tests[].reference`,
+            // observed expressions, event conditions and affects, reaction
+            // rates, and data-loader `unit_conversion`s. A separate pass would
+            // have had to re-enumerate all of them and would have drifted.
+            if op_node.op == "broadcast" {
+                check_broadcast_fn_node(op_node, base_path, equation_index, errors);
+            }
             // Recursively validate every expression-bearing child via the
             // canonical walker — args PLUS the sidecar fields (integral bounds,
             // aggregate/arrayop bodies, filter predicates, table axes,
@@ -1818,6 +1832,60 @@ pub(crate) fn validate_expression_references_with_systems(
             // Numbers are always valid
         }
     }
+}
+
+/// Report a `broadcast` node whose `fn` is unusable (esm-spec §4.3.4).
+///
+/// The rule is delegated wholesale to [`crate::op_registry::check_broadcast_fn`]
+/// — the single source of truth for the operator vocabulary — so `validate()`
+/// and the simulate-time gate cannot disagree about which files are acceptable.
+/// Both failure shapes it can return become the one `invalid_broadcast_fn`
+/// structural code, because from the file's point of view they are one defect:
+/// this `fn`/`args` pair is not a scalar operator application.
+///
+/// Note the deliberately NARROW scope. This is not a general op-registry sweep
+/// inside `validate()`: arities of ordinary `op` nodes are still checked only at
+/// compile time. `broadcast.fn` is singled out because it is the one operator
+/// name that no `op`-keyed check can ever see, and because getting it wrong is
+/// silent (issue #101) rather than loud.
+fn check_broadcast_fn_node(
+    node: &crate::types::ExpressionNode,
+    base_path: &str,
+    equation_index: usize,
+    errors: &mut Vec<StructuralError>,
+) {
+    use crate::op_registry::OpError;
+    let Err(err) = crate::op_registry::check_broadcast_fn(node) else {
+        return;
+    };
+    let (message, details) = match err {
+        OpError::BroadcastFn { fn_name, reason } => (
+            reason,
+            serde_json::json!({
+                "broadcast_fn": fn_name,
+                "equation_index": equation_index,
+            }),
+        ),
+        OpError::Arity { op, got, expected } => (
+            format!(
+                "'broadcast' fn '{op}' takes {expected} argument(s), got {got} (esm-spec §4.3.4)"
+            ),
+            serde_json::json!({
+                "broadcast_fn": op,
+                "got": got,
+                "expected": expected,
+                "equation_index": equation_index,
+            }),
+        ),
+        // `check_broadcast_fn` returns only the two shapes above.
+        other => (other.to_string(), serde_json::json!({})),
+    };
+    errors.push(StructuralError {
+        path: base_path.to_string(),
+        code: StructuralErrorCode::InvalidBroadcastFn,
+        message,
+        details,
+    });
 }
 
 /// Check if a variable name is a built-in function

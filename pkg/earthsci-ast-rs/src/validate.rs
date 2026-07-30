@@ -141,6 +141,17 @@ pub enum StructuralErrorCode {
     /// of the document `index_sets` registry (RFC semiring-faq-unified-ir §5.2):
     /// no implicit interval is inferred for an undeclared name.
     UndefinedIndexSet,
+    /// A `broadcast` node whose `fn` field is absent, does not name a scalar
+    /// operator in the registry, or is applied to an argument count that
+    /// operator does not accept (esm-spec §4.3.4: "the `fn` value MUST name a
+    /// scalar operator … loading MUST fail").
+    ///
+    /// `broadcast` is the one op whose OPERATOR is data — the node says
+    /// `broadcast` and the arithmetic is named by a sibling string field — so
+    /// no amount of `op`-keyed checking reaches it. Until this code existed,
+    /// `{"op":"broadcast","fn":"not_a_real_op","args":[x]}` validated clean and
+    /// then evaluated to `x` (issue #101).
+    InvalidBroadcastFn,
 }
 
 impl std::fmt::Display for StructuralErrorCode {
@@ -170,6 +181,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::JoinKeyInvalidType => "join_key_invalid_type",
             Self::RelationalNodeInContinuous => "relational_node_in_continuous",
             Self::UndefinedIndexSet => "undefined_index_set",
+            Self::InvalidBroadcastFn => "invalid_broadcast_fn",
         };
         write!(f, "{s}")
     }
@@ -1856,5 +1868,157 @@ mod tests {
             "expected pinned event_var_undeclared @ /models/TestModel/continuous_events/0/affects/0/lhs, got: {:?}",
             result.structural_errors
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #101 — `broadcast.fn` must be validated, not silently discarded.
+    // -----------------------------------------------------------------------
+
+    /// A one-model document whose observed `y` is defined by `expr`.
+    fn doc_with_observed_expr(expr: &str) -> String {
+        format!(
+            r#"{{
+              "esm": "0.1.0",
+              "metadata": {{"name": "bcast"}},
+              "models": {{"M": {{
+                "variables": {{
+                  "x": {{"type": "state", "units": "1", "default": 1.0}},
+                  "y": {{"type": "observed", "units": "1", "expression": {expr}}}
+                }},
+                "equations": [
+                  {{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}}, "rhs": "y"}}
+                ]
+              }}}}
+            }}"#
+        )
+    }
+
+    /// Deserialize DIRECTLY, bypassing `load()`'s schema pass, and return the
+    /// `invalid_broadcast_fn` findings `validate()` reports.
+    ///
+    /// The bypass is deliberate. The schema already requires `fn` to be PRESENT
+    /// on a `broadcast` node (`$defs/ExpressionNode/allOf`), so a missing-`fn`
+    /// document cannot reach `validate()` through `load()` — but a document
+    /// built programmatically, or parsed by a caller that skipped schema
+    /// validation, can, and `validate()` must not wave it through. What the
+    /// schema CANNOT express is the value constraint (§4.3.4: `fn` must name a
+    /// scalar operator, applied at a legal arity); that is what these tests pin.
+    fn broadcast_findings(expr: &str) -> Vec<StructuralError> {
+        let file: EsmFile =
+            serde_json::from_str(&doc_with_observed_expr(expr)).expect("fixture deserializes");
+        let result = validate(&file);
+        result
+            .structural_errors
+            .into_iter()
+            .filter(|e| matches!(e.code, StructuralErrorCode::InvalidBroadcastFn))
+            .collect()
+    }
+
+    /// The headline case from the issue: `fn` names an operator that is not in
+    /// the registry at all, and `validate()` returned `is_valid: true`.
+    #[test]
+    fn unregistered_broadcast_fn_is_a_structural_error() {
+        let expr = r#"{"op": "broadcast", "fn": "not_a_real_op", "args": ["x"]}"#;
+        // Through the real `load()` — the schema accepts any `fn` STRING, so
+        // this is exactly the document the issue reported as `is_valid: true`.
+        let file = crate::parse::load(&doc_with_observed_expr(expr)).expect("fixture loads");
+        let result = validate(&file);
+        assert!(
+            !result.is_valid,
+            "an unregistered `broadcast.fn` must fail validation"
+        );
+        let found = broadcast_findings(expr);
+        assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
+        assert_eq!(found[0].path, "/models/M/variables/y/expression");
+        assert!(
+            found[0].message.contains("not_a_real_op"),
+            "the message must name the offending fn: {}",
+            found[0].message
+        );
+    }
+
+    /// A MISSING `fn` silently became `+` in all three evaluators. It is
+    /// rejected at BOTH layers: the schema requires the field to be present, and
+    /// `validate()` reports it for a document that never went through the schema.
+    #[test]
+    fn missing_broadcast_fn_is_rejected_at_both_layers() {
+        let expr = r#"{"op": "broadcast", "args": ["x", "x"]}"#;
+        assert!(
+            crate::parse::load(&doc_with_observed_expr(expr)).is_err(),
+            "the schema requires `fn` on a `broadcast` node"
+        );
+        let found = broadcast_findings(expr);
+        assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
+        assert_eq!(found[0].details["broadcast_fn"], serde_json::Value::Null);
+    }
+
+    /// §4.3.4 requires a SCALAR operator; the array/tensor ops are not.
+    #[test]
+    fn non_scalar_broadcast_fn_is_a_structural_error() {
+        for f in ["aggregate", "index", "broadcast", "makearray"] {
+            let expr = format!(r#"{{"op": "broadcast", "fn": "{f}", "args": ["x"]}}"#);
+            let found = broadcast_findings(&expr);
+            assert_eq!(
+                found.len(),
+                1,
+                "fn `{f}`: expected one finding, got {found:?}"
+            );
+        }
+    }
+
+    /// An `fn`/`args` arity mismatch is reported too — `min` of one operand and
+    /// `sin` of two are exactly as wrong as their bare spellings.
+    #[test]
+    fn broadcast_fn_arity_mismatch_is_a_structural_error() {
+        for (f, args) in [
+            ("min", r#"["x"]"#),
+            ("sin", r#"["x", "x"]"#),
+            ("/", r#"["x"]"#),
+        ] {
+            let expr = format!(r#"{{"op": "broadcast", "fn": "{f}", "args": {args}}}"#);
+            let found = broadcast_findings(&expr);
+            assert_eq!(
+                found.len(),
+                1,
+                "fn `{f}`: expected one finding, got {found:?}"
+            );
+            assert_eq!(found[0].details["broadcast_fn"], f);
+        }
+    }
+
+    /// The legal spellings must stay legal — including the ONE-operand unary
+    /// form, which is an authored in-tree idiom (`tests/display/
+    /// structural_ops.json`, `canonicalize.rs`), and the one-operand n-ary
+    /// form (`tests/property_corpus/expressions/expr_039.json`).
+    #[test]
+    fn well_formed_broadcasts_produce_no_finding() {
+        for expr in [
+            r#"{"op": "broadcast", "fn": "exp", "args": ["x"]}"#,
+            r#"{"op": "broadcast", "fn": "-", "args": ["x"]}"#,
+            r#"{"op": "broadcast", "fn": "neg", "args": ["x"]}"#,
+            r#"{"op": "broadcast", "fn": "+", "args": ["x"]}"#,
+            r#"{"op": "broadcast", "fn": "+", "args": ["x", "x"]}"#,
+            r#"{"op": "broadcast", "fn": "min", "args": ["x", "x"]}"#,
+            r#"{"op": "broadcast", "fn": "*", "args": ["x", "x", "x"]}"#,
+            r#"{"op": "broadcast", "fn": "ifelse", "args": ["x", "x", "x"]}"#,
+        ] {
+            assert!(
+                broadcast_findings(expr).is_empty(),
+                "`{expr}` must remain valid"
+            );
+        }
+    }
+
+    /// The check rides the shared expression walker, so it reaches every
+    /// expression-bearing block — not just equation sides. A `broadcast` buried
+    /// in an `aggregate.expr` sidecar is found, at the enclosing field's pointer.
+    #[test]
+    fn broadcast_fn_is_checked_inside_sidecar_fields() {
+        let expr = r#"{"op": "aggregate", "output_idx": ["i"], "args": [],
+                       "ranges": {"i": [1, 3]},
+                       "expr": {"op": "broadcast", "fn": "nope", "args": ["x"]}}"#;
+        let found = broadcast_findings(expr);
+        assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
+        assert_eq!(found[0].path, "/models/M/variables/y/expression");
     }
 }

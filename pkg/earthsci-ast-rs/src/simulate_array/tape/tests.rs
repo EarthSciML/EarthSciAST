@@ -1277,3 +1277,171 @@ fn export_demotion_skips_unread_publishes() {
         "active export must publish the slot value"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #101 — a ONE-operand `broadcast` must apply its `fn`.
+// ---------------------------------------------------------------------------
+
+/// A method-of-lines model whose tendency is `rhs`, over an `[i]`-shaped state
+/// and an `[i]`-shaped observed `s = 0.5 * u` for `rhs` to consume. Array-shaped
+/// on purpose: a scalar model never engages the whole-array overlay, and the
+/// whole point of #101 is that the three evaluators disagreed.
+fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
+    json!({
+        "esm": "0.1.0",
+        "metadata": {"name": name},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "state", "shape": ["i"]},
+                "s": {"type": "observed", "shape": ["i"],
+                      "expression": agg(n, json!({"op": "*", "args": [0.5, idx("u", json!("i"))]}))}
+            },
+            "equations": [d_eq("u", n, agg(n, rhs))]
+        }}
+    })
+}
+
+/// `dy` from all three evaluation paths: the per-cell oracle (`force_scalar`),
+/// the whole-array vectorized overlay, and the tape (reference executor over
+/// the FUSED program). Returns them in that order.
+fn dy_three_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 3] {
+    let compiled = compile(doc);
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
+    let (dy_vec, _) = compiled.debug_eval_rhs(state, 0.0, &params, false);
+    let (prog, report) = compiled.build_tape(&HashSet::new());
+    assert!(
+        report.fallbacks.is_empty(),
+        "the tape must lower this model with no fallback, else the tape path is untested: {:?}",
+        report.fallbacks
+    );
+    let mut dy_tape = vec![0.0f64; state.len()];
+    run_reference(&prog, &compiled, state, &param_vec, 0.0, &mut dy_tape);
+    [dy_oracle, dy_vec, dy_tape]
+}
+
+fn assert_bits_eq(a: &[f64], b: &[f64], what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}: length");
+    for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+        assert_eq!(
+            x.to_bits(),
+            y.to_bits(),
+            "{what}: dy[{k}] diverged: {x:?} ({:016x}) vs {y:?} ({:016x})",
+            x.to_bits(),
+            y.to_bits()
+        );
+    }
+}
+
+/// The regression itself. For each unary scalar operator `F`, the tendency
+/// `broadcast(fn = F, [s])` must be BIT-IDENTICAL to the bare `F(s)` — on the
+/// per-cell oracle, on the vectorized overlay, and on the tape.
+///
+/// Before the fix all three folded `args` through the BINARY kernel table, so a
+/// single-element fold degenerated to the identity and every one of these
+/// returned `s` unchanged (issue #101).
+#[test]
+fn unary_broadcast_matches_the_bare_node_on_all_three_paths() {
+    let n = 6i64;
+    // `s = 0.5 * u` and `u ∈ [0.25, 3)`, so every operand is inside the domain
+    // of `log`/`sqrt` and no NaN can mask a divergence.
+    let state = seeded_state(n as usize, 11, 0.25, 3.0);
+    // `abs` is deliberately absent: the operands below are all positive, so
+    // `abs` would be the identity on them and the vacuity guard would fire.
+    for f in [
+        "-", "neg", "log", "exp", "sqrt", "sin", "cos", "tanh", "floor", "not",
+    ] {
+        let operand = idx("s", json!("i"));
+        let bare = json!({"op": f, "args": [operand]});
+        let bcast = json!({"op": "broadcast", "fn": f, "args": [operand]});
+
+        let [o_bare, v_bare, t_bare] = dy_three_ways(bcast_doc("bare", n, bare), &state);
+        let [o_bc, v_bc, t_bc] = dy_three_ways(bcast_doc("bcast", n, bcast), &state);
+
+        // Each path agrees with itself across the two spellings …
+        assert_bits_eq(&o_bc, &o_bare, &format!("fn `{f}`: oracle"));
+        assert_bits_eq(&v_bc, &v_bare, &format!("fn `{f}`: vectorized overlay"));
+        assert_bits_eq(&t_bc, &t_bare, &format!("fn `{f}`: tape"));
+        // … and the three paths agree with each other.
+        assert_bits_eq(&v_bc, &o_bc, &format!("fn `{f}`: overlay vs oracle"));
+        assert_bits_eq(&t_bc, &o_bc, &format!("fn `{f}`: tape vs oracle"));
+
+        // Guard against a vacuous pass: `F` must actually CHANGE the operand,
+        // otherwise "broadcast == bare" would hold even with the bug present.
+        let [o_id, _, _] = dy_three_ways(bcast_doc("id", n, idx("s", json!("i"))), &state);
+        assert!(
+            o_bare
+                .iter()
+                .zip(o_id.iter())
+                .any(|(a, b)| a.to_bits() != b.to_bits()),
+            "fn `{f}` is the identity on this state — the test would pass vacuously"
+        );
+    }
+}
+
+/// The n-ary and binary spellings keep folding exactly as before: a 1-operand
+/// `broadcast(fn = "+")` is the identity because `+(x)` IS `x`, and 2- and
+/// 3-operand folds are unchanged. This is the arity rule stated in
+/// `op_registry::check_broadcast_fn` — legal iff the bare node is legal.
+#[test]
+fn n_ary_broadcast_folds_are_unchanged() {
+    let n = 6i64;
+    let state = seeded_state(n as usize, 7, 0.25, 3.0);
+    let s = || idx("s", json!("i"));
+    let cases: Vec<(&str, serde_json::Value, serde_json::Value)> = vec![
+        // (label, broadcast spelling, equivalent bare spelling)
+        (
+            "unary +",
+            json!({"op": "broadcast", "fn": "+", "args": [s()]}),
+            json!({"op": "+", "args": [s()]}),
+        ),
+        (
+            "binary -",
+            json!({"op": "broadcast", "fn": "-", "args": [s(), 0.25]}),
+            json!({"op": "-", "args": [s(), 0.25]}),
+        ),
+        (
+            "ternary *",
+            json!({"op": "broadcast", "fn": "*", "args": [s(), 2.0, s()]}),
+            json!({"op": "*", "args": [s(), 2.0, s()]}),
+        ),
+        (
+            "binary min",
+            json!({"op": "broadcast", "fn": "min", "args": [s(), 1.0]}),
+            json!({"op": "min", "args": [s(), 1.0]}),
+        ),
+        (
+            "binary atan2",
+            json!({"op": "broadcast", "fn": "atan2", "args": [s(), 2.0]}),
+            json!({"op": "atan2", "args": [s(), 2.0]}),
+        ),
+        (
+            "ternary ifelse",
+            json!({"op": "broadcast", "fn": "ifelse",
+                   "args": [{"op": ">", "args": [s(), 0.5]}, s(), 0.125]}),
+            json!({"op": "ifelse",
+                   "args": [{"op": ">", "args": [s(), 0.5]}, s(), 0.125]}),
+        ),
+    ];
+    for (label, bcast, bare) in cases {
+        let [o_bare, v_bare, t_bare] = dy_three_ways(bcast_doc("bare", n, bare), &state);
+        let [o_bc, v_bc, t_bc] = dy_three_ways(bcast_doc("bcast", n, bcast), &state);
+        assert_bits_eq(&o_bc, &o_bare, &format!("{label}: oracle"));
+        assert_bits_eq(&v_bc, &v_bare, &format!("{label}: vectorized overlay"));
+        assert_bits_eq(&t_bc, &t_bare, &format!("{label}: tape"));
+    }
+}
+
+/// The numbers from the issue report, as a closed-form check rather than a
+/// cross-spelling one: `s = 0.5 * u`, so `D(u) = broadcast(fn="-", [s])` is
+/// `-0.5 * u` — and NOT `+0.5 * u`, which is what the fold-degeneracy produced.
+#[test]
+fn unary_broadcast_minus_negates() {
+    let n = 3i64;
+    let state = vec![1.0, 2.0, 4.0];
+    let rhs = json!({"op": "broadcast", "fn": "-", "args": [idx("s", json!("i"))]});
+    for dy in dy_three_ways(bcast_doc("neg_check", n, rhs), &state) {
+        assert_bits_eq(&dy, &[-0.5, -1.0, -2.0], "broadcast(fn=\"-\") must negate");
+    }
+}

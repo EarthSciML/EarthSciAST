@@ -1873,6 +1873,9 @@ fn resolve_expr(
                 crate::op_registry::OpError::MakearrayRegion { reason } => {
                     CompileError::MakearrayRegionInvalid { reason }
                 }
+                crate::op_registry::OpError::BroadcastFn { reason, .. } => {
+                    CompileError::InvalidBroadcastFn { reason }
+                }
             })?;
             // Closed-registry function call (esm-spec §9.2): resolve to the
             // dedicated `Fn` variant so the callee `name` and any inline array

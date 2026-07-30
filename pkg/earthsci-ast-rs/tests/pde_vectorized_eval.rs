@@ -858,3 +858,100 @@ fn array_valued_filter_is_a_per_cell_mask_on_both_paths() {
          was dropped, which is the R4 bug"
     );
 }
+
+// ============================================================================
+// Issue #101 — the shared unary-broadcast conformance fixture.
+// ============================================================================
+
+/// Run `fixtures/arrayop/27_broadcast_unary.esm` end-to-end and check its inline
+/// assertions, on BOTH evaluation paths.
+///
+/// The fixture is the cross-binding pin (Julia and Python glob this directory
+/// and execute the same `tests` block); this test is the Rust arm of it. It is
+/// here rather than in a numerics suite because the failure mode it guards is
+/// path-dependent: before the fix the per-cell oracle, the whole-array overlay
+/// and the tape ALL dropped a one-operand `broadcast`'s `fn`, each in its own
+/// copy of the same fold.
+#[test]
+fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
+    let path = fixture("27_broadcast_unary.esm");
+    let text = std::fs::read_to_string(&path).expect("read fixture");
+    let file = load(&text).expect("load fixture");
+
+    // The fixture's own initial conditions and expectations, kept in one place
+    // so a drift in the fixture shows up as a mismatch here rather than being
+    // silently unchecked.
+    let ic: HashMap<String, f64> = [
+        ("a[1]", 1.0),
+        ("a[2]", 4.0),
+        ("a[3]", 9.0),
+        ("negated", 0.0),
+        ("minused", 0.0),
+        ("rooted", 0.0),
+        ("logged", 0.0),
+        ("identity", 0.0),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let expected: Vec<(&str, f64)> = vec![
+        ("negated", -4.0),
+        ("minused", -9.0),
+        ("rooted", 3.0),
+        ("logged", std::f64::consts::LN_2 * 2.0),
+        ("identity", 4.0),
+    ];
+
+    let opts = SimulateOptions {
+        solver: SolverChoice::Bdf,
+        abstol: 1e-12,
+        reltol: 1e-10,
+        max_steps: 100_000,
+        output_times: Some(vec![1.0]),
+        progress: None,
+    };
+    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ic, &opts).expect("simulate fixture");
+    let last = sol.time.len() - 1;
+    for (name, want) in &expected {
+        let j = sol
+            .state_variable_names
+            .iter()
+            .position(|nm| nm == name || nm.ends_with(&format!(".{name}")))
+            .unwrap_or_else(|| panic!("`{name}` not in {:?}", sol.state_variable_names));
+        let got = sol.state[j][last];
+        assert!(
+            (got - want).abs() <= 1e-6 * want.abs().max(1.0),
+            "`{name}`: expected {want}, got {got} — a discarded `broadcast.fn` \
+             returns the operand instead"
+        );
+    }
+
+    // The tendencies are constants, so `dy` at t = 0 IS the assertion vector.
+    // Check it on the per-cell oracle and on the whole-array overlay separately:
+    // a divergence between them is exactly what the pre-fix code produced.
+    let compiled = ArrayCompiled::from_file(&file).expect("compile fixture");
+    let names = compiled.state_variable_names();
+    let state: Vec<f64> = names
+        .iter()
+        .map(|n| ic.get(n).copied().unwrap_or(0.0))
+        .collect();
+    let (dy_vec, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+    for (k, (a, b)) in dy_vec.iter().zip(dy_oracle.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "slot {k} ({}): overlay {a} vs oracle {b}",
+            names[k]
+        );
+    }
+    for (name, want) in &expected {
+        let k = names.iter().position(|n| n == name).expect("probe slot");
+        assert_eq!(
+            dy_vec[k].to_bits(),
+            want.to_bits(),
+            "tendency of `{name}` must be exactly {want}, got {}",
+            dy_vec[k]
+        );
+    }
+}

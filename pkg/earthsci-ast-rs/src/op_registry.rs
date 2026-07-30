@@ -100,6 +100,20 @@ pub enum OpError {
         /// What is wrong with the regions.
         reason: String,
     },
+    /// A `broadcast` node whose `fn` is absent, or names something that is not
+    /// a SCALAR operator (esm-spec §4.3.4: "the `fn` value must name a scalar
+    /// operator"). Diagnostic code `invalid_broadcast_fn`.
+    ///
+    /// An `fn`-arity mismatch is reported as [`OpError::Arity`] against the
+    /// `fn` NAME instead, because that is literally the same defect the bare
+    /// node would have: `broadcast(fn = "min", [x])` is wrong for exactly the
+    /// reason `{"op": "min", "args": [x]}` is wrong.
+    BroadcastFn {
+        /// The offending `fn` value, or `None` when the field is absent.
+        fn_name: Option<String>,
+        /// Why it is rejected.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for OpError {
@@ -112,7 +126,9 @@ impl std::fmt::Display for OpError {
                 f,
                 "operator '{op}' has no evaluator and was not lowered by any rewrite rule"
             ),
-            Self::MakearrayRegion { reason } => write!(f, "{reason}"),
+            Self::MakearrayRegion { reason } | Self::BroadcastFn { reason, .. } => {
+                write!(f, "{reason}")
+            }
         }
     }
 }
@@ -275,6 +291,108 @@ pub fn is_core_op(op: &str) -> bool {
     arity_of(op).is_some()
 }
 
+/// Is `op` a **scalar operator** — one whose meaning is a POINTWISE map from
+/// scalar operands to a scalar result (esm-spec §4.2 "arithmetic, elementary
+/// functions, comparisons")?
+///
+/// This is exactly the set a `broadcast` node's `fn` may name (§4.3.4: "the
+/// `fn` value must name a scalar operator"), and it is what makes the
+/// `broadcast` contract stateable in one line:
+///
+/// > `{"op": "broadcast", "fn": F, "args": A}` means what `{"op": F, "args": A}`
+/// > means, applied element-wise.
+///
+/// Everything whose meaning is NOT pointwise is excluded, and each exclusion is
+/// load-bearing:
+///
+/// * the array/tensor ops (`aggregate`, `makearray`, `index`, `reshape`,
+///   `transpose`, `concat`, and `broadcast` itself) — they RESHAPE, so
+///   "apply element-wise" is not defined for them (and a self-referential
+///   `fn: "broadcast"` would recurse forever in the evaluators);
+/// * the closed-registry invocation `fn` — its callee lives in `name`, not in
+///   the `broadcast` node's `fn` field, so it can never be spelled here;
+/// * the form/lowering ops (`D`, `ic`, `Pre`, `const`, `true`, `enum`,
+///   `table_lookup`, `apply_expression_template`) — consumed by system
+///   assembly or a lowering pass, never evaluated element-wise;
+/// * the build-time relational and geometry ops (`skolem`, `rank`, `distinct`,
+///   `argmin`, `argmax`, `intersect_polygon`, `polygon_intersection_area`).
+///
+/// Every name here is also in [`arity_of`], which [`check_broadcast_fn`] relies
+/// on (pinned by `every_scalar_operator_has_an_arity`).
+#[must_use]
+pub fn is_scalar_operator(op: &str) -> bool {
+    matches!(
+        op,
+        // Arithmetic (§4.2), including the canonical unary negation.
+        "+" | "-" | "*" | "/" | "^" | "neg"
+        // Elementary functions (§4.2).
+        | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+        | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh"
+        | "atan2" | "min" | "max"
+        // Comparisons, logic and the pointwise conditional (§4.2).
+        | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not" | "ifelse"
+    )
+}
+
+/// Validate a `broadcast` node's `fn` field (esm-spec §4.3.4).
+///
+/// `broadcast` is the one op whose OPERATOR is data: the node says `broadcast`
+/// but the arithmetic it performs is named by a sibling string field. Nothing
+/// checked that string, so three distinct defects were accepted silently and
+/// all three produced a plausible wrong number rather than a diagnostic
+/// (issue #101):
+///
+/// 1. **A missing `fn`.** All three evaluators defaulted it to `"+"`. There is
+///    no default in the spec, and inventing one turns a truncated node into a
+///    silent sum.
+/// 2. **An `fn` that names no scalar operator** — a typo (`"not_a_real_op"`) or
+///    a non-pointwise op (`"aggregate"`). §4.3.4 requires a scalar operator, so
+///    this is the exact analogue of the §9.1 rule for `fn`-NODE names.
+/// 3. **An `fn`/`args` arity mismatch.** `broadcast(fn = "sin", [a, b])` and
+///    `broadcast(fn = "min", [x])` are wrong for precisely the reason the bare
+///    `sin(a, b)` / `min(x)` nodes are wrong, so they get the SAME
+///    [`OpError::Arity`] diagnostic, reported against the `fn` name.
+///
+/// Note what rule (3) does NOT reject: a one-operand `broadcast` whose `fn` is
+/// genuinely n-ary or unary. `broadcast(fn = "+", [x])` and
+/// `broadcast(fn = "-", [x])` stay legal, because `+(x)` and `-(x)` are legal
+/// bare nodes (identity and negation respectively). That is the whole point of
+/// deriving the rule from [`arity_of`] rather than hard-coding "≥ 2".
+///
+/// # Errors
+///
+/// [`OpError::BroadcastFn`] for (1) and (2); [`OpError::Arity`] for (3).
+pub fn check_broadcast_fn(node: &ExpressionNode) -> Result<(), OpError> {
+    let Some(fn_name) = node.broadcast_fn.as_deref() else {
+        return Err(OpError::BroadcastFn {
+            fn_name: None,
+            reason: "'broadcast' is missing its 'fn': the field names the scalar operator to \
+                     apply element-wise and has no default (esm-spec §4.3.4)"
+                .to_string(),
+        });
+    };
+    // One `else` covers both "not in the registry at all" and "in the registry
+    // but not pointwise" — from the file's point of view they are the same
+    // defect: `fn` does not name a scalar operator.
+    let Some(arity) = arity_of(fn_name).filter(|_| is_scalar_operator(fn_name)) else {
+        return Err(OpError::BroadcastFn {
+            fn_name: Some(fn_name.to_string()),
+            reason: format!(
+                "'broadcast' fn '{fn_name}' does not name a scalar operator (esm-spec §4.3.4)"
+            ),
+        });
+    };
+    if !arity.admits(node.args.len()) {
+        return Err(OpError::Arity {
+            op: fn_name.to_string(),
+            got: node.args.len(),
+            expected: arity.describe(),
+        });
+    }
+    Ok(())
+}
+
 /// Is this node a **rewrite-target** `D` — a derivative whose `wrt` names a
 /// SPATIAL axis rather than the time variable (esm-spec §4.2 / §9.6.8)?
 ///
@@ -332,6 +450,11 @@ pub fn check_node(node: &ExpressionNode) -> Result<(), OpError> {
     // so arity alone says nothing about whether it is well-formed.
     if op == "makearray" {
         check_makearray_regions(node)?;
+    }
+    // `broadcast` likewise: `Arity::AtLeast(1)` says nothing about the OPERATOR
+    // it applies, which lives in the `fn` field (esm-spec §4.3.4).
+    if op == "broadcast" {
+        check_broadcast_fn(node)?;
     }
     Ok(())
 }
@@ -525,5 +648,176 @@ mod tests {
             matches!(check_expr(&agg), Err(OpError::Arity { .. })),
             "an arity error inside `aggregate.expr` must be found"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #101 — `broadcast.fn` is an operator name and must be checked.
+    // -----------------------------------------------------------------------
+
+    /// Every scalar operator must have an entry in `arity_of` — the invariant
+    /// `check_broadcast_fn` relies on when it derives the `fn`'s legal arity.
+    #[test]
+    fn every_scalar_operator_has_an_arity() {
+        for op in [
+            "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
+            "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+            "asinh", "acosh", "atanh", "atan2", "min", "max", "==", "!=", "<", "<=", ">", ">=",
+            "and", "or", "not", "ifelse",
+        ] {
+            assert!(is_scalar_operator(op), "`{op}` must be a scalar operator");
+            assert!(
+                arity_of(op).is_some(),
+                "scalar operator `{op}` has no arity entry"
+            );
+        }
+    }
+
+    /// The exclusions are the load-bearing half of `is_scalar_operator`: none of
+    /// these has a pointwise meaning, so none may be spelled as a `broadcast.fn`.
+    /// `broadcast` itself heads the list — allowing it would make the
+    /// evaluators' `fn` re-dispatch recurse forever.
+    #[test]
+    fn non_pointwise_ops_are_not_scalar_operators() {
+        for op in [
+            "broadcast",
+            "aggregate",
+            "makearray",
+            "index",
+            "reshape",
+            "transpose",
+            "concat",
+            "fn",
+            "D",
+            "ic",
+            "Pre",
+            "const",
+            "true",
+            "enum",
+            "table_lookup",
+            "apply_expression_template",
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "intersect_polygon",
+            "polygon_intersection_area",
+            "grad",
+            "not_a_real_op",
+        ] {
+            assert!(
+                !is_scalar_operator(op),
+                "`{op}` must NOT be usable as a `broadcast` fn"
+            );
+        }
+    }
+
+    /// The headline bug: `fn: "not_a_real_op"` was accepted and then silently
+    /// discarded, so the node evaluated to its operand.
+    #[test]
+    fn unregistered_broadcast_fn_is_rejected() {
+        let e = check_expr(&node(serde_json::json!({
+            "op": "broadcast", "fn": "not_a_real_op", "args": ["x"]
+        })))
+        .expect_err("an unregistered `fn` must be rejected");
+        assert!(
+            matches!(e, OpError::BroadcastFn { fn_name: Some(ref f), .. } if f == "not_a_real_op"),
+            "got {e:?}"
+        );
+    }
+
+    /// A MISSING `fn` used to default to `+` in all three evaluators. There is
+    /// no default in the spec.
+    #[test]
+    fn missing_broadcast_fn_is_rejected() {
+        let e = check_expr(&node(
+            serde_json::json!({"op": "broadcast", "args": ["x", "y"]}),
+        ))
+        .expect_err("a `broadcast` with no `fn` must be rejected");
+        assert!(
+            matches!(e, OpError::BroadcastFn { fn_name: None, .. }),
+            "got {e:?}"
+        );
+    }
+
+    /// A non-scalar op named as `fn` is rejected for the same reason a typo is:
+    /// §4.3.4 requires a SCALAR operator.
+    #[test]
+    fn non_scalar_broadcast_fn_is_rejected() {
+        for f in ["aggregate", "index", "makearray", "broadcast", "fn", "D"] {
+            let e = check_expr(&node(serde_json::json!({
+                "op": "broadcast", "fn": f, "args": ["x"]
+            })))
+            .expect_err("a non-scalar `fn` must be rejected");
+            assert!(
+                matches!(e, OpError::BroadcastFn { fn_name: Some(ref g), .. } if g == f),
+                "fn `{f}`: got {e:?}"
+            );
+        }
+    }
+
+    /// `broadcast(fn = F, args)` is legal exactly when `{op: F, args}` is —
+    /// which is also what it now MEANS. The arity rule is therefore derived
+    /// from `arity_of(F)`, not hard-coded.
+    #[test]
+    fn broadcast_fn_arity_mirrors_the_bare_node() {
+        let legal = |f: &str, n: usize| {
+            let args: Vec<serde_json::Value> =
+                (0..n).map(|i| serde_json::json!(format!("x{i}"))).collect();
+            check_expr(&node(
+                serde_json::json!({"op": "broadcast", "fn": f, "args": args}),
+            ))
+        };
+        // n-ary ops fold to the identity on one operand — `+(x)` is `x` — so a
+        // one-operand broadcast of them stays legal.
+        legal("+", 1).expect("`+` is n-ary from 1");
+        legal("*", 3).expect("`*` is n-ary");
+        // `-` is unary OR binary: negation or subtraction, exactly as bare.
+        legal("-", 1).expect("unary `-` is negation");
+        legal("-", 2).expect("binary `-` is subtraction");
+        assert!(matches!(legal("-", 3), Err(OpError::Arity { got: 3, .. })));
+        // Strictly binary.
+        assert!(matches!(legal("/", 1), Err(OpError::Arity { ref op, got: 1, .. }) if op == "/"));
+        assert!(matches!(
+            legal("atan2", 3),
+            Err(OpError::Arity { got: 3, .. })
+        ));
+        // `min`/`max` are n-ary with n >= 2 (§4.2 "MUST reject … fewer than
+        // two"), so a ONE-operand `broadcast(fn="min")` is an arity error —
+        // the same verdict the bare `{"op":"min","args":[x]}` node gets.
+        assert!(
+            matches!(legal("min", 1), Err(OpError::Arity { ref op, got: 1, .. }) if op == "min")
+        );
+        legal("min", 2).expect("`min` of two is fine");
+        // Unary elementary functions: exactly one. A 2-arg `broadcast(fn="sin")`
+        // used to resolve to `BinCode::Unknown` and evaluate to NaN in silence.
+        legal("sin", 1).expect("`sin` is unary");
+        assert!(
+            matches!(legal("sin", 2), Err(OpError::Arity { ref op, got: 2, .. }) if op == "sin")
+        );
+        legal("neg", 1).expect("`neg` is unary");
+        assert!(matches!(
+            legal("neg", 2),
+            Err(OpError::Arity { got: 2, .. })
+        ));
+        legal("ifelse", 3).expect("`ifelse` is ternary");
+        assert!(matches!(
+            legal("ifelse", 2),
+            Err(OpError::Arity { got: 2, .. })
+        ));
+    }
+
+    /// The in-tree authored idiom (`canonicalize.rs`, `tests/display/
+    /// structural_ops.json`): a ONE-operand `broadcast` of a unary function.
+    #[test]
+    fn one_operand_unary_broadcast_stays_legal() {
+        check_expr(&node(serde_json::json!({
+            "op": "broadcast", "fn": "sin", "args": ["u"]
+        })))
+        .expect("`broadcast(fn=\"sin\", [u])` is the authored unary spelling");
+        check_expr(&node(serde_json::json!({
+            "op": "broadcast", "fn": "exp", "args": ["A"]
+        })))
+        .expect("`broadcast(fn=\"exp\", [A])` is pinned by tests/display/structural_ops.json");
     }
 }

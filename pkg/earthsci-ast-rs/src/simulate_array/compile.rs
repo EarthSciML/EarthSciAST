@@ -126,7 +126,9 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
 /// [`CompileError::UnloweredOperatorError`] for a rewrite-target op (sugar, a
 /// spatial `D`, a user op, or a misspelling); [`CompileError::InvalidOperatorArity`]
 /// for a core op with the wrong argument count;
-/// [`CompileError::MakearrayRegionInvalid`] for a ragged or inverted `makearray`.
+/// [`CompileError::MakearrayRegionInvalid`] for a ragged or inverted `makearray`;
+/// [`CompileError::InvalidBroadcastFn`] for a `broadcast` whose `fn` is absent
+/// or names no scalar operator.
 pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
     crate::op_registry::check_expr(expr).map_err(|e| match e {
         OpError::Unlowered { op } => CompileError::UnloweredOperatorError { op },
@@ -134,6 +136,7 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
             CompileError::InvalidOperatorArity { op, got, expected }
         }
         OpError::MakearrayRegion { reason } => CompileError::MakearrayRegionInvalid { reason },
+        OpError::BroadcastFn { reason, .. } => CompileError::InvalidBroadcastFn { reason },
     })
 }
 
