@@ -3134,6 +3134,25 @@ A document is valid iff `Expand(document)` (§9.6.4 rule 2) is valid. Bindings M
 | `unlowered_operator` | pre-evaluation walk of the expanded tree | the same walk on the reference-preserving tree; sound by eager expansion (§9.6.4 rule 3) |
 | `rewrite_rule_nonterminating` | fixpoint | unchanged; the eager pre-pass consumes no pass budget |
 
+#### 9.6.10 Authoring for whole-array evaluation (non-normative)
+
+Nothing in this subsection changes what a document *means*. Two spellings of the same discretization always produce the same numbers — that is what §9.6.3's determinism contract requires. They can nonetheless differ enormously in what they *cost*, because a binding is free to evaluate a rule either as whole-array kernels (work proportional to the grid, once per RHS call) or by walking the rule body once per grid cell. The guidance below keeps a rule on the first path.
+
+**Prefer naming a discretization operator as the whole expression of an observed.**
+
+```json
+"dqdlon": { "type": "observed", "shape": ["lon","lat","lev"],
+            "expression": { "op": "D", "wrt": "lon", "args": ["q"] } }
+```
+
+and then read `dqdlon` where the derivative is needed, rather than writing the `D` inline inside an `aggregate` body and indexing it per cell. A named observed is materialized once over its own box; the inline form asks for a sub-array *per cell of the enclosing aggregate*, which a binding must recognize as loop-invariant before it can hoist it.
+
+**Prefer array-level template bodies.** A template whose `body` is array-level arithmetic composes cleanly at every call site. A template whose body is a per-cell `aggregate` wrapping an operator re-creates the nested shape one layer down at each site, even where every application is correctly named.
+
+**Why this is guidance and not a requirement.** A nested `aggregate` whose own `output_idx` (or contracted index) *rebinds* an enclosing index symbol only shadows it: inside the nested body that name denotes the nested aggregate's own index, so the node does not depend on the enclosing loop and a binding may materialize it once. Bindings are expected to recognize that case, and the common collision — a discretization template keyed on the grid's index names, inlined inside an equation body keyed on the same names — is exactly it. What remains genuinely per-cell is a nested body that reads an enclosing index it does **not** rebind, e.g. `aggregate[j](u[j] · i)` inside `aggregate[i](…)`: its value differs for every enclosing cell, so it cannot be hoisted at all, and no spelling rule can rescue it.
+
+Bindings that compile rules ahead of evaluation SHOULD report, per solve, which rules they could not compile and why, so that a costly spelling is diagnosable rather than merely slow. In this repository's Rust binding that list is `SolutionMetadata::tape_fallbacks` (`metadata.tapeFallbacks` over the wasm/JS boundary), the `tape_report` wasm entry point answers the same question without integrating, and `cargo run --release --example tape_report -- <model.esm>` does so natively.
+
 ### 9.7 Template libraries, cross-file imports, and metaparameters
 
 This section makes `expression_templates` shareable across files and components, and makes structurally integer sites (index-set sizes, dense ranges, region bounds) parameterizable at load. All resolution happens at load, before validation and before the §9.6.3 fixpoint — the engine, its determinism contract, and the `unlowered_operator` gate are untouched. Motivation and design history: `docs/content/rfcs/template-library-imports.md`.
