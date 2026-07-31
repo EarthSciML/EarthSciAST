@@ -63,6 +63,63 @@ pub(crate) fn tape_disabled() -> bool {
     })
 }
 
+/// Runtime-selected SIMD width for the fused-loop kernel clones (Step 4b).
+///
+/// The generic build targets baseline x86-64 (SSE-2), leaving 2x-4x of vector
+/// width unused on AVX2/AVX-512 machines. The hot fused-loop bodies are
+/// compiled again under `#[target_feature]` (same Rust source, same scalar
+/// semantics, wider lanes — LLVM's auto-vectorizer is not permitted to
+/// reassociate or contract FP ops, so the clones are bit-identical; pinned by
+/// `simd_clone_bit_identity`), and ONE clone is selected per process — never
+/// per element or per micro-op, which is the twice-measured dispatch trap.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SimdLevel {
+    /// The portable baseline codegen (and the only level off x86-64).
+    Generic,
+    #[cfg(target_arch = "x86_64")]
+    Avx2,
+    #[cfg(target_arch = "x86_64")]
+    Avx512,
+}
+
+/// Detect the widest supported clone, once. `ESS_TAPE_SIMD_DISABLE=1` forces
+/// the generic codegen (the Step 4b kill switch; bit-identical either way).
+pub(crate) fn simd_level() -> SimdLevel {
+    use std::sync::OnceLock;
+    static LEVEL: OnceLock<SimdLevel> = OnceLock::new();
+    *LEVEL.get_or_init(|| {
+        let off = std::env::var("ESS_TAPE_SIMD_DISABLE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if off {
+            return SimdLevel::Generic;
+        }
+        // `ESS_TAPE_SIMD_LEVEL=generic|avx2|avx512`: cap the selection below
+        // the detected width (measurement aid; a level the CPU lacks is
+        // ignored). Unset = widest detected.
+        let cap = std::env::var("ESS_TAPE_SIMD_LEVEL").unwrap_or_default();
+        if cap.eq_ignore_ascii_case("generic") {
+            return SimdLevel::Generic;
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            let allow512 = !cap.eq_ignore_ascii_case("avx2");
+            if allow512
+                && std::arch::is_x86_feature_detected!("avx512f")
+                && std::arch::is_x86_feature_detected!("avx512vl")
+                && std::arch::is_x86_feature_detected!("avx512dq")
+                && std::arch::is_x86_feature_detected!("avx512bw")
+            {
+                return SimdLevel::Avx512;
+            }
+            if std::arch::is_x86_feature_detected!("avx2") {
+                return SimdLevel::Avx2;
+            }
+        }
+        SimdLevel::Generic
+    })
+}
+
 /// `ESS_TAPE_CHECK=N`: for the first N calls of each taped scratch, run BOTH
 /// the legacy interpreter and the tape and assert bitwise-equal `dy` (then
 /// drop the check buffer). 0 (the default) checks nothing.
@@ -124,6 +181,9 @@ pub(crate) struct TapeExec {
     /// Rule counts, cached off the program for the per-call stats.
     pub(crate) n_taped: usize,
     pub(crate) n_fallback: usize,
+    /// Step 4b: the SIMD clone this executor runs its fused loops through,
+    /// selected ONCE at executor construction (never per element).
+    simd: SimdLevel,
 }
 
 impl TapeExec {
@@ -199,6 +259,7 @@ impl TapeExec {
             exports_active: n_fallback > 0 || tape_check_calls() > 0,
             n_taped: prog.rules.len() - n_fallback,
             n_fallback,
+            simd: simd_level(),
         }
     }
 }
@@ -1313,6 +1374,7 @@ unsafe fn exec_fused(
     slot_off: &[usize],
     obs: &ArrMap,
     fregs: &mut [f64],
+    simd: SimdLevel,
 ) {
     // Resolve scalar inputs once.
     let mut svals: SmallVec<[f64; 8]> = SmallVec::new();
@@ -1359,6 +1421,32 @@ unsafe fn exec_fused(
         return;
     }
 
+    // Step 4b: run the chunked micro-program through the SIMD clone selected
+    // at executor construction. Same source, same scalar semantics — the
+    // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
+    match simd {
+        SimdLevel::Generic => unsafe {
+            exec_fused_runs_generic(fs, &svals, &bases, &outs, fregs)
+        },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx2 => unsafe { exec_fused_runs_avx2(fs, &svals, &bases, &outs, fregs) },
+        #[cfg(target_arch = "x86_64")]
+        SimdLevel::Avx512 => unsafe { exec_fused_runs_avx512(fs, &svals, &bases, &outs, fregs) },
+    }
+}
+
+/// The strip-mined chunk loop of [`exec_fused`], monomorphized per SIMD
+/// level through the `#[target_feature]` wrappers below (`#[inline(always)]`
+/// so each wrapper compiles the WHOLE loop nest — micro-op dispatch, chunk
+/// kernels and stores — under its feature set).
+#[inline(always)]
+unsafe fn exec_fused_runs(
+    fs: &FusedSpec,
+    svals: &[f64],
+    bases: &[*const f64],
+    outs: &[(u16, *mut f64)],
+    fregs: &mut [f64],
+) {
     let rp = fregs.as_mut_ptr();
     for run in &fs.runs {
         let mut done = 0usize;
@@ -1531,7 +1619,7 @@ unsafe fn exec_fused(
                     }
                 }
             }
-            for &(reg, optr) in &outs {
+            for &(reg, optr) in outs {
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         rp.add(reg as usize * FCHUNK) as *const f64,
@@ -1543,6 +1631,49 @@ unsafe fn exec_fused(
             done += c;
         }
     }
+}
+
+/// Baseline-codegen instantiation of the fused chunk loop.
+#[inline(never)]
+unsafe fn exec_fused_runs_generic(
+    fs: &FusedSpec,
+    svals: &[f64],
+    bases: &[*const f64],
+    outs: &[(u16, *mut f64)],
+    fregs: &mut [f64],
+) {
+    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+}
+
+/// AVX2 clone: identical Rust source compiled under `avx2` (+`fma` is NOT
+/// enabled — LLVM must not contract mul+add into fused multiply-add, which
+/// would change bits). Reached only when `is_x86_feature_detected!` proved
+/// support, so the `unsafe` target-feature contract holds.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn exec_fused_runs_avx2(
+    fs: &FusedSpec,
+    svals: &[f64],
+    bases: &[*const f64],
+    outs: &[(u16, *mut f64)],
+    fregs: &mut [f64],
+) {
+    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
+}
+
+/// AVX-512 clone (f+vl+dq+bw, all runtime-checked). Note LLVM keeps its
+/// preferred vector width at 256 bits for these targets unless told
+/// otherwise, so this may codegen close to the AVX2 clone.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f", enable = "avx512vl", enable = "avx512dq", enable = "avx512bw")]
+unsafe fn exec_fused_runs_avx512(
+    fs: &FusedSpec,
+    svals: &[f64],
+    bases: &[*const f64],
+    outs: &[(u16, *mut f64)],
+    fregs: &mut [f64],
+) {
+    unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
 }
 
 /// The per-element measurement arm (`ESS_TAPE_FUSE_MODE=elem`): one scalar
@@ -1657,9 +1788,11 @@ fn run_range(
         plan_full,
         fregs,
         exports_active,
+        simd,
         ..
     } = exec;
     let exports_active = *exports_active;
+    let simd = *simd;
     let prog = env.prog;
     let slab_ptr = slab.as_mut_ptr();
     let slot_off: &[usize] = slot_off;
@@ -1974,7 +2107,7 @@ fn run_range(
             }
             Instr::Fused { spec } => {
                 let fs = &prog.fused[*spec as usize];
-                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs) };
+                unsafe { exec_fused(fs, env, slab_ptr, slot_off, obs, fregs, simd) };
             }
             Instr::DyWrite { write } => {
                 let w = &prog.dy_writes[*write as usize];
@@ -2089,6 +2222,308 @@ pub(super) fn run_rhs_oracle(
                     .collect();
                 let flat = multi_to_flat_col_major(&actual_multi, &vs.shape, &vs.origin);
                 dy[vs.flat_offset + flat] = v;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Step 4b: SIMD-clone bit-identity tests. The `#[target_feature]` clones are
+// the SAME Rust source under wider codegen; these tests pin that claim on
+// adversarial inputs (NaNs — quiet and payload-carrying — signed zeros,
+// denormals, infinities, extreme magnitudes) across chunk boundaries, ghost
+// runs and strided pre-loads. Any bit difference means the widened codegen
+// reassociated or contracted something, and that clone must be rejected.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod simd_tests {
+    use super::*;
+
+    /// Adversarial + pseudorandom input of length `n`, seeded.
+    fn adversarial(n: usize, seed: u64) -> Vec<f64> {
+        // NOTE on NaNs: inputs carry ONE NaN representation (the canonical
+        // positive qNaN). When BOTH operands of a commutative op are NaNs
+        // with different payloads, x86 propagates whichever lands in the
+        // first source slot — and LLVM (whose semantics leave NaN payloads
+        // nondeterministic) may commute operands differently per codegen
+        // width, so payload-mixing inputs would legitimately differ between
+        // equally-correct clones without any reassociation (measured here:
+        // a payload qNaN in this table trips exactly that on the AVX2
+        // clone). Ops that *generate* NaN (0/0, inf-inf, 0*inf, sqrt(-x))
+        // produce the deterministic hardware qNaN at every width and stay
+        // covered, as does single-NaN-operand propagation.
+        let specials = [
+            f64::NAN,
+            1.5e-310, // denormal
+            0.0,
+            -0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MIN_POSITIVE,          // smallest normal
+            5e-324,                     // smallest denormal
+            -5e-324,
+            2.2e-308,                   // denormal
+            f64::MAX,
+            f64::MIN,
+            1.0,
+            -1.0,
+            1.5,
+            -2.5,
+            1e308,
+            -1e308,
+            3.5e-320,                   // denormal
+            0.1,
+        ];
+        let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
+        (0..n)
+            .map(|k| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                if k % 3 == 0 {
+                    specials[(x as usize) % specials.len()]
+                } else {
+                    // Mix magnitudes; keep bit-level variety.
+                    let u = (x >> 11) as f64 / (1u64 << 53) as f64;
+                    (u - 0.5) * 10f64.powi((x % 61) as i32 - 30)
+                }
+            })
+            .collect()
+    }
+
+    /// Build a `FusedSpec` + inputs exercising every micro-op kind, run it
+    /// through every available SIMD clone, and assert byte-identical outputs.
+    #[test]
+    fn simd_clone_bit_identity() {
+        const N: usize = 2500; // chunk boundaries at 1024, 2048 + short tail
+        let a = adversarial(N, 1);
+        let b = adversarial(N, 2);
+        let shifted = adversarial(N + 16, 3);
+        let strided = adversarial(2 * N + 8, 4);
+        let svals = [
+            f64::NAN,
+            -0.0,
+            2.5,
+            5e-324,
+            f64::INFINITY,
+        ];
+
+        let inputs = vec![
+            // 0, 1: aligned reads.
+            FusedInput {
+                src: SrcRef::Slot(0),
+                shifted_ix: None,
+                src_shape: DimU::from_elem(N, 1),
+                elem_stride: 1,
+                load_reg: u16::MAX,
+            },
+            FusedInput {
+                src: SrcRef::Slot(1),
+                shifted_ix: None,
+                src_shape: DimU::from_elem(N, 1),
+                elem_stride: 1,
+                load_reg: u16::MAX,
+            },
+            // 2: shifted stride-1 read (ghost over the last run).
+            FusedInput {
+                src: SrcRef::Slot(2),
+                shifted_ix: Some(0),
+                src_shape: DimU::from_elem(N + 16, 1),
+                elem_stride: 1,
+                load_reg: u16::MAX,
+            },
+            // 3: strided (elem_stride 2) read through a pre-load register.
+            FusedInput {
+                src: SrcRef::Slot(3),
+                shifted_ix: Some(1),
+                src_shape: DimU::from_elem(2 * N + 8, 1),
+                elem_stride: 2,
+                load_reg: u16::MAX, // patched below once n_regs is known
+            },
+        ];
+
+        // Micro program: every Bin code, every monomorphized Un code, Neg,
+        // Selects (register / input / scalar conds), Mov, and every Bin2
+        // combo in both swap orientations, with operand kinds mixed.
+        let mut micro: Vec<MicroOp> = Vec::new();
+        let bins = [
+            BinCode::Add,
+            BinCode::Sub,
+            BinCode::Mul,
+            BinCode::Div,
+            BinCode::Pow,
+            BinCode::Min,
+            BinCode::Max,
+            BinCode::Eq,
+            BinCode::Ne,
+            BinCode::Lt,
+            BinCode::Le,
+            BinCode::Gt,
+            BinCode::Ge,
+        ];
+        for (i, op) in bins.iter().enumerate() {
+            let (a, b) = match i % 4 {
+                0 => (MRef::In(0), MRef::In(1)),
+                1 => (MRef::In(2), MRef::In(0)),
+                2 => (MRef::Scal(i as u16 % 5), MRef::In(3)),
+                _ => (MRef::In(1), MRef::Scal((i as u16 + 2) % 5)),
+            };
+            let out = micro.len() as u16;
+            micro.push(MicroOp::Bin { op: *op, a, b, out });
+        }
+        let uns = [
+            UnCode::Abs,
+            UnCode::Sqrt,
+            UnCode::Exp,
+            UnCode::Ln,
+            UnCode::Log10,
+            UnCode::Sin,
+            UnCode::Cos,
+            UnCode::Tanh,
+            UnCode::Floor,
+            UnCode::Ceil,
+            UnCode::Sign,
+        ];
+        for (i, op) in uns.iter().enumerate() {
+            let a = match i % 3 {
+                0 => MRef::In(0),
+                1 => MRef::In(2),
+                _ => MRef::Reg(i as u16), // an earlier Bin result
+            };
+            let out = micro.len() as u16;
+            micro.push(MicroOp::Un { op: *op, a, out });
+        }
+        let out = micro.len() as u16;
+        micro.push(MicroOp::Neg { a: MRef::In(3), out });
+        let out = micro.len() as u16;
+        micro.push(MicroOp::Select {
+            cond: MRef::Reg(9), // an Lt mask
+            a: MRef::In(0),
+            b: MRef::In(1),
+            out,
+        });
+        let out = micro.len() as u16;
+        micro.push(MicroOp::Select {
+            cond: MRef::In(2),
+            a: MRef::Reg(0),
+            b: MRef::Scal(1),
+            out,
+        });
+        let out = micro.len() as u16;
+        micro.push(MicroOp::Select {
+            cond: MRef::Scal(2),
+            a: MRef::In(1),
+            b: MRef::In(0),
+            out,
+        });
+        let out = micro.len() as u16;
+        micro.push(MicroOp::Mov { a: MRef::In(3), out });
+        let arith = [BinCode::Add, BinCode::Sub, BinCode::Mul, BinCode::Div];
+        for op1 in arith {
+            for op2 in arith {
+                for swap in [false, true] {
+                    let out = micro.len() as u16;
+                    micro.push(MicroOp::Bin2 {
+                        op1,
+                        a: MRef::In(0),
+                        b: MRef::In(1),
+                        op2,
+                        c: MRef::In(2),
+                        swap,
+                        out,
+                    });
+                }
+            }
+        }
+        let n_ops = micro.len();
+        let n_regs = n_ops as u16;
+        let mut inputs = inputs;
+        inputs[3].load_reg = n_regs; // one strided pre-load register
+
+        // Runs: [0, 1300) shifted-src offset 5; [1300, N) ghost for the
+        // stride-1 shifted input. The strided input stays live in both.
+        let runs = vec![
+            FusedRun {
+                out_off: 0,
+                len: 1300,
+                in_off: SmallVec::from_slice(&[5i64, 3]),
+            },
+            FusedRun {
+                out_off: 1300,
+                len: (N - 1300) as u32,
+                in_off: SmallVec::from_slice(&[GHOST_OFF, 3 + 2 * 1300]),
+            },
+        ];
+        let fs = FusedSpec {
+            shape: DimU::from_elem(N, 1),
+            inputs,
+            scalars: Vec::new(), // svals are passed directly
+            micro,
+            n_regs,
+            n_load_regs: 1,
+            outputs: SmallVec::new(), // outs are passed directly
+            runs,
+            n_fused_instrs: 0,
+            n_folded_gathers: 0,
+        };
+
+        let bases: Vec<*const f64> = vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
+        let mut run_level = |wider: u8| -> Vec<Vec<f64>> {
+            let mut outbufs: Vec<Vec<f64>> = (0..n_ops).map(|_| vec![0.0f64; N]).collect();
+            let outs: Vec<(u16, *mut f64)> = outbufs
+                .iter_mut()
+                .enumerate()
+                .map(|(i, buf)| (i as u16, buf.as_mut_ptr()))
+                .collect();
+            let mut fregs = vec![0.0f64; (n_regs as usize + 1) * FCHUNK];
+            match wider {
+                0 => unsafe {
+                    exec_fused_runs_generic(&fs, &svals, &bases, &outs, &mut fregs)
+                },
+                #[cfg(target_arch = "x86_64")]
+                1 => unsafe { exec_fused_runs_avx2(&fs, &svals, &bases, &outs, &mut fregs) },
+                #[cfg(target_arch = "x86_64")]
+                2 => unsafe { exec_fused_runs_avx512(&fs, &svals, &bases, &outs, &mut fregs) },
+                _ => panic!("level unavailable in this build"),
+            }
+            outbufs
+        };
+
+        let reference = run_level(0);
+        let mut levels_checked = 0;
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx2") {
+                let got = run_level(1);
+                assert_bits_eq(&reference, &got, "avx2");
+                levels_checked += 1;
+            }
+            if std::arch::is_x86_feature_detected!("avx512f")
+                && std::arch::is_x86_feature_detected!("avx512vl")
+                && std::arch::is_x86_feature_detected!("avx512dq")
+                && std::arch::is_x86_feature_detected!("avx512bw")
+            {
+                let got = run_level(2);
+                assert_bits_eq(&reference, &got, "avx512");
+                levels_checked += 1;
+            }
+        }
+        // On non-x86 hosts there is nothing to compare against — the test
+        // degenerates to "the generic path runs" (levels_checked = 0).
+        let _ = levels_checked;
+    }
+
+    fn assert_bits_eq(want: &[Vec<f64>], got: &[Vec<f64>], label: &str) {
+        for (op, (w, g)) in want.iter().zip(got.iter()).enumerate() {
+            for (k, (a, b)) in w.iter().zip(g.iter()).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "{label}: micro-op {op} elem {k}: generic {a:?} ({:016x}) vs {label} {b:?} ({:016x})",
+                    a.to_bits(),
+                    b.to_bits()
+                );
             }
         }
     }
