@@ -187,7 +187,10 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> (TapeProgram, TapeBuildReport) {
-        self.build_tape_opts(discrete_forcing, !fuse_disabled())
+        self.build_tape_opts(
+            discrete_forcing,
+            (!fuse_disabled()).then(fuse::SuperopCfg::from_env),
+        )
     }
 
     /// [`Self::build_tape`] with the Step 4 fusion pass explicitly on/off
@@ -195,7 +198,7 @@ impl ArrayCompiled {
     pub(crate) fn build_tape_opts(
         &self,
         discrete_forcing: &HashSet<String>,
-        fuse: bool,
+        fuse: Option<fuse::SuperopCfg>,
     ) -> (TapeProgram, TapeBuildReport) {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);

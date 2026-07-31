@@ -328,6 +328,27 @@ pub(crate) enum MicroOp {
         swap: bool,
         out: u16,
     },
+    /// Step 4b superop: a three-op `+ - * /` chain whose two intermediates
+    /// each have exactly one consumer (the next op):
+    /// `t1 = kernel(op1)(a, b); t2 = swap2 ? kernel(op2)(c, t1) :
+    /// kernel(op2)(t1, c); out = swap3 ? kernel(op3)(d, t2) :
+    /// kernel(op3)(t2, d)`. Element semantics are EXACTLY the three
+    /// constituent kernels applied in order — never a hardware FMA, which
+    /// would change bits. Executed all-pointer: scalar operands read from
+    /// splat registers, ghost inputs from the zero register (identical
+    /// values, so identical bits).
+    Bin3 {
+        op1: BinCode,
+        a: MRef,
+        b: MRef,
+        op2: BinCode,
+        c: MRef,
+        swap2: bool,
+        op3: BinCode,
+        d: MRef,
+        swap3: bool,
+        out: u16,
+    },
 }
 
 /// One array input of a fused group.
@@ -386,6 +407,11 @@ pub(crate) struct FusedSpec {
     /// pre-loads (`FusedInput::load_reg` indexes into `n_regs..n_regs +
     /// n_load_regs`).
     pub n_load_regs: u16,
+    /// Step 4b: registers appended after the load registers for the
+    /// all-pointer superops ([`MicroOp::Bin3`]): one splat register per
+    /// entry of `scalars` (filled once per call) plus a trailing zero
+    /// register (the ghost read). 0 when the micro-program has no Bin3.
+    pub n_splat_regs: u16,
     /// `(register, slot)` live-outs stored back to the slab.
     pub outputs: SmallVec<[(u16, SlotId); 2]>,
     /// Precompiled run schedule (see [`FusedRun`]); a group with no shifted

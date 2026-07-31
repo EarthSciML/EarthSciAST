@@ -1,5 +1,8 @@
 # Rust
 target/
+# Secondary target dir for RUSTFLAGS=-C target-cpu=native A/B builds
+# (step 4b ceiling measurements) — never commit build artifacts.
+target-native/
 Cargo.lock
 **/*.rs.bk
 

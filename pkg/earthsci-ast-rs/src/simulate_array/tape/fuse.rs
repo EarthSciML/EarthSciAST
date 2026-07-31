@@ -628,6 +628,67 @@ fn bin2_arith(op: BinCode) -> bool {
     )
 }
 
+/// Which superops the peephole may form. All settings are bit-identical (a
+/// superop applies the identical scalar kernels in the identical order); the
+/// knobs exist because the WIN is configuration-dependent, and were set by
+/// measurement on simpleclimate.esm (36×19×10, medians of ≥7 interleaved,
+/// AVX-512 clones active).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SuperopCfg {
+    /// Merge `+ - * /` three-op chains into [`MicroOp::Bin3`]. Default OFF:
+    /// measured at ~+0.2 ms/RHS — the chunked executor is bound by the
+    /// per-op loads/stores through the (L2-resident) register file, not by
+    /// dispatch, and Bin3's all-pointer form adds a fourth input stream plus
+    /// splat-register traffic that outweighs the two intermediate
+    /// round-trips it saves. Opt-in via `ESS_TAPE_BIN3=1`.
+    pub bin3: bool,
+    /// Extend Bin2 beyond the `+ - * /` square to the mask/clamp pairs of
+    /// [`bin2_pair_ok`]. Default ON: −0.2 ms/RHS generic, neutral under the
+    /// SIMD clones, and 8% fewer element-ops. `ESS_TAPE_EXTPAIR_DISABLE=1`
+    /// reverts.
+    pub ext_pairs: bool,
+}
+
+impl SuperopCfg {
+    /// The production configuration (env-overridable, read once).
+    pub(crate) fn from_env() -> Self {
+        use std::sync::OnceLock;
+        static CFG: OnceLock<SuperopCfg> = OnceLock::new();
+        let truthy = |k: &str| {
+            std::env::var(k)
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+        };
+        *CFG.get_or_init(|| SuperopCfg {
+            bin3: truthy("ESS_TAPE_BIN3"),
+            ext_pairs: !truthy("ESS_TAPE_EXTPAIR_DISABLE"),
+        })
+    }
+}
+
+/// The (op1, op2) pairs the executor monomorphizes as [`MicroOp::Bin2`]: the
+/// full `+ - * /` square, plus the pairs the simpleclimate adjacency
+/// histogram showed material (a multiply feeding a comparison mask; the
+/// min/max clamp and limiter idioms). MUST stay in sync with the executor's
+/// `Bin2` match arms — an unlisted pair is simply never merged.
+fn bin2_pair_ok(op1: BinCode, op2: BinCode, ext_pairs: bool) -> bool {
+    use BinCode::{Ge, Gt, Le, Lt, Max, Min, Mul};
+    (bin2_arith(op1) && bin2_arith(op2))
+        || ext_pairs && matches!(
+            (op1, op2),
+            (Mul, Gt)
+                | (Mul, Ge)
+                | (Mul, Lt)
+                | (Mul, Le)
+                | (Min, Max)
+                | (Max, Min)
+                | (Mul, Min)
+                | (Min, Mul)
+                | (Mul, Max)
+                | (Max, Mul)
+        )
+}
+
 /// Visit every operand of a micro-op.
 fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
     match op {
@@ -645,6 +706,12 @@ fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
             f(a);
             f(b);
             f(c);
+        }
+        MicroOp::Bin3 { a, b, c, d, .. } => {
+            f(a);
+            f(b);
+            f(c);
+            f(d);
         }
     }
 }
@@ -688,6 +755,9 @@ fn mop_label(op: &MicroOp) -> String {
         MicroOp::Bin2 { op1, op2, swap, .. } => {
             format!("Bin2({op1:?},{op2:?}{})", if *swap { ",swap" } else { "" })
         }
+        MicroOp::Bin3 { op1, op2, op3, .. } => {
+            format!("Bin3({op1:?},{op2:?},{op3:?})")
+        }
     }
 }
 
@@ -697,7 +767,7 @@ fn mop_label(op: &MicroOp) -> String {
 /// dispatch fewer per element, with the identical two kernels applied in the
 /// identical order (bit-identity is untouched). Restricted to the
 /// `+ - * /` kernels the executor monomorphizes.
-fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u16, SlotId)]) {
+fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u16, SlotId)], cfg: SuperopCfg) {
     let n_ssa = micro.len();
     // Use counts per SSA register (live-outs count as a use).
     let mut uses = vec![0u32; n_ssa];
@@ -720,11 +790,25 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u16, SlotId)]) {
                 count(a, &mut uses);
                 count(b, &mut uses);
             }
-            MicroOp::Bin2 { .. } => unreachable!("peephole runs once"),
+            MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } => unreachable!("peephole runs once"),
         }
     }
     for &(ssa, _) in outputs.iter() {
         uses[ssa as usize] += 1;
+    }
+
+    /// How the SSA register `t` is consumed by a `Bin` op: `Some((swap,
+    /// other))` when exactly one operand is `t` (`swap` = `t` is the RIGHT
+    /// operand), `None` when neither or both are `t`.
+    fn consumes<'a>(ca: &'a MRef, cb: &'a MRef, t: u16) -> Option<(bool, &'a MRef)> {
+        let t = MRef::Reg(t);
+        if *ca == t && *cb != t {
+            Some((false, cb))
+        } else if *cb == t && *ca != t {
+            Some((true, ca))
+        } else {
+            None
+        }
     }
 
     let mut merged: Vec<MicroOp> = Vec::with_capacity(micro.len());
@@ -738,6 +822,62 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u16, SlotId)]) {
     };
     let mut i = 0usize;
     while i < micro.len() {
+        // Try to merge micro[i..i+3] into a Bin3 (a `+ - * /` three-op chain
+        // whose two intermediates are each single-use, consumed by the next
+        // op), then micro[i..i+2] into a Bin2.
+        if i + 2 < micro.len() && cfg.bin3 {
+            if let (
+                MicroOp::Bin {
+                    op: op1,
+                    a,
+                    b,
+                    out: t1,
+                },
+                MicroOp::Bin {
+                    op: op2,
+                    a: ca,
+                    b: cb,
+                    out: t2,
+                },
+                MicroOp::Bin {
+                    op: op3,
+                    a: da,
+                    b: db,
+                    ..
+                },
+            ) = (&micro[i], &micro[i + 1], &micro[i + 2])
+            {
+                if let (Some((swap2, other2)), Some((swap3, other3))) =
+                    (consumes(ca, cb, *t1), consumes(da, db, *t2))
+                {
+                    if uses[*t1 as usize] == 1
+                        && uses[*t2 as usize] == 1
+                        && bin2_arith(*op1)
+                        && bin2_arith(*op2)
+                        && bin2_arith(*op3)
+                        && *other3 != MRef::Reg(*t1)
+                    {
+                        let new_id = merged.len() as u16;
+                        let mop = MicroOp::Bin3 {
+                            op1: *op1,
+                            a: remap(a, &new_of),
+                            b: remap(b, &new_of),
+                            op2: *op2,
+                            c: remap(other2, &new_of),
+                            swap2,
+                            op3: *op3,
+                            d: remap(other3, &new_of),
+                            swap3,
+                            out: new_id,
+                        };
+                        merged.push(mop);
+                        new_of[i + 2] = Some(new_id); // final consumer's value
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+        }
         // Try to merge micro[i] (producer) into micro[i+1] (consumer).
         if i + 1 < micro.len() {
             if let (
@@ -755,33 +895,23 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u16, SlotId)]) {
                 },
             ) = (&micro[i], &micro[i + 1])
             {
-                let t_ref = MRef::Reg(*t);
-                let (consumes, swap, other) = if *ca == t_ref && *cb != t_ref {
-                    (true, false, cb)
-                } else if *cb == t_ref && *ca != t_ref {
-                    (true, true, ca)
-                } else {
-                    (false, false, ca)
-                };
-                if consumes
-                    && uses[*t as usize] == 1
-                    && bin2_arith(*op1)
-                    && bin2_arith(*op2)
-                {
-                    let new_id = merged.len() as u16;
-                    let mop = MicroOp::Bin2 {
-                        op1: *op1,
-                        a: remap(a, &new_of),
-                        b: remap(b, &new_of),
-                        op2: *op2,
-                        c: remap(other, &new_of),
-                        swap,
-                        out: new_id,
-                    };
-                    merged.push(mop);
-                    new_of[i + 1] = Some(new_id); // consumer's value
-                    i += 2;
-                    continue;
+                if let Some((swap, other)) = consumes(ca, cb, *t) {
+                    if uses[*t as usize] == 1 && bin2_pair_ok(*op1, *op2, cfg.ext_pairs) {
+                        let new_id = merged.len() as u16;
+                        let mop = MicroOp::Bin2 {
+                            op1: *op1,
+                            a: remap(a, &new_of),
+                            b: remap(b, &new_of),
+                            op2: *op2,
+                            c: remap(other, &new_of),
+                            swap,
+                            out: new_id,
+                        };
+                        merged.push(mop);
+                        new_of[i + 1] = Some(new_id); // consumer's value
+                        i += 2;
+                        continue;
+                    }
                 }
             }
         }
@@ -803,7 +933,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(u16, SlotId)]) {
                 *b = remap(b, &new_of);
                 *out = new_id;
             }
-            MicroOp::Bin2 { .. } => unreachable!(),
+            MicroOp::Bin2 { .. } | MicroOp::Bin3 { .. } => unreachable!(),
         }
         merged.push(op);
         new_of[i] = Some(new_id);
@@ -833,25 +963,7 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u16, SlotId)]) -> u
         }
     };
     for (i, op) in micro.iter().enumerate() {
-        match op {
-            MicroOp::Bin { a, b, .. } => {
-                use_at(a, i, &mut last_use);
-                use_at(b, i, &mut last_use);
-            }
-            MicroOp::Un { a, .. } | MicroOp::Neg { a, .. } | MicroOp::Mov { a, .. } => {
-                use_at(a, i, &mut last_use)
-            }
-            MicroOp::Select { cond, a, b, .. } => {
-                use_at(cond, i, &mut last_use);
-                use_at(a, i, &mut last_use);
-                use_at(b, i, &mut last_use);
-            }
-            MicroOp::Bin2 { a, b, c, .. } => {
-                use_at(a, i, &mut last_use);
-                use_at(b, i, &mut last_use);
-                use_at(c, i, &mut last_use);
-            }
-        }
+        for_each_operand(op, |m| use_at(m, i, &mut last_use));
     }
     // Live-outs are used "after the end".
     for &(ssa, _) in outputs.iter() {
@@ -886,28 +998,14 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u16, SlotId)]) -> u
                 }
             }
         };
-        match &micro[i] {
-            MicroOp::Bin { a, b, .. } => {
-                let (a, b) = (*a, *b);
-                free_if_dies(&a, &mut free);
-                if b != a {
-                    free_if_dies(&b, &mut free);
-                }
+        let mut seen: SmallVec<[MRef; 4]> = SmallVec::new();
+        for_each_operand(&micro[i], |m| {
+            if !seen.contains(m) {
+                seen.push(*m);
             }
-            MicroOp::Un { a, .. } | MicroOp::Neg { a, .. } | MicroOp::Mov { a, .. } => {
-                let a = *a;
-                free_if_dies(&a, &mut free);
-            }
-            MicroOp::Select { cond, a, b, .. } | MicroOp::Bin2 { c: cond, a, b, .. } => {
-                let (c, a, b) = (*cond, *a, *b);
-                free_if_dies(&c, &mut free);
-                if a != c {
-                    free_if_dies(&a, &mut free);
-                }
-                if b != c && b != a {
-                    free_if_dies(&b, &mut free);
-                }
-            }
+        });
+        for m in &seen {
+            free_if_dies(m, &mut free);
         }
         // A dead value (never read, not an output) frees immediately.
         if last_use[i] == usize::MAX && !is_output[i] {
@@ -944,6 +1042,13 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u16, SlotId)]) -> u
                 remap(c);
                 *out = phys_of[*out as usize];
             }
+            MicroOp::Bin3 { a, b, c, d, out, .. } => {
+                remap(a);
+                remap(b);
+                remap(c);
+                remap(d);
+                *out = phys_of[*out as usize];
+            }
         }
     }
     for (ssa, _) in outputs.iter_mut() {
@@ -957,7 +1062,7 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u16, SlotId)]) -> u
 // The pass.
 // ---------------------------------------------------------------------------
 
-pub(super) fn fuse_program(prog: &mut TapeProgram) {
+pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     let n = prog.instrs.len();
     // Global reader index sets per slot.
     let mut readers: Vec<SmallVec<[u32; 4]>> = vec![SmallVec::new(); prog.slots.len()];
@@ -987,7 +1092,7 @@ pub(super) fn fuse_program(prog: &mut TapeProgram) {
     {
         let range = prog.section_range(cad);
         let start_len = sink.instrs.len();
-        fuse_section(prog, range, &readers, &mut sink);
+        fuse_section(prog, range, &readers, &mut sink, cfg);
         section_counts[sec] = sink.instrs.len() - start_len;
     }
 
@@ -1037,7 +1142,13 @@ impl Sink {
 /// Finalize one group: emit either its `Fused` instruction (plus any
 /// re-materialized gathers) or, for trivial groups, the original
 /// instructions verbatim.
-fn flush_one(g: GBuilder, prog: &TapeProgram, readers: &[SmallVec<[u32; 4]>], sink: &mut Sink) {
+fn flush_one(
+    g: GBuilder,
+    prog: &TapeProgram,
+    readers: &[SmallVec<[u32; 4]>],
+    sink: &mut Sink,
+    cfg: SuperopCfg,
+) {
     let has_compute = g.micro.iter().any(|m| !matches!(m, MicroOp::Mov { .. }));
     if g.member_instrs.len() < 2 || g.micro.is_empty() || !has_compute {
         for &ix in &g.member_instrs {
@@ -1138,11 +1249,19 @@ fn flush_one(g: GBuilder, prog: &TapeProgram, readers: &[SmallVec<[u32; 4]>], si
         }
     }
 
-    merge_superops(&mut micro, &mut outputs);
+    merge_superops(&mut micro, &mut outputs, cfg);
     for op in &micro {
         *sink.micro_hist.entry(mop_label(op)).or_insert(0) += n_elems;
     }
     let n_regs = allocate_registers(&mut micro, &mut outputs);
+    // Bin3 executes all-pointer: its scalar operands read from per-scalar
+    // splat registers and ghost reads from a trailing zero register, all
+    // appended after the load registers and filled once per call.
+    let n_splat_regs = if micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. })) {
+        scalars.len() as u16 + 1
+    } else {
+        0
+    };
     let runs = build_runs(&shape, &new_segs);
     // Strided shifted inputs are pre-loaded into dedicated chunk registers
     // appended after the micro register file.
@@ -1175,6 +1294,7 @@ fn flush_one(g: GBuilder, prog: &TapeProgram, readers: &[SmallVec<[u32; 4]>], si
         micro,
         n_regs,
         n_load_regs,
+        n_splat_regs,
         outputs,
         runs,
         n_fused_instrs: n_members as u32,
@@ -1189,6 +1309,7 @@ fn fuse_section(
     range: std::ops::Range<usize>,
     readers: &[SmallVec<[u32; 4]>],
     sink: &mut Sink,
+    cfg: SuperopCfg,
 ) {
     let mut open: Vec<GBuilder> = Vec::new();
 
@@ -1202,6 +1323,7 @@ fn fuse_section(
         prog: &TapeProgram,
         readers: &[SmallVec<[u32; 4]>],
         sink: &mut Sink,
+        cfg: SuperopCfg,
     ) {
         let mut hazard: Vec<usize> = Vec::new();
         ins.for_each_read(&prog.dy_writes, &prog.fused, |s| {
@@ -1214,7 +1336,7 @@ fn fuse_section(
         hazard.sort_unstable();
         for &gi in hazard.iter().rev() {
             let g = open.remove(gi);
-            flush_one(g, prog, readers, sink);
+            flush_one(g, prog, readers, sink, cfg);
         }
     }
 
@@ -1227,13 +1349,14 @@ fn fuse_section(
         prog: &TapeProgram,
         readers: &[SmallVec<[u32; 4]>],
         sink: &mut Sink,
+        cfg: SuperopCfg,
     ) -> usize {
         if let Some(gi) = open.iter().position(|g| g.shape == shape) {
             return gi;
         }
         if open.len() >= MAX_OPEN_GROUPS {
             let g = open.remove(0);
-            flush_one(g, prog, readers, sink);
+            flush_one(g, prog, readers, sink, cfg);
         }
         open.push(GBuilder::new(shape, prov));
         open.len() - 1
@@ -1251,7 +1374,7 @@ fn fuse_section(
         } = ins
         {
             for g in open.drain(..) {
-                flush_one(g, prog, readers, sink);
+                flush_one(g, prog, readers, sink, cfg);
             }
             let zone_end = (i + 1 + *n_true as usize + *n_false as usize).min(range.end);
             for j in i..zone_end {
@@ -1262,7 +1385,7 @@ fn fuse_section(
         }
         if matches!(ins, Instr::Fallback { .. }) {
             for g in open.drain(..) {
-                flush_one(g, prog, readers, sink);
+                flush_one(g, prog, readers, sink, cfg);
             }
             sink.passthrough(prog, i);
             i += 1;
@@ -1290,15 +1413,15 @@ fn fuse_section(
             if let Some(geom) = geom {
                 // A gather whose SOURCE is defined by an open group forces
                 // that group to materialize first.
-                flush_hazards(ins, None, &mut open, prog, readers, sink);
+                flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
                 let shape = out_desc.shape.clone();
-                let gi = find_or_open(&mut open, shape, prog.provenance[i], prog, readers, sink);
+                let gi = find_or_open(&mut open, shape, prog.provenance[i], prog, readers, sink, cfg);
                 open[gi].add_folded_gather(i as u32, *src, plan_ref, geom, *out);
                 i += 1;
                 continue;
             }
             // Unfoldable: pass through (with the usual read hazards).
-            flush_hazards(ins, None, &mut open, prog, readers, sink);
+            flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
             sink.passthrough(prog, i);
             i += 1;
             continue;
@@ -1322,7 +1445,7 @@ fn fuse_section(
             _ => None,
         };
         if let Some(shape) = elem_shape {
-            flush_hazards(ins, Some(&shape), &mut open, prog, readers, sink);
+            flush_hazards(ins, Some(&shape), &mut open, prog, readers, sink, cfg);
             let gi = find_or_open(
                 &mut open,
                 shape.clone(),
@@ -1330,6 +1453,7 @@ fn fuse_section(
                 prog,
                 readers,
                 sink,
+                cfg,
             );
             if open[gi].try_add(i as u32, ins, prog) {
                 i += 1;
@@ -1337,18 +1461,18 @@ fn fuse_section(
             }
             // Unfusable operand (an observed read): the target group may
             // still hold slots this instruction reads — flush it too.
-            flush_hazards(ins, None, &mut open, prog, readers, sink);
+            flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
             sink.passthrough(prog, i);
             i += 1;
             continue;
         }
 
         // Everything else passes through, flushing any group it reads from.
-        flush_hazards(ins, None, &mut open, prog, readers, sink);
+        flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
         sink.passthrough(prog, i);
         i += 1;
     }
     for g in open.drain(..) {
-        flush_one(g, prog, readers, sink);
+        flush_one(g, prog, readers, sink, cfg);
     }
 }

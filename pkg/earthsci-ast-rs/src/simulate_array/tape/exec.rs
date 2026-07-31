@@ -243,7 +243,7 @@ impl TapeExec {
         let max_fregs = prog
             .fused
             .iter()
-            .map(|f| f.n_regs as usize + f.n_load_regs as usize)
+            .map(|f| f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize)
             .max()
             .unwrap_or(0);
         TapeExec {
@@ -1310,6 +1310,37 @@ unsafe fn fch3(
     }
 }
 
+/// `dst[k] = g(a[k], b[k], c[k], d[k])` over one chunk, all operands
+/// pointers (the Bin3 superop; scalar/ghost operands were resolved to splat
+/// registers by the caller). See `fch1` for the aliasing argument; operands
+/// may alias each other, which shared slices permit.
+#[inline(always)]
+unsafe fn fch4(
+    dst: *mut f64,
+    n: usize,
+    pa: *const f64,
+    pb: *const f64,
+    pc: *const f64,
+    pd: *const f64,
+    g: impl Fn(f64, f64, f64, f64) -> f64 + Copy,
+) {
+    unsafe {
+        let o = std::slice::from_raw_parts_mut(dst, n);
+        let a = std::slice::from_raw_parts(pa, n);
+        let b = std::slice::from_raw_parts(pb, n);
+        let c = std::slice::from_raw_parts(pc, n);
+        let d = std::slice::from_raw_parts(pd, n);
+        for k in 0..n {
+            *o.get_unchecked_mut(k) = g(
+                *a.get_unchecked(k),
+                *b.get_unchecked(k),
+                *c.get_unchecked(k),
+                *d.get_unchecked(k),
+            );
+        }
+    }
+}
+
 /// The `vec_select` pick over one chunk.
 #[inline(always)]
 unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
@@ -1448,6 +1479,27 @@ unsafe fn exec_fused_runs(
     fregs: &mut [f64],
 ) {
     let rp = fregs.as_mut_ptr();
+    // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
+    // register (the ghost read), filled once per call. The values are the
+    // EXACT scalars / the exact `+0.0` ghost, so an all-pointer superop
+    // reads identical bits to the `MSrc::C` broadcast it replaces.
+    let splat_base = fs.n_regs as usize + fs.n_load_regs as usize;
+    let zero_ix = splat_base + svals.len();
+    if fs.n_splat_regs > 0 {
+        debug_assert_eq!(fs.n_splat_regs as usize, svals.len() + 1);
+        unsafe {
+            for (i, &v) in svals.iter().enumerate() {
+                let p = rp.add((splat_base + i) * FCHUNK);
+                for k in 0..FCHUNK {
+                    *p.add(k) = v;
+                }
+            }
+            let z = rp.add(zero_ix * FCHUNK);
+            for k in 0..FCHUNK {
+                *z.add(k) = 0.0;
+            }
+        }
+    }
     for run in &fs.runs {
         let mut done = 0usize;
         let len = run.len as usize;
@@ -1494,6 +1546,27 @@ unsafe fn exec_fused_runs(
                                         bases[*i as usize].offset(o as isize + done as isize)
                                     })
                                 }
+                            }
+                        }
+                    }
+                }
+            };
+            // All-pointer operand resolution for the Bin3 superop: scalar
+            // operands point at their splat registers, ghost reads at the
+            // zero register — same values, so same bits, with ONE loop shape
+            // per (op1, op2, op3) instead of 2^4 operand-kind arms.
+            let msrc_p = |m: &MRef| -> *const f64 {
+                match msrc(m) {
+                    MSrc::P(p) => p,
+                    MSrc::C(v) => {
+                        if v == 0.0 && v.is_sign_positive() {
+                            unsafe { rp.add(zero_ix * FCHUNK) as *const f64 }
+                        } else {
+                            match m {
+                                MRef::Scal(i) => unsafe {
+                                    rp.add((splat_base + *i as usize) * FCHUNK) as *const f64
+                                },
+                                _ => unreachable!("non-scalar constant operand"),
                             }
                         }
                     }
@@ -1576,7 +1649,7 @@ unsafe fn exec_fused_runs(
                     } => {
                         let (av, bv, cv) = (msrc(a), msrc(b), msrc(c3));
                         let dst = unsafe { rp.add(*out as usize * FCHUNK) };
-                        use BinCode::{Add, Div, Mul, Sub};
+                        use BinCode::{Add, Div, Ge, Gt, Le, Lt, Max, Min, Mul, Sub};
                         // Monomorphized composition of the same two kernel
                         // bodies, applied in the same order (t = op1(a, b);
                         // out = swap ? op2(c, t) : op2(t, c)).
@@ -1597,6 +1670,12 @@ unsafe fn exec_fused_runs(
                         let sub = |x: f64, y: f64| x - y;
                         let mul = |x: f64, y: f64| x * y;
                         let div = |x: f64, y: f64| x / y;
+                        let min = |x: f64, y: f64| x.min(y);
+                        let max = |x: f64, y: f64| x.max(y);
+                        let gt = |x: f64, y: f64| (x > y) as i32 as f64;
+                        let ge = |x: f64, y: f64| (x >= y) as i32 as f64;
+                        let lt = |x: f64, y: f64| (x < y) as i32 as f64;
+                        let le = |x: f64, y: f64| (x <= y) as i32 as f64;
                         match (op1, op2) {
                             (Add, Add) => b2!(add, add),
                             (Add, Sub) => b2!(add, sub),
@@ -1614,7 +1693,103 @@ unsafe fn exec_fused_runs(
                             (Div, Sub) => b2!(div, sub),
                             (Div, Mul) => b2!(div, mul),
                             (Div, Div) => b2!(div, div),
-                            other => unreachable!("Bin2 restricted to + - * / ({other:?})"),
+                            // Step 4b extended pairs (`bin2_pair_ok`): the
+                            // multiply-into-mask and min/max clamp idioms the
+                            // adjacency histogram showed material.
+                            (Mul, Gt) => b2!(mul, gt),
+                            (Mul, Ge) => b2!(mul, ge),
+                            (Mul, Lt) => b2!(mul, lt),
+                            (Mul, Le) => b2!(mul, le),
+                            (Min, Max) => b2!(min, max),
+                            (Max, Min) => b2!(max, min),
+                            (Mul, Min) => b2!(mul, min),
+                            (Min, Mul) => b2!(min, mul),
+                            (Mul, Max) => b2!(mul, max),
+                            (Max, Mul) => b2!(max, mul),
+                            other => unreachable!("Bin2 pair not monomorphized ({other:?})"),
+                        }
+                    }
+                    MicroOp::Bin3 {
+                        op1,
+                        a,
+                        b,
+                        op2,
+                        c: c3,
+                        swap2,
+                        op3,
+                        d: d4,
+                        swap3,
+                        out,
+                    } => {
+                        let (pa, pb, pc, pd) =
+                            (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
+                        let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        use BinCode::{Add, Div, Mul, Sub};
+                        // Monomorphized composition of the same three kernel
+                        // bodies applied in order:
+                        // t1 = op1(a, b); t2 = swap2 ? op2(c, t1) : op2(t1, c);
+                        // out = swap3 ? op3(d, t2) : op3(t2, d).
+                        macro_rules! b3 {
+                            ($f1:expr, $f2:expr, $f3:expr) => {
+                                match (*swap2, *swap3) {
+                                    (false, false) => unsafe {
+                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                            $f3($f2($f1(x, y), z), w)
+                                        })
+                                    },
+                                    (true, false) => unsafe {
+                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                            $f3($f2(z, $f1(x, y)), w)
+                                        })
+                                    },
+                                    (false, true) => unsafe {
+                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                            $f3(w, $f2($f1(x, y), z))
+                                        })
+                                    },
+                                    (true, true) => unsafe {
+                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                            $f3(w, $f2(z, $f1(x, y)))
+                                        })
+                                    },
+                                }
+                            };
+                        }
+                        let add = |x: f64, y: f64| x + y;
+                        let sub = |x: f64, y: f64| x - y;
+                        let mul = |x: f64, y: f64| x * y;
+                        let div = |x: f64, y: f64| x / y;
+                        macro_rules! b3_op12 {
+                            ($f3:expr) => {
+                                match (op1, op2) {
+                                    (Add, Add) => b3!(add, add, $f3),
+                                    (Add, Sub) => b3!(add, sub, $f3),
+                                    (Add, Mul) => b3!(add, mul, $f3),
+                                    (Add, Div) => b3!(add, div, $f3),
+                                    (Sub, Add) => b3!(sub, add, $f3),
+                                    (Sub, Sub) => b3!(sub, sub, $f3),
+                                    (Sub, Mul) => b3!(sub, mul, $f3),
+                                    (Sub, Div) => b3!(sub, div, $f3),
+                                    (Mul, Add) => b3!(mul, add, $f3),
+                                    (Mul, Sub) => b3!(mul, sub, $f3),
+                                    (Mul, Mul) => b3!(mul, mul, $f3),
+                                    (Mul, Div) => b3!(mul, div, $f3),
+                                    (Div, Add) => b3!(div, add, $f3),
+                                    (Div, Sub) => b3!(div, sub, $f3),
+                                    (Div, Mul) => b3!(div, mul, $f3),
+                                    (Div, Div) => b3!(div, div, $f3),
+                                    other => {
+                                        unreachable!("Bin3 restricted to + - * / ({other:?})")
+                                    }
+                                }
+                            };
+                        }
+                        match op3 {
+                            Add => b3_op12!(add),
+                            Sub => b3_op12!(sub),
+                            Mul => b3_op12!(mul),
+                            Div => b3_op12!(div),
+                            other => unreachable!("Bin3 restricted to + - * / ({other:?})"),
                         }
                     }
                 }
@@ -1755,6 +1930,33 @@ unsafe fn exec_fused_elem(
                             binary_kernel_of(*op2)(cv, t)
                         } else {
                             binary_kernel_of(*op2)(t, cv)
+                        };
+                        regs[*out as usize] = v;
+                    }
+                    MicroOp::Bin3 {
+                        op1,
+                        a,
+                        b,
+                        op2,
+                        c,
+                        swap2,
+                        op3,
+                        d,
+                        swap3,
+                        out,
+                    } => {
+                        let t1 = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
+                        let cv = get(c, &regs);
+                        let t2 = if *swap2 {
+                            binary_kernel_of(*op2)(cv, t1)
+                        } else {
+                            binary_kernel_of(*op2)(t1, cv)
+                        };
+                        let dv = get(d, &regs);
+                        let v = if *swap3 {
+                            binary_kernel_of(*op3)(dv, t2)
+                        } else {
+                            binary_kernel_of(*op3)(t2, dv)
                         };
                         regs[*out as usize] = v;
                     }
@@ -2230,10 +2432,11 @@ pub(super) fn run_rhs_oracle(
 // ---------------------------------------------------------------------------
 // Step 4b: SIMD-clone bit-identity tests. The `#[target_feature]` clones are
 // the SAME Rust source under wider codegen; these tests pin that claim on
-// adversarial inputs (NaNs — quiet and payload-carrying — signed zeros,
-// denormals, infinities, extreme magnitudes) across chunk boundaries, ghost
-// runs and strided pre-loads. Any bit difference means the widened codegen
-// reassociated or contracted something, and that clone must be rejected.
+// adversarial inputs (NaNs, signed zeros, denormals, infinities, extreme
+// magnitudes) across chunk boundaries, ghost runs and strided pre-loads. Any
+// bit difference outside the documented NaN-payload latitude means the
+// widened codegen reassociated or contracted something, and that clone must
+// be rejected.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -2241,20 +2444,24 @@ mod simd_tests {
     use super::*;
 
     /// Adversarial + pseudorandom input of length `n`, seeded.
-    fn adversarial(n: usize, seed: u64) -> Vec<f64> {
-        // NOTE on NaNs: inputs carry ONE NaN representation (the canonical
-        // positive qNaN). When BOTH operands of a commutative op are NaNs
-        // with different payloads, x86 propagates whichever lands in the
-        // first source slot — and LLVM (whose semantics leave NaN payloads
-        // nondeterministic) may commute operands differently per codegen
-        // width, so payload-mixing inputs would legitimately differ between
-        // equally-correct clones without any reassociation (measured here:
-        // a payload qNaN in this table trips exactly that on the AVX2
-        // clone). Ops that *generate* NaN (0/0, inf-inf, 0*inf, sqrt(-x))
-        // produce the deterministic hardware qNaN at every width and stay
-        // covered, as does single-NaN-operand propagation.
+    ///
+    /// NOTE on NaNs (`with_nan`): when BOTH operands of a commutative op are
+    /// NaNs with different payloads, x86 propagates whichever payload lands
+    /// in the first source slot — and LLVM (whose semantics leave NaN
+    /// payloads nondeterministic) may commute operands differently per
+    /// codegen width, so such cases legitimately differ between
+    /// equally-correct clones without any reassociation. Measured here
+    /// twice: a payload qNaN input trips it directly, and even a canonical
+    /// qNaN input trips it in chains, when `inf - inf` GENERATES the
+    /// negative hardware qNaN (fff8…) that then meets the positive input
+    /// NaN (7ff8…). Therefore the strict byte-equality set excludes NaN
+    /// inputs (all NaNs are then hardware-GENERATED — 0/0, inf-inf, 0*inf —
+    /// which yield the identical fff8… at every width, keeping both-NaN
+    /// cases deterministic), and a second set adds NaN inputs with NaN
+    /// results compared by class (non-NaN results stay byte-strict).
+    fn adversarial(n: usize, seed: u64, with_nan: bool) -> Vec<f64> {
         let specials = [
-            f64::NAN,
+            if with_nan { f64::NAN } else { -7.25 },
             1.5e-310, // denormal
             0.0,
             -0.0,
@@ -2293,16 +2500,16 @@ mod simd_tests {
     }
 
     /// Build a `FusedSpec` + inputs exercising every micro-op kind, run it
-    /// through every available SIMD clone, and assert byte-identical outputs.
-    #[test]
-    fn simd_clone_bit_identity() {
+    /// through every available SIMD clone, and assert byte-identical outputs
+    /// (NaN results compared by class when `with_nan` — see `adversarial`).
+    fn drive(with_nan: bool) {
         const N: usize = 2500; // chunk boundaries at 1024, 2048 + short tail
-        let a = adversarial(N, 1);
-        let b = adversarial(N, 2);
-        let shifted = adversarial(N + 16, 3);
-        let strided = adversarial(2 * N + 8, 4);
+        let a = adversarial(N, 1, with_nan);
+        let b = adversarial(N, 2, with_nan);
+        let shifted = adversarial(N + 16, 3, with_nan);
+        let strided = adversarial(2 * N + 8, 4, with_nan);
         let svals = [
-            f64::NAN,
+            if with_nan { f64::NAN } else { 3.75 },
             -0.0,
             2.5,
             5e-324,
@@ -2436,6 +2643,67 @@ mod simd_tests {
                 }
             }
         }
+        // Extended Bin2 pairs (`bin2_pair_ok` beyond the arith square).
+        let ext = [
+            (BinCode::Mul, BinCode::Gt),
+            (BinCode::Mul, BinCode::Ge),
+            (BinCode::Mul, BinCode::Lt),
+            (BinCode::Mul, BinCode::Le),
+            (BinCode::Min, BinCode::Max),
+            (BinCode::Max, BinCode::Min),
+            (BinCode::Mul, BinCode::Min),
+            (BinCode::Min, BinCode::Mul),
+            (BinCode::Mul, BinCode::Max),
+            (BinCode::Max, BinCode::Mul),
+        ];
+        for (i, (op1, op2)) in ext.iter().enumerate() {
+            for swap in [false, true] {
+                let out = micro.len() as u16;
+                micro.push(MicroOp::Bin2 {
+                    op1: *op1,
+                    a: MRef::In(1),
+                    b: MRef::In(2),
+                    op2: *op2,
+                    c: if i % 2 == 0 { MRef::In(0) } else { MRef::Scal(i as u16 % 5) },
+                    swap,
+                    out,
+                });
+            }
+        }
+        // Bin3: the full arith cube in all four swap orientations, cycling
+        // operand kinds through aligned / shifted (incl. ghost) / strided /
+        // splat-scalar / register sources.
+        let mut pat = 0usize;
+        for op1 in arith {
+            for op2 in arith {
+                for op3 in arith {
+                    for (swap2, swap3) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        let (a, b, c, d) = match pat % 4 {
+                            0 => (MRef::In(0), MRef::In(1), MRef::In(2), MRef::In(3)),
+                            1 => (MRef::In(2), MRef::Scal(0), MRef::In(0), MRef::Scal(3)),
+                            2 => (MRef::Scal(2), MRef::In(3), MRef::Scal(1), MRef::In(1)),
+                            _ => (MRef::In(1), MRef::In(0), MRef::Reg(0), MRef::In(2)),
+                        };
+                        pat += 1;
+                        let out = micro.len() as u16;
+                        micro.push(MicroOp::Bin3 {
+                            op1,
+                            a,
+                            b,
+                            op2,
+                            c,
+                            swap2,
+                            op3,
+                            d,
+                            swap3,
+                            out,
+                        });
+                    }
+                }
+            }
+        }
         let n_ops = micro.len();
         let n_regs = n_ops as u16;
         let mut inputs = inputs;
@@ -2462,6 +2730,7 @@ mod simd_tests {
             micro,
             n_regs,
             n_load_regs: 1,
+            n_splat_regs: 6, // 5 scalars + the zero register
             outputs: SmallVec::new(), // outs are passed directly
             runs,
             n_fused_instrs: 0,
@@ -2476,7 +2745,7 @@ mod simd_tests {
                 .enumerate()
                 .map(|(i, buf)| (i as u16, buf.as_mut_ptr()))
                 .collect();
-            let mut fregs = vec![0.0f64; (n_regs as usize + 1) * FCHUNK];
+            let mut fregs = vec![0.0f64; (n_regs as usize + 1 + 6) * FCHUNK];
             match wider {
                 0 => unsafe {
                     exec_fused_runs_generic(&fs, &svals, &bases, &outs, &mut fregs)
@@ -2496,7 +2765,7 @@ mod simd_tests {
         {
             if std::arch::is_x86_feature_detected!("avx2") {
                 let got = run_level(1);
-                assert_bits_eq(&reference, &got, "avx2");
+                assert_bits_eq(&reference, &got, "avx2", with_nan);
                 levels_checked += 1;
             }
             if std::arch::is_x86_feature_detected!("avx512f")
@@ -2505,7 +2774,7 @@ mod simd_tests {
                 && std::arch::is_x86_feature_detected!("avx512bw")
             {
                 let got = run_level(2);
-                assert_bits_eq(&reference, &got, "avx512");
+                assert_bits_eq(&reference, &got, "avx512", with_nan);
                 levels_checked += 1;
             }
         }
@@ -2514,9 +2783,28 @@ mod simd_tests {
         let _ = levels_checked;
     }
 
-    fn assert_bits_eq(want: &[Vec<f64>], got: &[Vec<f64>], label: &str) {
+    /// Strict byte equality: NaN-free adversarial inputs (±inf, ±0,
+    /// denormals, extremes); every NaN in the pipeline is hardware-generated
+    /// and identical at every width, so results must match to the bit.
+    #[test]
+    fn simd_clone_bit_identity() {
+        drive(false);
+    }
+
+    /// NaN-bearing inputs: non-NaN results byte-strict; NaN results
+    /// class-compared (payload latitude under commutation, see
+    /// `adversarial`).
+    #[test]
+    fn simd_clone_bit_identity_nan_inputs() {
+        drive(true);
+    }
+
+    fn assert_bits_eq(want: &[Vec<f64>], got: &[Vec<f64>], label: &str, nan_class: bool) {
         for (op, (w, g)) in want.iter().zip(got.iter()).enumerate() {
             for (k, (a, b)) in w.iter().zip(g.iter()).enumerate() {
+                if nan_class && a.is_nan() && b.is_nan() {
+                    continue;
+                }
                 assert_eq!(
                     a.to_bits(),
                     b.to_bits(),
