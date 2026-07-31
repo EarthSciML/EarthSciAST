@@ -1799,9 +1799,10 @@ pub(super) fn build_tape_program(
     param_names: &[String],
     const_names: &HashSet<String>,
     seg_invariant_names: &HashSet<String>,
-    // Step 4: run the kernel-fusion post-pass (`false` = the unfused program,
-    // bitwise-identical results — the `ESS_TAPE_FUSE_DISABLE` arm).
-    fuse: bool,
+    // Step 4: run the kernel-fusion post-pass with the given superop
+    // configuration (`None` = the unfused program, bitwise-identical
+    // results — the `ESS_TAPE_FUSE_DISABLE` arm).
+    fuse: Option<super::fuse::SuperopCfg>,
 ) -> (TapeProgram, (usize, usize)) {
     let observed_names: HashSet<String> = observed_rules
         .iter()
@@ -2288,7 +2289,11 @@ impl<'m> TapeBuilder<'m> {
 
     /// Flatten the chunk streams, run the fusion post-pass (Step 4), then
     /// liveness + slab coloring, and assemble the final program.
-    fn finish(mut self, exports: Vec<(String, SlotId)>, fuse: bool) -> TapeProgram {
+    fn finish(
+        mut self,
+        exports: Vec<(String, SlotId)>,
+        fuse: Option<super::fuse::SuperopCfg>,
+    ) -> TapeProgram {
         let mut instrs: Vec<Instr> = Vec::new();
         let mut provenance: Vec<u32> = Vec::new();
         let mut n_const = 0u32;
@@ -2325,8 +2330,8 @@ impl<'m> TapeBuilder<'m> {
             fused: Vec::new(),
             fuse_stats: FuseStats::default(),
         };
-        if fuse {
-            super::fuse::fuse_program(&mut prog);
+        if let Some(cfg) = fuse {
+            super::fuse::fuse_program(&mut prog, cfg);
         }
         color_slab(&mut prog);
         prog

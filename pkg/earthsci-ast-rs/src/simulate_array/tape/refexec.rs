@@ -352,6 +352,35 @@ pub(super) fn run_reference(
                                         binary_kernel_of(*op2)(t, cv)
                                     };
                                 }
+                                MicroOp::Bin3 {
+                                    op1,
+                                    a,
+                                    b,
+                                    op2,
+                                    c,
+                                    swap2,
+                                    op3,
+                                    d,
+                                    swap3,
+                                    out,
+                                } => {
+                                    let t1 = binary_kernel_of(*op1)(
+                                        get(a, &regs),
+                                        get(b, &regs),
+                                    );
+                                    let cv = get(c, &regs);
+                                    let t2 = if *swap2 {
+                                        binary_kernel_of(*op2)(cv, t1)
+                                    } else {
+                                        binary_kernel_of(*op2)(t1, cv)
+                                    };
+                                    let dv = get(d, &regs);
+                                    regs[*out as usize] = if *swap3 {
+                                        binary_kernel_of(*op3)(dv, t2)
+                                    } else {
+                                        binary_kernel_of(*op3)(t2, dv)
+                                    };
+                                }
                             }
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {

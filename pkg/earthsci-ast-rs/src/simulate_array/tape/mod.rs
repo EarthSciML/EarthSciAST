@@ -187,7 +187,10 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> (TapeProgram, TapeBuildReport) {
-        self.build_tape_opts(discrete_forcing, !fuse_disabled())
+        self.build_tape_opts(
+            discrete_forcing,
+            (!fuse_disabled()).then(fuse::SuperopCfg::from_env),
+        )
     }
 
     /// [`Self::build_tape`] with the Step 4 fusion pass explicitly on/off
@@ -195,7 +198,7 @@ impl ArrayCompiled {
     pub(crate) fn build_tape_opts(
         &self,
         discrete_forcing: &HashSet<String>,
-        fuse: bool,
+        fuse: Option<fuse::SuperopCfg>,
     ) -> (TapeProgram, TapeBuildReport) {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
@@ -254,6 +257,18 @@ impl ArrayCompiled {
             tot_runs,
             max_regs
         );
+        eprintln!("micro-op histogram (element-weighted, post-superop):");
+        for (k, n) in prog.fuse_stats.micro_hist.iter().take(24) {
+            eprintln!("  {n:>10}  {k}");
+        }
+        eprintln!("single-use adjacency (element-weighted, pre-superop):");
+        for (k, n) in prog.fuse_stats.adj_hist.iter().take(24) {
+            eprintln!("  {n:>10}  {k}");
+        }
+        eprintln!("arith chain lengths (element-weighted, pre-superop):");
+        for (len, n) in prog.fuse_stats.chain_hist.iter() {
+            eprintln!("  {n:>10}  len={len}");
+        }
         for f in by_regs.iter().take(12) {
             eprintln!(
                 "  group: shape={:?} micro={} regs={} inputs={} (shifted {}) scalars={} \
