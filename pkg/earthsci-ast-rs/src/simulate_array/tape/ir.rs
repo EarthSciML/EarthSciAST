@@ -422,6 +422,16 @@ pub struct FuseStats {
     /// Group size histogram buckets: [2-3, 4-7, 8-15, 16-31, 32-63, 64+]
     /// member instructions.
     pub group_size_hist: [usize; 6],
+    /// Step 4b diagnostics (weighted by group element count, i.e. per-RHS
+    /// element-op cost): final micro-op kind histogram, descending.
+    pub micro_hist: Vec<(String, usize)>,
+    /// Pre-superop single-use producer→consumer adjacency histogram
+    /// (`"producer>consumer"`), descending — the data that drives which
+    /// deeper superop shapes are worth monomorphizing.
+    pub adj_hist: Vec<(String, usize)>,
+    /// Pre-superop maximal arith (`+ - * /` Bin) chain lengths (single-use,
+    /// consumed by the immediately following op), weighted by element count.
+    pub chain_hist: Vec<(usize, usize)>,
 }
 
 /// Descriptor of one value slot.

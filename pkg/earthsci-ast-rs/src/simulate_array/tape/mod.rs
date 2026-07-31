@@ -254,6 +254,18 @@ impl ArrayCompiled {
             tot_runs,
             max_regs
         );
+        eprintln!("micro-op histogram (element-weighted, post-superop):");
+        for (k, n) in prog.fuse_stats.micro_hist.iter().take(24) {
+            eprintln!("  {n:>10}  {k}");
+        }
+        eprintln!("single-use adjacency (element-weighted, pre-superop):");
+        for (k, n) in prog.fuse_stats.adj_hist.iter().take(24) {
+            eprintln!("  {n:>10}  {k}");
+        }
+        eprintln!("arith chain lengths (element-weighted, pre-superop):");
+        for (len, n) in prog.fuse_stats.chain_hist.iter() {
+            eprintln!("  {n:>10}  len={len}");
+        }
         for f in by_regs.iter().take(12) {
             eprintln!(
                 "  group: shape={:?} micro={} regs={} inputs={} (shifted {}) scalars={} \

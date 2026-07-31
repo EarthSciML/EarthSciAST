@@ -628,6 +628,69 @@ fn bin2_arith(op: BinCode) -> bool {
     )
 }
 
+/// Visit every operand of a micro-op.
+fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
+    match op {
+        MicroOp::Bin { a, b, .. } => {
+            f(a);
+            f(b);
+        }
+        MicroOp::Un { a, .. } | MicroOp::Neg { a, .. } | MicroOp::Mov { a, .. } => f(a),
+        MicroOp::Select { cond, a, b, .. } => {
+            f(cond);
+            f(a);
+            f(b);
+        }
+        MicroOp::Bin2 { a, b, c, .. } => {
+            f(a);
+            f(b);
+            f(c);
+        }
+    }
+}
+
+/// SSA register use counts (live-outs count as a use). Valid only while the
+/// micro-program is in SSA form (op `i` defines register `i`).
+fn ssa_uses(micro: &[MicroOp], outputs: &[(u16, SlotId)]) -> Vec<u32> {
+    let mut uses = vec![0u32; micro.len()];
+    for op in micro {
+        for_each_operand(op, |m| {
+            if let MRef::Reg(r) = m {
+                uses[*r as usize] += 1;
+            }
+        });
+    }
+    for &(ssa, _) in outputs {
+        uses[ssa as usize] += 1;
+    }
+    uses
+}
+
+/// `true` when `op` reads SSA register `r`.
+fn reads_reg(op: &MicroOp, r: u16) -> bool {
+    let mut hit = false;
+    for_each_operand(op, |m| {
+        if *m == MRef::Reg(r) {
+            hit = true;
+        }
+    });
+    hit
+}
+
+/// Short kind label for the step-4b composition/adjacency histograms.
+fn mop_label(op: &MicroOp) -> String {
+    match op {
+        MicroOp::Bin { op, .. } => format!("Bin({op:?})"),
+        MicroOp::Un { op, .. } => format!("Un({op:?})"),
+        MicroOp::Neg { .. } => "Neg".to_string(),
+        MicroOp::Select { .. } => "Select".to_string(),
+        MicroOp::Mov { .. } => "Mov".to_string(),
+        MicroOp::Bin2 { op1, op2, swap, .. } => {
+            format!("Bin2({op1:?},{op2:?}{})", if *swap { ",swap" } else { "" })
+        }
+    }
+}
+
 /// Merge adjacent `Bin` pairs whose intermediate has exactly one consumer
 /// (the very next op) into [`MicroOp::Bin2`]: the intermediate then lives in
 /// a CPU register instead of a chunk buffer — one store + one load + one
@@ -912,6 +975,9 @@ pub(super) fn fuse_program(prog: &mut TapeProgram) {
         fused: Vec::new(),
         instrs: Vec::with_capacity(n),
         prov: Vec::with_capacity(n),
+        micro_hist: FxHashMap::default(),
+        adj_hist: FxHashMap::default(),
+        chain_hist: FxHashMap::default(),
     };
 
     let mut section_counts = [0usize; 3];
@@ -926,6 +992,18 @@ pub(super) fn fuse_program(prog: &mut TapeProgram) {
     }
 
     sink.stats.instrs_after = sink.instrs.len();
+    let desc = |m: FxHashMap<String, usize>| -> Vec<(String, usize)> {
+        let mut v: Vec<_> = m.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v
+    };
+    sink.stats.micro_hist = desc(sink.micro_hist);
+    sink.stats.adj_hist = desc(sink.adj_hist);
+    sink.stats.chain_hist = {
+        let mut v: Vec<_> = sink.chain_hist.into_iter().collect();
+        v.sort_by_key(|&(len, _)| len);
+        v
+    };
     prog.instrs = sink.instrs;
     prog.provenance = sink.prov;
     prog.n_const = section_counts[0] as u32;
@@ -940,6 +1018,10 @@ struct Sink {
     fused: Vec<FusedSpec>,
     instrs: Vec<Instr>,
     prov: Vec<u32>,
+    /// Step 4b histogram accumulators (weighted by group element count).
+    micro_hist: FxHashMap<String, usize>,
+    adj_hist: FxHashMap<String, usize>,
+    chain_hist: FxHashMap<usize, usize>,
 }
 
 impl Sink {
@@ -1022,7 +1104,44 @@ fn flush_one(g: GBuilder, prog: &TapeProgram, readers: &[SmallVec<[u32; 4]>], si
         }
     }
 
+    // Step 4b histograms (pre-superop, while the program is SSA): single-use
+    // producer→consumer adjacency and maximal arith chain lengths, weighted by
+    // the group's element count (= per-RHS element-op cost).
+    let n_elems: usize = shape.iter().product::<usize>().max(1);
+    {
+        let uses = ssa_uses(&micro, &outputs);
+        for i in 0..micro.len().saturating_sub(1) {
+            if uses[i] == 1 && reads_reg(&micro[i + 1], i as u16) {
+                let key = format!("{}>{}", mop_label(&micro[i]), mop_label(&micro[i + 1]));
+                *sink.adj_hist.entry(key).or_insert(0) += n_elems;
+            }
+        }
+        let arith = |op: &MicroOp| matches!(op, MicroOp::Bin { op, .. } if bin2_arith(*op));
+        let mut i = 0usize;
+        while i < micro.len() {
+            if arith(&micro[i]) {
+                let mut len = 1usize;
+                while i + len < micro.len()
+                    && arith(&micro[i + len])
+                    && uses[i + len - 1] == 1
+                    && reads_reg(&micro[i + len], (i + len - 1) as u16)
+                {
+                    len += 1;
+                }
+                if len >= 2 {
+                    *sink.chain_hist.entry(len).or_insert(0) += n_elems;
+                }
+                i += len;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     merge_superops(&mut micro, &mut outputs);
+    for op in &micro {
+        *sink.micro_hist.entry(mop_label(op)).or_insert(0) += n_elems;
+    }
     let n_regs = allocate_registers(&mut micro, &mut outputs);
     let runs = build_runs(&shape, &new_segs);
     // Strided shifted inputs are pre-loaded into dedicated chunk registers
