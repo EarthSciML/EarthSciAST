@@ -603,4 +603,53 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         @test isapprox(du2[vmap2["u[4]"]],  0.0; atol=1e-12)
     end
 
+    # ---------------------------------------------------------------------- #
+    # index() over an ELEMENTWISE COMBINATION of array-valued subexpressions.
+    #
+    # `index(aggregate, …)` and `index(makearray, …)` each had a handler, but
+    # `index(a + b, …)` where BOTH operands are array-valued had none: the `+`
+    # fell through to the generic recurse, which walked into the operands and
+    # let their bound loop index escape as E_TREEWALK_UNBOUND_LOOP_VAR.
+    #
+    # This blocks any COLUMN INTEGRAL OF A DISCRETISED OPERATOR, e.g. a mass
+    # budget over a flux divergence built from two lowered stencils:
+    #     divh     = D(Mx, lon) + D(My, lat)
+    #     divh_col = aggregate_k index(divh, i, j, k)
+    # which is exactly what an offline-CTM pressure fixer needs.
+    @testset "index distributes over an elementwise combination of arrays" begin
+        include("testutils.jl")
+        N = 4
+        a = Float64[1, 2, 3, 4]
+        b = Float64[10, 20, 30, 40]
+        # two array-valued subexpressions, combined elementwise ...
+        ca = _arrayop1d(_op("*", _n(2.0), _idx("a", _v("q"))), "q", 1, N)
+        cb = _arrayop1d(_op("*", _n(3.0), _idx("b", _v("q"))), "q", 1, N)
+        comb = _op("+", ca, cb)
+        # ... then INDEXED inside an outer reduction over the same axis.
+        rhs = EarthSciAST.OpExpr("arrayop", EarthSciAST.ASTExpr[];
+            output_idx = Any[], expr_body = _op("index", comb, _v("p")),
+            ranges = Dict("p" => [1, N]))
+        model = EarthSciAST.Model(Dict("y" => ModelVariable(StateVariable)),
+                                  [EarthSciAST.Equation(_D("y"), rhs)])
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator_impl(model;
+            initial_conditions = Dict("y" => 0.0),
+            const_arrays = Dict("a" => a, "b" => b))
+        du = fill(-1.0, length(u0))
+        f!(du, u0, p, 0.0)
+        @test du[vmap["y"]] ≈ 2 * sum(a) + 3 * sum(b)
+
+        # A SCALAR operand must still broadcast, not be indexed.
+        rhs2 = EarthSciAST.OpExpr("arrayop", EarthSciAST.ASTExpr[];
+            output_idx = Any[],
+            expr_body = _op("index", _op("*", _n(5.0), ca), _v("p")),
+            ranges = Dict("p" => [1, N]))
+        model2 = EarthSciAST.Model(Dict("y" => ModelVariable(StateVariable)),
+                                   [EarthSciAST.Equation(_D("y"), rhs2)])
+        f2!, u02, p2, _, vmap2 = EarthSciAST._build_evaluator_impl(model2;
+            initial_conditions = Dict("y" => 0.0), const_arrays = Dict("a" => a))
+        du2 = fill(-1.0, length(u02))
+        f2!(du2, u02, p2, 0.0)
+        @test du2[vmap2["y"]] ≈ 5 * 2 * sum(a)
+    end
+
 end
