@@ -859,6 +859,40 @@ function _resolve_indices_op(expr::OpExpr,
             return _resolve_index_of_makearray(first_arg::OpExpr, expr.args[2:end],
                                                array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
         end
+
+        # Expression-position ELEMENTWISE COMBINATION:
+        #     index(op(a, b, ...), k1, k2, ...)  ->  op(index(a, k...), index(b, k...), ...)
+        #
+        # Indexing an elementwise combination IS the combination of the indexed
+        # operands, so distributing is exact, not an approximation. Only operands
+        # that are themselves array-valued are wrapped; a scalar operand (a
+        # literal, a scalar parameter) broadcasts and must be left alone, exactly
+        # as it does under the §4.3.4 name-aligned rules.
+        #
+        # Without this, an observed whose expression COMBINES array-valued
+        # subexpressions cannot be indexed at all. The motivating case is a
+        # column integral of a discretised operator:
+        #     divh = D(Mx, lon) + D(My, lat)            # two lowered stencils
+        #     divh_col = aggregate_k index(divh, i, j, k)
+        # `divh` inlines to `+(makearray, makearray)`, the `+` has no index
+        # handler, so the generic recurse below walked INTO the makearrays and
+        # their stencils' own bound `i`/`j`/`k` — which the aggregate above never
+        # binds — escaped as `E_TREEWALK_UNBOUND_LOOP_VAR: j`. The two single-node
+        # cases (`index(aggregate,…)`, `index(makearray,…)`) were already handled
+        # right above; this closes the combination case they left open.
+        if first_arg isa OpExpr && _is_scalar_op((first_arg::OpExpr).op)
+            fa = first_arg::OpExpr
+            subs = expr.args[2:end]
+            _arrayish(a) = (a isa OpExpr && (_is_aggregate_op((a::OpExpr).op) ||
+                                             (a::OpExpr).op == "makearray")) ||
+                           (a isa VarExpr && haskey(array_var_info, (a::VarExpr).name))
+            if any(_arrayish, fa.args)
+                pushed = ASTExpr[_arrayish(a) ? OpExpr("index", ASTExpr[a, subs...]) : a
+                                 for a in fa.args]
+                return _resolve_indices(reconstruct(fa; args = pushed), array_var_info,
+                                        var_map, const_arrays, pgather, memo, bound_syms)
+            end
+        end
         # Expression-position INLINE `const` array literal:
         # index({op:const, value:[…]}, k1, …). A non-scalar `const` used as an
         # index target (e.g. the duo's `index({const [n][3][3]}, gt, d, k)`) is
