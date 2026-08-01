@@ -562,6 +562,51 @@ function _oop_interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
     return row_j .+ wy .* (row_jp1 .- row_j)
 end
 
+# ---- interp.* over lanes, ON HOST: just call the core per lane ---------------
+#
+# The six evaluators above are the TRACER's lowering, and they are branch-free
+# because a tracer cannot branch on a traced query. Nothing else needs that.
+# When the value type is a plain `Real` — `Float64`, or a ForwardDiff `Dual`,
+# i.e. every host and AD walk — the query is a host value and the lane loop may
+# simply BRANCH, which is what the scalar `_interp_*_core` kernels already do.
+# (`Reactant`'s `TracedRNumber <: Number` but NOT `<: Real`, so a trace never
+# reaches these methods; they are strictly a host dispatch.)
+#
+# BIT-IDENTICAL by construction, not by argument: these call the SAME
+# `_oop_interp_*` wrappers — hence the same `_interp_*_core` kernels — that the
+# scalar `:fn` arm and `f!` call, which is precisely what the branch-free forms
+# are documented (and tested) to reproduce. Broadcast serves a lane vector and
+# an invariant scalar query alike, exactly as the ladders did; the per-LANE spec
+# forms broadcast over `h.specs`, so lane `l` reads its own table.
+#
+# WHY IT MATTERS. The ladder is O(table) per LANE, and the constant is brutal on
+# a big table: a 61x23 `interp.bilinear` over 392 lanes costs 6.0 ms through the
+# ladder and 0.018 ms through the cores — 328x, at Float64 and at `Dual` alike
+# (measured). A model with 18 such calls per RHS was spending ~0.1 s per
+# evaluation inside interp alone; a 60 s chemistry window took 1775 s against
+# 25 s for the same model without the bilinear component. That is not a tracing
+# problem and never was — it is the tracer's program running on host.
+@inline _oop_interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T<:Real} =
+    _oop_interp_linear.(Ref(h), q, T)
+@inline _oop_interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q,
+                                       ::Type{T}) where {T<:Real} =
+    _oop_interp_searchsorted.(Ref(h), q, T)
+@inline _oop_interp_bilinear_lanes(h::_InterpBilinearSpec, x, y,
+                                   ::Type{T}) where {T<:Real} =
+    _oop_interp_bilinear.(Ref(h), x, y, T)
+
+# The per-lane spec twins. `h.specs[l]` is the member kernel's ORIGINAL spec, so
+# this is the unmerged kernel's own call on lane `l` — the identity the merge is
+# defined by, reached directly instead of through the knot-column ladder.
+@inline _oop_interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T<:Real} =
+    _oop_interp_linear.(h.specs, q, T)
+@inline _oop_interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
+                                       ::Type{T}) where {T<:Real} =
+    _oop_interp_searchsorted.(h.specs, q, T)
+@inline _oop_interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
+                                   ::Type{T}) where {T<:Real} =
+    _oop_interp_bilinear.(h.specs, x, y, T)
+
 # ---- Live forcing buffers as ARGUMENTS (B2) ----------------------------------
 #
 # The compiled IR reaches a live forcing buffer (`param_arrays` entries and
