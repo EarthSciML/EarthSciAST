@@ -74,7 +74,8 @@ module EarthSciASTReactantExt
 using Reactant: Reactant, TracedRArray, TracedRNumber, @allowscalar
 
 import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
-    _oop_scatter, _oop_read_forcing
+    _oop_scatter, _oop_read_forcing,
+    _oop_knot_count, _oop_knot_pair, _oop_knot_pair2, _oop_bilinear_corners
 
 # ---- State reads -------------------------------------------------------------
 #
@@ -135,6 +136,173 @@ end
 @inline function _oop_scatter(du::TracedRArray{T,1}, out::Vector{Int}, res) where {T}
     du[out] = res isa AbstractArray ? res : fill(res, length(out))
     return du
+end
+
+# ---- interp knot addressing: a GATHER, not an O(table) select ladder ---------
+#
+# The sixth seam, and the one with the largest measured effect. The default
+# lowering of `interp.*`'s locate → gather → blend (src/tree_walk/oop.jl) is a
+# branch-free SELECT LADDER: one `ifelse` per table knot, chained. On host that
+# is the right program — a few fused broadcasts over a 2–3 knot table. Under a
+# trace it is O(table) traced OPS PER CALL SITE, and the constant is brutal:
+# one `interp.bilinear` on a 61×23 table over 392 lanes emits 76,593 stablehlo
+# ops (5,524 `select`, 2,806 `compare`, 1,319 `and`, plus scaffolding) and takes
+# 74 s to trace. The ReSEACT Fast-JX component has 18 of them; across the
+# operator-split window's traced RHS call sites that reached 21.4M ops and the
+# XLA compile was OOM-killed at 30.4 GB, with >90% of the program being ladder
+# scaffolding and <1% real arithmetic.
+#
+# XLA has the constant-time primitive the ladder is emulating. "Index a constant
+# table by a computed integer index" is `stablehlo.gather`; "count how many knots
+# are ≤ the query" is a `compare` against a constant knot ROW plus one `reduce`.
+# Both are O(1) ops in the TABLE — the emitted program stops depending on the
+# table size at all, and the 61×23 bilinear drops to ~400 ops (190×).
+#
+# BIT-IDENTITY, which is the acceptance bar (test/tree_walk_oop_test.jl pins the
+# lane forms against the scalar `_interp_*_core` kernels over dense query sweeps
+# including both clamps and NaN):
+#
+#   * COUNT. The ladder sums 0.0/1.0 terms left to right; `sum` over the same
+#     terms reassociates. Every term is 0.0 or 1.0 and n ≪ 2^53, so every partial
+#     sum is an exactly-representable integer and the result is INDEPENDENT of
+#     association order. NaN queries fail every compare in both forms and
+#     contribute 0.0 in both.
+#   * GATHER. The ladder SELECTS `v[k]` when `i == k` — it never blends — so the
+#     table entry arrives bit-exact; a gather returns the same stored double.
+#     Identical for ±0.0, subnormals, Inf and NaN table entries alike. The index
+#     is produced by the callers' `min(max(count,1), n-1)` clamp, so it is an
+#     exactly-integral Float64 in `[1, n-1]` and `stablehlo.convert` to i64
+#     (round-toward-zero) is exact; the gather is therefore always in bounds and
+#     never takes XLA's out-of-bounds clamping path.
+#   * The blend, the query clamps and the NaN handling are untouched — they live
+#     in the shared lane evaluators, not in these seams.
+#
+# Both knot SHAPES are served: a `Vector{Float64}` (one table shared by every
+# lane) becomes a flat constant indexed by `k` directly; a
+# `Vector{Vector{Float64}}` / `Matrix{Vector{Float64}}` of lane COLUMNS (the
+# kernel-class merge's `_Interp*LaneSpec`, one table per lane) becomes the same
+# flat constant in knot-major order, indexed by `(k-1)*L + lane` against a
+# constant lane iota — so the merged path gets the identical O(1) lowering, with
+# lane `l` still reading only its own table.
+
+const _RxIdx = Union{TracedRArray{<:Any,1},TracedRNumber}
+const _RxKnots = Union{Vector{Float64},Vector{Vector{Float64}}}
+const _RxTbl = Union{Vector{Vector{Float64}},Matrix{Vector{Float64}}}
+
+# --- lane-shape plumbing (host-side, trace time only) -------------------------
+#
+# Two independent "does this have a lane axis" questions: the QUERY (a lane
+# vector, or one invariant scalar) and the TABLE (shared by every lane, or one
+# column per lane). `0` means "no lane axis of its own"; the result carries a
+# lane axis iff either does, and when neither does the gather runs at length 1
+# and is unwrapped back to a traced scalar.
+@inline _rx_len(x::TracedRArray{<:Any,1}) = length(x)
+@inline _rx_len(::TracedRNumber) = 0
+@inline _rx_cols(::Vector{Float64}) = 0
+@inline _rx_cols(v::Vector{Vector{Float64}}) = length(v[1])
+@inline _rx_tbl_cols(::Vector{Vector{Float64}}) = 0
+@inline _rx_tbl_cols(t::Matrix{Vector{Float64}}) = length(t[1, 1])
+
+@inline _rx_vec(x::TracedRArray{<:Any,1}, ::Int) = x
+@inline _rx_vec(x::TracedRNumber, n::Int) = Reactant.broadcast_to_size(x, (n,))
+@inline _rx_unwrap(r::AbstractVector, L::Int) = L == 0 ? (@allowscalar r[1]) : r
+
+# f64 lane index (exactly integral and in `[1, n-1]` by the callers' clamp) → i64.
+@inline _rx_int(i::TracedRArray{T,1}) where {T} =
+    Reactant.Ops.convert(TracedRArray{Int64,1}, i)
+
+# ONE `stablehlo.gather` of a constant table at 1-based traced indices.
+# `Ops.constant` memoizes by value, so N call sites sharing a table share one
+# constant in the module.
+@inline _rx_take(vals::Vector{Float64}, lin::TracedRArray{Int64,1}) =
+    Reactant.Ops.gather_getindex(Reactant.Ops.constant(vals),
+                                 Reactant.Ops.reshape(lin, length(lin), 1))
+
+# The two knot shapes, as (flat host constant, knot index → linear index).
+@inline _rx_flat(v::Vector{Float64}) = v
+@inline _rx_flat(v::Vector{Vector{Float64}}) = reduce(vcat, v)   # knot-major
+@inline _rx_lin(::Vector{Float64}, ik::TracedRArray{Int64,1}) = ik
+@inline function _rx_lin(v::Vector{Vector{Float64}}, ik::TracedRArray{Int64,1})
+    L = length(v[1])
+    return (ik .- Int64(1)) .* Int64(L) .+ Reactant.Ops.constant(collect(Int64, 1:L))
+end
+
+# The constant the count compares against: a 1×n knot ROW when one table is
+# shared, an L×n knot MATRIX when each lane owns one.
+_rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
+function _rx_knot_matrix(v::Vector{Vector{Float64}})
+    L = length(v[1])
+    M = Matrix{Float64}(undef, L, length(v))
+    @inbounds for k in eachindex(v), l in 1:L
+        M[l, k] = v[k][l]
+    end
+    return M
+end
+
+# The bilinear table as one flat constant + the (i,j) → linear-index map, and
+# the strides that step to the neighbouring corner along each axis.
+function _rx_tbl_lin(t::Vector{Vector{Float64}}, ii, jj, Nx::Int, Ny::Int)
+    flat = Vector{Float64}(undef, Nx * Ny)
+    @inbounds for k in 1:Nx, l in 1:Ny
+        flat[(k - 1) * Ny + l] = t[k][l]
+    end
+    return flat, (ii .- Int64(1)) .* Int64(Ny) .+ jj, Ny, 1
+end
+function _rx_tbl_lin(t::Matrix{Vector{Float64}}, ii, jj, Nx::Int, Ny::Int)
+    L = length(t[1, 1])
+    flat = Vector{Float64}(undef, Nx * Ny * L)
+    @inbounds for k in 1:Nx, l in 1:Ny
+        col = t[k, l]
+        base = ((k - 1) * Ny + (l - 1)) * L
+        for m in 1:L
+            flat[base + m] = col[m]
+        end
+    end
+    lane = Reactant.Ops.constant(collect(Int64, 1:L))
+    lin = ((ii .- Int64(1)) .* Int64(Ny) .+ (jj .- Int64(1))) .* Int64(L) .+ lane
+    return flat, lin, Ny * L, L
+end
+
+# --- the three seams ----------------------------------------------------------
+
+# count-locate: one compare against a constant knot row + one reduce.
+function _oop_knot_count(knots::_RxKnots, q::_RxIdx, cmp::F) where {F}
+    K = Reactant.Ops.constant(_rx_knot_matrix(knots))         # (L|1) × n
+    Q = reshape(_rx_vec(q, 1), (max(_rx_len(q), 1), 1))       # (L|1) × 1
+    c = sum(ifelse.(cmp.(K, Q), 1.0, 0.0); dims = 2)          # (L|1) × 1
+    s = Reactant.Ops.reshape(c, size(c, 1))
+    return _rx_unwrap(s, max(_rx_cols(knots), _rx_len(q)))
+end
+
+# knot pair: two gathers, independent of the table size.
+function _oop_knot_pair(v::_RxKnots, i::_RxIdx)
+    L = max(_rx_cols(v), _rx_len(i))
+    ik = _rx_int(_rx_vec(i, max(L, 1)))
+    flat = _rx_flat(v)
+    return (_rx_unwrap(_rx_take(flat, _rx_lin(v, ik)), L),
+            _rx_unwrap(_rx_take(flat, _rx_lin(v, ik .+ Int64(1))), L))
+end
+
+# Two tables at one index. The default fuses them to share the ladder's
+# compares; with a gather there are no compares to share, so it is two pairs.
+function _oop_knot_pair2(a::_RxKnots, b::_RxKnots, i::_RxIdx)
+    alo, ahi = _oop_knot_pair(a, i)
+    blo, bhi = _oop_knot_pair(b, i)
+    return alo, ahi, blo, bhi
+end
+
+# bilinear corners: four gathers of one flat table constant at
+# `lin`, `lin+Δk`, `lin+Δl`, `lin+Δk+Δl` — no `Nx·Ny` cell ladder.
+function _oop_bilinear_corners(tbl::_RxTbl, i::_RxIdx, j::_RxIdx,
+                               Nx::Int, Ny::Int)
+    L = max(_rx_tbl_cols(tbl), _rx_len(i), _rx_len(j))
+    n = max(L, 1)
+    ii = _rx_int(_rx_vec(i, n)); jj = _rx_int(_rx_vec(j, n))
+    flat, lin, dk, dl = _rx_tbl_lin(tbl, ii, jj, Nx, Ny)
+    return (_rx_unwrap(_rx_take(flat, lin), L),
+            _rx_unwrap(_rx_take(flat, lin .+ Int64(dk)), L),
+            _rx_unwrap(_rx_take(flat, lin .+ Int64(dl)), L),
+            _rx_unwrap(_rx_take(flat, lin .+ Int64(dk + dl)), L))
 end
 
 end # module
