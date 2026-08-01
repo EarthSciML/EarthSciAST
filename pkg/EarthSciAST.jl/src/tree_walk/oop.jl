@@ -345,20 +345,120 @@ end
 @inline _oop_interp_searchsorted(h::_InterpSearchsortedSpec, x, ::Type{T}) where {T} =
     convert(T, _interp_searchsorted_core("interp.searchsorted", x, h.xs))
 
+# ---- interp knot addressing: the seams a TRACER replaces --------------------
+#
+# The three primitive shapes the lane forms below are built from, factored out
+# as SEAMS for exactly the reason `_oop_read_state` is one: the branch-free
+# select-ladder lowering is RIGHT for host / ForwardDiff — a handful of fused
+# broadcasts over a 2–3 knot table, no branch, no allocation per knot — and
+# catastrophically WRONG for a tracer on a big table, where every ladder step is
+# a separate traced op and the emitted program is O(table) PER CALL SITE.
+#
+# Measured, one `interp.bilinear` on a 61×23 table over 392 lanes: the ladder
+# traces to 76,593 stablehlo ops (5,524 `select` + 2,806 `compare` + 1,319 `and`
+# and their broadcast/constant scaffolding), in 74 s. The ReSEACT Fast-JX
+# component has 18 such calls; across the traced operator-split window's ~120
+# RHS call sites that reached 21.4M ops and the XLA compile was OOM-killed at
+# 30 GB. >90% of that program was ladder scaffolding; real arithmetic was <1%.
+#
+# A tracer has a constant-time primitive for precisely this — `stablehlo.gather`
+# on a constant table, and a `reduce` for the count — so a backend replaces the
+# three ladders HERE rather than forking the three lane evaluators. What a
+# backend method must honour, bit-for-bit:
+#
+#   `_oop_knot_count(knots, q, cmp)`   Σ_k [cmp(knots[k], q)] as a Float64 lane
+#         value. The terms are 0.0/1.0 and n ≪ 2^53, so the sum is EXACT in any
+#         association order: a `reduce` is bit-identical to the ladder's
+#         left-to-right `.+` chain, for every query including NaN (which fails
+#         every compare and contributes 0.0 in both).
+#   `_oop_knot_pair(v, i)`             `(v[i], v[i+1])` elementwise, `i` an
+#         exactly-integral Float64 lane index in `[1, length(v)-1]`. SELECTION,
+#         never a blend — the table entry comes through bit-exact (no `0·Inf`,
+#         no signed-zero surprise), which a gather also gives by construction.
+#   `_oop_knot_pair2(a, b, i)`         the same, for two same-length tables at
+#         one index, sharing the ladder's compares (the linear evaluator's
+#         axis+table pair; kept fused so the host op count is UNCHANGED).
+#   `_oop_bilinear_corners(tbl, i, j, Nx, Ny)`  the four `tbl[i+a][j+b]`,
+#         `a,b ∈ {0,1}`, same selection contract, `i ∈ [1,Nx-1]`, `j ∈ [1,Ny-1]`.
+#
+# `knots`/`v`/`a`/`b` is a `Vector{Float64}` (one table shared by every lane) or
+# a `Vector{Vector{Float64}}` of lane COLUMNS (`_Interp*LaneSpec`, one table per
+# lane, `col[k][l]`); `tbl` is `Vector{Vector{Float64}}` (scalar spec,
+# `tbl[k][l]`) or a `Matrix{Vector{Float64}}` of lane columns (`tbl[k,l][lane]`).
+# Both are build-time host constants either way, so a backend can materialize
+# them as constant tensors. `_oop_knot_at` is the one place that difference is
+# read, so a backend's methods need not repeat it.
+@inline _oop_knot_at(v::AbstractVector{Float64}, k::Int) = @inbounds v[k]
+@inline _oop_knot_at(v::AbstractVector{Vector{Float64}}, k::Int) = @inbounds v[k]
+@inline _oop_tbl_at(t::Vector{Vector{Float64}}, k::Int, l::Int) = @inbounds t[k][l]
+@inline _oop_tbl_at(t::Matrix{Vector{Float64}}, k::Int, l::Int) = @inbounds t[k, l]
+
+@inline function _oop_knot_count(knots, q, cmp::F) where {F}
+    n = length(knots)
+    cnt = ifelse.(cmp.(_oop_knot_at(knots, 1), q), 1.0, 0.0)
+    for k in 2:n
+        cnt = cnt .+ ifelse.(cmp.(_oop_knot_at(knots, k), q), 1.0, 0.0)
+    end
+    return cnt
+end
+
+@inline function _oop_knot_pair(v, i)
+    n = length(v)
+    lo = _oop_knot_at(v, 1) .+ zero.(i)
+    hi = _oop_knot_at(v, 2) .+ zero.(i)
+    for k in 2:(n - 1)
+        sel = i .== Float64(k)
+        lo = ifelse.(sel, _oop_knot_at(v, k),     lo)
+        hi = ifelse.(sel, _oop_knot_at(v, k + 1), hi)
+    end
+    return lo, hi
+end
+
+@inline function _oop_knot_pair2(a, b, i)
+    n = length(a)
+    alo = _oop_knot_at(a, 1) .+ zero.(i); ahi = _oop_knot_at(a, 2) .+ zero.(i)
+    blo = _oop_knot_at(b, 1) .+ zero.(i); bhi = _oop_knot_at(b, 2) .+ zero.(i)
+    for k in 2:(n - 1)
+        sel = i .== Float64(k)
+        alo = ifelse.(sel, _oop_knot_at(a, k),     alo)
+        ahi = ifelse.(sel, _oop_knot_at(a, k + 1), ahi)
+        blo = ifelse.(sel, _oop_knot_at(b, k),     blo)
+        bhi = ifelse.(sel, _oop_knot_at(b, k + 1), bhi)
+    end
+    return alo, ahi, blo, bhi
+end
+
+@inline function _oop_bilinear_corners(tbl, i, j, Nx::Int, Ny::Int)
+    z = zero.(i .+ j)
+    t_ij    = _oop_tbl_at(tbl, 1, 1) .+ z; t_i1j   = _oop_tbl_at(tbl, 2, 1) .+ z
+    t_ijp1  = _oop_tbl_at(tbl, 1, 2) .+ z; t_i1jp1 = _oop_tbl_at(tbl, 2, 2) .+ z
+    for k in 1:(Nx - 1), l in 1:(Ny - 1)
+        (k == 1 && l == 1) && continue
+        sel = (i .== Float64(k)) .& (j .== Float64(l))
+        t_ij    = ifelse.(sel, _oop_tbl_at(tbl, k,     l),     t_ij)
+        t_i1j   = ifelse.(sel, _oop_tbl_at(tbl, k + 1, l),     t_i1j)
+        t_ijp1  = ifelse.(sel, _oop_tbl_at(tbl, k,     l + 1), t_ijp1)
+        t_i1jp1 = ifelse.(sel, _oop_tbl_at(tbl, k + 1, l + 1), t_i1jp1)
+    end
+    return t_ij, t_i1j, t_ijp1, t_i1jp1
+end
+
 # ---- interp.* over whole LANES: locate → gather → blend ----------------------
 #
 # The de-scalarized interp forms the affine access-kernel path evaluates (and the
 # forms an XLA/Reactant trace needs): NO branch on the query, NO opaque scalar
-# core inside a broadcast — every step is elementwise arithmetic + `ifelse`
-# selection, so a traced query lane vector flows through as whole-array ops and
-# the emitted program's size is O(table), independent of the grid.
+# core inside a broadcast — every step is elementwise arithmetic + a knot-
+# addressing seam, so a traced query lane vector flows through as whole-array ops
+# and the emitted program's size is independent of the GRID. (It is independent
+# of the TABLE too, but only on a backend that gives the seams above a gather;
+# the default lowering is the O(table) select ladder — see the seam header.)
 #
 # BIT-IDENTICAL to the scalar cores, by mirroring their decision trees with
 # `ifelse` selects instead of branches:
 #   * locate: `i = clamp(Σ_k [axis[k] ≤ x], 1, n-1)` — for a validated strictly-
 #     increasing axis this is exactly the scan's "largest k with axis[k] ≤ x".
-#   * gather: chained `ifelse(i == k, table[k], …)` SELECTS (never blends) the
-#     cell's endpoints, so table entries come through exactly (no `0·Inf`, no
+#   * gather: `_oop_knot_pair` / `_oop_bilinear_corners` SELECT (never blend)
+#     the cell's endpoints, so table entries come through exactly (no `0·Inf`, no
 #     signed-zero surprises).
 #   * blend: the cores' pinned form `tᵢ + w·(tᵢ₊₁ − tᵢ)` verbatim.
 #   * clamps: the same outer `x ≤ axis[1]` / `x ≥ axis[n]` selects the cores
@@ -372,20 +472,9 @@ end
 function _oop_interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T}
     axis = h.axis; table = h.table
     n = length(axis)
-    cnt = ifelse.(axis[1] .<= q, 1.0, 0.0)
-    for k in 2:n
-        cnt = cnt .+ ifelse.(axis[k] .<= q, 1.0, 0.0)
-    end
+    cnt = _oop_knot_count(axis, q, <=)
     i = min.(max.(cnt, 1.0), Float64(n - 1))
-    ai  = axis[1] .+ zero.(i);  ai1 = axis[2] .+ zero.(i)
-    ti  = table[1] .+ zero.(i); ti1 = table[2] .+ zero.(i)
-    for k in 2:(n - 1)
-        sel = i .== Float64(k)
-        ai  = ifelse.(sel, axis[k],      ai)
-        ai1 = ifelse.(sel, axis[k + 1],  ai1)
-        ti  = ifelse.(sel, table[k],     ti)
-        ti1 = ifelse.(sel, table[k + 1], ti1)
-    end
+    ai, ai1, ti, ti1 = _oop_knot_pair2(axis, table, i)
     w = (q .- ai) ./ (ai1 .- ai)
     blend = ti .+ w .* (ti1 .- ti)
     return ifelse.(q .<= axis[1], table[1],
@@ -398,11 +487,7 @@ function _oop_interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q, ::Type{T}
     n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
     # smallest i with xs[i] ≥ x  ==  #(xs .< x) + 1; NaN → n+1 (selected explicitly,
     # since `xs[k] < NaN` is false everywhere and would land on 1).
-    cnt = ifelse.(xs[1] .< q, 1.0, 0.0)
-    for k in 2:n
-        cnt = cnt .+ ifelse.(xs[k] .< q, 1.0, 0.0)
-    end
-    r = cnt .+ 1.0
+    r = _oop_knot_count(xs, q, <) .+ 1.0
     return ifelse.(q .!= q, Float64(n + 1), r)
 end
 
@@ -412,39 +497,11 @@ function _oop_interp_bilinear_lanes(h::_InterpBilinearSpec, x, y, ::Type{T}) whe
     # Per-axis clamp of the QUERY (the core's x_q/y_q), then count-locate.
     x_q = ifelse.(x .<= ax[1], ax[1], ifelse.(x .>= ax[Nx], ax[Nx], x))
     y_q = ifelse.(y .<= ay[1], ay[1], ifelse.(y .>= ay[Ny], ay[Ny], y))
-    ci = ifelse.(ax[1] .<= x_q, 1.0, 0.0)
-    for k in 2:Nx
-        ci = ci .+ ifelse.(ax[k] .<= x_q, 1.0, 0.0)
-    end
-    i = min.(max.(ci, 1.0), Float64(Nx - 1))
-    cj = ifelse.(ay[1] .<= y_q, 1.0, 0.0)
-    for k in 2:Ny
-        cj = cj .+ ifelse.(ay[k] .<= y_q, 1.0, 0.0)
-    end
-    j = min.(max.(cj, 1.0), Float64(Ny - 1))
-    xi  = ax[1] .+ zero.(i); xip1 = ax[2] .+ zero.(i)
-    for k in 2:(Nx - 1)
-        sel = i .== Float64(k)
-        xi   = ifelse.(sel, ax[k],     xi)
-        xip1 = ifelse.(sel, ax[k + 1], xip1)
-    end
-    yj  = ay[1] .+ zero.(j); yjp1 = ay[2] .+ zero.(j)
-    for k in 2:(Ny - 1)
-        sel = j .== Float64(k)
-        yj   = ifelse.(sel, ay[k],     yj)
-        yjp1 = ifelse.(sel, ay[k + 1], yjp1)
-    end
-    # Corner gathers: doubly-chained selects over the (Nx−1)×(Ny−1) cells.
-    t_ij   = table[1][1] .+ zero.(i .+ j); t_i1j  = table[2][1] .+ zero.(i .+ j)
-    t_ijp1 = table[1][2] .+ zero.(i .+ j); t_i1jp1 = table[2][2] .+ zero.(i .+ j)
-    for k in 1:(Nx - 1), l in 1:(Ny - 1)
-        (k == 1 && l == 1) && continue
-        sel = (i .== Float64(k)) .& (j .== Float64(l))
-        t_ij    = ifelse.(sel, table[k][l],         t_ij)
-        t_i1j   = ifelse.(sel, table[k + 1][l],     t_i1j)
-        t_ijp1  = ifelse.(sel, table[k][l + 1],     t_ijp1)
-        t_i1jp1 = ifelse.(sel, table[k + 1][l + 1], t_i1jp1)
-    end
+    i = min.(max.(_oop_knot_count(ax, x_q, <=), 1.0), Float64(Nx - 1))
+    j = min.(max.(_oop_knot_count(ay, y_q, <=), 1.0), Float64(Ny - 1))
+    xi, xip1 = _oop_knot_pair(ax, i)
+    yj, yjp1 = _oop_knot_pair(ay, j)
+    t_ij, t_i1j, t_ijp1, t_i1jp1 = _oop_bilinear_corners(table, i, j, Nx, Ny)
     wx = (x_q .- xi) ./ (xip1 .- xi)
     wy = (y_q .- yj) ./ (yjp1 .- yj)
     row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
@@ -457,32 +514,21 @@ end
 # The lane-tabled twins of the three evaluators above, for a merged kernel
 # class whose members carry DIFFERENT same-shape interp tables
 # (`_Interp*LaneSpec`, registered_functions.jl). Same locate → gather → blend
-# select chains, with every scalar knot read (`axis[k]` / `table[k]` / `xs[k]`)
-# replaced by its length-L lane COLUMN (`col[k][l] == specs[l].…[k]`). All the
-# selects are elementwise, so lane `l` computes exactly what the scalar-spec
-# evaluator computes on `specs[l]` — bit-identical to the unmerged kernels by
-# construction. The columns are host `Vector{Float64}` constants, so a
-# Reactant trace embeds them as constant tensors exactly like scalar knots,
-# and the emitted program stays O(table), independent of the lane count's
-# origin. `q` may be a lane vector OR an invariant scalar; the columns force a
-# length-L result either way (each lane still owns its own table).
+# through the SAME seams, with every scalar knot read (`axis[k]` / `table[k]` /
+# `xs[k]`) replaced by its length-L lane COLUMN (`col[k][l] == specs[l].…[k]`).
+# All the selects are elementwise, so lane `l` computes exactly what the
+# scalar-spec evaluator computes on `specs[l]` — bit-identical to the unmerged
+# kernels by construction. The columns are host `Vector{Float64}` constants, so
+# a Reactant trace embeds them as constant tensors exactly like scalar knots,
+# and the emitted program stays independent of the lane count's origin. `q` may
+# be a lane vector OR an invariant scalar; the columns force a length-L result
+# either way (each lane still owns its own table).
 function _oop_interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T}
     axis = h.axis_cols; table = h.table_cols
     n = length(axis)
-    cnt = ifelse.(axis[1] .<= q, 1.0, 0.0)
-    for k in 2:n
-        cnt = cnt .+ ifelse.(axis[k] .<= q, 1.0, 0.0)
-    end
+    cnt = _oop_knot_count(axis, q, <=)
     i = min.(max.(cnt, 1.0), Float64(n - 1))
-    ai  = axis[1] .+ zero.(i);  ai1 = axis[2] .+ zero.(i)
-    ti  = table[1] .+ zero.(i); ti1 = table[2] .+ zero.(i)
-    for k in 2:(n - 1)
-        sel = i .== Float64(k)
-        ai  = ifelse.(sel, axis[k],      ai)
-        ai1 = ifelse.(sel, axis[k + 1],  ai1)
-        ti  = ifelse.(sel, table[k],     ti)
-        ti1 = ifelse.(sel, table[k + 1], ti1)
-    end
+    ai, ai1, ti, ti1 = _oop_knot_pair2(axis, table, i)
     w = (q .- ai) ./ (ai1 .- ai)
     blend = ti .+ w .* (ti1 .- ti)
     return ifelse.(q .<= axis[1], table[1],
@@ -494,11 +540,7 @@ function _oop_interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
     xs = h.xs_cols
     n = length(xs)
     n == 0 && return one.(q .* 0 .+ 1.0)     # empty table → 1 lane-wide (core's rule)
-    cnt = ifelse.(xs[1] .< q, 1.0, 0.0)
-    for k in 2:n
-        cnt = cnt .+ ifelse.(xs[k] .< q, 1.0, 0.0)
-    end
-    r = cnt .+ 1.0
+    r = _oop_knot_count(xs, q, <) .+ 1.0
     return ifelse.(q .!= q, Float64(n + 1), r)
 end
 
@@ -508,38 +550,11 @@ function _oop_interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
     Nx = length(ax); Ny = length(ay)
     x_q = ifelse.(x .<= ax[1], ax[1], ifelse.(x .>= ax[Nx], ax[Nx], x))
     y_q = ifelse.(y .<= ay[1], ay[1], ifelse.(y .>= ay[Ny], ay[Ny], y))
-    ci = ifelse.(ax[1] .<= x_q, 1.0, 0.0)
-    for k in 2:Nx
-        ci = ci .+ ifelse.(ax[k] .<= x_q, 1.0, 0.0)
-    end
-    i = min.(max.(ci, 1.0), Float64(Nx - 1))
-    cj = ifelse.(ay[1] .<= y_q, 1.0, 0.0)
-    for k in 2:Ny
-        cj = cj .+ ifelse.(ay[k] .<= y_q, 1.0, 0.0)
-    end
-    j = min.(max.(cj, 1.0), Float64(Ny - 1))
-    xi  = ax[1] .+ zero.(i); xip1 = ax[2] .+ zero.(i)
-    for k in 2:(Nx - 1)
-        sel = i .== Float64(k)
-        xi   = ifelse.(sel, ax[k],     xi)
-        xip1 = ifelse.(sel, ax[k + 1], xip1)
-    end
-    yj  = ay[1] .+ zero.(j); yjp1 = ay[2] .+ zero.(j)
-    for k in 2:(Ny - 1)
-        sel = j .== Float64(k)
-        yj   = ifelse.(sel, ay[k],     yj)
-        yjp1 = ifelse.(sel, ay[k + 1], yjp1)
-    end
-    t_ij   = table[1, 1] .+ zero.(i .+ j); t_i1j  = table[2, 1] .+ zero.(i .+ j)
-    t_ijp1 = table[1, 2] .+ zero.(i .+ j); t_i1jp1 = table[2, 2] .+ zero.(i .+ j)
-    for k in 1:(Nx - 1), l in 1:(Ny - 1)
-        (k == 1 && l == 1) && continue
-        sel = (i .== Float64(k)) .& (j .== Float64(l))
-        t_ij    = ifelse.(sel, table[k, l],         t_ij)
-        t_i1j   = ifelse.(sel, table[k + 1, l],     t_i1j)
-        t_ijp1  = ifelse.(sel, table[k, l + 1],     t_ijp1)
-        t_i1jp1 = ifelse.(sel, table[k + 1, l + 1], t_i1jp1)
-    end
+    i = min.(max.(_oop_knot_count(ax, x_q, <=), 1.0), Float64(Nx - 1))
+    j = min.(max.(_oop_knot_count(ay, y_q, <=), 1.0), Float64(Ny - 1))
+    xi, xip1 = _oop_knot_pair(ax, i)
+    yj, yjp1 = _oop_knot_pair(ay, j)
+    t_ij, t_i1j, t_ijp1, t_i1jp1 = _oop_bilinear_corners(table, i, j, Nx, Ny)
     wx = (x_q .- xi) ./ (xip1 .- xi)
     wy = (y_q .- yj) ./ (yjp1 .- yj)
     row_j   = t_ij   .+ wx .* (t_i1j   .- t_ij)
