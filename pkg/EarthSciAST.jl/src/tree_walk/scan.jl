@@ -58,6 +58,19 @@
 # the fold, which is not a no-op in floating point. The mirrored spellings
 # `i >= j` / `i > j` ARE forward scans and are recognized as such. This
 # matches the Rust and Python ports exactly.
+#
+# STAGGERED OUTPUT. The output axis may also be the term axis plus one trailing
+# cell — the shape a cumulative flux takes on a staggered grid, where the
+# quantity lands on the NODES and the terms live at the CENTRES (ReSEACT's
+# `Mz[ke] = -Σ_{k < ke}(…)` over `lev_nodes` contracting `lev`). It is the same
+# recurrence run one step further, so NOTHING IN THIS FILE CHANGES for it: the
+# term pass runs over the centres, the last node is left unwritten by the term
+# kernels, and the strict fold below writes every cell before reading it — the
+# slot's entry value reaches only an `acc` the loop discards.
+# `_scan_term_iters` (build.jl) states the admission condition and why the
+# inclusive window is excluded. Pinned by the staggered testsets in
+# test/scan_prefix_test.jl, bitwise against the per-cell reference exactly as
+# the same-range cases are.
 # ========================================================================
 
 # One equation's prefix fold, resolved to output slots at build time.

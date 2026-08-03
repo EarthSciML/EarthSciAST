@@ -1686,6 +1686,14 @@ end
 # j = 2 — is then folded to a literal 0.0 and the interior cell silently
 # computes the wrong number. (That is a pre-existing latent hole in the corner
 # check, not one this file introduces; the gather form simply does not reach it.)
+#
+# ONE EXCEPTION, applied downstream rather than here: a producer that is a
+# forward PREFIX SCAN is unwrapped back to the bare form by
+# `_scan_unwrap_identity_gather`, because a detected scan never reaches
+# `_unrolled_contraction_body` or the lane fold above — it lowers as an
+# elementwise term body plus an O(N) accumulation. The unwrap re-checks the
+# scan shape itself and keeps the gather form for everything else, so the
+# reasoning in this comment still governs every other producer.
 function _materialized_fill_equation(name::String, def::ASTExpr, dims::Vector{Int})
     nd = length(dims)
     # Fresh loop names; the `_mo` prefix is engine-internal and never part of a
@@ -2906,9 +2914,11 @@ end
 # the O(N²) guarded fold `_unrolled_contraction_body` would emit. See scan.jl
 # for the rewrite, the bit-exactness argument, and why forward-only.
 #
-# Returns `(axis, inclusive, j_name)` — `axis` the POSITION of the scanned
-# symbol in `idx_names` — or `nothing` for anything that is not exactly this
-# shape. Every condition below is load-bearing:
+# Returns `(axis, inclusive, j_name, term_iters)` — `axis` the POSITION of the
+# scanned symbol in `idx_names`, `term_iters` the range vector the TERM build
+# must run over (`nothing` ⇒ `range_iters` unchanged; see the STAGGERED case
+# below) — or `nothing` for anything that is not exactly this shape. Every
+# condition below is load-bearing:
 #
 #   * one contracted symbol, constant-bound: a second contraction or a ragged
 #     bound means the admitted set is not a simple prefix of one axis;
@@ -2918,8 +2928,8 @@ end
 #     output symbol — a conjunction, a shifted bound (`j <= i-1`) or a compare
 #     against anything else is not this pattern (and `j <= i-1` is just the
 #     strict form, which the caller can already spell as `<`);
-#   * the two ranges coincide: cell `i` must accumulate over the same axis it
-#     indexes, or `acc_{i-1}` is not a prefix of cell `i`'s window;
+#   * the ranges COINCIDE, or the contracted range is the output range minus
+#     its last cell (see `_scan_term_iters`);
 #   * the body does not mention the scanned OUTPUT symbol. This is the
 #     condition that makes the rewrite sound rather than merely faster: if the
 #     term at `j` depends on `i` (`u[j] * w[i]`, `u[i-j]`), then consecutive
@@ -2949,11 +2959,140 @@ function _detect_prefix_scan(idx_names::Vector{String}, range_iters,
     i_name = (i_side::VarExpr).name
     axis = findfirst(isequal(i_name), idx_names)
     axis === nothing && return nothing
-    collect(range_iters[axis]) == citer || return nothing
+    term_iters = _scan_term_iters(range_iters, axis, citer, inclusive)
+    term_iters === :decline && return nothing
     # `_referenced_var_names` routes through the generated field walk, so a
     # reference buried in a nested aggregate's body/filter/ranges counts.
     i_name in _referenced_var_names(rhs_body) && return nothing
-    return (axis::Int, inclusive, contract_names[1])
+    return (axis::Int, inclusive, contract_names[1], term_iters)
+end
+
+# Which axis do the TERMS live on? Two shapes are admitted, and they are the
+# same recurrence — `out[i] = out[i-1] ⊕ term[i-1]` for the strict window,
+# `out[i] = out[i-1] ⊕ term[i]` for the inclusive one — differing only in how
+# many output cells that recurrence has to fill:
+#
+#   SAME-RANGE (`nothing`). Output and terms share the axis, which is the only
+#   shape a scan could take before this. The term build runs over the output
+#   range verbatim.
+#
+#   STAGGERED (a modified range vector). The output is the axis's NODES and the
+#   terms its CENTRES — one fewer — which is how a cumulative flux is spelled on
+#   a staggered grid: `Mz[ke] = -Σ_{k < ke}(…)` over `lev_nodes` contracting
+#   `lev` (ReSEACT's diagnosed vertical air-mass flux). Admitted ONLY for the
+#   STRICT window, and only when the contracted range is exactly the output
+#   range minus its LAST cell, because that is precisely the condition under
+#   which `{k ∈ terms : k < i}` equals `{k ∈ terms : k < i-1} ∪ {i-1}` for every
+#   output cell — i.e. the same prefix recurrence, run one step further. The
+#   INCLUSIVE window is declined: `out[i] = ⊕_{k <= i}` over a longer output
+#   axis would need a term at the last node, which does not exist.
+#
+#   The last output node is then left UNCOVERED by the term build and untouched
+#   by the term kernels. That is safe by inspection of `_scan_lanes!` /
+#   `_scan_lanes_oop` (scan.jl): the strict fold WRITES `du[s] = acc` at every
+#   cell and only reads the slot into a `term` it accumulates into an `acc` that
+#   the loop then discards — so whatever the slot held on entry (0̄ from `du`
+#   zeroing, or a stale observed-buffer value) cannot reach an output. The fold
+#   itself is untouched by this change, which is what keeps scan.jl's
+#   bit-exactness argument intact.
+#
+# ess-scan: see through a materialized observed's IDENTITY GATHER to the prefix
+# scan underneath — and ONLY to a prefix scan.
+#
+# `_materialized_fill_equation` synthesizes every array-observed fill as
+# `index(<def>, i…)` rather than handing over the bare producer, and that is a
+# deliberate CORRECTNESS choice documented at its definition: the bare form
+# routes a contraction through `_unrolled_contraction_body` + the affine LANE
+# derivation, whose const-lane fold (`_derive_lane_repl`, stencil_affine.jl)
+# decides a lane is loop-invariant by comparing its VALUES at the box CORNERS
+# only, so a const gather that agrees at the corners and differs INSIDE the box
+# silently folds to a literal.
+#
+# THAT HAZARD DOES NOT REACH A SCAN, which is why this exception is safe and why
+# it is written as an exception rather than a relaxation. A detected prefix scan
+# never calls `_unrolled_contraction_body`: `_compile_arrayop_equation!`
+# substitutes the contracted symbol with the output symbol and hands the
+# resulting ELEMENTWISE body — no contraction left in it, no lane fold over a
+# contracted axis — to the ordinary affine build, with an O(N) accumulation
+# behind it (scan.jl). So the gather form is kept for every other producer and
+# lifted only for the one shape whose lowering does not touch the machinery the
+# comment is protecting against.
+#
+# Without this, `_detect_prefix_scan` never runs on a materialized observed at
+# all: `_compile_arrayop_equation!` tests `rhs.op == "aggregate"`, sees `index`,
+# and leaves `contract_names` empty. ReSEACT's `Transport3D.Mz` — a materialized
+# staggered prefix scan, and ~90% of that model's build cost — declined here,
+# not at the range check `_scan_term_iters` owns.
+#
+# Returns the bare producer when every guard holds, else `rhs` unchanged.
+function _scan_unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
+                                      ranges_dict)
+    rhs isa OpExpr || return rhs
+    g = rhs::OpExpr
+    g.op == "index" || return rhs
+    nd = length(idx_names)
+    length(g.args) == nd + 1 || return rhs
+    prod = g.args[1]
+    (prod isa OpExpr && _is_aggregate_op((prod::OpExpr).op)) || return rhs
+    a = prod::OpExpr
+    a.filter === nothing && return rhs          # a scan is a FILTERED aggregate
+    a.expr_body === nothing && return rhs
+    aranges = a.ranges
+    aranges === nothing && return rhs
+    # The gather must be the IDENTITY one the fill synthesizer emits — this
+    # equation's own loop symbols, in order. Anything else is a real reindex.
+    for d in 1:nd
+        v = g.args[d + 1]
+        (v isa VarExpr && (v::VarExpr).name == idx_names[d]) || return rhs
+    end
+    aout = _output_idx_strings(a)
+    length(aout) == nd || return rhs
+    # Rename the producer's own output symbols onto this equation's loops. A loop
+    # name colliding with one of the producer's CONTRACTED symbols would capture
+    # it, so decline rather than rename into a capture.
+    contracted = _contracted_index_names(aranges, aout)
+    any(n -> n in contracted, idx_names) && return rhs
+    ren = Dict{String,ASTExpr}()
+    renmap = Dict{String,String}()
+    for d in 1:nd
+        aout[d] == idx_names[d] && continue
+        ren[aout[d]] = VarExpr(idx_names[d])
+        renmap[aout[d]] = idx_names[d]
+    end
+    newranges = Dict{String,Any}()
+    for (k, v) in aranges
+        newranges[get(renmap, k, k)] = v
+    end
+    bare = reconstruct(a;
+        output_idx = Any[n for n in idx_names],
+        ranges = newranges,
+        filter = isempty(ren) ? a.filter : _sub_preserving(a.filter, ren),
+        expr_body = isempty(ren) ? a.expr_body : _sub_preserving(a.expr_body, ren))
+    # Adopt ONLY if this really is a prefix scan. Everything below mirrors what
+    # `_compile_arrayop_equation!` would derive from `bare`, so the detector sees
+    # exactly what it will see later.
+    cnames = _contracted_index_names(newranges, idx_names)
+    length(cnames) == 1 || return rhs
+    rspec = collect(newranges[cnames[1]])
+    _is_const_int_range(rspec) || return rhs
+    all(n -> haskey(ranges_dict, n), idx_names) || return rhs
+    range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
+    cconst = Union{Vector{Int},Nothing}[collect(_expand_int_range(rspec))]
+    _detect_prefix_scan(idx_names, range_iters, cnames, cconst,
+                        bare.join_gates, bare.filter,
+                        _extract_arrayop_body(bare)) === nothing && return rhs
+    return bare
+end
+
+# Returns `nothing` (same-range), a term range vector (staggered), or `:decline`.
+function _scan_term_iters(range_iters, axis::Int, citer, inclusive::Bool)
+    out = collect(range_iters[axis])
+    out == citer && return nothing
+    (!inclusive && length(citer) == length(out) - 1 &&
+     @views(out[1:end-1]) == citer) || return :decline
+    term_iters = copy(range_iters)
+    term_iters[axis] = citer
+    return term_iters
 end
 
 # Resolve the output slots a prefix-scan equation owns, grouped into lanes
@@ -3048,7 +3187,13 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
     lhs_body = lhs_op.expr_body::OpExpr  # D(index(var, ...))
-    rhs_body = _extract_arrayop_body(eq.rhs)
+    # A materialized observed's fill arrives as the GATHER form
+    # `index(<def>, i…)` (`_materialized_fill_equation`). Speculatively unwrap it
+    # back to the bare producer — adopted ONLY when that producer is a prefix
+    # scan, the one shape the gather form's rationale does not cover. See
+    # `_scan_unwrap_identity_gather`.
+    rhs_expr = _scan_unwrap_identity_gather(eq.rhs, idx_names, ranges_dict)
+    rhs_body = _extract_arrayop_body(rhs_expr)
 
     # Generalized einsum: detect contracted (reduction) indices in the RHS.
     # Contracted indices are keys in rhs.ranges that are NOT in output_idx.
@@ -3071,8 +3216,8 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     # M2 join gates / filter predicate (§5.3 / §7.2) — constant per equation.
     agg_gates = nothing
     agg_filter = nothing
-    if eq.rhs isa OpExpr && _is_aggregate_op((eq.rhs::OpExpr).op)
-        rhs_op = eq.rhs::OpExpr
+    if rhs_expr isa OpExpr && _is_aggregate_op((rhs_expr::OpExpr).op)
+        rhs_op = rhs_expr::OpExpr
         rhs_oplus, rhs_zerobar =
             _aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce)
         agg_gates  = rhs_op.join_gates
@@ -3161,8 +3306,13 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
                 _unrolled_contraction_body(rhs_body, contract_names, contract_const,
                                            agg_filter, rhs_oplus, rhs_zerobar) :
             nothing
+        # The TERM build runs over the axis the TERMS live on — the output axis
+        # itself for a same-range scan, its centres for a staggered one
+        # (`scan[4]`, see `_scan_term_iters`). The FOLD below always walks the
+        # full output axis. Identical object on every pre-existing shape.
+        term_iters = (scan === nothing || scan[4] === nothing) ? range_iters : scan[4]
         affine_kernels = affine_body === nothing ? nothing :
-            _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
+            _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
                                 resolved_obs, array_var_info, var_map,
                                 const_registry, pgather, param_sym_set, reg_funcs,
                                 covered; template_sites=template_sites, xeq=xeq)
@@ -3172,7 +3322,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
         # Rarely taken; `covered` is untouched on a `nothing` return.
         if affine_kernels === nothing && template_sites !== nothing && affine_body !== nothing
             affine_kernels =
-                _try_affine_stencil(affine_body, idx_names, range_iters, lhs_body,
+                _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
                                     resolved_obs, array_var_info, var_map,
                                     const_registry, pgather, param_sym_set,
                                     reg_funcs, covered; xeq=xeq)
