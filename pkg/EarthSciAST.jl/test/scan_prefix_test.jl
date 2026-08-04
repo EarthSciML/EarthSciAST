@@ -248,13 +248,17 @@ end
         end
     end
 
-    @testset "identity gather over a scan unwraps; anything else does not" begin
+    @testset "identity gather over a CONTRACTING producer unwraps" begin
         # A materialized array observed's fill arrives as `index(<def>, i…)`
         # (`_materialized_fill_equation`), which hides the aggregate from
-        # `_detect_prefix_scan` — `rhs.op` is `index`, so `contract_names` never
-        # gets populated. `_scan_unwrap_identity_gather` lifts that wrapper for a
-        # prefix scan ONLY; every other producer keeps the gather form, which is
-        # what the fill synthesizer's correctness comment relies on.
+        # `_compile_arrayop_equation!` — `rhs.op` is `index`, so `contract_names`
+        # never gets populated and NONE of the contraction machinery runs (no
+        # scan detection, no unrolled fold, no runtime contraction loop). The
+        # affine build is then handed `index(<contracting aggregate>, i…)`, which
+        # it cannot model, and the whole equation drops to the per-cell tier.
+        # `_unwrap_identity_gather` lifts the wrapper whenever the producer
+        # actually contracts — originally a prefix-scan-only exception, widened
+        # once `_derive_lane_repl` stopped folding const lanes by sampled values.
         n = 8
         ranges_d = Dict{String,Any}("_mo0" => Any[1, n + 1])
         mkagg(; filt="<", jrange=Any[1, n], out=["gke"], red="+") =
@@ -265,32 +269,46 @@ end
                                     _op(filt, _v("gk"), _v("gke"))))
         gather(a) = _op("index", a, _v("_mo0"))
 
+        unwrapped(a) = begin
+            got = ESM._unwrap_identity_gather(gather(a), ["_mo0"], ranges_d)
+            got isa ESM.OpExpr && ESM._is_aggregate_op(got.op) &&
+                ESM._output_idx_strings(got) == ["_mo0"] &&
+                sort(collect(keys(got.ranges))) == ["_mo0", "gk"]
+        end
+
         # The staggered scan: unwrapped, renamed onto the fill's own loop symbol.
-        got = ESM._scan_unwrap_identity_gather(gather(mkagg()), ["_mo0"], ranges_d)
-        @test got isa ESM.OpExpr && ESM._is_aggregate_op(got.op)
-        @test ESM._output_idx_strings(got) == ["_mo0"]
-        @test sort(collect(keys(got.ranges))) == ["_mo0", "gk"]
+        @test unwrapped(mkagg())
+        # An UNFILTERED reduction — a plain column integral, ReSEACT's
+        # `divh_col` / `dp_col`. Not a scan, but it contracts, so it unwraps and
+        # reaches `_unrolled_contraction_body` instead of the per-cell tier.
+        @test unwrapped(mkagg(; filt=nothing))
+        # A REVERSE scan is not a FORWARD scan, but it is still a constant-bound
+        # contraction: the guarded fold owns it.
+        @test unwrapped(mkagg(; filt=">"))
+        # Likewise a neither-same-nor-staggered contracted range.
+        @test unwrapped(mkagg(; jrange=Any[1, n - 3]))
 
-        # An UNFILTERED reduction is not a scan — the gather form must survive,
-        # because that is exactly the producer the corner-fold hazard applies to.
-        plain = gather(mkagg(; filt=nothing))
-        @test ESM._scan_unwrap_identity_gather(plain, ["_mo0"], ranges_d) === plain
-
-        # A REVERSE scan is not a forward scan.
-        rev = gather(mkagg(; filt=">"))
-        @test ESM._scan_unwrap_identity_gather(rev, ["_mo0"], ranges_d) === rev
-
-        # A neither-same-nor-staggered contracted range declines.
-        odd = gather(mkagg(; jrange=Any[1, n - 3]))
-        @test ESM._scan_unwrap_identity_gather(odd, ["_mo0"], ranges_d) === odd
-
+        # ---- what still keeps the gather form ----
+        # NO contraction: the bare form lowers identically, so there is nothing
+        # to unlock and the fill synthesizer's default governs.
+        nocon = ESM.OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["gke"],
+            expr_body=_idx("u", _v("gke")),
+            ranges=Dict{String,Any}("gke" => Any[1, n + 1]), reduce="+")
+        let g = gather(nocon)
+            @test ESM._unwrap_identity_gather(g, ["_mo0"], ranges_d) === g
+        end
+        # A VARIABLE-VALENCE contracted bound takes the per-cell path from either
+        # form, so there is nothing to gain and a lowering to change.
+        varb = mkagg(; filt=nothing, jrange=Any[1, "nedges"])
+        let g = gather(varb)
+            @test ESM._unwrap_identity_gather(g, ["_mo0"], ranges_d) === g
+        end
         # A non-identity gather (a real reindex) is left alone.
         reidx = _op("index", mkagg(), _op("+", _v("_mo0"), _n(1)))
-        @test ESM._scan_unwrap_identity_gather(reidx, ["_mo0"], ranges_d) === reidx
-
+        @test ESM._unwrap_identity_gather(reidx, ["_mo0"], ranges_d) === reidx
         # And a bare producer that is not a gather at all passes through.
         bare = mkagg()
-        @test ESM._scan_unwrap_identity_gather(bare, ["_mo0"], ranges_d) === bare
+        @test ESM._unwrap_identity_gather(bare, ["_mo0"], ranges_d) === bare
     end
 
     @testset "a model with no prefix reduction carries no folds" begin

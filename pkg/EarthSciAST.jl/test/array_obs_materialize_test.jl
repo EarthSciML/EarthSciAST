@@ -243,9 +243,14 @@ end
     # `g[j] = Σ_i W[i,j]·c[i]` over const `W`/`c` — the in-model conservative
     # regrid of the §5.10 refresh fixture. Pins the FILL against the inline
     # oracle: a lane whose const VALUES coincide at the box corners but differ
-    # inside (`W[3, j]` is 0, 0.5, 0 across j = 1..3) must not fold to a
-    # literal. See `_materialized_fill_equation` for why the fill is spelled as
-    # a gather rather than handed the bare aggregate.
+    # inside (`W[3, j]` is 0, 0.5, 0 across j = 1..3) must not fold to a literal.
+    #
+    # This IS the adversarial column that the old value-sampling fold in
+    # `_derive_lane_repl` silently zeroed, and the reason the fill used to be
+    # withheld from the bare-aggregate path. That fold now derives invariance
+    # STRUCTURALLY from the resolved linear index, so `_unwrap_identity_gather`
+    # hands this contracting producer over bare — which makes this testset the
+    # live guard on that derivation rather than a test of an avoided path.
     @testset "const-weight contraction ≡ the inlining build" begin
         Wm = [0.5 0.0 0.0; 0.5 0.0 0.0; 0.0 0.5 0.0;
               0.0 0.5 0.0; 0.0 0.0 0.5; 0.0 0.0 0.5]
@@ -270,6 +275,78 @@ end
         du_i = _aom_du(inl, inl[2])
         @test du_f == du_i
         @test [du_f[fac[5]["c[$j]"]] for j in 1:3] == vec(sum(Wm .* src; dims = 1))
+    end
+
+    # ---- A materialized observed that CONTRACTS reaches the affine tier ----
+    # `_materialized_fill_equation` synthesizes the fill as `index(<def>, i…)`,
+    # and `_compile_arrayop_equation!` detects a contraction by testing
+    # `rhs.op == "aggregate"` — so under the gather form it saw `index`, left
+    # `contract_names` empty, and skipped EVERY contraction tier. The affine
+    # build was then handed `index(<contracting aggregate>, i…)`, which it cannot
+    # model ("index(aggregate) with contracted index"), so the equation dropped
+    # to the per-cell tier: one kernel per output cell, O(#cells) IR, for a shape
+    # whose kernel is grid-independent. `_unwrap_identity_gather` lifts the
+    # wrapper whenever the producer contracts.
+    #
+    # ReSEACT's `Transport3D.divh_col` / `dp_col` are exactly this shape — column
+    # sums over `lev` feeding a [lon, lat] field — and were the last two
+    # `:percell_acc` equations in that build.
+    @testset "a CONTRACTING materialized observed reaches the affine tier" begin
+        Nx, Ny = 6, 4
+        isetsC = Dict("x" => ESM_AOM.IndexSet("interval"; size = Nx),
+                      "y" => ESM_AOM.IndexSet("interval"; size = Ny))
+        # s[i] = Σ_j u[i,j] — `j` is contracted (in `ranges`, not `output_idx`).
+        colsum = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+            output_idx = Any["i"], reduce = "+",
+            ranges = Dict("i" => ESM_AOM.IndexSetRef("x"),
+                          "j" => ESM_AOM.IndexSetRef("y")),
+            expr_body = _idx("u", _v("i"), _v("j")))
+        agg2(body) = ESM_AOM.OpExpr("arrayop", ESM_AOM.ASTExpr[];
+            output_idx = Any["i", "j"],
+            ranges = Dict("i" => ESM_AOM.IndexSetRef("x"),
+                          "j" => ESM_AOM.IndexSetRef("y")),
+            expr_body = body)
+        mC = ESM_AOM.Model(
+            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x", "y"]),
+                 "s" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"]),
+                 "k" => ESM_AOM.ModelVariable(ESM_AOM.ParameterVariable; default = 0.5)),
+            [ESM_AOM.Equation(_v("s"), colsum),
+             ESM_AOM.Equation(agg2(_Didx("u", _v("i"), _v("j"))),
+                              agg2(_op("*", _v("k"), _idx("s", _v("i")))))])
+        icsC = Dict("u[$i,$j]" => Float64(10i + j) for i in 1:Nx, j in 1:Ny)
+        kwC = (; index_sets = isetsC, initial_conditions = icsC)
+
+        ESM_AOM._reset_cascade_tally!()
+        facC = ESM_AOM._build_evaluator_impl(mC; kwC...)
+        tally = copy(ESM_AOM._CASCADE_TALLY)
+        @test facC[6].n_mat_array_obs == 1              # `s` IS materialized
+        # The point of the unwrap: nothing lands on the per-cell tier.
+        @test get(tally, :percell_acc, 0) == 0
+        @test get(tally, :affine, 0) >= 2               # the fill AND D(u)
+
+        # Differential: bit-identical to the inlining oracle and to the per-cell
+        # reference, which never sees the unwrap at all.
+        inlC = withenv("ESS_ARRAY_OBS_INLINE" => "1") do
+            ESM_AOM._build_evaluator_impl(mC; kwC...)
+        end
+        pcC = withenv("ESS_STENCIL_DISABLE" => "1") do
+            ESM_AOM._build_evaluator_impl(mC; kwC...)
+        end
+        u0 = facC[2]
+        for probe in (u0, fill(1.0, length(u0)),
+                      collect(range(-3.0, 3.0; length = length(u0))))
+            @test _aom_du(facC, probe) == _aom_du(inlC, probe)
+            @test _aom_du(facC, probe) == _aom_du(pcC, probe)
+        end
+
+        # ...and the hand-computed value: D(u)[i,j] = k · Σ_j' u[i,j'].
+        du = _aom_du(facC, u0)
+        for i in 1:Nx
+            rowsum = sum(Float64(10i + j) for j in 1:Ny)
+            for j in 1:Ny
+                @test du[facC[5]["u[$i,$j]"]] == 0.5 * rowsum
+            end
+        end
     end
 
     # ---- Intersection with the O(N) prefix scan (ess-scan, scan.jl) ----

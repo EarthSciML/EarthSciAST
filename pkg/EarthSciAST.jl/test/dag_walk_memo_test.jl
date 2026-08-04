@@ -180,6 +180,64 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         end
     end
 
+    @testset "_lower_broadcast is DAG-safe (the build-entry rewrite)" begin
+        # `_lower_broadcast` runs over EVERY equation at the entry to
+        # `build_evaluator`. `map_children` already declined to REBUILD an
+        # unchanged node — which keeps a shared DAG shared on the way OUT — but
+        # the walk itself was per-PATH, so a node reachable by 2^d paths was
+        # re-entered 2^d times even when nothing changed. That single pass was
+        # 6245 of 6255 profiler samples on the depth-28 chain below, and the
+        # whole of the depth-32 build's 457 s.
+        #
+        # The fix is NOT an unconditional identity memo: that cost 2.6× on trees
+        # with no sharing, which is what an ordinary model's equations are. The
+        # walk runs un-memoized under a visit BUDGET and only re-runs memoized if
+        # the budget is exhausted, so the two paths below are both live and must
+        # agree.
+        deep = _doubling_dag(_op("*", _v("x"), _v("y")), 34)
+        t = @elapsed r = ESM._lower_broadcast(deep)
+        @test t < 10                    # pre-fix: 2^34 visits
+        # No broadcast node anywhere ⇒ the rewrite is the identity, and
+        # identity-preservation holds on BOTH paths (this one trips the budget).
+        @test r === deep
+
+        # A real lowering: correct on the fast path, which is what a small tree
+        # takes. `broadcast(fn=F, args) ≡ F(args)`.
+        bc = _op("broadcast", _v("a"), _v("b"); fn="+")
+        shared = _op("sin", bc)
+        e = _op("-", shared, shared)
+        low = ESM._lower_broadcast(e)
+        @test low isa ESM.OpExpr
+        inner = ((low::ESM.OpExpr).args[1]::ESM.OpExpr).args[1]
+        @test (inner::ESM.OpExpr).op == "+"
+        @test ESM._referenced_var_names(low) == Set(["a", "b"])
+
+        # The two paths agree up to SHARING — the property that lets the build
+        # take either one. `canonical_json` compares them as values.
+        memoed = ESM._lower_broadcast_memoized(e, IdDict{ESM.OpExpr,ESM.ASTExpr}())
+        @test ESM.canonical_json(memoed) == ESM.canonical_json(low)
+        # ...and only the memoized path DEDUPES: one output node per input node,
+        # which is what stops a shared DAG re-inflating into a 2^d-node tree.
+        @test (memoed::ESM.OpExpr).args[1] === (memoed::ESM.OpExpr).args[2]
+
+        # No memo leak across unrelated nodes: two structurally EQUAL but
+        # distinct broadcast nodes must both lower (identity keys, not value
+        # keys).
+        b1 = _op("broadcast", _v("p"); fn="sin")
+        b2 = _op("broadcast", _v("p"); fn="sin")
+        for got in (ESM._lower_broadcast(_op("+", b1, b2)),
+                    ESM._lower_broadcast_memoized(_op("+", b1, b2),
+                                                  IdDict{ESM.OpExpr,ESM.ASTExpr}()))
+            @test all(a -> (a::ESM.OpExpr).op == "sin", (got::ESM.OpExpr).args)
+        end
+
+        # A bogus `fn` is a BUILD error on both paths, not a silent pass.
+        bad = _op("+", _op("broadcast", _v("z"); fn="no_such_op"), _n(1.0))
+        @test_throws ESM.TreeWalkError ESM._lower_broadcast(bad)
+        @test_throws ESM.TreeWalkError ESM._lower_broadcast_memoized(
+            bad, IdDict{ESM.OpExpr,ESM.ASTExpr}())
+    end
+
     @testset "_count_obs_refs! path-multiplicity DP on a shared DAG" begin
         names = Set(["g"])
         # A depth-20 doubling DAG: totals must equal the PER-PATH enumeration

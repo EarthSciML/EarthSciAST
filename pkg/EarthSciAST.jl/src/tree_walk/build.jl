@@ -1713,28 +1713,28 @@ end
 # polyhedral build, per-cell fallback, per-cell CSE, class merge, codegen) with
 # no bespoke kernel path.
 #
-# THE RHS IS ALWAYS THE GATHER FORM `index(<def>, i…)`, never the bare producer
-# — even when `<def>` is an `aggregate` whose own `output_idx` matches. That is
-# deliberate, and it is a CORRECTNESS choice, not a style one: `index(<def>, i…)`
+# THE RHS IS THE GATHER FORM `index(<def>, i…)`, not the bare producer — even
+# when `<def>` is an `aggregate` whose own `output_idx` matches. `index(<def>, i…)`
 # is EXACTLY the expression every reader of this observed used to present after
 # inlining, so the fill lowers through the identical, already-exercised path.
-# Handing `_compile_arrayop_equation!` the bare aggregate instead routes its
-# contraction through `_unrolled_contraction_body` + the affine LANE derivation,
-# whose const-lane fold (`_derive_lane_repl`, stencil_affine.jl) decides a lane
-# is loop-invariant by comparing its VALUES at the box CORNERS only. A const
-# gather whose values coincide at the corners but differ INSIDE the box — a
-# conservative-regrid weight column `W[i, j]`, zero at j = 1 and j = 3 and 0.5 at
-# j = 2 — is then folded to a literal 0.0 and the interior cell silently
-# computes the wrong number. (That is a pre-existing latent hole in the corner
-# check, not one this file introduces; the gather form simply does not reach it.)
 #
-# ONE EXCEPTION, applied downstream rather than here: a producer that is a
-# forward PREFIX SCAN is unwrapped back to the bare form by
-# `_scan_unwrap_identity_gather`, because a detected scan never reaches
-# `_unrolled_contraction_body` or the lane fold above — it lowers as an
-# elementwise term body plus an O(N) accumulation. The unwrap re-checks the
-# scan shape itself and keeps the gather form for everything else, so the
-# reasoning in this comment still governs every other producer.
+# HISTORICALLY this was also a correctness requirement, because the bare form
+# routed a contraction into the affine LANE derivation, whose const-lane fold
+# (`_derive_lane_repl`, stencil_affine.jl) then decided a lane was loop-invariant
+# by comparing its VALUES at the box CORNERS: a const gather agreeing at the
+# corners and differing inside — a regrid weight column `W[i, j]` reading
+# (0, 0.5, 0) — folded to a literal 0.0 and the interior cell silently computed
+# the wrong number. That hole is CLOSED: `_derive_lane_repl` no longer samples
+# values, deriving invariance structurally from the resolved linear index
+# instead. The gather form is now a lowering-path default, not a guard.
+#
+# EXCEPTION, applied downstream rather than here: a producer that CONTRACTS is
+# unwrapped back to the bare form by `_unwrap_identity_gather`. The gather form
+# hides a contraction from `_compile_arrayop_equation!` entirely (it tests
+# `rhs.op == "aggregate"` and sees `index`), so scan detection, the unrolled fold
+# and the runtime contraction loop are all skipped and the equation drops to the
+# per-cell tier at O(#cells) IR. A NON-contracting producer keeps the gather
+# form: it lowers identically either way.
 function _materialized_fill_equation(name::String, def::ASTExpr, dims::Vector{Int})
     nd = length(dims)
     # Fresh loop names; the `_mo` prefix is engine-internal and never part of a
@@ -3037,37 +3037,52 @@ end
 #   itself is untouched by this change, which is what keeps scan.jl's
 #   bit-exactness argument intact.
 #
-# ess-scan: see through a materialized observed's IDENTITY GATHER to the prefix
-# scan underneath — and ONLY to a prefix scan.
+# See through a materialized observed's IDENTITY GATHER to the CONTRACTING
+# producer underneath.
 #
 # `_materialized_fill_equation` synthesizes every array-observed fill as
-# `index(<def>, i…)` rather than handing over the bare producer, and that is a
-# deliberate CORRECTNESS choice documented at its definition: the bare form
-# routes a contraction through `_unrolled_contraction_body` + the affine LANE
-# derivation, whose const-lane fold (`_derive_lane_repl`, stencil_affine.jl)
-# decides a lane is loop-invariant by comparing its VALUES at the box CORNERS
-# only, so a const gather that agrees at the corners and differs INSIDE the box
-# silently folds to a literal.
+# `index(<def>, i…)` rather than handing over the bare producer, so the fill
+# lowers through the identical, already-exercised path every reader used after
+# inlining. That is the right default and it stays. But `_compile_arrayop_equation!`
+# detects a contraction by testing `rhs.op == "aggregate"` — it sees `index`,
+# leaves `contract_names` empty, and NONE of the contraction machinery runs:
+# not `_detect_prefix_scan`, not `_unrolled_contraction_body`, not the runtime
+# contraction loop. The affine build is then handed `index(<contracting
+# aggregate>, i…)` directly, which `_stencilize_indexed` cannot model
+# ("index(aggregate) with contracted index"), so the whole equation lands on the
+# per-cell tier at O(#cells) IR. ReSEACT's `Transport3D.Mz` (a staggered prefix
+# scan, ~90% of that model's build cost) and its column integrals `divh_col` /
+# `dp_col` all declined here rather than at any tier's own guard.
 #
-# THAT HAZARD DOES NOT REACH A SCAN, which is why this exception is safe and why
-# it is written as an exception rather than a relaxation. A detected prefix scan
-# never calls `_unrolled_contraction_body`: `_compile_arrayop_equation!`
-# substitutes the contracted symbol with the output symbol and hands the
-# resulting ELEMENTWISE body — no contraction left in it, no lane fold over a
-# contracted axis — to the ordinary affine build, with an O(N) accumulation
-# behind it (scan.jl). So the gather form is kept for every other producer and
-# lifted only for the one shape whose lowering does not touch the machinery the
-# comment is protecting against.
+# WHY THIS IS NOW SAFE FOR MORE THAN A SCAN. This unwrap was originally admitted
+# for prefix scans ALONE, and the exception was justified by a hazard downstream:
+# `_derive_lane_repl` (stencil_affine.jl) used to decide a const lane was
+# loop-invariant by comparing its VALUES at the box CORNERS, so a const gather
+# that agreed at the corners and differed inside — a regrid weight column
+# (0, 0.5, 0) — folded to a literal and silently zeroed the interior cell. A scan
+# never reaches that fold (it lowers as an elementwise term body plus an O(N)
+# accumulation), which is what made the narrow exception sound while the general
+# relaxation was not.
 #
-# Without this, `_detect_prefix_scan` never runs on a materialized observed at
-# all: `_compile_arrayop_equation!` tests `rhs.op == "aggregate"`, sees `index`,
-# and leaves `contract_names` empty. ReSEACT's `Transport3D.Mz` — a materialized
-# staggered prefix scan, and ~90% of that model's build cost — declined here,
-# not at the range check `_scan_term_iters` owns.
+# That hazard is GONE: `_derive_lane_repl` no longer samples values at all. It
+# derives invariance STRUCTURALLY from the resolved linear INDEX — an all-zero
+# stride vector over the box — and its remaining corner evaluations only pin an
+# affine map that is affine by construction. The fold "cannot be fooled by
+# adversarial data", so the reason to withhold the unwrap from non-scan
+# producers no longer exists.
+#
+# STILL DELIBERATELY NARROW: the bare form is adopted only when it UNLOCKS
+# something — i.e. only when the producer actually contracts. A non-contracting
+# aggregate lowers identically either way, so it keeps the gather form and the
+# default above governs it unchanged. Beyond that, the contracted bounds must all
+# be constant integer ranges and there must be no join gate, which are exactly
+# the preconditions `_unrolled_contraction_body` states for a shared fold
+# template; anything else would take the per-cell path from the bare form too,
+# so there would be nothing to gain and a lowering to change.
 #
 # Returns the bare producer when every guard holds, else `rhs` unchanged.
-function _scan_unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
-                                      ranges_dict)
+function _unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
+                                 ranges_dict)
     rhs isa OpExpr || return rhs
     g = rhs::OpExpr
     g.op == "index" || return rhs
@@ -3076,7 +3091,6 @@ function _scan_unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
     prod = g.args[1]
     (prod isa OpExpr && _is_aggregate_op((prod::OpExpr).op)) || return rhs
     a = prod::OpExpr
-    a.filter === nothing && return rhs          # a scan is a FILTERED aggregate
     a.expr_body === nothing && return rhs
     aranges = a.ranges
     aranges === nothing && return rhs
@@ -3107,21 +3121,35 @@ function _scan_unwrap_identity_gather(rhs::ASTExpr, idx_names::Vector{String},
     bare = reconstruct(a;
         output_idx = Any[n for n in idx_names],
         ranges = newranges,
-        filter = isempty(ren) ? a.filter : _sub_preserving(a.filter, ren),
+        # `a.filter` is `nothing` for a plain (unfiltered) reduction — a shape
+        # this unwrap now admits, where it once took scans only.
+        filter = (a.filter === nothing || isempty(ren)) ? a.filter :
+                 _sub_preserving(a.filter, ren),
         expr_body = isempty(ren) ? a.expr_body : _sub_preserving(a.expr_body, ren))
-    # Adopt ONLY if this really is a prefix scan. Everything below mirrors what
-    # `_compile_arrayop_equation!` would derive from `bare`, so the detector sees
-    # exactly what it will see later.
+    # Everything below mirrors what `_compile_arrayop_equation!` would derive
+    # from `bare`, so each detector sees exactly what it will see later.
     cnames = _contracted_index_names(newranges, idx_names)
-    length(cnames) == 1 || return rhs
-    rspec = collect(newranges[cnames[1]])
-    _is_const_int_range(rspec) || return rhs
+    # No contraction ⇒ the gather form already lowers identically. Keep it.
+    isempty(cnames) && return rhs
+    # Every contracted bound must be a constant integer range: that is the
+    # precondition BOTH the prefix-scan detector and the unrolled fold state, and
+    # a variable-valence bound would take the per-cell path from either form.
+    cspecs = [collect(newranges[n]) for n in cnames]
+    all(_is_const_int_range, cspecs) || return rhs
     all(n -> haskey(ranges_dict, n), idx_names) || return rhs
     range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
-    cconst = Union{Vector{Int},Nothing}[collect(_expand_int_range(rspec))]
-    _detect_prefix_scan(idx_names, range_iters, cnames, cconst,
-                        bare.join_gates, bare.filter,
-                        _extract_arrayop_body(bare)) === nothing && return rhs
+    cconst = Union{Vector{Int},Nothing}[collect(_expand_int_range(s)) for s in cspecs]
+    # A forward prefix scan: the O(N) term-plus-accumulation tier (scan.jl).
+    if length(cnames) == 1 &&
+       _detect_prefix_scan(idx_names, range_iters, cnames, cconst,
+                           bare.join_gates, bare.filter,
+                           _extract_arrayop_body(bare)) !== nothing
+        return bare
+    end
+    # Otherwise the ordinary contraction tiers. A join gate can drop terms per
+    # output cell, which breaks the shared fold template `_unrolled_contraction_body`
+    # builds — decline, exactly as that function's own contract requires.
+    bare.join_gates === nothing || return rhs
     return bare
 end
 
@@ -3230,10 +3258,10 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     lhs_body = lhs_op.expr_body::OpExpr  # D(index(var, ...))
     # A materialized observed's fill arrives as the GATHER form
     # `index(<def>, i…)` (`_materialized_fill_equation`). Speculatively unwrap it
-    # back to the bare producer — adopted ONLY when that producer is a prefix
-    # scan, the one shape the gather form's rationale does not cover. See
-    # `_scan_unwrap_identity_gather`.
-    rhs_expr = _scan_unwrap_identity_gather(eq.rhs, idx_names, ranges_dict)
+    # back to the bare producer — adopted only when that producer CONTRACTS,
+    # which is the only case the gather form costs anything (it hides the
+    # contraction from every tier below). See `_unwrap_identity_gather`.
+    rhs_expr = _unwrap_identity_gather(eq.rhs, idx_names, ranges_dict)
     rhs_body = _extract_arrayop_body(rhs_expr)
 
     # Generalized einsum: detect contracted (reduction) indices in the RHS.

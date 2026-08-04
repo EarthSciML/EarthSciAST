@@ -222,9 +222,54 @@ end
 # `reshape`/`transpose`/`concat` are NOT lowered — they are genuine shape ops
 # with no scalar-operator spelling, and keep their `E_TREEWALK_UNSUPPORTED_OP`
 # rejection in `_compile_op`.
+#
+# DAG-SAFE, WITHOUT TAXING THE COMMON CASE (ESS-0hh).
+# `map_children` already declines to REBUILD an unchanged node, which keeps a
+# shared DAG shared on the way out — but the WALK itself was per-PATH, so a node
+# reachable by 2^d paths was re-entered 2^d times even when nothing changed and
+# nothing was rebuilt. On dag_walk_memo_test.jl's depth-32 chain that was 457 s,
+# and 6245 of 6255 profiler samples at depth 28.
+#
+# The obvious fix — memoize every node on identity — is sound (the rewrite is a
+# pure, context-free function of the node) but it is NOT free: an `IdDict` probe
+# plus insert per node MEASURED 2.6× the un-memoized walk on trees with no
+# sharing (55 → 142 ns/node), and an ordinary model's equations are exactly that
+# shape. Paying a constant-factor tax on every build to defend against a
+# pathological one is the wrong trade.
+#
+# So: walk UN-MEMOIZED under a visit BUDGET, and only if the budget is exhausted
+# — which only a shared DAG with an exponential path count can do — redo the walk
+# memoized. Both paths compute the same function, so which one ran is
+# unobservable except in time and in SHARING: the memoized path maps a node
+# reached twice to the same output object rather than two equal copies, which is
+# the DAG-preserving direction and already what the unchanged case did.
+#
+# MEASURED. Unshared trees: back to the original walk cost (the residue is one
+# `Ref` decrement per node), against 2.6× for the unconditional memo. The 64×64
+# advection build of tree_walk_test.jl — 4096 equations, ~40k nodes, no sharing —
+# runs 0.54 s against its 5.0 s budget. Doubling DAGs: FLAT ~0.3 s for the whole
+# depth-8-through-40 build, of which ~0.25 s is the budget burned before the
+# switch. That burn is a one-time CONSTANT, not a scaling term, and it buys the
+# common case paying nothing. Tripping the budget is not an error condition — a
+# legitimately huge single expression simply takes the memoized path, which is
+# the linear one.
+const _LOWER_BCAST_BUDGET = 1 << 21     # ~2.1M node visits, ~0.1 s un-memoized
+
+struct _BroadcastBudgetExceeded <: Exception end
+
 function _lower_broadcast(expr::ASTExpr)::ASTExpr
     expr isa OpExpr || return expr
-    e = map_children(_lower_broadcast, expr)
+    try
+        return _lower_broadcast_budgeted(expr, Ref(_LOWER_BCAST_BUDGET))
+    catch err
+        err isa _BroadcastBudgetExceeded || rethrow()
+    end
+    return _lower_broadcast_memoized(expr, IdDict{OpExpr,ASTExpr}())
+end
+
+# The lowering itself, shared by both walks: `e` is the node with its children
+# already rewritten.
+@inline function _lower_broadcast_node(e::ASTExpr)::ASTExpr
     (e isa OpExpr && (e::OpExpr).op == "broadcast") || return e
     b = e::OpExpr
     prob = _broadcast_fn_problem(b.fn, length(b.args))
@@ -232,6 +277,25 @@ function _lower_broadcast(expr::ASTExpr)::ASTExpr
     # Only `op`/`fn`/`args` are meaningful on a broadcast node; the lowered node
     # is the plain scalar-op spelling of the same expression.
     return OpExpr(String(b.fn), copy(b.args))
+end
+
+function _lower_broadcast_budgeted(expr::ASTExpr, fuel::Ref{Int})::ASTExpr
+    expr isa OpExpr || return expr
+    (fuel[] -= 1) > 0 || throw(_BroadcastBudgetExceeded())
+    return _lower_broadcast_node(
+        map_children(x -> _lower_broadcast_budgeted(x, fuel), expr::OpExpr))
+end
+
+function _lower_broadcast_memoized(expr::ASTExpr,
+                                   memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+    expr isa OpExpr || return expr
+    key = expr::OpExpr
+    hit = get(memo, key, nothing)
+    hit === nothing || return hit
+    out = _lower_broadcast_node(
+        map_children(x -> _lower_broadcast_memoized(x, memo), key))
+    memo[key] = out
+    return out
 end
 
 # Lower every `broadcast` node in a Model's expression-bearing fields (variable

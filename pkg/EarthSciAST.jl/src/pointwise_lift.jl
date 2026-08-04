@@ -172,6 +172,7 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
     isempty(lifted) && return
     arrayvars = _pointwise_lift_operands(lifted, states, params, observeds)
     size_to_names = _index_sets_by_size(index_sets)
+    var_shapes = _declared_shapes(states, params, observeds)
 
     for (n, eq) in enumerate(equations)
         species = differential_lhs_variable(eq.lhs)
@@ -183,7 +184,10 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
         rank = length(mas[1].regions[1])
         loops = _pointwise_lift_loops(mas, lifted, rank, species, template_registry)
         gaxes, ranges = _pointwise_lift_axes(mas[1], loops, size_to_names,
-                                             species, rank)
+                                             species, rank;
+                                             mas = mas, var_shapes = var_shapes,
+                                             index_sets = index_sets,
+                                             reg = template_registry)
 
         # Promote the species to the grid shape so the scoped-ic fold, array-cell
         # discovery, and evaluator all see an array state.
@@ -272,16 +276,118 @@ function _pointwise_lift_loops(mas::Vector{OpExpr}, lifted::Set{String},
         "species '$(species)' from its operator makearray"))
 end
 
-# Map each grid dimension to a declared index set by matching extents,
-# producing the species' new shape axes (`gaxes`) and the aggregate loop
-# `ranges`.
+# Every declared array shape in one lookup, for the axis-NAME propagation below.
+function _declared_shapes(ds::OrderedDict{String,ModelVariable}...)::Dict{String,Vector{String}}
+    out = Dict{String,Vector{String}}()
+    for d in ds, (k, v) in d
+        sh = v.shape
+        (sh === nothing || isempty(sh)) && continue
+        out[k] = collect(sh)
+    end
+    return out
+end
+
+# PROPAGATE the axis names, rather than recovering them from the extent.
+#
+# Every operand gathered inside a spatial operator's makearray is indexed at the
+# lift's own loop variables, and a DECLARED-shape operand names the index set at
+# each of its positions. So `index(dp, i, j, k)` with `dp :: [lon, lat, lev]`
+# says directly that loop `i` runs over `lon` — no size table needed. Returns one
+# name per dimension, or `nothing` where the evidence is absent or conflicting.
+#
+# EXTENT AGREEMENT is what makes this sound, and it is not a mere sanity check:
+# a flux-form stencil gathers STAGGERED face arrays over the very same loops
+# (`Mx :: [lon_nodes, lat, lev]` is read at `i` too), and those name the wrong,
+# one-longer axis. Requiring the candidate index set's size to equal the
+# dimension's cell extent rejects exactly the staggered operands and keeps the
+# cell-centred ones. It also makes this pass a STRICT REFINEMENT of the size
+# match it precedes: when only one declared index set has the dimension's size,
+# any extent-agreeing name IS that index set, so a previously-unambiguous
+# resolution can never change. Only the ambiguous cases — which used to degrade
+# to a synthetic dense axis — can now resolve.
+#
+# Walks THROUGH surviving `apply_expression_template` references (analysis only,
+# exactly as `_detect_lift_loops` does): with a monotone rule stack the interior
+# gathers live inside the referenced template bodies, not the equation tree.
+function _lift_axis_names(mas::Vector{OpExpr}, loops::Vector{String},
+                          extents::Vector{Int},
+                          var_shapes::Dict{String,Vector{String}},
+                          index_sets::OrderedDict{String,IndexSet},
+                          reg)::Vector{Union{String,Nothing}}
+    rank = length(loops)
+    evidence = [Set{String}() for _ in 1:rank]
+    dim_of = Dict{String,Int}()
+    for (d, l) in enumerate(loops)
+        # A repeated loop name (a diagonal gather) would make the position
+        # ambiguous; drop it rather than guess.
+        haskey(dim_of, l) ? (dim_of[l] = 0) : (dim_of[l] = d)
+    end
+    peek = IdDict{OpExpr,Any}()
+    seen = IdDict{OpExpr,Bool}()
+    function walk(e)
+        e isa OpExpr || return
+        get!(seen, e, false) && return
+        seen[e] = true
+        if e.op == APPLY_EXPRESSION_TEMPLATE_OP
+            reg === nothing && return
+            body = get!(peek, e) do
+                try
+                    _expand_expr_refs(e, reg)
+                catch
+                    nothing   # unknown template: the build path raises the real diagnostic
+                end
+            end
+            body === nothing || walk(body)
+            return
+        end
+        if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr
+            sh = get(var_shapes, (e.args[1]::VarExpr).name, nothing)
+            if sh !== nothing && length(sh) == length(e.args) - 1
+                for p in eachindex(sh)
+                    lv = _index_arg_loop(e.args[p + 1])
+                    lv === nothing && continue
+                    d = get(dim_of, lv, 0)
+                    d == 0 && continue
+                    iset = get(index_sets, sh[p], nothing)
+                    (iset !== nothing && iset.size === extents[d]) || continue
+                    push!(evidence[d], sh[p])
+                end
+            end
+        end
+        for c in child_exprs(e)
+            walk(c)
+        end
+    end
+    for ma in mas
+        walk(ma)
+    end
+    return Union{String,Nothing}[length(evidence[d]) == 1 ? first(evidence[d]) :
+                                 nothing for d in 1:rank]
+end
+
+# Map each grid dimension to a declared index set — by NAME propagation from the
+# operand gathers where that is decisive (`_lift_axis_names`), else by matching
+# extents — producing the species' new shape axes (`gaxes`) and the aggregate
+# loop `ranges`.
 function _pointwise_lift_axes(ma::OpExpr, loops::Vector{String},
                               size_to_names::Dict{Int,Vector{String}},
-                              species::String, rank::Int)
+                              species::String, rank::Int;
+                              mas::Union{Vector{OpExpr},Nothing} = nothing,
+                              var_shapes::Union{Dict{String,Vector{String}},Nothing} = nothing,
+                              index_sets = nothing, reg = nothing)
     extents = _makearray_extents(ma)
+    named = (mas === nothing || var_shapes === nothing || index_sets === nothing) ?
+        Union{String,Nothing}[nothing for _ in 1:rank] :
+        _lift_axis_names(mas, loops, extents, var_shapes, index_sets, reg)
     gaxes = String[]
     ranges = Dict{String,Any}()
     for d in 1:rank
+        nm = d <= length(named) ? named[d] : nothing
+        if nm !== nothing
+            push!(gaxes, nm)
+            ranges[loops[d]] = IndexSetRef(nm)
+            continue
+        end
         cands = get(size_to_names, extents[d], String[])
         if length(cands) == 1
             push!(gaxes, cands[1])
@@ -292,10 +398,11 @@ function _pointwise_lift_axes(ma::OpExpr, loops::Vector{String},
             if length(cands) > 1
                 @warn "pointwise lift: grid dimension $(d) of species " *
                       "'$(species)' (extent $(extents[d])) matches multiple " *
-                      "declared index sets $(sort(cands)) by size; the lift " *
-                      "cannot pick one, so a synthetic dense axis " *
-                      "'_liftdim$(d)_$(extents[d])' is used instead of an " *
-                      "index-set reference."
+                      "declared index sets $(sort(cands)) by size, and no " *
+                      "declared-shape operand gathered at loop " *
+                      "'$(loops[d])' names one of them unambiguously, so a " *
+                      "synthetic dense axis '_liftdim$(d)_$(extents[d])' is " *
+                      "used instead of an index-set reference."
             end
             # Synthetic-axis naming convention: `_liftdim<dim>_<extent>` — an
             # underscore-prefixed name that cannot collide with a declared
