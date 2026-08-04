@@ -493,7 +493,38 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
                                        Int[], Int[], arr, ""))
         return VarExpr(_lane_name(length(ctx.recipes)))
     end
-    throw(_StencilFallback("index into non-array/unknown var (loop-var-dependent)"))
+    # COMBINATION producer: `index(a ⊕ b, k…)` where ⊕ is elementwise. Push the
+    # index through to each array-valued operand — `index(a,k…) ⊕ index(b,k…)` —
+    # and re-stencilize. This mirrors the branch `_resolve_indices` already
+    # carries (resolve.jl, the §4.3.4 name-aligned note) for the SAME motivating
+    # shape, `divh = D(Mx,lon) + D(My,lat)` inlining to `+(makearray, makearray)`.
+    # The two single-node producers are handled above; the resolver closes this
+    # combination case and the affine build did not, so an equation whose RHS
+    # ADDS two lowered stencils — reseact's air-mass continuity,
+    # `D(m)/dt = -(divh_fix + D(Mz,lev))` — declined here and fell back to the
+    # per-cell tier, one kernel per cell, O(#cells) IR. Distribution is sound for
+    # any `_is_scalar_op` (registry categories applicable elementwise).
+    if first_arg isa OpExpr && _is_scalar_op((first_arg::OpExpr).op)
+        fa = first_arg::OpExpr
+        _arrayish(a) = (a isa OpExpr && (_is_aggregate_op((a::OpExpr).op) ||
+                                         (a::OpExpr).op == "makearray")) ||
+                       (a isa VarExpr && (haskey(ctx.array_var_info, (a::VarExpr).name) ||
+                                          haskey(ctx.pgather, (a::VarExpr).name) ||
+                                          haskey(ctx.const_arrays, (a::VarExpr).name)))
+        if any(_arrayish, fa.args)
+            pushed = ASTExpr[_arrayish(a) ? OpExpr("index", ASTExpr[a, idx_args...]) : a
+                             for a in fa.args]
+            return _stencilize(reconstruct(fa; args = pushed), ctx)
+        end
+    end
+    # Name the producer: "some var is not an array" is not actionable, and the
+    # thing that failed to resolve is exactly what you need to see.
+    throw(_StencilFallback("index into non-array/unknown var (loop-var-dependent): " *
+                          (first_arg isa VarExpr ? "'$(first_arg.name)'" :
+                           first_arg isa OpExpr ?
+                             "producer op '$((first_arg::OpExpr).op)' :: " *
+                             first(sprint(show, first_arg), 160) :
+                           "non-var $(typeof(first_arg))")))
 end
 
 # Symbolically index an array producer at `kargs`. For a `makearray`, select the

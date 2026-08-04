@@ -224,13 +224,54 @@ function _discover_geometry_vars(model::Model, equations::Vector{Equation},
         setup_vars, defs, live_tainted =
             _geometry_setup_vars(model, equations, ring_vars,
                                  pre_state_names, live_param_names)
+        # GEOMETRY-DERIVED restriction. `live_tainted` is a DOCUMENT-WIDE set:
+        # every var transitively reading a live `param_arrays` buffer. The
+        # inlining below is meant for the geometry LIVE-FIELD outputs only — the
+        # `F_tgt = A_ij ⊗ F_src / A_j` shape that mixes setup-const weights with a
+        # live source field and so cannot be materialized at setup. Live taint
+        # ALONE does not identify those: in a flattened multi-model document
+        # nearly every array observed is live-tainted, because `flatten` merges
+        # all models and the met forcing reaches all of them.
+        #
+        # Without this restriction ONE `polygon_intersection_area` — in ONE model
+        # — inlined every live array observed of every UNRELATED model into its
+        # readers. Adding an NEI regrid to reseact.esm swept in ~500 observeds
+        # across DryDepositionGas / FastJX / WetDeposition / Transport3D,
+        # including the whole RHS of the air-mass continuity equation
+        # (`divh_fix`, `Mz`, `dPSdt`, `dp`). That routed host equations into the
+        # array-equation compiler for the first time (the pre-geometry cascade
+        # tally is EMPTY), where `D(m)` declined to the per-cell tier and emitted
+        # O(#cells) IR — a >32 GiB build at NLEV=72 whose cost scaled with the
+        # grid. Geometry in one model must not change how another model's
+        # equations compile.
+        #
+        # Derived = reads a geometry setup var / clip ring, transitively. The
+        # regrid's own outputs still qualify (they read `A_ij`), so the motivating
+        # met→fire coupling edge is unchanged.
+        geom_derived = Set{String}()
+        _saturate!() do
+            changed = false
+            for (name, rhs) in defs
+                name in geom_derived && continue
+                refs = _referenced_var_names(rhs)
+                if any(r -> r in setup_vars || r in ring_vars || r in geom_derived, refs)
+                    push!(geom_derived, name); changed = true
+                end
+            end
+            changed
+        end
         for (name, v) in model.variables
             (v.type == ObservedVariable && _is_array_shape(v.shape) &&
              !(name in setup_vars) && !(name in ring_vars) &&
-             name in live_tainted && haskey(defs, name) &&
+             name in live_tainted && name in geom_derived && haskey(defs, name) &&
              defs[name] isa OpExpr) || continue
             push!(inline_vars, name)
         end
+        get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
+            (println(stderr, "[geom-inline] has_geometry=", has_geometry,
+                     " has_pia=", has_pia, " inlined=", length(inline_vars),
+                     " (live-tainted ∩ geometry-derived): ",
+                     sort(collect(inline_vars))); flush(stderr))
     end
     return (; has_geometry, has_pia, has_setup_geometry,
             ring_vars, setup_vars, defs, inline_vars)
@@ -3351,6 +3392,15 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     # differential reference).
     _tally_cascade!(use_contraction_loop ? :percell_loop :
                     _stencil_disabled() ? :percell_disabled : :percell_acc)
+    # ESS_STENCIL_DEBUG announced every affine FIRE but stayed silent on every
+    # DECLINE — backwards for diagnosis, since the declines are what cost O(cells)
+    # IR and the fires are what you wanted. Name the equation that fell back, so a
+    # cascade tally reading `:percell_acc => 1` can be turned into "which one".
+    get(ENV, "ESS_STENCIL_DEBUG", "") == "1" &&
+        (println(stderr, "[ess-affine] DECLINED -> per-cell: lhs=",
+                 sprint(show, lhs_body), " out_idx=", idx_names,
+                 " ranges=", [(n, length(r)) for (n, r) in zip(idx_names, range_iters)]);
+         flush(stderr))
     _compile_arrayop_percell!(percell_scalar, acc_kernels, covered, lhs_body, rhs_body;
         idx_names=idx_names, range_iters=range_iters,
         contract_names=contract_names, contract_ranges=contract_ranges,
