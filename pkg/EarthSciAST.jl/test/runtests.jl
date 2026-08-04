@@ -126,6 +126,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # Streaming output sinks (Wave 3): multi-grid — partition variables by
     # spatial-dim signature (`group_gridding_by_grid`) → one sink per grid/store.
     include("streaming_multigrid_test.jl")
+    # Streaming output sinks (regression): `sink_flush!` interleaved with ordinary
+    # records must not move, drop, or duplicate a record — no fill-valued phantom
+    # slots at shard tails, no records written past the declared `shape[time]`.
+    include("streaming_flush_gap_test.jl")
     include("discrete_materialize_test.jl")
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")
