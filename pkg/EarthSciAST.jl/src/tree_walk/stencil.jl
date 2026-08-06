@@ -714,6 +714,38 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
     body = producer.expr_body
     (body === nothing || length(oi) != length(kargs)) && return
     kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
+    # CONTRACTED indices are binders here too. Binding only `output_idx` left a
+    # reduction index FREE, and the first site in the body needing its value — an
+    # `index(makearray, …, gk)` region select — threw `E_TREEWALK_UNBOUND_LOOP_VAR`
+    # out of the whole build instead of out of this tier. The motivating body is a
+    # mass-weighted column integral,
+    #     pbl_sum_X[gi,gj] = Σ_gk dp[gi,gj,gk] · pbl_f[gi,gj,gk] · X[gi,gj,gk]
+    # whose `pbl_f` is a region-split layer-overlap expression, so `gk` reaches a
+    # makearray select in every term. Only an INLINING build gets here at all
+    # (`form = :oop` / `ESS_ARRAY_OBS_INLINE=1`): materializing the observed gives
+    # the reduction its own fill equation, where the contraction is top-level and
+    # never enters a branch-key walk.
+    #
+    # The contraction is part of the cell's branch structure — two `gk` may select
+    # DIFFERENT regions — so the key covers every contracted value, in the same
+    # deterministic order the unroll accumulates them. `seen` is per-value: a node
+    # shared across terms must be re-keyed at each `gk` rather than suppressed
+    # after the first. Key EQUALITY CLASSES still hold, because the traversal
+    # remains a deterministic function of the body DAG plus the bindings.
+    ranges = _ranges_dict(producer)
+    cnames = _contracted_index_names(ranges, oi)
+    citers = Vector{Vector{Int}}(undef, length(cnames))
+    for d in eachindex(cnames)
+        raw = ranges[cnames[d]]
+        # Decline the tier rather than invent a key, for either shape we cannot
+        # enumerate here: an unresolved `IndexSetRef` (not a dense bound vector at
+        # all), or a ragged / expression-valued bound, which has no value without
+        # the enclosing per-cell environment.
+        raw isa AbstractVector && _is_const_int_range(raw) ||
+            throw(_StencilFallback("branch key: contracted index '$(cnames[d])' " *
+                                   "has no constant dense range"))
+        citers[d] = collect(_expand_int_range(raw))
+    end
     n = length(oi)
     saved = Vector{Union{Nothing,Int}}(undef, n)
     added = falses(n)
@@ -726,7 +758,44 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
             added[d] = true
         end
     end
-    _branch_key!(io, body, idxset, idx_env, const_arrays, memo, seen)
+    nc = length(cnames)
+    csaved = Vector{Union{Nothing,Int}}(undef, nc)
+    cadded = falses(nc)
+    for d in 1:nc
+        nm = cnames[d]
+        csaved[d] = get(idx_env, nm, nothing)
+        if !(nm in idxset)
+            push!(idxset, nm)
+            cadded[d] = true
+        end
+    end
+    if nc == 0
+        _branch_key!(io, body, idxset, idx_env, const_arrays, memo, seen)
+    else
+        # FRESH `_refs_idxset` memo. That memo caches, per node, whether the node
+        # references `idxset` — and `idxset` just GREW by the contracted names. An
+        # entry cached under the smaller set says `false` for a subtree that does
+        # reference `gk`, and `_branch_key!` uses it to PRUNE: the key would then
+        # omit exactly the region selections that vary with `gk`, so two cells with
+        # different branch structure would key equal and merge into one affine
+        # kernel — wrong, and silently. Rebuilding costs a walk on a path that only
+        # inlining builds reach.
+        cmemo = IdDict{OpExpr,Bool}()
+        for tup in Iterators.product(citers...)
+            for d in 1:nc
+                idx_env[cnames[d]] = tup[d]
+            end
+            print(io, 'C')
+            _branch_key!(io, body, idxset, idx_env, const_arrays, cmemo,
+                         IdDict{OpExpr,Nothing}())
+        end
+    end
+    for d in nc:-1:1
+        nm = cnames[d]
+        old = csaved[d]
+        old === nothing ? delete!(idx_env, nm) : (idx_env[nm] = old)
+        cadded[d] && delete!(idxset, nm)
+    end
     for d in n:-1:1
         nm = oi[d]
         old = saved[d]

@@ -412,6 +412,12 @@ end
 # silently dropped. Bound locals (index vars, `int_var`) are short local symbols
 # never present in `bindings` (namespaced globals / parameter names), so
 # recursing cannot capture them.
+#
+# THAT IS A PRECONDITION ON THE CALLER, not a property of the AST. The
+# tree-walk's `_sub_preserving` (tree_walk/helpers.jl) substitutes INDEX names —
+# precisely the symbols binders bind — so it cannot assume this and does
+# capture-avoiding descent instead. Do not carry this paragraph over to a
+# binding map whose keys are loop variables.
 substitute(expr::OpExpr, bindings::Dict{String,ASTExpr})::ASTExpr =
     map_children(x -> substitute(x, bindings), expr)
 

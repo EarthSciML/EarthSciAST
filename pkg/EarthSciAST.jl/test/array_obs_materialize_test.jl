@@ -401,3 +401,66 @@ end
         @test [du[facS[5]["c[$i]"]] for i in 1:Ns] == 2.0 .* cumsum(1.0:Ns)
     end
 end
+
+# Capture-avoiding substitution when an array observed is INLINED.
+#
+# `_sub_preserving` (tree_walk/helpers.jl) used to substitute straight through a
+# nested aggregate's own binders, so an inlined column sum lost its loop variable
+# while `ranges` still declared it — the unroll then emitted `length(gk)`
+# IDENTICAL terms and the sum degenerated to `length(gk) · body[gk = outer_k]`.
+#
+# The shape below is the ReSEACT PBL mixing operator reduced to its essentials:
+# `gk` is CONTRACTED in `w` and an OUTPUT index in `mean`, so inlining `w` into
+# `mean` puts the two binders in the same body. Materializing `w` (the default
+# `:inplace` build) hides the collision behind a buffer gather, which is why the
+# defect was invisible there and reached only the INLINING builds:
+# `ESS_ARRAY_OBS_INLINE=1` and `form = :oop` (which never materializes).
+@testset "inlined aggregate does not capture a reader's loop variable" begin
+    NI, NK = 2, 4
+    _agg(out, rngs, body) = Dict{String,Any}(
+        "op" => "aggregate", "args" => Any[], "output_idx" => Any[out...],
+        "ranges" => Dict(rngs...), "expr" => body)
+    _ix(a, ks...) = Dict{String,Any}("op" => "index", "args" => Any[a, ks...])
+
+    doc = Dict{String,Any}(
+        "esm" => "0.8.0", "metadata" => Dict("name" => "agg_inline_capture"),
+        "models" => Dict("R" => Dict{String,Any}(
+            "variables" => Dict(
+                "q"    => Dict("type" => "state",    "shape" => Any["gi", "gk"]),
+                "w"    => Dict("type" => "observed", "shape" => Any["gi"]),
+                "mean" => Dict("type" => "observed", "shape" => Any["gi", "gk"])),
+            "equations" => Any[
+                # w[gi] = Σ_gk q[gi,gk]           — `gk` CONTRACTED
+                Dict("lhs" => "w",
+                     "rhs" => merge(_agg(["gi"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                                         _ix("q", "gi", "gk")),
+                                    Dict("reduce" => "+"))),
+                # mean[gi,gk] = w[gi] / 2         — `gk` an OUTPUT index
+                Dict("lhs" => "mean",
+                     "rhs" => _agg(["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                                   Dict("op" => "/", "args" => Any[_ix("w", "gi"), 2.0]))),
+                Dict("lhs" => _agg(["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                                   Dict("op" => "D", "wrt" => "t",
+                                        "args" => Any[_ix("q", "gi", "gk")])),
+                     "rhs" => _agg(["gi", "gk"], ["gi" => Any[1, NI], "gk" => Any[1, NK]],
+                                   Dict("op" => "-", "args" => Any[_ix("mean", "gi", "gk"),
+                                                                   _ix("q", "gi", "gk")])))])))
+
+    ics = Dict{String,Any}("q[$i,$k]" => Float64(10i + k) for i in 1:NI, k in 1:NK)
+    # du[gi,gk] = (Σ_kk q[gi,kk])/2 − q[gi,gk]
+    want(i, k) = sum(Float64(10i + kk) for kk in 1:NK) / 2 - Float64(10i + k)
+
+    du_iip(; inline) = withenv("ESS_ARRAY_OBS_INLINE" => (inline ? "1" : nothing)) do
+        f!, u0, p, _, vm = EarthSciAST.build_evaluator(doc; initial_conditions = ics)
+        du = similar(u0); f!(du, u0, p, 0.0)
+        [du[vm["q[$i,$k]"]] for i in 1:NI, k in 1:NK]
+    end
+    fo, u0o, po, _, vmo = EarthSciAST.build_evaluator(doc; initial_conditions = ics,
+                                                      form = :oop)
+    duo = fo(u0o, po, 0.0)
+
+    ref = [want(i, k) for i in 1:NI, k in 1:NK]
+    @test du_iip(inline = false) == ref          # factored: was already right
+    @test du_iip(inline = true)  == ref          # inlined: the capture path
+    @test [duo[vmo["q[$i,$k]"]] for i in 1:NI, k in 1:NK] == ref   # :oop never materializes
+end

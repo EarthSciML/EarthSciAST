@@ -82,10 +82,81 @@ function _sub_arg_vec(args::Vector{ASTExpr}, bindings::Dict{String,ASTExpr},
     return new_args, changed
 end
 
+# Does `expr` BIND any name `bindings` would replace? Same rule as
+# `_bound_symbols` (expression.jl) but allocation-free on the hot path: a node
+# carrying none of the three binder fields — every plain math op, which is the
+# overwhelming majority of a per-cell substitution — answers `false` after three
+# `=== nothing` checks and no name vector is built.
+function _binds_any(expr::OpExpr, bindings::Dict{String,ASTExpr})
+    isempty(bindings) && return false
+    iv = expr.int_var
+    if iv !== nothing && haskey(bindings, iv::String)
+        return true
+    end
+    rg = expr.ranges
+    if rg !== nothing
+        for k in keys(rg)
+            haskey(bindings, k) && return true
+        end
+    end
+    oi = expr.output_idx
+    if oi !== nothing
+        for x in oi
+            x isa AbstractString && haskey(bindings, String(x)) && return true
+        end
+    end
+    return false
+end
+
+# `bindings` minus the names `expr` binds — the substitution map that may enter
+# `expr`'s scope. Off the hot path (only reached when `_binds_any` fires), so it
+# reuses `_bound_symbols` directly.
+function _shadowed_bindings(expr::OpExpr, bindings::Dict{String,ASTExpr})
+    bound = Set{String}(_bound_symbols(expr))
+    out = Dict{String,ASTExpr}()
+    for (n, v) in bindings
+        n in bound || (out[n] = v)
+    end
+    return out
+end
+
 function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_SubMemo)
     # Identity memo: a shared node substitutes to a single shared output node.
     cached = get(memo, expr, nothing)
     cached === nothing || return cached
+    # CAPTURE AVOIDANCE. A node carrying `ranges` / `output_idx` / `int_var` is a
+    # BINDER: those names are loop variables scoped to its own body, filter,
+    # operands and bounds. A substitution for an OUTER variable of the same name
+    # must not penetrate that scope. The shadow set is `_bound_symbols`
+    # (expression.jl) verbatim, so substitution and `free_variables` share ONE
+    # scoping rule rather than two that can drift.
+    #
+    # WHAT IT COSTS TO GET WRONG. The motivating case is an inlined column mean:
+    #
+    #     pbl_sum_O3[gi,gj]     = Σ_gk dp[gi,gj,gk]·pbl_f[gi,gj,gk]·O3[gi,gj,gk]
+    #     pbl_mean_O3[gi,gj,gk] = pbl_sum_O3[gi,gj] / max(pbl_wt[gi,gj], 1)
+    #
+    # `gk` is CONTRACTED in the first and an OUTPUT index in the second. Under
+    # `:inplace` the sum is materialized, so the mean reads a buffer gather and
+    # the two binders never meet. Under `:oop` nothing is materialized
+    # (`mat_array_vars`, build.jl), the sum is spliced into the mean's body, and
+    # substituting the outer `gk` used to rewrite the inner sum's own loop
+    # variable. The inner body then no longer mentions `gk` while `ranges` still
+    # declares it, so the unroll emits `length(gk)` IDENTICAL terms: a column sum
+    # silently degenerates to `NLEV · body[gk = outer_k]`. It does not always
+    # throw — the ReSEACT PBL model happens to trip `E_TREEWALK_UNBOUND_LOOP_VAR`
+    # in the affine branch-key walk, but the same capture on a plainer model
+    # returns a WRONG NUMBER with no diagnostic at all.
+    if _binds_any(expr, bindings)
+        inner = _shadowed_bindings(expr, bindings)
+        # Every binding shadowed ⇒ nothing in this subtree can substitute.
+        # Otherwise recurse under the reduced map with its OWN memo: `memo` maps
+        # node identity under ONE binding map, and a shared node reachable from
+        # both scopes must not resolve to the inner scope's answer outside it.
+        result = isempty(inner) ? expr : _sub_preserving(expr, inner, _SubMemo())
+        memo[expr] = result
+        return result
+    end
     new_args, changed = _sub_arg_vec(expr.args, bindings, memo)
     new_body = expr.expr_body
     if expr.expr_body !== nothing
