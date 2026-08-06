@@ -148,6 +148,22 @@ const _oop_value_type = _rhs_value_type
 
 @inline _oop_store(du, i::Int, v) = (@inbounds du[i] = v; du)
 
+# Seed the extended vector's STATE prefix from `u`, for the materialized-observed
+# prelude. A third member of the family above, and a seam for the same reason: on
+# host this is one `copyto!`, but a tracing backend needs it as ONE slice
+# operation rather than `n` scalar stores — the per-element form would put the
+# state size into the XLA program, which is the property the compiled IR exists
+# to avoid. Returns `ue` so a backend can implement it functionally.
+@inline function _oop_prefix_copy(ue, u, n::Int)
+    @inbounds copyto!(ue, 1, u, 1, n)
+    return ue
+end
+
+# A fill body carries no CSE prelude (`_materialized_fill_equation` compiles
+# straight through `_compile`), but `_oop_eval` still takes a cache. One empty
+# vector per value type, allocated once at call time rather than per level.
+@inline _EMPTY_OOP_CACHE(::Type{T}) where {T} = Vector{T}(undef, 0)
+
 # One kernel's whole result lands through ONE call, not one call per cell. Splitting
 # it per cell would be the natural-looking thing and is exactly wrong for a tracing
 # backend: it turns a single scatter into `length(out)` separate scatter ops, i.e. an
@@ -703,13 +719,79 @@ end
 # path never traces — but a runtime contraction loop (ess-runtime-contraction) can
 # put a const-gather (a loop-var-subscripted weight) on the traced `:oop` RHS, so
 # it needs the same lowering here to stay bit-identical to `f!`.
+# Evaluate an INDEX subtree to a concrete `Int`.
+#
+# WHY THIS IS NOT `_oop_eval`. A gather's subscripts are integer index arithmetic
+# over enclosing loop counters and literals — they never read the state. But
+# `_oop_eval` returns the VALUE type, so under tracing a loop counter comes back
+# as a `TracedRNumber` holding a constant, and everything downstream inherits it:
+# `round(Int, ·)` stays traced, and the ghost-bounds test `lo <= sub <= hi` then
+# throws "non-boolean (TracedRNumber{Bool}) used in boolean context" — a control
+# decision XLA cannot make, on a quantity that was concrete all along.
+#
+# Reached whenever a runtime contraction loop (ess-runtime-contraction) puts a
+# loop-var-dependent subscript on the traced RHS, which a mass-weighted column
+# integral does as soon as the reduction is long enough to clear
+# `ESS_CONTRACTION_LOOP_MIN`.
+#
+# Deliberately NARROW: exactly the kinds an index expression can contain. Anything
+# else is a genuinely state-dependent subscript, which cannot be resolved at trace
+# time at all, and says so rather than silently tracing into the same dead end.
+function _oop_index_int(n::_Node, u, p, t, cache::AbstractVector{T},
+                        fb::_OopForcing)::Int where {T}
+    k = n.kind
+    if k === _NK_LOOPVAR
+        return (n.payload::Base.RefValue{Int})[]
+    elseif k === _NK_LITERAL
+        return round(Int, n.literal)
+    elseif k === _NK_CONST_GATHER
+        cg = n.payload::_ConstGatherArray
+        off = 1
+        @inbounds for d in eachindex(n.children)
+            off += (_oop_index_int(n.children[d], u, p, t, cache, fb) - 1) * cg.strides[d]
+        end
+        (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
+        return round(Int, @inbounds cg.flat[off])
+    elseif k === _NK_OP
+        op = n.op
+        c = n.children
+        if op === :+
+            s = 0
+            @inbounds for d in eachindex(c)
+                s += _oop_index_int(c[d], u, p, t, cache, fb)
+            end
+            return s
+        elseif op === :-
+            length(c) == 1 && return -_oop_index_int(c[1], u, p, t, cache, fb)
+            return _oop_index_int(c[1], u, p, t, cache, fb) -
+                   _oop_index_int(c[2], u, p, t, cache, fb)
+        elseif op === :*
+            s = 1
+            @inbounds for d in eachindex(c)
+                s *= _oop_index_int(c[d], u, p, t, cache, fb)
+            end
+            return s
+        elseif op === :/
+            return div(_oop_index_int(c[1], u, p, t, cache, fb),
+                       _oop_index_int(c[2], u, p, t, cache, fb))
+        end
+    end
+    throw(TreeWalkError("E_TREEWALK_TRACED_SUBSCRIPT",
+        "an out-of-place gather subscript must resolve to a build-time / " *
+        "loop-counter integer, but this one is node kind $(k)" *
+        (k === _NK_OP ? " (op $(n.op))" : "") *
+        ". A subscript computed from the STATE cannot be resolved while tracing " *
+        "— XLA would need the value to pick a slot. Run the interpreted " *
+        "evaluator (`form = :inplace`), which resolves it per call."))
+end
+
 function _oop_const_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     cg = n.payload::_ConstGatherArray
     children = n.children
     strides = cg.strides
     off = 1
     @inbounds for d in eachindex(children)
-        sub = round(Int, _oop_eval(children[d], u, p, t, cache, fb))
+        sub = _oop_index_int(children[d], u, p, t, cache, fb)
         off += (sub - 1) * strides[d]
     end
     (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
@@ -724,7 +806,9 @@ function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Oop
     children = n.children
     off = 0
     @inbounds for d in eachindex(children)
-        sub = round(Int, _oop_eval(children[d], u, p, t, cache, fb))
+        # `_oop_index_int`, not `_oop_eval`: the ghost test below is a CONTROL
+        # decision, so `sub` has to be a host `Int`. See `_oop_index_int`.
+        sub = _oop_index_int(children[d], u, p, t, cache, fb)
         (sg.lo[d] <= sub <= sg.hi[d]) || return zero(T)   # ghost cell
         off += (sub - sg.lo[d]) * sg.strides[d]
     end
@@ -1728,12 +1812,51 @@ container passed to [`rhs_with_buffers`](@ref)`(f)`). Treat as read-only.
 """
 forcing_buffer_index(f::_OopRHS) = f.buffer_index
 
+# Fill ONE materialized-observed level out of place, mirroring
+# `_fill_obs_levels!` (build.jl) statement for statement — scalar entries, then
+# the level's access kernels, then its prefix reductions — but threading the
+# extended vector functionally, because a tracing backend's `_oop_store` returns
+# a new value rather than mutating.
+#
+# Output AND state are both `ue`: a fill reads the state and every STRICTLY
+# LOWER level, which are already valid in `ue`, exactly as the in-place wrapper
+# arranges. `_oop_eval` wants a CSE cache; a fill body is compiled without one
+# (`_materialized_fill_equation` goes straight through `_compile`), so it gets an
+# empty view of the caller's — allocating a fresh empty vector per level per call
+# would defeat the point of the seam.
+@inline function _oop_fill_level(ue, lvl, p, t, ::Type{T}, fb, empty_cache) where {T}
+    scalars, kernels, plans, scans = lvl
+    @inbounds for m in eachindex(scalars)
+        slot, node = scalars[m]
+        ue = _oop_store(ue, slot, _oop_eval(node, ue, p, t, empty_cache, fb))
+    end
+    for j in eachindex(kernels)
+        plan = plans[j]
+        ue = plan.vectorizable ?
+             _oop_run_acc_vec(ue, ue, p, t, kernels[j], plan, T, fb) :
+             _oop_run_acc_kernel(ue, ue, p, t, kernels[j], T)
+    end
+    isempty(scans) || (ue = _apply_scan_folds_oop(ue, scans))
+    return ue
+end
+
+# Walk the levels as a TUPLE by tail recursion, for the reason `_fill_obs_levels!`
+# does: a `Vector` of heterogeneously-parameterized levels boxes each one and
+# costs an allocation per level per call.
+@inline _oop_fill_levels(ue, ::Tuple{}, p, t, ::Type{T}, fb, ec) where {T} = ue
+@inline function _oop_fill_levels(ue, levels::Tuple, p, t, ::Type{T}, fb, ec) where {T}
+    ue = _oop_fill_level(ue, levels[1], p, t, T, fb, ec)
+    return _oop_fill_levels(ue, Base.tail(levels), p, t, T, fb, ec)
+end
+
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                        cse_prelude::AbstractVector{_Node},
                        acc_kernels::AbstractVector{_AccKernel},
                        n_states::Int,
                        pgather::AbstractDict=_EMPTY_PGATHER,
-                       scan_folds::AbstractVector{_ScanFold}=_ScanFold[])
+                       scan_folds::AbstractVector{_ScanFold}=_ScanFold[],
+                       mat_levels::Tuple=(),
+                       n_total::Int=n_states)
     n_cse = length(cse_prelude)
     # J5 covers BOTH IR families: the `_NK_PARAM_GATHER` scalar scan and the
     # acc-descriptor scan (`_AK_FORCING_BOX`/`_AK_ARR_FIXED`/`_AK_ARR_TBL_BOX`)
@@ -1780,15 +1903,32 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         end
         fb = _OopForcing(buffers, host_keys)
         T = _oop_value_type(u, p, t)
+
+        # Factored array observeds, filled per call into the block above the ODE
+        # state — the out-of-place twin of `_make_rhs_with_obs_buffers`. `ue` is
+        # `u` widened to `n_total`, so a reader's `index(<observed>, i…)` resolves
+        # through the ordinary array-gather path onto the observed's slots. With
+        # nothing materialized this is `ue === u` and the whole prelude folds away,
+        # leaving the closure byte-identical to the pre-change one.
+        #
+        # The CSE cache is built from `ue`, NOT `u`: with observeds materialized
+        # the state prelude may reference their slots, and the in-place wrapper
+        # gets this for free by evaluating its whole state RHS against `ue`.
+        ue = u
+        if !isempty(mat_levels)
+            ue = _oop_prefix_copy(_oop_du_zeros(u, T, n_total), u, n_states)
+            ue = _oop_fill_levels(ue, mat_levels, p, t, T, fb, _EMPTY_OOP_CACHE(T))
+        end
+
         cache = Vector{T}(undef, n_cse)
         @inbounds for s in 1:n_cse
-            cache[s] = _oop_eval(cse_prelude[s], u, p, t, cache, fb)
+            cache[s] = _oop_eval(cse_prelude[s], ue, p, t, cache, fb)
         end
 
         du = _oop_du_zeros(u, T, n_states)
         @inbounds for k in eachindex(rhs_list)
             slot, node = rhs_list[k]
-            du = _oop_store(du, slot, _oop_eval(node, u, p, t, cache, fb))
+            du = _oop_store(du, slot, _oop_eval(node, ue, p, t, cache, fb))
         end
 
         # Access kernels (the unified array IR), out of place. The vectorized form
@@ -1799,8 +1939,8 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         for j in eachindex(acc_kernels)
             plan = acc_plans[j]
             du = plan.vectorizable ?
-                 _oop_run_acc_vec(du, u, p, t, acc_kernels[j], plan, T, fb) :
-                 _oop_run_acc_kernel(du, u, p, t, acc_kernels[j], T)
+                 _oop_run_acc_vec(du, ue, p, t, acc_kernels[j], plan, T, fb) :
+                 _oop_run_acc_kernel(du, ue, p, t, acc_kernels[j], T)
         end
 
         # Cumulative (prefix) reductions (ess-scan, scan.jl): fold the per-cell

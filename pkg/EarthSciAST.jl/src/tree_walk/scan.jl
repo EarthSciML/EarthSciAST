@@ -184,6 +184,13 @@ function _apply_scan_fold_oop(du, S::_ScanFold)
         "prefix scan carries unsupported ⊕ '$(op)'; expected +, *, max or min"))
 end
 
+# READS GO THROUGH `_oop_read_state`, writes through `_oop_store`. This walked the
+# output with a bare `@inbounds du[s]`, which is the one thing the oop seam exists
+# to prevent: scalar indexing of a traced array is rejected outright, so a model
+# whose prefix reduction reached the traced RHS died with "Scalar indexing is
+# disallowed" pointing here rather than at anything the author wrote. Writes were
+# already routed; only the reads were not, so this never showed up on host, where
+# both spellings are the same load.
 function _scan_lanes_oop(du, S::_ScanFold, combine::F) where {F}
     slots = S.slots
     len = S.len
@@ -194,20 +201,20 @@ function _scan_lanes_oop(du, S::_ScanFold, combine::F) where {F}
         base = (l - 1) * len
         if S.inclusive
             s = slots[base + 1]
-            acc = combine(z, @inbounds du[s])
+            acc = combine(z, _oop_read_state(du, s))
             du = _oop_store(du, s, acc)
             for k in 2:len
                 s = slots[base + k]
-                acc = combine(acc, @inbounds du[s])
+                acc = combine(acc, _oop_read_state(du, s))
                 du = _oop_store(du, s, acc)
             end
         else
             s = slots[base + 1]
-            acc = combine(z, @inbounds du[s])
+            acc = combine(z, _oop_read_state(du, s))
             du = _oop_store(du, s, z)
             for k in 2:len
                 s = slots[base + k]
-                term = @inbounds du[s]
+                term = _oop_read_state(du, s)
                 du = _oop_store(du, s, acc)
                 acc = combine(acc, term)
             end

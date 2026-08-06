@@ -74,7 +74,7 @@ module EarthSciASTReactantExt
 using Reactant: Reactant, TracedRArray, TracedRNumber, @allowscalar
 
 import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
-    _oop_scatter, _oop_read_forcing,
+    _oop_scatter, _oop_read_forcing, _oop_prefix_copy,
     _oop_knot_count, _oop_knot_pair, _oop_knot_pair2, _oop_bilinear_corners
 
 # ---- State reads -------------------------------------------------------------
@@ -107,6 +107,19 @@ import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
 # rather than silently widening.
 @inline _oop_du_zeros(u::TracedRArray{T0,1}, ::Type{TracedRNumber{T0}},
                       n::Int) where {T0} = Reactant.Ops.fill(zero(T0), (n,))
+
+# The materialized-observed prelude's state prefix. ONE traced concatenation, not
+# `n` stores: the host default's `copyto!` walks elements, which both trips the
+# scalar-indexing rejection and — if it were allowed — would put the STATE LENGTH
+# into the XLA program, exactly the grid-dependence the compiled IR exists to
+# avoid. `ue` is zero-filled by `_oop_du_zeros`, so the tail beyond `n` is the
+# zeros the observed fills then overwrite, and concatenating reproduces it
+# without reading `ue` at all.
+@inline function _oop_prefix_copy(ue::TracedRArray{T0,1}, u::TracedRArray{T0,1},
+                                  n::Int) where {T0}
+    length(ue) == n && return u
+    return vcat(u, @inbounds ue[(n + 1):length(ue)])
+end
 
 # One scalar equation's `du` slot. Same bounded-scalar-indexing argument as
 # `_oop_read_state`; mutation of a `TracedRArray` is tracked by the trace, so the

@@ -347,9 +347,10 @@ end
 #   * an observed whose declared shape does not resolve to concrete extents, or
 #     whose defining aggregate's own output ranges are not the dense `1…n` the
 #     buffer layout addresses;
-#   * every array observed at all under the `:oop` emitter (which builds its own
-#     traced `du` vector) or with `ESS_ARRAY_OBS_INLINE=1` — both restore the
-#     pre-change build exactly.
+#   * every array observed at all with `ESS_ARRAY_OBS_INLINE=1`, which restores
+#     the pre-change build exactly. (The `:oop` emitter used to be excluded here
+#     too; it now materializes on the same terms as `:inplace` — see the
+#     `mat_array_vars` note in `_build_lower_and_classify`.)
 #
 # GHOST CELLS. A materialized observed is a first-class array field of its
 # declared shape, so a gather OUTSIDE that shape reads the ghost literal 0.0 —
@@ -1952,11 +1953,21 @@ function _build_lower_and_classify(model::Model;
     # keyed on that set keeps holding): the promoted array observeds that get a
     # dense buffer instead of being spliced into each reader. Phase 3 narrows it
     # again to the ones whose extents actually resolve. Empty (byte-identical)
-    # for the `:oop` emitter, under `ESS_ARRAY_OBS_INLINE=1`, and for any model
-    # with no promoted array observed.
-    mat_array_vars = form === :inplace ?
-        _collect_materialized_array_obs(model, equations, array_inline_vars,
-                                        discrete_vars) : Set{String}()
+    # under `ESS_ARRAY_OBS_INLINE=1` and for any model with no promoted array
+    # observed.
+    #
+    # BOTH EMITTERS. This was `:inplace`-only, on the reasoning that the `:oop`
+    # emitter builds its own `du` and had no buffer to fill. That made inlining
+    # MANDATORY under `:oop`, and inlining is superlinear: a reader spliced with
+    # a reduction body pays the whole body per output cell. Measured on ReSEACT
+    # at 7×7×8 — the smallest grid that model builds — the SAME emitter takes
+    # 2 GiB materialized and OOMs past 39 GiB inlined, so the traced build was
+    # not merely slower, it was impossible. `_make_rhs_oop` now fills the same
+    # observed block through the `_oop_du_zeros`/`_oop_store` seam that already
+    # exists for exactly this reason (a backend may implement the writes
+    # functionally on an immutable traced value).
+    mat_array_vars = _collect_materialized_array_obs(model, equations,
+                                                     array_inline_vars, discrete_vars)
 
     return (; equations, folded_array_obs,
             has_geometry=geo.has_geometry,
@@ -2420,7 +2431,13 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # keep, unchanged, is the shape it was written for — a STATE equation that is
     # itself a prefix reduction — including in a model that also materializes
     # observeds, where the two mechanisms compose bit-for-bit.
+    # `mat_levels` carries the `:inplace` shape `(scalars, _KernelSection, scans)`
+    # that `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills
+    # as `(scalars, kernels, oop_plans, scans)` because the out-of-place runners
+    # take the kernel and its plan separately rather than a fused callable. Only
+    # the emitter actually being built is populated.
     mat_levels = Any[]
+    mat_levels_oop = Any[]
     mat_scan_fold_count = 0
     if !isempty(mat_vars)
         for lvl in _materialized_obs_levels(mat_defs, mat_vars, raw_obs)
@@ -2443,10 +2460,17 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                 append!(lvl_scans, sfs)
             end
             merged, _ = _merge_acc_kernel_classes(lvl_kernels)
-            plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in merged]
             mat_scan_fold_count += length(lvl_scans)
-            push!(mat_levels,
-                  (lvl_scalars, _make_kernel_section(merged, plans), lvl_scans))
+            if form === :oop
+                push!(mat_levels_oop,
+                      (lvl_scalars, merged,
+                       _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
+                       lvl_scans))
+            else
+                plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in merged]
+                push!(mat_levels,
+                      (lvl_scalars, _make_kernel_section(merged, plans), lvl_scans))
+            end
         end
     end
 
@@ -2561,7 +2585,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # along so the OOP RHS can expose its live forcing buffers as ARGUMENTS
         # (`_OopRHS` / `rhs_with_buffers`, B2) — the traceable binding.
         _make_rhs_oop(rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
-                      scan_folds)
+                      scan_folds, Tuple(mat_levels_oop), n_total)
     else
         throw(TreeWalkError("E_TREEWALK_UNKNOWN_FORM",
             "build_evaluator: `form` must be :inplace or :oop, got :$(form)"))

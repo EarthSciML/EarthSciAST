@@ -464,3 +464,50 @@ end
     @test du_iip(inline = true)  == ref          # inlined: the capture path
     @test [duo[vmo["q[$i,$k]"]] for i in 1:NI, k in 1:NK] == ref   # :oop never materializes
 end
+
+# `:oop` materializes too, and agrees with `:inplace` bit for bit.
+#
+# Materialization used to be `:inplace`-only, which made INLINING mandatory under
+# `:oop` — and inlining is superlinear, because a reader spliced with a reduction
+# body pays that whole body per output cell. On ReSEACT the same emitter took
+# 2 GiB materialized and blew past 39 GiB inlined at the smallest grid that model
+# builds, so the traced build was not merely slower, it was impossible.
+#
+# The oracle is the one this file uses throughout: `:oop` is documented as
+# emitting the same IR in the same evaluation order, so the two must agree
+# EXACTLY, not approximately.
+@testset ":oop materializes array observeds and matches :inplace" begin
+    Ns = 6
+    isetsO = Dict("x" => ESM_AOM.IndexSet("interval"; size = Ns))
+    aggO(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
+        output_idx = Any["i"], ranges = Dict("i" => Any[1, Ns]), expr_body = body)
+    # tot = Σ_j u[j]^2 — a genuine CONTRACTION, so inlining it into every reader
+    # is exactly the blow-up this pins against. Scalar-shaped, hence read by all.
+    totO = ESM_AOM.OpExpr("arrayop", ESM_AOM.ASTExpr[];
+        output_idx = Any["i"], reduce = "+",
+        ranges = Dict("i" => Any[1, Ns], "j" => Any[1, Ns]),
+        expr_body = _op("*", _idx("u", _v("j")), _idx("u", _v("j"))))
+    mO = ESM_AOM.Model(
+        Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
+             "g" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"])),
+        [ESM_AOM.Equation(_v("g"), totO),
+         ESM_AOM.Equation(aggO(_Didx("u", _v("i"))),
+                          aggO(_op("-", _idx("g", _v("i")), _idx("u", _v("i")))))])
+    icsO = Dict("u[$j]" => 0.5 * j for j in 1:Ns)
+
+    iip = ESM_AOM._build_evaluator_impl(mO; index_sets = isetsO,
+                                        initial_conditions = icsO)
+    oop = ESM_AOM._build_evaluator_impl(mO; index_sets = isetsO,
+                                        initial_conditions = icsO, form = :oop)
+    # BOTH emitters buffer the observed. Without this the value check below would
+    # still pass on the inlining build it exists to rule out.
+    @test iip[6].n_mat_array_obs == 1
+    @test oop[6].n_mat_array_obs == 1
+
+    du = similar(iip[2]); iip[1](du, iip[2], iip[3], 0.0)
+    duo = oop[1](oop[2], oop[3], 0.0)
+    want = [sum((0.5j)^2 for j in 1:Ns) - 0.5 * i for i in 1:Ns]
+    @test [du[iip[5]["u[$i]"]] for i in 1:Ns] == want
+    @test [duo[oop[5]["u[$i]"]] for i in 1:Ns] ==
+          [du[iip[5]["u[$i]"]] for i in 1:Ns]      # bit-identical, not merely close
+end
