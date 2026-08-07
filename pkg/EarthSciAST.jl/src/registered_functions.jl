@@ -52,11 +52,15 @@ This module provides:
   codes (`unknown_closed_function`, `closed_function_overflow`,
   `searchsorted_non_monotonic`, `closed_function_arity`).
 
-Calendar arithmetic uses the Julia stdlib `Dates` module with the
-proleptic-Gregorian default; the v0.3.0 spec contract forbids leap-second
-consultation, which `Dates` already honors. `julian_day` is computed via the
-Fliegel–van Flandern (1968) integer formula plus the fractional-day offset,
-giving ≤ 1 ulp agreement with the spec reference.
+Calendar arithmetic is a BRANCH-FREE closed form over the proleptic-Gregorian
+calendar (Hinnant's `civil_from_days`), computed in the argument's own value
+type rather than through `Dates` — see the calendar section below for why an
+opaque host call is a wall for a traced or otherwise non-host evaluator. The
+v0.3.0 spec contract forbids leap-second consultation, which this honors by
+construction. `julian_day` is computed via the Fliegel–van Flandern (1968)
+integer formula plus the fractional-day offset, giving ≤ 1 ulp agreement with
+the spec reference. `Dates` remains the ORACLE: `test/datetime_arithmetic_
+test.jl` pins every field against it exhaustively over 1600–2400.
 """
 
 using Dates
@@ -153,6 +157,37 @@ function _check_int32(name::String, v::Integer)::Int32
     return Int32(v)
 end
 
+# The same range check for a calendar field arriving as an integer-VALUED real
+# (the branch-free decomposition below works in the value's own type, so every
+# field comes back as a float on the `Float64` path). Non-finite `t` is
+# rejected here rather than raising a bare `InexactError` out of the
+# conversion: the totality contract at the top of this file scopes the
+# calendar functions to FINITE inputs, and the previous `Dates` path threw on
+# NaN too — from inside `round(Int64, NaN)`, with no diagnostic code attached.
+# Narrow a calendar field to `Int32` IF the value type can hold one, else hand
+# it back untouched. This is what keeps the generic registry's contract
+# unchanged for every caller that existed before tracing: the spec pins these
+# fields to integers, a host real can be one, and only a value type that
+# cannot reach `Float64` gets the widened form.
+#
+# `Real` is the discriminator because it is exactly the right question — "is
+# this a host number?" — and a traced number answers no (Reactant's
+# `TracedRNumber <: RNumber <: Number`, deliberately NOT `<: Real`, since
+# `Real`'s interface promises host comparisons it cannot honor). Should some
+# future backend put a symbolic type under `Real`, this narrows and
+# `_cal_i32`'s `Float64(v)` raises a MethodError naming the type — loud, not
+# a silently wrong number.
+@inline _cal_narrow(name::String, v) = v isa Real ? _cal_i32(name, v) : v
+
+function _cal_i32(name::String, v)::Int32
+    fv = Float64(v)
+    if !isfinite(fv) || fv < typemin(Int32) || fv > typemax(Int32)
+        throw(ClosedFunctionError("closed_function_overflow",
+            "$(name): result $(fv) is not a finite Int32"))
+    end
+    return Int32(fv)
+end
+
 """
     evaluate_closed_function(name::String, args::Vector) -> Any
 
@@ -191,32 +226,31 @@ function evaluate_closed_function(name::String, args::AbstractVector)
 
     if name == "datetime.year"
         _expect_arity(name, args, 1)
-        return _check_int32(name, year(_to_datetime(args[1])))
+        return _cal_i32(name, _cal_year(_value(args[1])))
     elseif name == "datetime.month"
         _expect_arity(name, args, 1)
-        return Int32(month(_to_datetime(args[1])))
+        return _cal_i32(name, _cal_month(_value(args[1])))
     elseif name == "datetime.day"
         _expect_arity(name, args, 1)
-        return Int32(day(_to_datetime(args[1])))
+        return _cal_i32(name, _cal_day(_value(args[1])))
     elseif name == "datetime.hour"
         _expect_arity(name, args, 1)
-        return Int32(hour(_to_datetime(args[1])))
+        return _cal_i32(name, _cal_hour(_value(args[1])))
     elseif name == "datetime.minute"
         _expect_arity(name, args, 1)
-        return Int32(minute(_to_datetime(args[1])))
+        return _cal_i32(name, _cal_minute(_value(args[1])))
     elseif name == "datetime.second"
         _expect_arity(name, args, 1)
-        return Int32(second(_to_datetime(args[1])))
+        return _cal_i32(name, _cal_second(_value(args[1])))
     elseif name == "datetime.day_of_year"
         _expect_arity(name, args, 1)
-        return Int32(dayofyear(_to_datetime(args[1])))
+        return _cal_i32(name, _cal_day_of_year(_value(args[1])))
     elseif name == "datetime.julian_day"
         _expect_arity(name, args, 1)
         return _datetime_julian_day(Float64(args[1]))::Float64
     elseif name == "datetime.is_leap_year"
         _expect_arity(name, args, 1)
-        y = year(_to_datetime(args[1]))
-        return isleapyear(y) ? Int32(1) : Int32(0)
+        return _cal_i32(name, _cal_is_leap_year(_value(args[1])))
     elseif name == "interp.searchsorted"
         _expect_arity(name, args, 2)
         return _interp_searchsorted(name, args[1], args[2])
@@ -254,10 +288,13 @@ its inference, and the AD path — which is already boxing duals anyway — take
 one. Callers select between them on the COMPILE-TIME value type (`T === Float64`),
 so the branch folds away and the `Float64` path never even compiles this call.
 
-Only the three float-returning functions need generic treatment. Everything else
-is already dual-safe inside the pinned registry: the calendar `datetime.*` fields
-take the dual's primal (see `_value`) and return `Int32`, and
-`interp.searchsorted` returns an `Int32` index — none of which a dual can widen.
+Beyond the three float-returning functions, the CALENDAR fields are handled
+here too — not because a `Dual` needs it (the pinned registry takes its primal
+and returns `Int32` quite happily) but because a value type that cannot reach
+`Float64` at all has no `Int32` to be given. A traced number is exactly that,
+and returning the argument's own type is what keeps the decomposition inside
+the traced program. `interp.searchsorted` still falls through: its `Int32`
+index is a build-time table position, not a value the traced program computes.
 """
 function evaluate_closed_function_ad(name::String, args::AbstractVector)
     if name == "datetime.julian_day"
@@ -269,6 +306,36 @@ function evaluate_closed_function_ad(name::String, args::AbstractVector)
     elseif name == "interp.bilinear"
         _expect_arity(name, args, 5)
         return _interp_bilinear(name, args[1], args[2], args[3], args[4], args[5])
+    # ---- Calendar fields ----
+    # These used to fall through to the pinned registry, which was correct for
+    # a `Dual` (whose primal `_value` recovers) and a wall for anything a host
+    # `Float64` cannot represent — a traced value, where `Int32(...)` has no
+    # answer to give. `_cal_narrow` keeps the OLD behavior wherever the old
+    # behavior was possible and only widens where it was not, so a `Dual`
+    # query still returns exactly the `Int32` the `Float64` path returns
+    # (pinned by `closed_functions_autodiff_test.jl`) and a traced query
+    # returns a traced number, keeping the decomposition inside the program.
+    #
+    # `_value` is the identity on a traced number and the primal of a `Dual`,
+    # so a differentiating walk still gets the exact a.e. derivative (zero —
+    # these are piecewise constant) rather than partials leaking through the
+    # floor divisions.
+    elseif name == "datetime.year"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_value(args[1])))
+    elseif name == "datetime.month"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_month(_value(args[1])))
+    elseif name == "datetime.day"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day(_value(args[1])))
+    elseif name == "datetime.hour"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_hour(_value(args[1])))
+    elseif name == "datetime.minute"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_minute(_value(args[1])))
+    elseif name == "datetime.second"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_second(_value(args[1])))
+    elseif name == "datetime.day_of_year"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day_of_year(_value(args[1])))
+    elseif name == "datetime.is_leap_year"
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_is_leap_year(_value(args[1])))
     end
     # Discrete-valued or already-generic: the pinned registry handles duals.
     return evaluate_closed_function(name, args)
@@ -283,15 +350,164 @@ end
                            evaluate_closed_function_ad(name, args)
 end
 
-# Convert a UTC scalar time (seconds since Unix epoch) to a `Dates.DateTime`
-# at millisecond resolution. The spec pins floor-divmod by 86400 for the
-# (date, time-of-day) split; `Dates.unix2datetime` does this with the
-# proleptic-Gregorian calendar already.
-# `_value` first: the calendar decomposition is discrete (see `_value`), so an AD
-# dual query is stripped to its primal here rather than rejected. On a `Float64`
-# query `_value` is the identity and this is the same call it always was.
-@inline function _to_datetime(t_utc)::DateTime
-    return unix2datetime(Float64(_value(t_utc)))
+# ========================================================================
+# Branch-free proleptic-Gregorian calendar  (ess-traced-datetime)
+# ========================================================================
+#
+# WHY THIS EXISTS. The calendar used to be `unix2datetime(Float64(_value(t)))`
+# followed by `Dates.year`/`month`/… — an OPAQUE HOST CALL, and a wall for any
+# evaluator whose value type is not a host real:
+#
+#   1. `Float64(x)` demands a concrete bit pattern NOW. Under an XLA trace
+#      (Reactant) `t` is a symbolic handle to a value that will not exist
+#      until the compiled program runs, and there is no method — nor any
+#      possible answer — for `Float64(::TracedRNumber{Float64})`.
+#   2. `DateTime` is a host struct. A tracer records operations on tensors;
+#      it cannot record "construct a Julia object".
+#   3. `Dates.month` walks a cumulative-length table and `isleapyear` branches
+#      on `y % 4 / % 100 / % 400`. A trace cannot TAKE a branch whose
+#      condition is a traced value — the same wall `_oop_index_int` (oop.jl)
+#      exists to keep subscript arithmetic away from.
+#
+# So the calendar is re-derived here as ARITHMETIC. Nothing about it is
+# approximate: the proleptic-Gregorian calendar is a closed-form function of
+# the day number, and Howard Hinnant's `civil_from_days` computes it with no
+# branch and no table — the exact inverse of the Fliegel–van Flandern formula
+# `_datetime_julian_day` already runs in the forward direction below. Every
+# step is `+ - * /`, `floor`, a comparison and a `select`, all of which the
+# `:oop` runners already lower (`ifelse` is a VALUE-level select — both arms
+# are computed and the condition picks one — not control flow, which is
+# precisely why `interp.searchsorted` traces today; see `_oop_interp_
+# searchsorted`).
+#
+# THIS IS THE ONLY IMPLEMENTATION. It replaces the `Dates` path for EVERY
+# value type rather than sitting beside it as a traced-only twin, because two
+# implementations of one calendar is two calendars — they drift, and the drift
+# surfaces as an `:oop`-vs-`:inplace` mismatch in a model, not as a test
+# failure here. `test/datetime_arithmetic_test.jl` pins agreement with `Dates`
+# EXHAUSTIVELY: every day from 1600-01-01 to 2400-01-01 (292,000 days), every
+# second of four representative days, and the millisecond-rounding boundaries.
+#
+# MILLISECOND RESOLUTION IS PART OF THE CONTRACT, not an implementation
+# detail. `Dates.unix2datetime(x)` is `DateTime(UTM(UNIXEPOCH + trunc(Int64,
+# 1000x)))`, so the sub-millisecond remainder of `t` is DISCARDED, and working
+# in whole milliseconds from the start is what reproduces that. Decomposing
+# `t` directly in seconds disagrees at every sub-millisecond boundary — caught
+# by the ms-boundary phase of the test, which is the only phase that can see
+# it (an exact-integer `t` truncates and rounds alike).
+#
+# `trunc`, NOT `round`, and the distinction is load-bearing: at
+# `t = …59.9995 s` rounding lands on the next second and truncation stays put,
+# and `Dates` stays put. Note this makes the cut asymmetric about the epoch —
+# truncation goes toward ZERO, so a sub-second time in 1969 moves forward
+# while one in 1971 moves back. That is `Dates`' behavior, faithfully copied,
+# not a choice made here.
+
+# Floor division. PRECONDITION: `a` and `b` are exact integers in the value
+# type and `b > 0` — true of every call in this section.
+#
+# The whole decomposition rests on `floor(a/b)` being the exact integer floor,
+# so the argument is worth writing down. If `b` divides `a`, IEEE division
+# returns the quotient exactly and `floor` is a no-op. Otherwise the true
+# quotient is `k ± s/b` for integers `k`, `s ≥ 1`, so it misses an integer by
+# at least `1/b`, while the division's own error is at most half an ulp of
+# `q = a/b`, i.e. `q·2⁻⁵³`. Flooring is therefore safe whenever
+# `q·2⁻⁵³ < 1/b` — that is, whenever `q·b = a` stays under `2⁵³`, which is the
+# SAME condition as `a` being an exact integer in the first place. No separate
+# magnitude bound to track: if the inputs are exact, the quotient is right.
+@inline _cdiv(a, b) = floor(a / b)
+
+# Truncation toward zero, spelled with the two primitives the traced backends
+# already lower. `Base.trunc` would do on the host but is a third op to demand
+# of a backend for no gain, and `floor` + a select is exactly the pair the rest
+# of this section is built from.
+@inline _ctrunc(x) = ifelse(x < 0, -floor(-x), floor(x))
+
+# Days since 1970-01-01 and milliseconds-of-day, from a UTC second count.
+#
+# `ms` is an exact integer — the precondition `_cdiv` needs — for every
+# `|t| < 9e12 s`, about ±285,000 years around the epoch. Past that the ms
+# count leaves Float64's exact-integer range and the fields stop being
+# meaningful; on the `Float64` path `_cal_i32` then rejects them as
+# non-Int32. That is the same place the old `Dates` path gave up (an
+# `InexactError` from inside `trunc(Int64, ·)`), so the domain has not
+# narrowed — but note it IS a throw, and the TOTALITY CONTRACT at the top of
+# this file scopes the calendar to finite in-range inputs for that reason.
+@inline function _cal_split(t_utc)
+    ms = _ctrunc(1000 * t_utc)
+    days = _cdiv(ms, 86400000)
+    return days, ms - days * 86400000
+end
+
+# (year, month, day) from days since the Unix epoch — Hinnant's
+# `civil_from_days`, shifted to an era beginning 0000-03-01 so that the leap
+# day lands at the END of a 400-year era and needs no special case.
+@inline function _civil_from_days(days)
+    z = days + 719468
+    era = _cdiv(z, 146097)                       # 400-year era
+    doe = z - era * 146097                       # day-of-era, 0..146096
+    yoe = _cdiv(doe - _cdiv(doe, 1460) + _cdiv(doe, 36524) -
+                _cdiv(doe, 146096), 365)         # year-of-era, 0..399
+    doy = doe - (365 * yoe + _cdiv(yoe, 4) - _cdiv(yoe, 100))  # days since Mar 1
+    mp = _cdiv(5 * doy + 2, 153)                 # month index, Mar = 0 .. Feb = 11
+    d = doy - _cdiv(153 * mp + 2, 5) + 1
+    m = mp + ifelse(mp < 10, oftype(mp, 3), oftype(mp, -9))    # shift Mar-based → Jan-based
+    y = yoe + era * 400 + ifelse(m <= 2, oftype(mp, 1), oftype(mp, 0))
+    return y, m, d
+end
+
+# Days since the Unix epoch from a civil date — the exact inverse of
+# `_civil_from_days`, used only to locate Jan 1 for `day_of_year`.
+@inline function _days_from_civil(y, m, d)
+    yy = y - ifelse(m <= 2, oftype(y, 1), oftype(y, 0))
+    era = _cdiv(yy, 400)
+    yoe = yy - era * 400
+    mp = m + ifelse(m > 2, oftype(m, -3), oftype(m, 9))
+    doy = _cdiv(153 * mp + 2, 5) + d - 1
+    doe = yoe * 365 + _cdiv(yoe, 4) - _cdiv(yoe, 100) + doy
+    return era * 146097 + doe - 719468
+end
+
+# The nine `datetime.*` fields, each on the value's own type. Callers take one
+# field; the unused arithmetic is dead code that LLVM drops on the host path
+# and XLA's DCE drops in the traced program, so computing (y, m, d) together
+# costs nothing at either end.
+@inline _cal_year(t)   = _civil_from_days(_cal_split(t)[1])[1]
+@inline _cal_month(t)  = _civil_from_days(_cal_split(t)[1])[2]
+@inline _cal_day(t)    = _civil_from_days(_cal_split(t)[1])[3]
+
+@inline function _cal_day_of_year(t)
+    days = _cal_split(t)[1]
+    y, _, _ = _civil_from_days(days)
+    return days - _days_from_civil(y, oftype(y, 1), oftype(y, 1)) + 1
+end
+
+@inline function _cal_is_leap_year(t)
+    y = _cal_year(t)
+    # (y%4 == 0) && (y%100 != 0 || y%400 == 0), spelled as selects.
+    r4 = y - 4 * _cdiv(y, 4)
+    r100 = y - 100 * _cdiv(y, 100)
+    r400 = y - 400 * _cdiv(y, 400)
+    one_ = oftype(y, 1)
+    zero_ = oftype(y, 0)
+    century_ok = ifelse(r100 == 0, ifelse(r400 == 0, one_, zero_), one_)
+    return ifelse(r4 == 0, century_ok, zero_)
+end
+
+@inline function _cal_hour(t)
+    msod = _cal_split(t)[2]
+    return _cdiv(msod, 3600000)
+end
+
+@inline function _cal_minute(t)
+    msod = _cal_split(t)[2]
+    return _cdiv(msod - _cdiv(msod, 3600000) * 3600000, 60000)
+end
+
+@inline function _cal_second(t)
+    msod = _cal_split(t)[2]
+    rem_min = msod - _cdiv(msod, 60000) * 60000
+    return _cdiv(rem_min, 1000)
 end
 
 # Fliegel–van Flandern (1968) integer JDN, plus fractional-day offset from
@@ -312,18 +528,36 @@ end
 # `t - 86400*floor(t/86400)`: ForwardDiff differentiates `mod` directly, and on a
 # `Float64` query this is bit-for-bit the same call as before (`_value` is the
 # identity), preserving the spec's pinned ≤1 ulp / cross-binding contract.
-function _datetime_julian_day(t_utc::Real)
-    dt = unix2datetime(Float64(_value(t_utc)))
-    y = year(dt); m = month(dt); d = day(dt)
-    jdn = (1461 * (y + 4800 + (m - 14) ÷ 12)) ÷ 4 +
-          (367 * (m - 2 - 12 * ((m - 14) ÷ 12))) ÷ 12 -
-          (3 * ((y + 4900 + (m - 14) ÷ 12) ÷ 100)) ÷ 4 +
+#
+# The (y, m, d) decomposition comes from the branch-free calendar above rather
+# than from `Dates`, so this traces like everything else — which matters more
+# here than for the discrete fields, because a Rosenbrock ∂f/∂t through solar
+# geometry runs straight down this path.
+#
+# `÷` BECAME `_cdiv` ONLY WHERE THAT IS THE SAME OPERATION. Julia's integer `÷`
+# truncates toward zero; `_cdiv` floors. The two agree exactly when the
+# numerator is non-negative, which holds for all three of the divisions kept
+# below (the `1461·(…)`, `367·(…)` and `3·(…)/100` terms are positive for every
+# year > -4800, the same implicit domain the Fliegel–van Flandern form always
+# carried). The ONE place they differ is `(m - 14) ÷ 12`, whose numerator runs
+# -13..-2: truncation gives -1 for every month, flooring would give -2 at
+# January. That term is written as the select it actually is.
+function _datetime_julian_day(t_utc)
+    y, m, d = _civil_from_days(_cal_split(_value(t_utc))[1])
+    a = ifelse(m <= 2, oftype(m, -1), oftype(m, 0))   # == (m - 14) ÷ 12, truncated
+    jdn = _cdiv(1461 * (y + 4800 + a), 4) +
+          _cdiv(367 * (m - 2 - 12 * a), 12) -
+          _cdiv(3 * _cdiv(y + 4900 + a, 100), 4) +
           d - 32075
     # JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
     # to a fractional offset relative to noon. The spec pins this offset as
     # `(time_of_day_seconds − 43200) / 86400` (esm-spec §9.2.1).
     seconds_in_day = mod(t_utc, 86400.0)
-    return Float64(jdn) + (seconds_in_day - 43200.0) / 86400.0
+    # `jdn` is already a value of the argument's own type — the branch-free
+    # decomposition never leaves it. The `Float64(jdn)` that stood here was
+    # narrowing an `Int` returned by `Dates`, and on a traced value it is the
+    # same wall as `_to_datetime`'s.
+    return jdn + (seconds_in_day - 43200.0) / 86400.0
 end
 
 # Validate an `interp.searchsorted` table `xs`: must be a vector, non-decreasing,
