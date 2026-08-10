@@ -96,15 +96,10 @@ const ESM = EarthSciAST
 
     @testset "_ACC_GUARD_SAFE keys vs registry (else update GUARD_SAFE_UNREGISTERED)" begin
         # op => reason it is in the guard-safe table without a registry row.
-        # Both entries are DEAD today: no registry op mints these symbols, so
-        # the sanitizer can never meet them. Kept in the table as it predates
-        # the registry; if either op ever gets a registry row the entry turns
-        # live and must leave this manifest (and its neutral operand be
-        # re-checked).
-        GUARD_SAFE_UNREGISTERED = Dict{Symbol,String}(
-            :log2  => "no registry row; dead sanitizer entry",  # only log/log10 are registered
-            :log1p => "no registry row; dead sanitizer entry",  # only log/log10 are registered
-        )
+        # Empty: every sanitizer entry is a registered op (the former :log2 /
+        # :log1p entries were dead — no registry op mints those symbols). An
+        # entry belongs here only with a reason, never silently.
+        GUARD_SAFE_UNREGISTERED = Dict{Symbol,String}()
         @test setdiff(Set(keys(ESM._ACC_GUARD_SAFE)), regops) ==
               Set(keys(GUARD_SAFE_UNREGISTERED))
     end

@@ -1387,8 +1387,11 @@ end
 #
 # `(operand_index, SAFE)` for every op whose real-domain evaluation can raise.
 # `^`/`pow` sanitize the BASE (operand 1); `1.0 ^ y` is always finite.
+# Keys are registry ops only — the audit test (op_capability_audit_test.jl)
+# pins the containment, so an entry for an unregistered spelling is
+# unreachable and must not be added "just in case".
 const _ACC_GUARD_SAFE = Dict{Symbol,Tuple{Int,Float64}}(
-    :log => (1, 1.0), :log2 => (1, 1.0), :log10 => (1, 1.0), :log1p => (1, 0.0),
+    :log => (1, 1.0), :log10 => (1, 1.0),
     :sqrt => (1, 1.0),
     :asin => (1, 0.0), :acos => (1, 0.0), :atanh => (1, 0.0),
     :acosh => (1, 1.0),
