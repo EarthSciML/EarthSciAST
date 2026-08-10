@@ -110,14 +110,19 @@ end
         # count over the SAME distinct-table set. The table constant must be
         # `Nx·Ny·D` at both, and `Nx·Ny·L` must appear at neither.
         #
-        # Asserted as membership rather than as "the largest constant", because
-        # the largest is NOT the table: `_oop_interp_bilinear_lanes` reads its
-        # clamp bounds as `ax[1]` / `ax[Nx]`, which are still lane COLUMNS, so a
-        # handful of L-wide constants survive (4 per bilinear — 3.8 MB at
-        # 13×7×72, against the table's former 1.32 GB). Shrinking those is a
-        # separate change with a real hazard: collapsing an all-equal column to
-        # a scalar changes the RESULT LENGTH when the query is lane-invariant,
-        # the same trap `_rx_knot_matrix`'s `Lq` guard exists for.
+        # Asserted as membership rather than as "the largest constant". The
+        # clamp bounds `ax[1]` / `ax[Nx]` used to survive as lane COLUMNS (4
+        # L-wide constants per bilinear — 3.8 MB at 13×7×72, against the
+        # table's former 1.32 GB); `_oop_lane_bound` (oop.jl, part of the
+        # lane-table interning change) now collapses an all-equal boundary
+        # column to its one scalar HOST-SIDE, so those constants no longer
+        # reach the trace at all in this fixture (every lane shares `_AX`).
+        # The RESULT-LENGTH hazard that made this a separate change — a
+        # collapsed bound meeting a lane-invariant query, the same trap
+        # `_rx_knot_matrix`'s `Lq` guard exists for — is covered by the length
+        # pins here (the L-lane testset below) and by the host-side sweeps in
+        # test/lane_table_intern_test.jl: the length-L knot columns still flow
+        # through every seam, so they carry the lane axis regardless.
         mk(nc) = begin
             h = _lane_spec(4, nc)
             L = length(h.specs)

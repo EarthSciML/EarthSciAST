@@ -356,13 +356,21 @@ end
 # scalar `_compile_op` and the vectorized `_merge_fn_node`, so both ends build
 # the same spec object from the one table. `fname` MUST be a `_fn_const_arg_spec`
 # name (the caller gates on that); the `else` is an internal-consistency guard.
+#
+# The freshly built spec is routed through the build-scoped lane-table intern
+# pool (`_lane_intern`, acc_merge.jl): within one build, content-equal specs —
+# same table/axis bits minted from DIFFERENT const spellings or distinct-but-
+# equal vectors — come out as the SAME object, so downstream `===` fast paths
+# (the merge guard, `_check_fn_group_specs`) hit and a merged kernel's per-lane
+# spec table shares one object per distinct content. Identity when the pool is
+# off (outside a build, or ESS_LANE_INTERN_DISABLE=1).
 function _build_interp_spec(fname::AbstractString, const_args::Vector{Any})
     if fname == "interp.linear"
-        return _build_interp_linear_spec(fname, const_args...)
+        return _lane_intern(_build_interp_linear_spec(fname, const_args...))
     elseif fname == "interp.bilinear"
-        return _build_interp_bilinear_spec(fname, const_args...)
+        return _lane_intern(_build_interp_bilinear_spec(fname, const_args...))
     elseif fname == "interp.searchsorted"
-        return _build_interp_searchsorted_spec(fname, const_args...)
+        return _lane_intern(_build_interp_searchsorted_spec(fname, const_args...))
     end
     throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
         "fn '$(fname)' carries const args but has no interp.* spec builder"))
