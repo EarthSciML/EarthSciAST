@@ -21,6 +21,12 @@
 #
 # Layer 3 is the one that would have caught the original defect; layers 1-2 are
 # what stop a dedup from silently mixing lanes up.
+#
+# The trailing testsets extend layer 3 to the lane-table-intern change's traced
+# side: the clamp-bound collapse (`_oop_lane_bound`) must land as SCALAR
+# constants (lane-wide splat columns under the ESS_LANE_INTERN_DISABLE=1
+# oracle), and the module must hold ONE table payload per distinct CONTENT —
+# under both env settings, and through `build_evaluator(form=:oop)` itself.
 
 using Test
 using EarthSciAST
@@ -48,6 +54,20 @@ end
 function _f64_widths(hlo::String)
     return Set(parse(Int, m.captures[1]) for m in eachmatch(r"tensor<(\d+)xf64>", hlo))
 end
+
+# How many f64 constants of width `w` carry a full PAYLOAD (`dense<[…]>`, a real
+# per-element list — a table) — as opposed to splat constants (`dense<7.25…>`,
+# one repeated value: broadcast scaffolding, or an UN-collapsed all-equal bound
+# column). The distinction is load-bearing: only payload constants are tables.
+_ld_npayload(hlo::String, w::Int) =
+    length(collect(eachmatch(Regex("dense<\\[[^\\n]+\\]> : tensor<$(w)xf64>"), hlo)))
+
+# A splat f64 constant of MLIR spelling `v` ("%.6e", e.g. "7.250000e+00") at
+# width `w` — a lane-wide bound column — or as a scalar `tensor<f64>` — a
+# collapsed bound. The fixtures below pick bound values whose spelling appears
+# nowhere else in the module, so presence/absence is exact.
+_ld_has_col(hlo, v::String, w) = occursin("dense<$v> : tensor<$(w)xf64>", hlo)
+_ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
 
 @testset "traced interp lane dedup (grid-independent constants)" begin
 
@@ -155,5 +175,159 @@ end
         @test length(got) == L
         ref = ESM._oop_interp_bilinear_lanes(h, xs, fill(1.25, L), Float64)
         @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(got, ref))
+    end
+
+    # ---- the lane-table-intern change's TRACED-SIDE claims, measured in HLO.
+    #
+    # Two claims landed host-side (tree_walk/acc_merge.jl `_lane_intern`,
+    # tree_walk/oop.jl `_oop_lane_bound`, both under ESS_LANE_INTERN_DISABLE=1)
+    # with their Reactant-side effect asserted only by argument. Pinned here on
+    # the emitted module text (`@code_hlo optimize = false` — pre-canonicalize,
+    # so every constant is still visible where the trace put it):
+    #
+    #   * CLAMP/EDGE BOUNDS. `_oop_lane_bound` collapses an all-bitwise-equal
+    #     boundary column to its one scalar HOST-side, so the trace embeds a
+    #     `tensor<f64>` and never sees the column; under the kill switch the
+    #     column reaches the broadcast and is embedded as a lane-wide
+    #     `tensor<Lxf64>` splat — the O(lanes) constant the collapse retires
+    #     (4 per bilinear; measured 3.6 MB → 32 B per 13×7×72 call site).
+    #     `_oop_lane_bound` reads the env var PER CALL, i.e. at TRACE time, so
+    #     the oracle toggles around the trace, not around spec construction.
+    #
+    #   * TABLE CONSTANTS DO **NOT** REVERT under the kill switch — and must
+    #     not: build-time interning shares SPEC OBJECTS, but the seams here
+    #     dedup the knot COLUMNS by VALUE (`_rx_lane_groups`), which was
+    #     deliberately KEPT (it is finer than spec identity, and the seams
+    #     never see spec identity at all). So the flat table payload is
+    #     `Nx·Ny·D` with D = distinct CONTENTS in both worlds. Asserting the
+    #     oracle arm pins that deliberate redundancy: an env var must never be
+    #     able to reintroduce the O(lanes) constant.
+    #
+    # The bound values (5.0, 7.25 — MLIR spells them "%.6e") are chosen to
+    # appear nowhere else in the module, so splat presence/absence is exact.
+
+    @testset "clamp bounds: scalar consts collapsed, lane columns under the oracle" begin
+        ax = [5.0, 6.0, 7.25]
+        band(b) = ESM._InterpBilinearSpec(
+            [Float64[b + 0.01j + 0.1i for j in 0:2] for i in 0:2],
+            copy(ax), copy(ax))
+        specs = ESM._InterpBilinearSpec[band(Float64(1 + (l - 1) % 3)) for l in 1:21]
+        h = ESM._InterpBilinearLaneSpec(specs, 1, 0, 0, 1)
+        L = length(h.specs)                    # 21 lanes, D = 3 tables, 1 axis
+        xs = Float64[4.0 + 0.2k for k in 0:(L - 1)]   # spans both clamps
+        ys = Float64[8.0 - 0.2k for k in 0:(L - 1)]
+        f = (x, y) -> ESM._oop_interp_bilinear_lanes(h, x, y,
+                                                     RX.TracedRNumber{Float64})
+        xr, yr = RX.ConcreteRArray(xs), RX.ConcreteRArray(ys)
+        son = repr(RX.@code_hlo optimize = false f(xr, yr))
+        soff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+            repr(RX.@code_hlo optimize = false f(xr, yr))
+        end
+
+        # Collapsed: each bound is a scalar constant; NO lane-wide bound column.
+        @test _ld_has_scalar(son, "5.000000e+00")
+        @test _ld_has_scalar(son, "7.250000e+00")
+        @test !_ld_has_col(son, "5.000000e+00", L)
+        @test !_ld_has_col(son, "7.250000e+00", L)
+        # Oracle: the very same values come back as L-wide splat columns.
+        @test _ld_has_col(soff, "5.000000e+00", L)
+        @test _ld_has_col(soff, "7.250000e+00", L)
+
+        # ONE table payload of Nx·Ny·D — not one per corner gather (four
+        # gathers share it via `Ops.constant`'s value memo), not Nx·Ny·L — and
+        # the SAME one under the oracle (the kept trace-time dedup, see above).
+        @test _ld_npayload(son, 9 * 3) == 1
+        @test _ld_npayload(soff, 9 * 3) == 1
+        @test !(9L in _f64_widths(son)) && !(9L in _f64_widths(soff))
+        # The shared axis dedups to D = 1: one 3-wide payload serves 21 lanes.
+        @test _ld_npayload(son, 3) == 1
+
+        # Both programs still compute the per-lane host oracle's numbers.
+        ref = ESM._oop_interp_bilinear_lanes(h, xs, ys, Float64)
+        gon = Array((RX.@compile sync = true f(xr, yr))(xr, yr))
+        goff = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+            Array((RX.@compile sync = true f(xr, yr))(xr, yr))
+        end
+        @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(gon, ref))
+        @test all(isapprox(a, b; rtol = 1e-14) for (a, b) in zip(goff, ref))
+    end
+
+    # The same claims through the FRONT DOOR: `build_evaluator(doc; form=:oop)`
+    # — so the build-time intern pool, the kernel-class merge, and the ext's
+    # seams are all in the traced pipeline, not just a hand-built lane spec.
+    # Four members over one axis: u/v/w carry two distinct table CONTENTS in
+    # three spellings (Float64, Int — the coercion twin AST interning cannot
+    # unify — and a distinct copy), so they merge into ONE class whose flat
+    # table is 9·D = 18 wide (D = 2 contents, NOT 3 members); z reuses content
+    # A under a DIFFERENT template, landing in its own class — whose single
+    # shared spec takes the scalar-spec lane form (host-scalar bounds by
+    # construction, no columns to collapse). Everything is pinned at two grid
+    # sizes: the payload inventory must not move when N does.
+    @testset "built model: one constant per distinct content (N=$N)" for N in (5, 11)
+        ax = Any[5.0, 6.0, 7.25]
+        ta_f = Any[Any[1.0, 2.0, 3.0], Any[4.0, 5.5, 6.0], Any[7.0, 8.0, 9.0]]
+        ta_i = Any[Any[1, 2, 3], Any[4, 5.5, 6], Any[7, 8, 9]]
+        tb = Any[Any[-9.0, 3.0, -1.0], Any[2.5, -4.0, 0.5], Any[-0.25, 8.0, -6.0]]
+        bil(x, tbl) = Dict{String,Any}("op" => "fn", "name" => "interp.bilinear",
+            "args" => Any[Dict{String,Any}("op" => "const", "value" => tbl),
+                          Dict{String,Any}("op" => "const", "value" => ax),
+                          Dict{String,Any}("op" => "const", "value" => ax),
+                          Dict{String,Any}("op" => "index", "args" => Any[x, "i"]),
+                          Dict{String,Any}("op" => "index", "args" => Any[x, "i"])])
+        ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
+            "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
+            "args" => Any[], "expr" => e)
+        eq(x, rhs) = Dict{String,Any}(
+            "lhs" => ao(Dict{String,Any}("op" => "D", "wrt" => "t",
+                "args" => Any[Dict{String,Any}("op" => "index",
+                                               "args" => Any[x, "i"])])),
+            "rhs" => ao(rhs))
+        st() = Dict{String,Any}("type" => "state", "shape" => Any["n"])
+        doc = Dict{String,Any}(
+            "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "LD"),
+            "index_sets" => Dict{String,Any}("n" => Dict{String,Any}(
+                "kind" => "interval", "size" => N)),
+            "models" => Dict{String,Any}("M" => Dict{String,Any}(
+                "variables" => Dict{String,Any}("u" => st(), "v" => st(),
+                                                "w" => st(), "z" => st()),
+                "equations" => Any[
+                    eq("u", bil("u", ta_f)), eq("v", bil("v", ta_i)),
+                    eq("w", bil("w", tb)),
+                    eq("z", Dict{String,Any}("op" => "*",
+                        "args" => Any[2.0, bil("z", ta_f)]))])))
+
+        fo, _, p, _, _ = ESM.build_evaluator(doc; form = :oop)
+        fi, _, _, _, _ = ESM.build_evaluator(doc)
+        Lm = 3N                                # the merged u/v/w class's lanes
+        u = Float64[4.2 + 0.23(k % 17) for k in 1:(4N)]
+        ur, tr = RX.ConcreteRArray(u), RX.ConcreteRNumber(0.0)
+        s = repr(RX.@code_hlo optimize = false fo(ur, p, tr))
+
+        @test _ld_npayload(s, 18) == 1        # merged class: 9·D, D = 2 contents
+        @test _ld_npayload(s, 9) == 1         # z's class: content A once more
+        @test _ld_npayload(s, 3) == 1         # ONE axis payload across BOTH classes
+        @test !(9Lm in _f64_widths(s))        # no per-lane flattening anywhere
+        @test _ld_has_scalar(s, "7.250000e+00")
+        @test !_ld_has_col(s, "7.250000e+00", Lm) && !_ld_has_col(s, "7.250000e+00", N)
+
+        # Oracle build+trace: bound columns return on the merged class (z's
+        # scalar-spec form has none to lose); the table inventory is unmoved.
+        s_off, fo_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+            g, _, _, _, _ = ESM.build_evaluator(doc; form = :oop)
+            repr(RX.@code_hlo optimize = false g(ur, p, tr)), g
+        end
+        @test _ld_has_col(s_off, "7.250000e+00", Lm)
+        @test _ld_has_col(s_off, "5.000000e+00", Lm)
+        @test _ld_npayload(s_off, 18) == 1 && _ld_npayload(s_off, 9) == 1
+
+        # Numbers: the compiled module agrees with the trusted in-place f!,
+        # interned and oracle alike (XLA reassociates — tolerance, not ==).
+        du = zero(u); fi(du, u, p, 0.0)
+        got = Array((RX.@compile sync = true fo(ur, p, tr))(ur, p, tr))
+        @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got, du))
+        got_off = withenv("ESS_LANE_INTERN_DISABLE" => "1") do
+            Array((RX.@compile sync = true fo_off(ur, p, tr))(ur, p, tr))
+        end
+        @test all(isapprox(a, b; rtol = 1e-12, atol = 1e-13) for (a, b) in zip(got_off, du))
     end
 end
