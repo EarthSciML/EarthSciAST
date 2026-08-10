@@ -66,9 +66,11 @@ _codegen_node_budget() =
 # any OTHER value type (ForwardDiff `Dual` in a stiff-solver Jacobian) they used
 # to drop all the way to the per-cell interpreter `_run_acc_kernel!`. The dual
 # overflow tier re-emits those residual kernels into a SECOND generated function
-# with its own (default unbounded) budget. That function is called ONLY when
-# `T !== Float64`, so its native-compile cost is paid at the first Dual call —
-# never at Float64, whose routing (tape/interpreter) stays byte-for-byte.
+# with its own (default unbounded) budget. Under non-Float64 `T` it is called
+# unconditionally, so its native-compile cost is paid at the first Dual call.
+# (Since ess-f64ofl, below, the same function also serves Float64 calls when
+# the Float64 overflow routing is armed; ESS_F64_OVERFLOW_CODEGEN=0 restores
+# the tape-at-Float64 routing byte-for-byte.)
 # Kill switch: ESS_DUAL_CODEGEN_DISABLE=1 restores the pre-dual routing exactly
 # (the differential-oracle escape hatch, mirroring ESS_CODEGEN_DISABLE); the
 # tier is also off whenever ESS_CODEGEN_DISABLE=1 disables codegen wholesale,
@@ -81,6 +83,41 @@ _codegen_node_budget() =
 _dual_codegen_disabled() = get(ENV, "ESS_DUAL_CODEGEN_DISABLE", "") == "1"
 _dual_codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
+
+# ---- Float64 overflow routing (ess-f64ofl) ----------------------------------
+# The SAME overflow generated function, called at Float64 too — so a
+# budget-declined kernel stops running the Float64 lane tape and runs compiled
+# code, like every other kernel. The overflow RGF is eltype-generic and its
+# emission is already paid at build (a few ms); what this routing adds is the
+# residual kernels' NATIVE compile at the first Float64 call — measured at
+# ~0.13-0.15 s per 1000 emitted nodes (roughly linear, the per-function
+# ESS_CODEGEN_FN_NODE_CAP chunking is what keeps it linear), the same latency a
+# Dual caller already pays at its first call. Steady-state, the compiled
+# routing measured ~1.7-1.8x faster per RHS call than the serial tape on a
+# tape-class fixture (234 -> 137 us at 3528 cells; 4.5 -> 2.5 ms at 69768
+# cells), 0 B/call either way.
+#
+# THE TAPE IS NOT RETIRED. It remains built, reachable, and load-bearing:
+#   * kill switch ESS_F64_OVERFLOW_CODEGEN=0 restores today's routing exactly
+#     (tape at Float64 for every residual kernel) — the differential oracle;
+#   * whenever Polyester threading is active (`_threads_available()`), the
+#     routing defers to the tape AT CALL TIME: the tape's cell axis is
+#     Polyester-threaded (T2) and the overflow RGF is single-threaded, so
+#     compiled-serial would be a runtime REGRESSION at large grids for
+#     threaded users. The guard is per call, so `using Polyester` after the
+#     build still gets the threaded tape. (Finer per-plan arbitration —
+#     compiled code for plans whose threading verdict is serial — is future
+#     work; the coarse guard keeps threaded users byte-for-byte on today's
+#     path.)
+#   * kernels even the overflow emission declines (`dual_resid`) keep the
+#     tape/interpreter at Float64, exactly as before.
+# The routing is inert unless the PRIMARY emission declined something and the
+# overflow function exists (`ESS_DUAL_CODEGEN_DISABLE=1` therefore also
+# disables it, keeping that switch a full pre-overflow oracle). On every model
+# within the primary budget — all repo fixtures — nothing changes at all.
+# Build tally: `:f64_overflow_armed` when a section is built with the routing
+# armed (overflow function present + feature on).
+_f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "0"
 
 # Per-kernel decline: the kernel keeps the interpreter/lane-tape runner.
 # Never an error — the tier is a pure optimization.
@@ -748,6 +785,11 @@ struct _KernelSection{F,TB,G,GTB}
     dualtabs::GTB
     n_dual_emitted::Int
     dual_resid::Vector{Int}
+    # Float64 overflow routing (ess-f64ofl): when true, the overflow function
+    # above also serves Float64 calls (in place of the lane tape) whenever
+    # Polyester threading is not active. Baked at build time from
+    # ESS_F64_OVERFLOW_CODEGEN (default on).
+    f64cg::Bool
 end
 
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
@@ -762,6 +804,26 @@ end
         s.dualf(du, u, p, t, s.dualtabs)
         @inbounds for j in s.dual_resid
             _run_acc_kernel!(du, u, p, t, kernels[j], T)
+        end
+        return nothing
+    end
+    if G !== Nothing && T === Float64 && s.f64cg && !_threads_available()
+        # Float64 overflow routing (ess-f64ofl): budget-declined kernels run
+        # the SAME compiled overflow function as the Dual path, bit-identical
+        # to the tape/interpreter by the emitter's contract. Deferred to the
+        # tape whenever Polyester threading is active — the tape's cell axis
+        # is threaded (T2) and this function is not, so the guard (checked per
+        # call, exactly as `_run_acc_plan!` checks it) keeps threaded users on
+        # today's path. Kernels the overflow emission itself declined keep
+        # their pre-codegen runners, in the same order as the plain loop below.
+        s.dualf(du, u, p, t, s.dualtabs)
+        @inbounds for j in s.dual_resid
+            P = plans[j]
+            if P !== nothing
+                _run_acc_plan!(du, u, p, t, kernels[j], P)
+            else
+                _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
+            end
         end
         return nothing
     end
@@ -807,9 +869,16 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
                             tally=:dual_codegen)
     if dg === nothing
         return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
-                              nothing, nothing, 0, collect(Int, 1:length(kernels)))
+                              nothing, nothing, 0, collect(Int, 1:length(kernels)),
+                              false)
     end
+    # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
+    # function exists and ESS_F64_OVERFLOW_CODEGEN has not turned it off.
+    # `ESS_DUAL_CODEGEN_DISABLE=1` / `ESS_CODEGEN_DISABLE=1` reach the branch
+    # above instead, so both remain full oracles for their tiers.
+    f64cg = _f64_overflow_codegen_enabled()
+    f64cg && _tally_cascade!(:f64_overflow_armed)
     dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
     return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
-                          dg.f, dg.tabs, count(dg.covered), dual_resid)
+                          dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg)
 end
