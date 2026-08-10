@@ -60,6 +60,28 @@ _codegen_debug() = get(ENV, "ESS_CODEGEN_DEBUG", "") == "1"
 _codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 400_000)
 
+# ---- Dual overflow tier (ess-dualfp) ----------------------------------------
+# Kernels the primary emission declines — in practice on the node BUDGET, which
+# exists to bound Float64 build latency — keep the Float64 lane tape, but under
+# any OTHER value type (ForwardDiff `Dual` in a stiff-solver Jacobian) they used
+# to drop all the way to the per-cell interpreter `_run_acc_kernel!`. The dual
+# overflow tier re-emits those residual kernels into a SECOND generated function
+# with its own (default unbounded) budget. That function is called ONLY when
+# `T !== Float64`, so its native-compile cost is paid at the first Dual call —
+# never at Float64, whose routing (tape/interpreter) stays byte-for-byte.
+# Kill switch: ESS_DUAL_CODEGEN_DISABLE=1 restores the pre-dual routing exactly
+# (the differential-oracle escape hatch, mirroring ESS_CODEGEN_DISABLE); the
+# tier is also off whenever ESS_CODEGEN_DISABLE=1 disables codegen wholesale,
+# so the existing oracle stays a pure interpreter/tape build.
+# Budget: ESS_DUAL_CODEGEN_NODE_BUDGET overrides the overflow emission budget
+# (default unbounded — per-function size is still capped by
+# ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory).
+# Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in
+# `_CASCADE_TALLY` — the observability hook for which tier Dual evaluation uses.
+_dual_codegen_disabled() = get(ENV, "ESS_DUAL_CODEGEN_DISABLE", "") == "1"
+_dual_codegen_node_budget() =
+    something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
+
 # Per-kernel decline: the kernel keeps the interpreter/lane-tape runner.
 # Never an error — the tier is a pure optimization.
 struct _CodegenDecline <: Exception
@@ -598,10 +620,12 @@ end
 # reference, as explicit arguments — it captures nothing, so the RHS stays
 # allocation-free. Kernels that decline stay on their existing runners
 # (`covered[j] == false`). Returns `nothing` when no kernel could be emitted.
-function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
+function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
+                            budget::Int=_codegen_node_budget(),
+                            tally::Symbol=:codegen)
     isempty(acc_kernels) && return nothing
     t0 = time_ns()
-    ctx = _CGCtx(_codegen_node_budget())
+    ctx = _CGCtx(budget)
     covered = fill(false, length(acc_kernels))
     kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
     for (j, K) in enumerate(acc_kernels)
@@ -615,7 +639,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
             lx = _cg_emit_kernel!(ctx, K)
             push!(kloops, (lx, ctx.nodes - nodes0))
             covered[j] = true
-            _tally_cascade!(:codegen_kernel)
+            _tally_cascade!(Symbol(tally, :_kernel))
         catch err
             err isa _CodegenDecline || rethrow()
             resize!(ctx.prologue, nprologue)
@@ -624,9 +648,9 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
             end
             resize!(ctx.invlog, ninvlog)
             ctx.nodes = nodes0
-            _tally_cascade!(Symbol("codegen_decline_", err.reason))
+            _tally_cascade!(Symbol(tally, "_decline_", err.reason))
             _codegen_debug() &&
-                println(stderr, "[ess-codegen] kernel $j DECLINED: $(err.reason)")
+                println(stderr, "[ess-codegen/$tally] kernel $j DECLINED: $(err.reason)")
         end
     end
     any(covered) || return nothing
@@ -692,7 +716,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel})
         @__MODULE__, @__MODULE__, ex)
     if _codegen_debug()
         ms = (time_ns() - t0) / 1e6
-        println(stderr, "[ess-codegen] emitted $(count(covered))/$(length(covered)) ",
+        println(stderr, "[ess-codegen/$tally] emitted $(count(covered))/$(length(covered)) ",
                 "kernels in $(length(chunks)) fn(s), $(ctx.nodes) nodes, ",
                 "$(length(ctx.tabs)) tab objects, build $(round(ms; digits=1)) ms")
     end
@@ -707,18 +731,40 @@ end
 # pre-codegen RHS. Emitted kernels write disjoint du slots from residual ones
 # (each state slot has exactly one equation/cell), so running the generated
 # section first is value-identical to the original in-order kernel loop.
-struct _KernelSection{F,TB}
+struct _KernelSection{F,TB,G,GTB}
     cgf::F
     cgtabs::TB
     n_emitted::Int                # kernels compiled into the generated function
     kernels::Vector{_AccKernel}   # residual kernels (pre-codegen runners)
     plans::Vector{Union{Nothing,_AccPlan}}
+    # Dual overflow tier (ess-dualfp): a second generated function covering the
+    # residual kernels the PRIMARY emission declined (in practice on the node
+    # budget), called ONLY under non-Float64 `T` — so Duals run compiled code
+    # instead of the per-cell interpreter, and the Float64 path (tape /
+    # interpreter over `kernels`/`plans` above) is untouched. `dual_resid`
+    # indexes `kernels`: the kernels even the overflow emission declined, which
+    # keep the eltype-generic interpreter under non-Float64 `T`.
+    dualf::G
+    dualtabs::GTB
+    n_dual_emitted::Int
+    dual_resid::Vector{Int}
 end
 
-@inline function (s::_KernelSection{F})(du, u, p, t, ::Type{T}) where {F,T}
+@inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
     F !== Nothing && s.cgf(du, u, p, t, s.cgtabs)
     kernels = s.kernels
     plans = s.plans
+    if G !== Nothing && T !== Float64
+        # Dual fast path: the overflow function covers every kernel not in
+        # `dual_resid`. Emitted kernels write disjoint du slots from residual
+        # ones (each state slot has exactly one equation/cell), so the order
+        # generated-first is value-identical to the in-order kernel loop.
+        s.dualf(du, u, p, t, s.dualtabs)
+        @inbounds for j in s.dual_resid
+            _run_acc_kernel!(du, u, p, t, kernels[j], T)
+        end
+        return nothing
+    end
     @inbounds for j in 1:length(kernels)
         P = plans[j]
         if T === Float64 && P !== nothing
@@ -732,17 +778,38 @@ end
 
 # Partition the kernels between the codegen tier and the pre-existing runners.
 # `ESS_CODEGEN_DISABLE=1` (or an empty emission) yields a section that is
-# exactly the pre-codegen kernel loop.
+# exactly the pre-codegen kernel loop; `ESS_DUAL_CODEGEN_DISABLE=1` yields the
+# pre-dual routing (Duals interpret every residual kernel) with the primary
+# tier intact.
 function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
                               acc_plans::AbstractVector{Union{Nothing,_AccPlan}})
     cg = _codegen_disabled() ? nothing : _build_codegen_rhs(acc_kernels)
     if cg === nothing
-        return _KernelSection(nothing, nothing, 0,
-                              collect(_AccKernel, acc_kernels),
-                              collect(Union{Nothing,_AccPlan}, acc_plans))
+        kernels = collect(_AccKernel, acc_kernels)
+        plans = collect(Union{Nothing,_AccPlan}, acc_plans)
+        n_emitted = 0
+    else
+        resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
+        kernels = _AccKernel[acc_kernels[j] for j in resid]
+        plans = Union{Nothing,_AccPlan}[acc_plans[j] for j in resid]
+        n_emitted = count(cg.covered)
     end
-    resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
-    return _KernelSection(cg.f, cg.tabs, count(cg.covered),
-                          _AccKernel[acc_kernels[j] for j in resid],
-                          Union{Nothing,_AccPlan}[acc_plans[j] for j in resid])
+    cgf = cg === nothing ? nothing : cg.f
+    cgtabs = cg === nothing ? nothing : cg.tabs
+    # Dual overflow tier: retry the residual kernels under the dual budget. Its
+    # RGF is only ever CALLED with non-Float64 arguments, so nothing here adds
+    # Float64 compile latency — only the (cheap) AST emission runs at build.
+    # Gated on ESS_CODEGEN_DISABLE too: that switch must keep yielding a pure
+    # pre-codegen build (the codegen tier's differential oracle).
+    dg = (_codegen_disabled() || _dual_codegen_disabled() || isempty(kernels)) ?
+         nothing :
+         _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
+                            tally=:dual_codegen)
+    if dg === nothing
+        return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
+                              nothing, nothing, 0, collect(Int, 1:length(kernels)))
+    end
+    dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
+    return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
+                          dg.f, dg.tabs, count(dg.covered), dual_resid)
 end
