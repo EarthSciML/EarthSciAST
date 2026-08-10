@@ -2,4 +2,8 @@ dist/
 node_modules/
 src/generated.ts
 src/embedded-schema.ts
+# Ajv's standalone output: one ~700 kB line. Prettier would reformat it, and the
+# drift guard compares the generator's bytes exactly — so formatting it here
+# would make `npm run generate-validator` and this file permanently disagree.
+src/generated-validator.js
 package-lock.json

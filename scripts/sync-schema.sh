@@ -91,6 +91,40 @@ else
   node "$TS_GENERATOR" >/dev/null && echo "Synced:  $TS_EMBEDDED (regenerated from esm-schema.json)"
 fi
 
+# ---------------------------------------------------------------------------
+# pkg/earthsci-ast-ts/src/generated-validator.js
+# ---------------------------------------------------------------------------
+# The schema, precompiled by Ajv into a standalone validator so that validating
+# a document needs no runtime code generation (and therefore no 'unsafe-eval' in
+# a consumer's Content-Security-Policy). Another generated copy of the schema,
+# so another thing that can fall behind it.
+#
+# Unlike the embedded schema above, this generator NEEDS node_modules — it runs
+# Ajv to do the compiling. This gate is documented to work without an npm
+# install, so the check is skipped when the dependency is absent, and says so
+# rather than passing quietly. The authoritative check is the drift test in
+# pkg/earthsci-ast-ts/src/generated-validator.test.ts, which runs where the
+# dependencies exist.
+TS_VALIDATOR="pkg/earthsci-ast-ts/src/generated-validator.js"
+TS_VGEN="${REPO_ROOT}/pkg/earthsci-ast-ts/scripts/generate-standalone-validator.mjs"
+if [[ ! -f "$TS_VGEN" ]]; then
+  echo "MISSING: $TS_VALIDATOR generator"
+  drifted=1
+elif [[ ! -d "${REPO_ROOT}/pkg/earthsci-ast-ts/node_modules/ajv" ]]; then
+  echo "SKIP:    $TS_VALIDATOR (needs pkg/earthsci-ast-ts npm install; covered by its test suite)"
+elif [[ "$check_mode" == true ]]; then
+  if v_result=$(node "$TS_VGEN" --check 2>&1); then
+    echo "OK:      $TS_VALIDATOR (precompiled from esm-schema.json)"
+  else
+    echo "DRIFT:   $TS_VALIDATOR"
+    echo "         ${v_result}"
+    echo "         Regenerate with: cd pkg/earthsci-ast-ts && npm run generate-validator"
+    drifted=1
+  fi
+else
+  node "$TS_VGEN" >/dev/null && echo "Synced:  $TS_VALIDATOR (recompiled from esm-schema.json)"
+fi
+
 # Extract the version field from a binding manifest.
 # Emits "<file>: <version>" to stdout.
 read_version() {
