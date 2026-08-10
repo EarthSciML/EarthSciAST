@@ -26,8 +26,11 @@
 #     guarantees); CSE slot values convert to `T` exactly where the
 #     interpreter's `buf[i] = …` store does;
 #   * `fn` nodes call the SAME functions the interpreter calls
-#     (`_interp_*_core` with the node's typed `_Interp*Spec`, boxed
-#     `_eval_closed_fn` for `datetime.*`) — interpolation is not reimplemented.
+#     (`_interp_*_core` with the node's typed `_Interp*Spec` — or, for the
+#     per-lane `_Interp*LaneSpec` tables the kernel-class merge mints, the
+#     member spec selected by the interpreter's exact `_interp_lane` box
+#     addressing — boxed `_eval_closed_fn` for `datetime.*`) — interpolation
+#     is not reimplemented.
 #
 # ELTYPE-GENERIC: the emitted function derives `T = _rhs_value_type(u, p, t)`
 # exactly as the interpreter does, so the SAME generated code integrates at
@@ -392,6 +395,41 @@ function _cg_emit_fn(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         # land in the evaluator's value type.
         return :(convert(_cgT, _interp_searchsorted_core("interp.searchsorted",
                      $(_cg_emit(ctx, kc, ch[1])), $sp.xs)))
+    elseif pl isa Tuple{String,_InterpLinearLaneSpec}
+        # Per-LANE spec table (kernel-class merge, oop_merge.jl): select THIS
+        # cell's member spec by the box lane addressing, then call the SAME
+        # core on the member's own table/axis — the interpreter's lane-spec
+        # arm verbatim, bit-identical per lane by construction. The lane index
+        # is `_interp_lane(h, midx)` on the loop multi-index, which is exactly
+        # `_cg_boxaddr`'s exact-Int address (the `_AccStateTblBox` addressing;
+        # its literal-1/zero-stride folding cannot change the index).
+        h = pl[2]
+        hs = _cg_tab!(ctx, h)
+        sp = _cg_name(ctx, "sp")
+        return :(let $sp = $hs.specs[$(_cg_boxaddr(kc, h.s1, h.s2, h.s3, h.off))]
+                     _interp_linear_core($sp.table, $sp.axis,
+                                         $(_cg_emit(ctx, kc, ch[1])))
+                 end)
+    elseif pl isa Tuple{String,_InterpBilinearLaneSpec}
+        h = pl[2]
+        hs = _cg_tab!(ctx, h)
+        sp = _cg_name(ctx, "sp")
+        return :(let $sp = $hs.specs[$(_cg_boxaddr(kc, h.s1, h.s2, h.s3, h.off))]
+                     _interp_bilinear_core($sp.table, $sp.axis_x, $sp.axis_y,
+                                           $(_cg_emit(ctx, kc, ch[1])),
+                                           $(_cg_emit(ctx, kc, ch[2])))
+                 end)
+    elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
+        # `convert(_cgT, …)` exactly as the scalar-spec arm above (and the
+        # interpreter's lane-spec arm): the discrete index must land in the
+        # evaluator's value type.
+        h = pl[2]
+        hs = _cg_tab!(ctx, h)
+        sp = _cg_name(ctx, "sp")
+        return :(let $sp = $hs.specs[$(_cg_boxaddr(kc, h.s1, h.s2, h.s3, h.off))]
+                     convert(_cgT, _interp_searchsorted_core("interp.searchsorted",
+                                 $(_cg_emit(ctx, kc, ch[1])), $sp.xs))
+                 end)
     elseif pl isa Tuple{String,Nothing}
         # Boxed all-scalar closed fn (`datetime.*`): same eager `Any[…]` arg
         # boxing, same `_eval_closed_fn` registry-on-`T` call, same convert.
