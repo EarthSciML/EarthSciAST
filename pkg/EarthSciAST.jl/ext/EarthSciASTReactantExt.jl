@@ -194,9 +194,11 @@ end
 # lane) becomes a flat constant indexed by `k` directly; a
 # `Vector{Vector{Float64}}` / `Matrix{Vector{Float64}}` of lane COLUMNS (the
 # kernel-class merge's `_Interp*LaneSpec`, one table per lane) becomes the same
-# flat constant in knot-major order, indexed by `(k-1)*L + lane` against a
-# constant lane iota — so the merged path gets the identical O(1) lowering, with
-# lane `l` still reading only its own table.
+# flat constant in knot-major order, indexed by `(k-1)*D + gid[lane]` against a
+# constant lane→group map — so the merged path gets the identical O(1) lowering,
+# with lane `l` still reading only its own table. `D` is the number of DISTINCT
+# lane tables rather than the lane count; see the lane-dedup section for why
+# that difference is what keeps the constant off the grid size.
 
 const _RxIdx = Union{TracedRArray{<:Any,1},TracedRNumber}
 const _RxKnots = Union{Vector{Float64},Vector{Vector{Float64}}}
@@ -231,20 +233,82 @@ const _RxTbl = Union{Vector{Vector{Float64}},Matrix{Vector{Float64}}}
     Reactant.Ops.gather_getindex(Reactant.Ops.constant(vals),
                                  Reactant.Ops.reshape(lin, length(lin), 1))
 
-# The two knot shapes, as (flat host constant, knot index → linear index).
-@inline _rx_flat(v::Vector{Float64}) = v
-@inline _rx_flat(v::Vector{Vector{Float64}}) = reduce(vcat, v)   # knot-major
-@inline _rx_lin(::Vector{Float64}, ik::TracedRArray{Int64,1}) = ik
-@inline function _rx_lin(v::Vector{Vector{Float64}}, ik::TracedRArray{Int64,1})
-    L = length(v[1])
-    return (ik .- Int64(1)) .* Int64(L) .+ Reactant.Ops.constant(collect(Int64, 1:L))
+# --- lane dedup ---------------------------------------------------------------
+#
+# WHY THIS EXISTS. The kernel-class merge tables one spec PER LANE, and a lane
+# is (cell × member): merging Fast-JX's 18 actinic-flux bands over a grid gives
+# `L = 18 · ncells` lanes. But the bands' tables do not vary with the cell —
+# there are 18 DISTINCT tables and `ncells` copies of each. Materialising one
+# copy per lane makes the emitted XLA constant scale with the GRID, which is
+# precisely the property a compiled program must not have: at 13×7×72 the
+# 61×23 flux table reached 165,464,208 doubles = 1.32 GB and Reactant refused
+# to emit it (its threshold is 100 MB). Keying lanes by VALUE makes the
+# constant scale with the number of distinct tables — a property of the
+# document, not of the domain: the same table falls to 25,254 doubles (193 KB)
+# and stays there at every grid.
+#
+# Grouping is by `isequal` (what `Dict` uses), NOT `==`: it separates `-0.0`
+# from `0.0` and unifies `NaN` with `NaN`, so two lanes share a slot only when
+# their tables agree BITWISE. Merging is therefore value-preserving by
+# construction, and when no two lanes agree the groups degenerate to
+# `gid[l] = l` and the emitted constant is byte-for-byte the old one.
+#
+# Returns (reps, gid): `reps[g]` is a lane index witnessing group `g`, and
+# `gid[l]` is lane `l`'s group. Host-side, trace time only.
+function _rx_lane_groups(cols::AbstractArray{Vector{Float64}})
+    L = length(first(cols))
+    n = length(cols)
+    key = Vector{Float64}(undef, n)
+    ids = Dict{Vector{Float64},Int}()
+    gid = Vector{Int64}(undef, L)
+    reps = Int[]
+    @inbounds for l in 1:L
+        q = 0
+        for c in cols
+            key[q += 1] = c[l]
+        end
+        g = get(ids, key, 0)
+        if g == 0
+            g = length(reps) + 1
+            ids[copy(key)] = g
+            push!(reps, l)
+        end
+        gid[l] = g
+    end
+    return reps, gid
+end
+
+# The two knot shapes, as (flat host constant, knot index → linear index, the
+# stride from one knot to the next). Knot-major, deduplicated across lanes.
+@inline _rx_knot_lin(v::Vector{Float64}, ik::TracedRArray{Int64,1}) = (v, ik, 1)
+function _rx_knot_lin(v::Vector{Vector{Float64}}, ik::TracedRArray{Int64,1})
+    reps, gid = _rx_lane_groups(v)
+    D = length(reps); n = length(v)
+    flat = Vector{Float64}(undef, n * D)
+    @inbounds for k in 1:n, g in 1:D
+        flat[(k - 1) * D + g] = v[k][reps[g]]
+    end
+    return flat, (ik .- Int64(1)) .* Int64(D) .+ Reactant.Ops.constant(gid), D
 end
 
 # The constant the count compares against: a 1×n knot ROW when one table is
 # shared, an L×n knot MATRIX when each lane owns one.
-_rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
-function _rx_knot_matrix(v::Vector{Vector{Float64}})
+#
+# `Lq` is the QUERY's lane count. Collapsing per-lane knots that are all equal
+# to a single row is only sound when the query itself carries the lane axis —
+# the L×n compare matrix is otherwise the only thing giving the result its L
+# rows, and a 1×n row against a 1×1 query would silently return one lane where
+# the caller unwraps L.
+_rx_knot_matrix(v::Vector{Float64}, ::Int) = reshape(copy(v), 1, length(v))
+function _rx_knot_matrix(v::Vector{Vector{Float64}}, Lq::Int)
     L = length(v[1])
+    if Lq == L
+        reps, _ = _rx_lane_groups(v)
+        if length(reps) == 1
+            r = reps[1]
+            return reshape(Float64[v[k][r] for k in eachindex(v)], 1, length(v))
+        end
+    end
     M = Matrix{Float64}(undef, L, length(v))
     @inbounds for k in eachindex(v), l in 1:L
         M[l, k] = v[k][l]
@@ -262,26 +326,28 @@ function _rx_tbl_lin(t::Vector{Vector{Float64}}, ii, jj, Nx::Int, Ny::Int)
     return flat, (ii .- Int64(1)) .* Int64(Ny) .+ jj, Ny, 1
 end
 function _rx_tbl_lin(t::Matrix{Vector{Float64}}, ii, jj, Nx::Int, Ny::Int)
-    L = length(t[1, 1])
-    flat = Vector{Float64}(undef, Nx * Ny * L)
+    reps, gid = _rx_lane_groups(t)
+    D = length(reps)
+    flat = Vector{Float64}(undef, Nx * Ny * D)
     @inbounds for k in 1:Nx, l in 1:Ny
         col = t[k, l]
-        base = ((k - 1) * Ny + (l - 1)) * L
-        for m in 1:L
-            flat[base + m] = col[m]
+        base = ((k - 1) * Ny + (l - 1)) * D
+        for m in 1:D
+            flat[base + m] = col[reps[m]]
         end
     end
-    lane = Reactant.Ops.constant(collect(Int64, 1:L))
-    lin = ((ii .- Int64(1)) .* Int64(Ny) .+ (jj .- Int64(1))) .* Int64(L) .+ lane
-    return flat, lin, Ny * L, L
+    lane = Reactant.Ops.constant(gid)
+    lin = ((ii .- Int64(1)) .* Int64(Ny) .+ (jj .- Int64(1))) .* Int64(D) .+ lane
+    return flat, lin, Ny * D, D
 end
 
 # --- the three seams ----------------------------------------------------------
 
 # count-locate: one compare against a constant knot row + one reduce.
 function _oop_knot_count(knots::_RxKnots, q::_RxIdx, cmp::F) where {F}
-    K = Reactant.Ops.constant(_rx_knot_matrix(knots))         # (L|1) × n
-    Q = reshape(_rx_vec(q, 1), (max(_rx_len(q), 1), 1))       # (L|1) × 1
+    Lq = max(_rx_len(q), 1)
+    K = Reactant.Ops.constant(_rx_knot_matrix(knots, Lq))     # (L|1) × n
+    Q = reshape(_rx_vec(q, 1), (Lq, 1))                       # (L|1) × 1
     c = sum(ifelse.(cmp.(K, Q), 1.0, 0.0); dims = 2)          # (L|1) × 1
     s = Reactant.Ops.reshape(c, size(c, 1))
     return _rx_unwrap(s, max(_rx_cols(knots), _rx_len(q)))
@@ -291,9 +357,10 @@ end
 function _oop_knot_pair(v::_RxKnots, i::_RxIdx)
     L = max(_rx_cols(v), _rx_len(i))
     ik = _rx_int(_rx_vec(i, max(L, 1)))
-    flat = _rx_flat(v)
-    return (_rx_unwrap(_rx_take(flat, _rx_lin(v, ik)), L),
-            _rx_unwrap(_rx_take(flat, _rx_lin(v, ik .+ Int64(1))), L))
+    # One dedup pass serves both knots: the next knot is one stride on.
+    flat, lin, dk = _rx_knot_lin(v, ik)
+    return (_rx_unwrap(_rx_take(flat, lin), L),
+            _rx_unwrap(_rx_take(flat, lin .+ Int64(dk)), L))
 end
 
 # Two tables at one index. The default fuses them to share the ladder's
