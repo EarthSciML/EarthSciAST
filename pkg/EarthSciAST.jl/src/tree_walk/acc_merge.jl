@@ -139,11 +139,15 @@ end
 # `_fn_spec_hash` keys `_struct_sig!`'s grouping; `_fn_spec_content_equal` is the
 # exact check `_merge_fn_node` re-runs on the resulting group, so a hash COLLISION
 # degrades to a loud build error instead of back to silent wrong numbers.
-_fn_spec_hash(::Nothing) = UInt(0)                      # all-scalar `datetime.*`
+_fn_spec_hash(::Nothing) = UInt(0)                      # boxed all-scalar fn
 _fn_spec_hash(s::_InterpLinearSpec) = hash(s.axis, hash(s.table, UInt(0x11)))
 _fn_spec_hash(s::_InterpBilinearSpec) =
     hash(s.axis_y, hash(s.axis_x, hash(s.table, UInt(0x22))))
 _fn_spec_hash(s::_InterpSearchsortedSpec) = hash(s.xs, UInt(0x33))
+# A typed-core spec's content IS its two ints (`_fn_typed_core_spec` mints it
+# deterministically from the fname), so same-name nodes always content-match —
+# the payload analog of the `Nothing` it replaced (ess-dtcore).
+_fn_spec_hash(s::_FnTypedCoreSpec) = hash(s.arity, hash(s.id, UInt(0x77)))
 # An unknown spec type cannot be content-hashed, so key it by IDENTITY: over-splitting
 # (a group per object) is safe — worst case an extra kernel — where under-splitting is
 # the silent wrong number this whole mechanism exists to prevent. No such spec exists
@@ -159,6 +163,8 @@ _fn_spec_content_equal(a::_InterpBilinearSpec, b::_InterpBilinearSpec) =
     isequal(a.table, b.table) && isequal(a.axis_x, b.axis_x) && isequal(a.axis_y, b.axis_y)
 _fn_spec_content_equal(a::_InterpSearchsortedSpec, b::_InterpSearchsortedSpec) =
     isequal(a.xs, b.xs)
+_fn_spec_content_equal(a::_FnTypedCoreSpec, b::_FnTypedCoreSpec) =
+    a.id == b.id && a.arity == b.arity
 
 # Every cell in a `fn` group must carry a CONTENT-equal spec, because the merged
 # kernel carries exactly one. Throws rather than merging cells whose const tables

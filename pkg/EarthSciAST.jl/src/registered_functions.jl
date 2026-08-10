@@ -560,6 +560,128 @@ function _datetime_julian_day(t_utc)
     return jdn + (seconds_in_day - 43200.0) / 86400.0
 end
 
+# ============================================================
+# Registry-declared typed scalar cores (ess-dtcore)
+# ============================================================
+#
+# An ALL-SCALAR closed function (payload `(fname, nothing)` — today the nine
+# `datetime.*` entries) used to reach every evaluator tier through ONE boxed
+# door: args collected into a `Vector{Any}`, dispatched by name through
+# `_eval_closed_fn`. That box was the single residual allocation on the lane
+# tape (~480 B/call) and one opaque call per lane on the `:oop` lane path.
+#
+# This table lets a closed function DECLARE a typed scalar core: a concrete,
+# allocation-free Julia function `(t::Float64) -> Float64` that computes
+# EXACTLY what the boxed registry computes at `T === Float64` — each row's
+# `core` is the same `_cal_*` / `_datetime_julian_day` composition the pinned
+# `evaluate_closed_function` arm runs (`_value` elided: it is the identity on
+# `Float64`), followed by the same `Int32 → Float64` widening the call sites'
+# `convert(T, …)` performed. Bit-identity with the boxed path is therefore by
+# CONSTRUCTION, not by test alone (though the tests pin it anyway), and the
+# `_cal_i32` overflow throw is preserved verbatim.
+#
+# CONSUMERS. `_compile_fn_node` (tree_walk/compile.jl) consults
+# `_fn_typed_core_spec` ONCE at build time and mints the payload
+# `(fname, _FnTypedCoreSpec)` instead of `(fname, nothing)`; every tier's `:fn`
+# arm — scalar walker, access interpreter, lane tape (`_TC_FN_TYPED`), codegen,
+# and both `:oop` paths — `isa`-matches that concrete payload and calls
+# `_fn_typed_core_call(id, x)` at `T === Float64`. A closed function WITHOUT a
+# row keeps the boxed `(fname, nothing)` route on every tier, unchanged. A
+# future all-scalar closed function becomes fast on every tier by adding ONE
+# row here.
+#
+# FLOAT64-ONLY, DELIBERATELY. The declared cores are eltype-generic in
+# construction (the branch-free calendar is), but the typed call surface pins
+# `Float64` because that is what preserves bit-identity with the split
+# registry: a non-`Float64` value type (ForwardDiff `Dual`, a traced number)
+# keeps the boxed `_eval_closed_fn` route and with it the exact
+# `evaluate_closed_function_ad` widening semantics (`_cal_narrow`) it had
+# before typed cores existed. The tiers' `T === Float64` selection folds at
+# compile time, exactly like `_eval_closed_fn`'s own registry split.
+#
+# ARITY. Each row declares its spec arity; the tier executors implement the
+# UNARY form — which covers the entire v0.3.0 all-scalar set. A future row
+# declaring a wider arity is NOT silently mis-called: `_compile_fn_node` only
+# mints the typed payload when the declared arity is 1 AND matches the call,
+# so a wider core falls back to the boxed path (correct, just slower) until
+# the executors grow that arity. A wrong-arity CALL likewise keeps the boxed
+# payload, so the registry's eval-time `closed_function_arity` diagnostic is
+# unchanged.
+
+# The typed-core payload rider: `(fname, _FnTypedCoreSpec)` on the `:fn` node.
+# `id` is the 1-based row index into `_FN_TYPED_SCALAR_CORES` — an isbits
+# handle, so the payload is a pure descriptor (content-keyed by `id` in the
+# merge/CSE machinery; no per-chunk clone needed on the threaded tape, unlike
+# `_TC_FN`'s mutable arg buffer).
+struct _FnTypedCoreSpec
+    id::Int
+    arity::Int
+end
+
+# One row per declared function. `core` must be total over finite `Float64`
+# (the TOTALITY CONTRACT above) and EXACTLY the boxed registry's `Float64`
+# composition — including the `_cal_i32` Int32 range check, whose throw is
+# part of the pinned semantics for absurd inputs.
+const _FN_TYPED_SCALAR_CORES = (
+    (fname = "datetime.year", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.year", _cal_year(t)))),
+    (fname = "datetime.month", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.month", _cal_month(t)))),
+    (fname = "datetime.day", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.day", _cal_day(t)))),
+    (fname = "datetime.hour", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(t)))),
+    (fname = "datetime.minute", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(t)))),
+    (fname = "datetime.second", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.second", _cal_second(t)))),
+    (fname = "datetime.day_of_year", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(t)))),
+    (fname = "datetime.is_leap_year", arity = 1,
+     core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(t)))),
+    # Already `Float64`-valued — the boxed arm's `convert(T, ::Float64)` was
+    # the identity, so the core is the raw kernel.
+    (fname = "datetime.julian_day", arity = 1,
+     core = _datetime_julian_day),
+)
+
+# The typed-core declaration for `fname`, or `nothing` when the function keeps
+# the boxed path (`interp.searchsorted` DELIBERATELY has no row — its typed
+# route is the `_InterpSearchsortedSpec` const-arg protocol, and its pinned-
+# registry fallthrough in `evaluate_closed_function_ad` stays as is). BUILD-
+# TIME ONLY (a linear scan over a heterogeneous tuple — type-unstable and
+# happily so); the runtime hot paths carry the resolved `_FnTypedCoreSpec` on
+# the node payload instead.
+function _fn_typed_core_spec(fname::AbstractString)::Union{Nothing,_FnTypedCoreSpec}
+    for (i, row) in enumerate(_FN_TYPED_SCALAR_CORES)
+        row.fname == fname && return _FnTypedCoreSpec(i, row.arity)
+    end
+    return nothing
+end
+
+# Should be unreachable: every `id` in a `_FnTypedCoreSpec` payload was minted
+# by `_fn_typed_core_spec` from the same const table this indexes.
+@noinline _fn_typed_core_id_oob(id::Int) =
+    throw(ClosedFunctionError("unknown_closed_function",
+        "internal: typed-core id $(id) has no _FN_TYPED_SCALAR_CORES row"))
+
+# The typed unary call, shared by EVERY tier's `Float64` fast path (scalar
+# walker, access interpreter, lane tape, codegen, both `:oop` paths) — one
+# callee, so the tiers cannot drift from each other OR from the boxed registry
+# (whose composition each row's `core` is). The tuple recursion below unrolls
+# into a type-stable branch ladder over the const table rows: no dynamic
+# dispatch, no arg box, zero allocation — the property the lane tape's
+# `_TC_FN_TYPED` loop is built on. `Float64(…)` re-pins the result so the
+# ladder infers concretely even if a future row's `core` widens.
+@inline _fn_typed_core_call(id::Int, x::Float64)::Float64 =
+    _fn_typed_core_call_r(_FN_TYPED_SCALAR_CORES, id, x)
+@inline _fn_typed_core_call_r(::Tuple{}, id::Int, x::Float64)::Float64 =
+    _fn_typed_core_id_oob(id)
+@inline function _fn_typed_core_call_r(rows::Tuple, id::Int, x::Float64)::Float64
+    return id == 1 ? Float64(first(rows).core(x)) :
+                     _fn_typed_core_call_r(Base.tail(rows), id - 1, x)
+end
+
 # Validate an `interp.searchsorted` table `xs`: must be a vector, non-decreasing,
 # with no NaN entries (esm-spec §9.2.2). Factored out of the per-call kernel so
 # the vectorized array path can validate ONCE at build time instead of re-walking

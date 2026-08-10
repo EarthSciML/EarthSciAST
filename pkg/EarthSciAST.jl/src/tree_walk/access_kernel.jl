@@ -607,11 +607,24 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
             sp = @inbounds h.specs[_interp_lane(h, midx)]
             return convert(T, _interp_searchsorted_core("interp.searchsorted",
                                                         ev(ch[1]), sp.xs))
+        elseif pl isa Tuple{String,_FnTypedCoreSpec}
+            # Registry-declared typed scalar core — MIRRORS compile.jl's `:fn`
+            # arm: `T === Float64` folds at compile time and calls the unary
+            # core directly (no `Any[]` box, bit-identical to the boxed
+            # registry by construction); every other `T` keeps the boxed
+            # route below verbatim (AD/traced widening unchanged).
+            if T === Float64
+                return _fn_typed_core_call(pl[2].id, ev(ch[1]))
+            end
+            args_evaluated = Any[ev(ci) for ci in ch]
+            return convert(T, _eval_closed_fn(pl[1], args_evaluated, T))
         elseif pl isa Tuple{String,Nothing}
-            # `_eval_closed_fn` selects the pinned vs. AD registry on the
-            # compile-time `T` — mirrors compile.jl's `:fn` arm, and keeps this
-            # arm's inference (and the affine kernel's zero-alloc property)
-            # identical at `T === Float64`.
+            # Undeclared all-scalar closed fn (none in the v0.3.0 set — kept
+            # as the registry's boxed fallback contract). `_eval_closed_fn`
+            # selects the pinned vs. AD registry on the compile-time `T` —
+            # mirrors compile.jl's `:fn` arm, and keeps this arm's inference
+            # (and the affine kernel's zero-alloc property) identical at
+            # `T === Float64`.
             fname = pl[1]
             args_evaluated = Any[ev(ci) for ci in ch]
             return convert(T, _eval_closed_fn(fname, args_evaluated, T))
@@ -806,6 +819,10 @@ _acc_fn_spec_keyable(::_InterpSearchsortedSpec) = true
 _acc_fn_spec_keyable(::_InterpLinearLaneSpec) = true
 _acc_fn_spec_keyable(::_InterpBilinearLaneSpec) = true
 _acc_fn_spec_keyable(::_InterpSearchsortedLaneSpec) = true
+# A typed-core spec is a pure function of the fname (isbits `id`/`arity` row
+# handle) — content IS the two ints, so `_fn_spec_hash`/`_fn_spec_content_equal`
+# (acc_merge.jl) key it exactly.
+_acc_fn_spec_keyable(::_FnTypedCoreSpec) = true
 _acc_fn_spec_keyable(::Any) = false
 
 function _acc_fn_pay_key(payload)
@@ -1010,7 +1027,11 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 #     by contract (never throws on real inputs), so an eager eval under a guard
 #     matches the lazy walk bit for bit and any off-domain NaN is discarded by
 #     the guard's select. A lane-varying boxed fn boxes its args per lane exactly
-#     as the scalar walk does (the ONE place the tape is not zero-alloc).
+#     as the scalar walk does — the ONE place the tape is not zero-alloc, and
+#     since ess-dtcore reachable only by an all-scalar closed fn WITHOUT a
+#     typed-core declaration (none in the v0.3.0 set): a DECLARED core
+#     (`datetime.*`) rides `_TC_FN_TYPED` instead — a typed per-lane
+#     `_fn_typed_core_call` loop, no arg box, zero-alloc like every other opcode.
 
 # Tape opcodes.
 const _TC_GATHER_STATE   = UInt8(1)   # d[l] = u[oln[l] + delta]
@@ -1031,6 +1052,10 @@ const _TC_FN             = UInt8(12)  # d[l] = _eval_closed_fn(name, args[·], F
 const _TC_INTERP_LINEAR_TBL   = UInt8(13)  # d[l] = _interp_linear_core(specs[·(l)], q[l])
 const _TC_INTERP_BILINEAR_TBL = UInt8(14)  # d[l] = _interp_bilinear_core(specs[·(l)], x[l], y[l])
 const _TC_INTERP_SEARCH_TBL   = UInt8(15)  # d[l] = Float64(_interp_searchsorted_core(specs[·(l)], q[l]))
+# Registry-declared typed scalar core (ess-dtcore): a pure descriptor — the
+# `_FnTypedCoreSpec` payload is isbits, so unlike `_TC_FN` there is no mutable
+# arg buffer and no per-chunk clone (`_clone_plan_scratch` shares it as-is).
+const _TC_FN_TYPED            = UInt8(16)  # d[l] = _fn_typed_core_call(spec.id, q[l])
 
 # One instruction. Operand `args[k]` is a buffer id into the plan's `bufs`;
 # `strides[k]` is 0 (a length-1 scalar/literal slot, broadcast) or 1 (a lane
@@ -1301,9 +1326,26 @@ end
 function _plan_emit_fn!(B::_AccPlanBuilder, nd::_Node, K::_AccKernel)
     pl = nd.payload
     ch = nd.children
+    if pl isa Tuple{String,_FnTypedCoreSpec}
+        # Registry-declared typed scalar core (ess-dtcore): a typed per-lane
+        # `_fn_typed_core_call` loop — no `Any[]` arg box, so the tape stays
+        # zero-alloc through a `datetime.*` spine. Same totality argument as
+        # the boxed arm below (eager per-lane eval under a guard is the
+        # author's contract). Unary by construction (`_compile_fn_node` only
+        # mints this payload at declared arity 1); anything else is a
+        # hand-built node — decline it to the scalar walk rather than guess.
+        length(ch) == 1 || throw(_AccPlanDecline())
+        o = _plan_emit!(B, ch[1], K)
+        d = _plan_newlane!(B)
+        push!(B.instrs, _mkinstr(_TC_FN_TYPED; dest=d, args=Int[o[1]],
+                                 strides=Int[o[2]], payload=pl[2]))
+        o[3] && push!(B.free, o[1])
+        return (d, 1, true)
+    end
     if pl isa Tuple{String,Nothing}
-        # BOXED closed fn (`datetime.*`): no typed interp spec, so evaluate it
-        # per lane through `_eval_closed_fn` (gordian total-vectorize, Stage 2).
+        # BOXED closed fn (an all-scalar fn WITHOUT a typed-core registry row —
+        # none in the v0.3.0 set since ess-dtcore): no typed spec, so evaluate
+        # it per lane through `_eval_closed_fn` (gordian total-vectorize, Stage 2).
         # Totality is the AUTHOR'S CONTRACT — a closed function must be total over
         # real inputs (never throw; return NaN off-domain), so eager per-lane eval
         # under a guard is safe and the guard's select discards any off-domain
@@ -1454,9 +1496,11 @@ Compile `K` into a lane tape, or return `nothing` when the kernel has no strided
 formulation (reduction, sub-kernel call, n-indexed descriptor) — the scalar
 `_run_acc_kernel!` then keeps the kernel. Lazy guard ops (`ifelse`/`and`/`or`)
 ARE compiled: eager select/blend on a spine copy sanitized by
-`_acc_sanitize_guards` so eager evaluation cannot throw. Boxed closed `fn`
-(`datetime.*`) leaves ARE compiled: a per-lane `_eval_closed_fn` loop, total by
-the closed-function contract.
+`_acc_sanitize_guards` so eager evaluation cannot throw. All-scalar closed `fn`
+leaves ARE compiled: a typed per-lane `_fn_typed_core_call` loop when the
+registry declares a core (`datetime.*`, `_TC_FN_TYPED` — zero-alloc), a boxed
+per-lane `_eval_closed_fn` loop otherwise (`_TC_FN`); both total by the
+closed-function contract.
 """
 function _build_acc_plan(K::_AccKernel; tile::Int=1024)
     isempty(K.subs) || return nothing
@@ -1895,7 +1939,25 @@ function _run_acc_instr!(ins::_AccInstr, bufs::Vector{Vector{Float64}}, u,
             d[l] = Float64(_interp_searchsorted_core("interp.searchsorted",
                                                      q[1 + (l-1)*sq], sp.xs))
         end
-    else # _TC_FN — boxed closed fn (datetime.*), per-lane through _eval_closed_fn
+    elseif c === _TC_FN_TYPED
+        # Registry-declared typed scalar core (ess-dtcore): the SAME
+        # `_fn_typed_core_call` every other tier's Float64 path calls — a
+        # type-stable ladder over `_FN_TYPED_SCALAR_CORES`, so this loop is
+        # zero-alloc like every other opcode (the boxed `_TC_FN` below is now
+        # the only allocating one, and nothing in the v0.3.0 set reaches it).
+        d = bufs[ins.dest]; spec = ins.payload::_FnTypedCoreSpec
+        q = bufs[ins.args[1]]; sq = ins.strides[1]
+        if sq == 0                      # lane-invariant: ONE call, broadcast
+            v = _fn_typed_core_call(spec.id, @inbounds q[1])
+            @inbounds for l in 1:L
+                d[l] = v
+            end
+        else
+            @inbounds for l in 1:L
+                d[l] = _fn_typed_core_call(spec.id, q[1 + (l-1)*sq])
+            end
+        end
+    else # _TC_FN — boxed closed fn (undeclared all-scalar), per-lane through _eval_closed_fn
         d = bufs[ins.dest]
         name, argbuf = ins.payload::Tuple{String,Vector{Any}}
         args = ins.args; sts = ins.strides; na = length(args)
@@ -1940,8 +2002,10 @@ end
 # Run one planned kernel in place. Bit-identical to `_run_acc_kernel!` at
 # Float64 (same per-lane op sequence, same fold order, same write order) and
 # zero-allocation (all buffers preallocated on the plan) — the ONE exception is
-# a boxed closed `fn` (`datetime.*`) with lane-varying args, which boxes those
-# args per lane exactly as the scalar `:fn` arm does. `Float64` only —
+# a boxed closed `fn` (`_TC_FN` — an all-scalar fn with NO typed-core registry
+# row; none in the v0.3.0 set, `datetime.*` rides the zero-alloc `_TC_FN_TYPED`
+# since ess-dtcore) with lane-varying args, which boxes those args per lane
+# exactly as the scalar `:fn` arm does. `Float64` only —
 # `_make_rhs` gates on `T === Float64` and sends every other value type to the
 # scalar runner.
 # Per-call scalar sources → their 1-length stride-0 buffers. Reads only `u`,
