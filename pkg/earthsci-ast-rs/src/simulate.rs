@@ -605,6 +605,24 @@ impl Compiled {
                 ic_vec[i] = interpret(expr, &no_state, param_vec, &no_obs, t0);
             } else if let Some(d) = self.state_defaults[i] {
                 ic_vec[i] = d;
+            } else if matches!(self.state_kinds[i], StateKind::Algebraic(_)) {
+                // An algebraic state's initial value is DETERMINED, not supplied.
+                //
+                // `apply_algebraic_ics` runs immediately after this and
+                // overwrites this slot by interpreting the state's own defining
+                // body (esm-0kt), so whatever goes here is discarded before the
+                // solve begins. Demanding a `default` therefore rejected a
+                // perfectly well-posed model — `NOx = NO + NO2` needs no initial
+                // condition, because it HAS one the moment NO and NO2 do.
+                //
+                // Only a DIFFERENTIAL state genuinely needs a starting value,
+                // and that case still errors below.
+                //
+                // Callers used to paper over this themselves: the TypeScript
+                // binding injected a placeholder for exactly these states before
+                // calling `simulate`, which meant a model ran in the browser and
+                // failed on a server that called the same function directly.
+                ic_vec[i] = 0.0;
             } else {
                 return Err(SimulateError::InvalidInitialCondition { name: name.clone() });
             }
@@ -2637,6 +2655,97 @@ mod tests {
 
     /// Algebraic states whose `default` does not satisfy the constraint at
     /// t=0 must be reconciled before integration starts (esm-0kt).
+    #[test]
+    fn an_algebraic_state_needs_no_default() {
+        // The same shape as `algebraic_ic_reconciled_to_constraint`, except G
+        // declares NO default at all — as `NOx = NO + NO2` does in real
+        // chemistry, where the sum is defined by its parts and there is nothing
+        // sensible to seed it with.
+        //
+        // This used to fail with `Invalid initial condition 'M.G'`, which was
+        // wrong twice over: the value is overwritten by `apply_algebraic_ics`
+        // before the solve starts, and the model is perfectly well posed. It
+        // also split the ecosystem — the TypeScript binding injected a
+        // placeholder before calling simulate, so a model that ran in a browser
+        // failed on a server calling this function directly.
+        let json = r#"{
+            "esm": "0.4.0",
+            "metadata": {"name": "TestFixture"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "D": {"type": "state", "default": 1.0},
+                        "G": {"type": "state"},
+                        "k": {"type": "parameter", "default": 1.0}
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["D"], "wrt": "t"},
+                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "G"]}
+                        },
+                        {"lhs": "G", "rhs": "D"}
+                    ]
+                }
+            }
+        }"#;
+        let file = crate::parse::load(json).expect("parse fixture");
+        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let opts = SimulateOptions {
+            output_times: Some(vec![0.0, 1.0]),
+            ..Default::default()
+        };
+        let sol = compiled
+            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+            .expect("a defaultless ALGEBRAIC state must not block a simulation");
+
+        let g = sol
+            .state_variable_names
+            .iter()
+            .position(|n| n.ends_with("G"))
+            .expect("G in solution");
+        // G is determined by its own body (G = D), so it starts at D's default
+        // rather than at the placeholder the IC pass wrote.
+        assert!(
+            (sol.state[g][0] - 1.0).abs() < 1e-9,
+            "G should be reconciled to D at t0, got {}",
+            sol.state[g][0]
+        );
+    }
+
+    /// The other half of the rule: a DIFFERENTIAL state with no way to start
+    /// still has to be refused. Relaxing that would silently begin every such
+    /// model at zero.
+    #[test]
+    fn a_defaultless_differential_state_is_still_refused() {
+        let json = r#"{
+            "esm": "0.4.0",
+            "metadata": {"name": "TestFixture"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "D": {"type": "state"},
+                        "k": {"type": "parameter", "default": 1.0}
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["D"], "wrt": "t"},
+                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "D"]}
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let file = crate::parse::load(json).expect("parse fixture");
+        let compiled = Compiled::from_file(&file).expect("compile succeeds");
+        let err = compiled
+            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &SimulateOptions::default())
+            .expect_err("a differential state with no initial value must be refused");
+        assert!(
+            matches!(err, SimulateError::InvalidInitialCondition { .. }),
+            "expected InvalidInitialCondition, got {err:?}"
+        );
+    }
+
     #[test]
     fn algebraic_ic_reconciled_to_constraint() {
         // dD/dt = -k*G,  G = D  (so D evolves as exp(-k*t), G tracks D).
