@@ -722,9 +722,10 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
     #     pbl_sum_X[gi,gj] = Σ_gk dp[gi,gj,gk] · pbl_f[gi,gj,gk] · X[gi,gj,gk]
     # whose `pbl_f` is a region-split layer-overlap expression, so `gk` reaches a
     # makearray select in every term. Only an INLINING build gets here at all
-    # (`form = :oop` / `ESS_ARRAY_OBS_INLINE=1`): materializing the observed gives
-    # the reduction its own fill equation, where the contraction is top-level and
-    # never enters a branch-key walk.
+    # (`ESS_ARRAY_OBS_INLINE=1`, or an observed excluded from materialization —
+    # both emitters materialize by default since 66b8e9a6): materializing the
+    # observed gives the reduction its own fill equation, where the contraction
+    # is top-level and never enters a branch-key walk.
     #
     # The contraction is part of the cell's branch structure — two `gk` may select
     # DIFFERENT regions — so the key covers every contracted value, in the same

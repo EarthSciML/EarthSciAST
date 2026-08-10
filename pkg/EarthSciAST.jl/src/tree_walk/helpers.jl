@@ -136,10 +136,11 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String,ASTExpr}, memo::_Su
     #     pbl_sum_O3[gi,gj]     = Σ_gk dp[gi,gj,gk]·pbl_f[gi,gj,gk]·O3[gi,gj,gk]
     #     pbl_mean_O3[gi,gj,gk] = pbl_sum_O3[gi,gj] / max(pbl_wt[gi,gj], 1)
     #
-    # `gk` is CONTRACTED in the first and an OUTPUT index in the second. Under
-    # `:inplace` the sum is materialized, so the mean reads a buffer gather and
-    # the two binders never meet. Under `:oop` nothing is materialized
-    # (`mat_array_vars`, build.jl), the sum is spliced into the mean's body, and
+    # `gk` is CONTRACTED in the first and an OUTPUT index in the second. In a
+    # MATERIALIZING build (the default for both emitters since 66b8e9a6) the sum
+    # is materialized, so the mean reads a buffer gather and the two binders
+    # never meet. In an INLINING build (`ESS_ARRAY_OBS_INLINE=1`, or an observed
+    # excluded from materialization) the sum is spliced into the mean's body, and
     # substituting the outer `gk` used to rewrite the inner sum's own loop
     # variable. The inner body then no longer mentions `gk` while `ranges` still
     # declares it, so the unroll emits `length(gk)` IDENTICAL terms: a column sum
