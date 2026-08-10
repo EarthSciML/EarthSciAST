@@ -46,6 +46,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")
     include("shape_promotion_test.jl")
+    include("shape_promotion_consumer_refs_test.jl")  # promoted-var consumers gathered in-loop
     include("subsystem_ref_test.jl")
     include("reaction_system_ref_test.jl")
     include("editing_test.jl")

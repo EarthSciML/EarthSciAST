@@ -407,11 +407,24 @@ spatial state) and propagates through elementwise ops, stopping at aggregate
 reductions and `index` gathers. The transform is a no-op for a system with no
 scalar-downstream-of-array variables (it returns an equivalent system).
 
+CONSUMERS of a promoted variable are closed too: a bare reference to a newly
+promoted name inside the body of an `aggregate`/`arrayop` that already carries
+its loops (a pointwise-lifted species ODE, an authored per-cell equation) is
+rewritten to an `index(var, <loops>)` gather bound in that body's own loop
+scope — name-aligned against the enclosing `ranges`' index sets where possible,
+positionally over the enclosing producer's `output_idx` otherwise (see
+[`_index_promoted_consumer_refs`](@ref)). A reference in SCALAR position (the
+un-discretized spatial state equation) is left bare deliberately: its loops do
+not exist until `discretize` lowers the equation, and `index_promoted_refs!`
+closes it post-discretize. `index_consumer_refs=false` disables the consumer
+rewrite (the pre-fix behaviour, kept as a regression kill switch).
+
 `index_sets` for the grid axes must already be declared (the loop ranges resolve
 against them); supply them on the FlattenedSystem before calling. Returns a new
 FlattenedSystem; the input is untouched.
 """
-function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
+function promote_downstream_shapes(flat::FlattenedSystem;
+                                   index_consumer_refs::Bool=true)::FlattenedSystem
     # Current shapes from declarations (scalar = []).
     shapes = Dict{String,Vector{String}}()
     for d in (flat.state_variables, flat.parameters, flat.observed_variables)
@@ -464,21 +477,34 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
     new_params = promote_partition(flat.parameters)
     new_observeds = promote_partition(flat.observed_variables)
 
+    # Names whose shape GREW in this pass (scalar → array). Only these need
+    # consumer-side gathers below: a pre-existing array operand was already the
+    # author's (or an earlier lift's) responsibility to index, and rewriting it
+    # here would change working documents.
+    newly_promoted = Set{String}(k for k in arrayvars if flat_was_scalar(flat, k))
+
     # Rewrite equations: a promoted var's bare `x = expr` becomes `x = arrayop(…)`;
-    # otherwise index any newly-array operands that appear bare in the RHS
-    # (e.g. an aggregate body, or a still-scalar consumer that must now gather).
+    # then, in EVERY equation, a bare reference to a newly promoted variable
+    # inside a loop-carrying aggregate/arrayop body becomes an `index` gather in
+    # that body's own loop scope (`_index_promoted_consumer_refs`). Without the
+    # consumer rewrite, a pointwise-lifted state ODE — whose lift indexed only
+    # the operands that carried a shape AT FLATTEN TIME — ships a bare scalar
+    # name for a now-array variable, and the evaluator fails to bind it
+    # (`E_TREEWALK_UNBOUND_VARIABLE`). Scalar-position references are left for
+    # the post-discretize `index_promoted_refs!` companion, as before.
     new_eqs = Equation[]
     for eq in flat.equations
-        if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
-           haskey(defs, (eq.lhs::VarExpr).name) &&
-           (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
-            name = (eq.lhs::VarExpr).name
-            push!(new_eqs, Equation(eq.lhs,
-                _lift_to_arrayop(eq.rhs, shapes[name], arrayvars, shapes);
-                _comment=eq._comment))
+        rhs = if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
+                 haskey(defs, (eq.lhs::VarExpr).name) &&
+                 (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
+            _lift_to_arrayop(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
         else
-            push!(new_eqs, eq)
+            eq.rhs
         end
+        index_consumer_refs &&
+            (rhs = _index_promoted_consumer_refs(rhs, newly_promoted, shapes))
+        push!(new_eqs, rhs === eq.rhs ? eq :
+              Equation(eq.lhs, rhs; _comment=eq._comment))
     end
 
     return FlattenedSystem(flat; state_variables=new_states, parameters=new_params,
@@ -503,6 +529,140 @@ function promoted_array_names(flat::FlattenedSystem, promoted::FlattenedSystem):
         end
     end
     return out
+end
+
+"""
+    _index_promoted_consumer_refs(expr, promoted, var_shapes) -> ASTExpr
+
+Consumer-side companion of the promoted-definition rewrite: replace a BARE
+reference to a newly promoted array variable, wherever it sits inside the body
+of a loop-carrying `aggregate`/`arrayop`, with an `index(var, <loops>)` gather
+bound in the enclosing loop scope.
+
+The motivating construct is a pointwise-lifted species ODE (§10.5) consuming a
+scalar-authored photolysis chain (Fast-JX): the lift indexed only operands that
+carried a shape AT FLATTEN TIME, so the j-rate — promoted only later, by
+`promote_downstream_shapes` — survives as a bare name inside the per-cell
+`aggregate` body, and the evaluator fails to bind it
+(`E_TREEWALK_UNBOUND_VARIABLE`). The post-discretize `index_promoted_refs!`
+cannot close this either: it takes ONE `spatial_loops` list, while each consumer
+equation iterates its OWN loop names (the lift's `["i","j","k"]` vs a promoted
+definition's `["_p0","_p1","_p2"]`).
+
+Loop resolution, innermost scope winning:
+- NAME-ALIGNED (preferred): every `ranges` entry of an enclosing producer whose
+  spec is a plain `IndexSetRef` binds `index set → loop name` — including
+  CONTRACTED loops absent from `output_idx` — and the gather lists the loop
+  bound to each of the variable's declared axes in DECLARED-AXIS order, so a
+  `[c,d]`-shaped variable inside a `[d,c]`-iterating body transposes correctly
+  (the body-scope analogue of `_AxisAlign`). An axis bound by two loops of the
+  same producer is ambiguous and poisons name alignment for that axis.
+- POSITIONAL fallback: when name alignment cannot resolve every axis, and the
+  INNERMOST enclosing producer has an all-symbolic `output_idx` whose rank
+  equals the variable's, gather positionally over those loops (the historical
+  `_index_bare` convention).
+- Otherwise the reference is left bare (the status-quo diagnostic fires).
+
+A reference in scalar position (no enclosing producer) is always left bare —
+its loops do not exist until `discretize` runs (`index_promoted_refs!` owns
+that case). References already under an `index` node are self-contained: the
+gathered operand (arg 1) is never rewrapped. Pure; returns `expr` itself
+(`===`) when nothing changes. IDENTITY-MEMOIZED per loop scope (the ESS-0hh
+convention of `_wrap_bare_array_refs`): within one scope the rewrite is a pure
+function of the node, so a structurally-shared input DAG rewrites to a shared
+output DAG instead of re-inflating into an exponential tree; entering a
+producer opens a fresh scope (and memo), since the same node can legally
+rewrite differently under different loop bindings.
+"""
+function _index_promoted_consumer_refs(expr::ASTExpr, promoted::Set{String},
+                                       var_shapes::Dict{String,Vector{String}})::ASTExpr
+    isempty(promoted) && return expr
+    return _index_promoted_in_scope(expr, promoted, var_shapes,
+                                    Dict{String,Union{String,Nothing}}(), nothing,
+                                    IdDict{OpExpr,ASTExpr}())
+end
+
+function _index_promoted_in_scope(expr::ASTExpr, promoted::Set{String},
+                                  var_shapes::Dict{String,Vector{String}},
+                                  env::Dict{String,Union{String,Nothing}},
+                                  poslocal::Union{Nothing,Vector{String}},
+                                  memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+    if expr isa VarExpr
+        expr.name in promoted || return expr
+        # Scalar position: no enclosing loop scope, nothing to bind against.
+        (isempty(env) && poslocal === nothing) && return expr
+        vs = get(var_shapes, expr.name, String[])
+        isempty(vs) && return expr
+        if allunique(vs)
+            loops = String[]
+            for ax in vs
+                l = get(env, ax, nothing)
+                l === nothing && (empty!(loops); break)
+                push!(loops, l)
+            end
+            (length(loops) == length(vs) && allunique(loops)) &&
+                return _index_wrap(expr, loops)
+        end
+        (poslocal !== nothing && length(poslocal) == length(vs)) &&
+            return _index_wrap(expr, poslocal)
+        return expr
+    elseif expr isa OpExpr
+        cached = get(memo, expr, nothing)
+        cached === nothing || return cached
+        result = _index_promoted_opexpr(expr, promoted, var_shapes, env,
+                                        poslocal, memo)
+        memo[expr] = result
+        return result
+    end
+    return expr
+end
+
+function _index_promoted_opexpr(expr::OpExpr, promoted::Set{String},
+                                var_shapes::Dict{String,Vector{String}},
+                                env::Dict{String,Union{String,Nothing}},
+                                poslocal::Union{Nothing,Vector{String}},
+                                memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+    if expr.op == "index"
+        # The gathered operand keeps its own indexing (`_index_bare` twin);
+        # only the subscript expressions recurse.
+        length(expr.args) <= 1 && return expr
+        changed = false
+        new_args = Vector{ASTExpr}(undef, length(expr.args))
+        new_args[1] = expr.args[1]
+        for i in 2:length(expr.args)
+            r = _index_promoted_in_scope(expr.args[i], promoted, var_shapes,
+                                         env, poslocal, memo)
+            r === expr.args[i] || (changed = true)
+            new_args[i] = r
+        end
+        return changed ? reconstruct(expr; args=new_args) : expr
+    end
+    env2, pos2, memo2 = env, poslocal, memo
+    if expr.op in _ARRAY_PRODUCER_OPS && expr.expr_body !== nothing &&
+       expr.ranges !== nothing
+        env2 = copy(env)
+        seen = Set{String}()
+        for (loop, spec) in expr.ranges
+            (spec isa IndexSetRef && isempty(spec.of)) || continue
+            ax = spec.from
+            # Two loops of ONE producer over the same index set (a square
+            # correlation) leave the axis with no unambiguous loop; poison
+            # it rather than let Dict iteration order pick one.
+            env2[ax] = ax in seen ? nothing : String(loop)
+            push!(seen, ax)
+        end
+        oi = expr.output_idx
+        # The positional fallback is only ever the INNERMOST producer's own
+        # loops: an unusable output_idx (literal singleton dims, empty)
+        # CLEARS it rather than letting an outer scope's loops leak in.
+        pos2 = (oi !== nothing && !isempty(oi) &&
+                all(x -> x isa AbstractString, oi)) ?
+               String[String(x) for x in oi] : nothing
+        memo2 = IdDict{OpExpr,ASTExpr}()      # new loop scope ⇒ new memo
+    end
+    return map_children(
+        c -> _index_promoted_in_scope(c, promoted, var_shapes, env2, pos2, memo2),
+        expr)
 end
 
 """
