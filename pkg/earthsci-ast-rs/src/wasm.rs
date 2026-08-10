@@ -250,9 +250,26 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
             .collect()
     };
 
+    // Each state's `kind`, so a host can tell a settable initial condition from
+    // one the solver is going to overwrite. Without it every Run UI re-derives
+    // the distinction by walking the raw `.esm` itself — the same rule written
+    // twice, in a language that cannot see what flattening already resolved.
+    let algebraic: std::collections::HashSet<String> =
+        crate::simulate::algebraic_state_names(&flat)
+            .into_iter()
+            .collect();
+    let mut states = to_vars(&flat.state_variables);
+    for state in &mut states {
+        let kind = match state.get("name").and_then(|n| n.as_str()) {
+            Some(name) if algebraic.contains(name) => "algebraic",
+            _ => "differential",
+        };
+        state["kind"] = serde_json::Value::from(kind);
+    }
+
     let out = serde_json::json!({
         "parameters": to_vars(&flat.parameters),
-        "states": to_vars(&flat.state_variables),
+        "states": states,
         "independentVariables": flat.independent_variables,
     });
 
