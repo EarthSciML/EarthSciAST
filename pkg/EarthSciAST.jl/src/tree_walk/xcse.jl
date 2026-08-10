@@ -106,13 +106,16 @@ _xcse_disabled() = get(ENV, "ESS_XCSE_DISABLE", "") == "1"
 #     shared by construction — a shared parent implies shared children);
 #   * a kernel def matching an EXISTING scalar prelude slot is rewritten onto
 #     it regardless of cost — the slot is already paid for.
-const _XCSE_EXPENSIVE_OPS = Set{Symbol}([
-    :fn,
-    :exp, :expm1, :log, :log2, :log10, :log1p,
-    :sin, :cos, :tan, :asin, :acos, :atan, :atan2,
-    :sinh, :cosh, :tanh, :asinh, :acosh, :atanh,
-    :sqrt, :cbrt, :^, :pow,
-])
+# Derived from the registry's `:xcse_expensive` flag (src/op_registry.jl) —
+# membership is edited THERE, next to every other per-pass op set. The
+# pre-registry hand list also named `:expm1`/`:log2`/`:log1p`/`:cbrt`, spellings
+# with no `_OP_TABLE` row: spine ops only ever come from the registry
+# vocabulary (the compile-time `unlowered_operator` gate rejects everything
+# else), so those entries could never match a def and dropping them is a no-op
+# by construction. test/op_capability_audit_test.jl pins both the membership
+# and the ⊆-registry containment.
+const _XCSE_EXPENSIVE_OPS =
+    Set{Symbol}(Symbol(n) for n in _ops_with(:xcse_expensive))
 
 # ---- Exact value numbering ----------------------------------------------------
 #

@@ -71,6 +71,7 @@ struct _OpSpec
     array_producer::Bool
     self_indexed::Bool
     builtin_fn::Bool
+    xcse_expensive::Bool
 end
 
 # Compact row constructor for `_OP_TABLE` (keyword flags keep the table
@@ -82,10 +83,10 @@ _op(name::String; arity=nothing, category::Symbol, fn=nothing,
     ws4::Bool=false, cse::Bool=false, stencil::Bool=false,
     geo::Bool=false, known::Bool=false,
     arrprod::Bool=false, selfidx::Bool=false,
-    builtin::Bool=false) =
+    builtin::Bool=false, xcse::Bool=false) =
     _OpSpec(name, arity, category, fn, dimclass, prec, sep,
             ws4, cse, stencil, geo, known,
-            arrprod, selfidx, builtin)
+            arrprod, selfidx, builtin, xcse)
 
 """
     _OP_FLAG_NAMES
@@ -100,10 +101,11 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:array_producer`     → `_ARRAY_PRODUCER_OPS`           (shape_promotion.jl)
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
 - `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validate.jl)
+- `:xcse_expensive`     → `_XCSE_EXPENSIVE_OPS`           (tree_walk/xcse.jl)
 """
 const _OP_FLAG_NAMES =
     (:ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known,
-     :array_producer, :self_indexed, :builtin_fn)
+     :array_producer, :self_indexed, :builtin_fn, :xcse_expensive)
 
 """
     _OP_TABLE
@@ -131,6 +133,11 @@ hand:
 - `_BUILTIN_FUNCTION_NAMES` (src/validate.jl) — bare names the reference
   checker excuses as always-in-scope builtins (mirrors Rust
   `is_builtin_function`, structural.rs).
+- `_XCSE_EXPENSIVE_OPS` (src/tree_walk/xcse.jl) — ops at least as expensive
+  as an fn/interp call, the cross-kernel fn-CSE cost gate (plan B4
+  criterion (c)): closed-function calls and the transcendental / power-class
+  elementary ops. Bare arithmetic / comparisons / min-max are deliberately
+  unflagged — never worth a store + K loads on their own.
 - `_TRANSCENDENTAL_OPS` / `_CIRCULAR_OPS` / `_INVERSE_CIRCULAR_OPS` /
   `_COMPARISON_OPS` / `_BOOLEAN_OPS` (src/units.jl) — the dimensional-rule
   op classes (from the `dim_class` column via
@@ -173,9 +180,9 @@ const _OP_TABLE = _OpSpec[
     _op("/";   arity=2:2,            category=:arithmetic, fn=(/), prec=5,
         ws4=true, stencil=true, geo=true, known=true),
     _op("^";   arity=2:2,            category=:arithmetic, fn=(^), prec=7,
-        ws4=true, stencil=true, geo=true, known=true),
+        ws4=true, stencil=true, geo=true, known=true, xcse=true),
     _op("pow"; arity=2:2,            category=:arithmetic, fn=(^),
-        ws4=true, stencil=true),
+        ws4=true, stencil=true, xcse=true),
     _op("neg"; arity=1:1,            category=:arithmetic, fn=(-),
         ws4=true, stencil=true),
 
@@ -224,51 +231,51 @@ const _OP_TABLE = _OpSpec[
     #    `ceil`/`min`/`max` have bespoke rules, not a class (units.jl).
     _op("sin";   arity=1:1, category=:elementary, fn=sin,
         dimclass=:circular, builtin=true,
-        ws4=true, stencil=true, geo=true, known=true),
+        ws4=true, stencil=true, geo=true, known=true, xcse=true),
     _op("cos";   arity=1:1, category=:elementary, fn=cos,
         dimclass=:circular, builtin=true,
-        ws4=true, stencil=true, geo=true, known=true),
+        ws4=true, stencil=true, geo=true, known=true, xcse=true),
     _op("tan";   arity=1:1, category=:elementary, fn=tan,
         dimclass=:circular, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("asin";  arity=1:1, category=:elementary, fn=asin,
         dimclass=:inverse_circular, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("acos";  arity=1:1, category=:elementary, fn=acos,
         dimclass=:inverse_circular, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("atan";  arity=1:2, category=:elementary, fn=atan,
         dimclass=:inverse_circular, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("atan2"; arity=2:2, category=:elementary, fn=atan,
         dimclass=:inverse_circular, builtin=true,
-        stencil=true, geo=true),
+        stencil=true, geo=true, xcse=true),
     _op("sinh";  arity=1:1, category=:elementary, fn=sinh,
         dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("cosh";  arity=1:1, category=:elementary, fn=cosh,
         dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("tanh";  arity=1:1, category=:elementary, fn=tanh,
         dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("asinh"; arity=1:1, category=:elementary, fn=asinh,
-        dimclass=:transcendental, builtin=true, stencil=true),
+        dimclass=:transcendental, builtin=true, stencil=true, xcse=true),
     _op("acosh"; arity=1:1, category=:elementary, fn=acosh,
-        dimclass=:transcendental, builtin=true, stencil=true),
+        dimclass=:transcendental, builtin=true, stencil=true, xcse=true),
     _op("atanh"; arity=1:1, category=:elementary, fn=atanh,
-        dimclass=:transcendental, builtin=true, stencil=true),
+        dimclass=:transcendental, builtin=true, stencil=true, xcse=true),
     _op("exp";   arity=1:1, category=:elementary, fn=exp,
         dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("log";   arity=1:1, category=:elementary, fn=log,
         dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("log10"; arity=1:1, category=:elementary, fn=log10,
         dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true),
+        ws4=true, stencil=true, known=true, xcse=true),
     _op("sqrt";  arity=1:1, category=:elementary, fn=sqrt, builtin=true,
-        ws4=true, stencil=true, geo=true, known=true),
+        ws4=true, stencil=true, geo=true, known=true, xcse=true),
     _op("abs";   arity=1:1, category=:elementary, fn=abs, builtin=true,
         ws4=true, stencil=true, geo=true, known=true),
     _op("sign";  arity=1:1, category=:elementary, fn=sign, builtin=true,
@@ -300,7 +307,7 @@ const _OP_TABLE = _OpSpec[
     #    `interp.*` lookup (FastJX actinic-flux bands over `Solar.cos_zenith`) was
     #    re-walked once per occurrence — see `_CSE_OPAQUE_OPS` (tree_walk/compile.jl).
     #    `call` stays opaque: it was removed in v0.3.0 and always throws at compile.
-    _op("fn";   category=:function, known=true),
+    _op("fn";   category=:function, known=true, xcse=true),
     _op("call"; category=:function, cse=true, known=true),
 
     # ── Const data / enum markers ──
