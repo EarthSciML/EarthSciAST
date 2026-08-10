@@ -2678,7 +2678,25 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     return f!, u0, p, tspan_default, layout.var_map, diag
 end
 
-function _build_evaluator_impl(model::Model;
+# Build-scoped lane-table intern pool (acc_merge.jl): every `_Interp*Spec` mint
+# and every lane-spec `.specs` collection inside this build canonicalizes
+# content-equal interp tables to ONE object. The pool is installed here — the
+# single entry every build path funnels through — and torn down in `finally`,
+# save/restore so a nested build cannot clobber an outer one's pool. With
+# `ESS_LANE_INTERN_DISABLE=1` the pool stays `nothing` and the build is
+# byte-for-byte today's un-interned build (the differential oracle).
+function _build_evaluator_impl(model::Model; kwargs...)
+    prev = _LANE_INTERN_POOL[]
+    _LANE_INTERN_POOL[] = _lane_intern_disabled() ? nothing :
+                          Dict{_LaneInternKey,Any}()
+    try
+        return _build_evaluator_impl_inner(model; kwargs...)
+    finally
+        _LANE_INTERN_POOL[] = prev
+    end
+end
+
+function _build_evaluator_impl_inner(model::Model;
                          initial_conditions::AbstractDict=Dict{String,Float64}(),
                          parameter_overrides::AbstractDict=Dict{String,Float64}(),
                          tspan::Union{Nothing,Tuple{<:Real,<:Real}}=nothing,

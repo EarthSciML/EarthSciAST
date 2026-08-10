@@ -166,6 +166,84 @@ _fn_spec_content_equal(a::_InterpSearchsortedSpec, b::_InterpSearchsortedSpec) =
 _fn_spec_content_equal(a::_FnTypedCoreSpec, b::_FnTypedCoreSpec) =
     a.id == b.id && a.arity == b.arity
 
+# ---- Lane-table interning (build-scoped) -------------------------------------
+#
+# `_compile_fn_node` mints a fresh `_Interp*Spec` per SOURCE `fn` node, so two
+# calls over content-equal const tables routinely hold DISTINCT spec objects
+# (AST interning catches structurally identical const spellings, but not e.g.
+# `[1, 2]` vs `[1.0, 2.0]`, distinct-but-equal const vectors, or template-
+# manufactured copies). Everything downstream already keys those by CONTENT
+# (`_struct_sig!`, `_AccFnPayKey`, xcse) — the objects just stayed distinct, so
+# a merged kernel's `_Interp*LaneSpec.specs` vector carries one table copy per
+# content-twin and every backend re-discovers the sharing (the Reactant ext
+# groups lanes by `isequal` at trace time).
+#
+# The pool below makes content-equal specs the SAME object (`===`) at BUILD
+# time instead: every mint (`_build_interp_spec`) and every collection into a
+# lane-spec `.specs` vector (the `_Interp*LaneSpec` outer constructors) routes
+# through `_lane_intern`, which returns the pool's canonical object for the
+# content. Keying mirrors `_AccFnPayKey`'s hash-then-confirm posture over the
+# SAME matched (`_fn_spec_hash`, `_fn_spec_content_equal`) pair the merge guard
+# trusts: the Dict confirms `isequal` after the hash bucket, so a hash
+# collision degrades to a missed share (a duplicate object), never to aliasing
+# two different tables. `isequal` semantics are bitwise per element (NaN
+# unifies with NaN, `-0.0` stays apart from `0.0`), so canonicalization can
+# never swap a signed zero between tables. Content-equal tables are
+# interchangeable by the same argument that justifies `_AccFnPayKey` — every
+# admitted closed function is a pure function of (spec, scalar args) — so any
+# identity-keyed consumer (`_cg_tab!`'s table memo, `objectid` fallbacks) can
+# only MERGE MORE, never confuse two different tables.
+#
+# The pool is BUILD-SCOPED: `_build_evaluator_impl` installs a fresh Dict for
+# the duration of one build (saving/restoring any outer pool, so nested builds
+# stay correct) and clears it after, so canonical objects never leak across
+# builds and the pool cannot grow without bound. Outside a build the ref is
+# `nothing` and `_lane_intern` is the identity — direct constructor use (tests,
+# tooling) sees exactly the pre-interning behavior.
+#
+# Kill switch: `ESS_LANE_INTERN_DISABLE=1` (read at build entry, like
+# `ESS_STENCIL_DISABLE`) keeps the ref `nothing` for the whole build, restoring
+# today's un-interned build byte for byte — the differential oracle
+# (test/lane_table_intern_test.jl).
+_lane_intern_disabled() = get(ENV, "ESS_LANE_INTERN_DISABLE", "") == "1"
+
+struct _LaneInternKey
+    spec::Any
+end
+Base.hash(k::_LaneInternKey, h::UInt) = hash(_fn_spec_hash(k.spec), h)
+Base.isequal(a::_LaneInternKey, b::_LaneInternKey) =
+    _fn_spec_content_equal(a.spec, b.spec)
+Base.:(==)(a::_LaneInternKey, b::_LaneInternKey) = isequal(a, b)
+
+const _LANE_INTERN_POOL =
+    Base.RefValue{Union{Nothing,Dict{_LaneInternKey,Any}}}(nothing)
+
+# The closed set of spec types the pool canonicalizes — exactly the types
+# `_fn_spec_hash`/`_fn_spec_content_equal` content-model AND whose tables are
+# worth sharing. `_FnTypedCoreSpec`/`Nothing` carry no table (nothing to
+# share); an unknown spec type falls through untouched (its content pair keys
+# by identity anyway, so pooling it would be a no-op that still paid the hash).
+_lane_internable(::_InterpLinearSpec) = true
+_lane_internable(::_InterpBilinearSpec) = true
+_lane_internable(::_InterpSearchsortedSpec) = true
+_lane_internable(::Any) = false
+
+@inline function _lane_intern(spec)
+    _lane_internable(spec) || return spec
+    pool = _LANE_INTERN_POOL[]
+    pool === nothing && return spec
+    return get!(pool, _LaneInternKey(spec), spec)::typeof(spec)
+end
+
+# Canonicalize one lane-spec `.specs` vector: content-equal lanes come out
+# holding the SAME (`===`) spec object. Identity (the very vector, untouched)
+# whenever the pool is off — the `_Interp*LaneSpec` constructors then store
+# exactly what they were handed, today's build.
+function _lane_intern_specs(specs::Vector{S}) where {S}
+    _LANE_INTERN_POOL[] === nothing && return specs
+    return S[_lane_intern(s) for s in specs]
+end
+
 # Every cell in a `fn` group must carry a CONTENT-equal spec, because the merged
 # kernel carries exactly one. Throws rather than merging cells whose const tables
 # differ — the hazard this guards is a SILENT one (identical shapes, different

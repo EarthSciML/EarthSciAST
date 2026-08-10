@@ -1049,6 +1049,12 @@ struct _InterpLinearLaneSpec
 end
 function _InterpLinearLaneSpec(specs::Vector{_InterpLinearSpec},
                                s1::Int, s2::Int, s3::Int, off::Int)
+    # Content-intern the per-lane specs (build-scoped pool; acc_merge.jl):
+    # content-equal lanes come out holding the SAME (`===`) spec object, so a
+    # backend keying tables by identity shares one copy per DISTINCT table
+    # rather than one per lane. Identity when the pool is off. Same for the
+    # bilinear/searchsorted twins below.
+    specs = _lane_intern_specs(specs)
     L = length(specs); n = length(specs[1].axis)
     table_cols = Vector{Vector{Float64}}(undef, n)
     axis_cols  = Vector{Vector{Float64}}(undef, n)
@@ -1068,6 +1074,7 @@ struct _InterpBilinearLaneSpec
 end
 function _InterpBilinearLaneSpec(specs::Vector{_InterpBilinearSpec},
                                  s1::Int, s2::Int, s3::Int, off::Int)
+    specs = _lane_intern_specs(specs)   # see the linear twin above
     L = length(specs)
     Nx = length(specs[1].axis_x); Ny = length(specs[1].axis_y)
     table_cols = Matrix{Vector{Float64}}(undef, Nx, Ny)
@@ -1093,6 +1100,7 @@ struct _InterpSearchsortedLaneSpec
 end
 function _InterpSearchsortedLaneSpec(specs::Vector{_InterpSearchsortedSpec},
                                      s1::Int, s2::Int, s3::Int, off::Int)
+    specs = _lane_intern_specs(specs)   # see the linear twin above
     L = length(specs); n = length(specs[1].xs)
     xs_cols = Vector{Vector{Float64}}(undef, n)
     for k in 1:n
