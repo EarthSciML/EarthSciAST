@@ -44,6 +44,162 @@ _acc_node_has_lazy(n::_Node) =
     (n.kind === _NK_OP && (n.op === :ifelse || n.op === :and || n.op === :or)) ||
     any(_acc_node_has_lazy, n.children)
 
+# ---- DIRECT CLASS EMISSION (per-cell scalarizer → lane-batched class kernels)
+#
+# The kernel-CLASS merge (oop_merge.jl) exists because the per-cell grouping
+# below used to key an `interp.*` node's spec by CONTENT (`_fn_spec_hash`):
+# cells calling the same function against DIFFERENT same-shape const tables
+# (a `makearray` whose regions each carry their own table, indexed inside an
+# equation on the per-cell path) split into one kernel PER DISTINCT TABLE —
+# an O(#tables) kernel count the post-hoc merge then repaired by re-grouping
+# the assembled kernels on a SHAPE key and transposing the specs into
+# per-lane tables (`_Interp*LaneSpec`).
+#
+# Direct emission folds that repair into the emitter: the grouping signature
+# keys an interp spec's SHAPE (knot count — `_direct_fn_shape_token`), so
+# same-shape cells share ONE group, and `_acc_merge_nodes` mints the per-lane
+# spec table AT MERGE TIME (`_direct_merge_fn_payload`) exactly as it mints an
+# `_AccConstBox` for a varying literal or an `_AccStateTblBox` for a varying
+# state slot. The kernel count is then grid-independent BY CONSTRUCTION — a
+# class is a fact of the document (the set of distinct call SHAPES), never of
+# the grid — and the post-hoc merge becomes a residual repair pass that finds
+# nothing to do on kernels this emitter produced (pinned by
+# test/direct_class_emission_test.jl).
+#
+# BIT-IDENTITY. Per lane the evaluated op sequence is byte-identical to the
+# split kernel's: the lane-spec arms of every runner (`_eval_acc`, the lane
+# tape's `_TC_INTERP_*_TBL`, the :oop lane evaluator, the codegen tier) select
+# lane `l`'s OWN spec by the `_outs_cells` box addressing (s1=1, off=1, lane
+# == cell ordinal — the same shape the post-hoc merge mints) and call the SAME
+# `_interp_*_core`. Grouping coarser can only change WHICH kernel hosts a
+# cell, never the scalar sequence its lane evaluates.
+#
+# GENERALITY VS THE MERGE'S BAIL-OUTS. The per-cell entries this emitter sees
+# are compiled scalar trees: no `_NK_REDUCE` (contractions arrive unrolled as
+# fixed-width `_NK_CONTRACTION`), no `_NK_SUBCALL` (templates are fused on
+# this path), no `_NK_CACHED` (per-kernel CSE runs after the merge), no
+# n-indexed descriptors (the merge mints only STATE_FIXED/STATE_TBL_BOX/
+# CONST_BOX/ARR_FIXED/ARR_TBL_BOX), and out slots are globally unique within
+# the equation (`covered` throws on a duplicate derivative) with an
+# assignment scatter — so every semantic bail-out of the post-hoc merge is
+# structurally unreachable here. The merge's remaining bail-outs
+# (`:unvectorizable` members, fold-to-cell of a varying inv tier) were
+# artifacts of merging post-hoc — needing member `_OopAccPlan`s as the table
+# source, and having to relocate already-built CSE tiers. Direct emission
+# needs neither: tables come from the cell nodes themselves, and
+# `_build_acc_cse` runs AFTER the merge, so genuinely loop-invariant subtrees
+# keep a REAL invariant tier even when the interp specs vary per lane (the
+# case the merge must fold to the cell tier). The one hazard that creates is
+# pinned in `_build_acc_cse` itself: a lane-spec `:fn` node is never
+# classified invariant (`_acc_fn_pay_lane_varying`, access_kernel.jl), the
+# scalarizer-side twin of the merge's kept-inv `nacc0` pin.
+#
+# Anything the shape key does not model — `Nothing` (boxed closed fn),
+# `_FnTypedCoreSpec`, an unknown spec type — keeps the CONTENT/identity key
+# and the rep-payload + `_check_fn_group_specs` guard byte-for-byte, so those
+# groups decline to exactly today's behavior.
+#
+# KILL SWITCH. `ESS_DIRECT_CLASS_EMIT_DISABLE=1` restores the assemble-then-
+# merge pipeline byte for byte (content-keyed signature, loud spec-mismatch
+# guard) — the differential oracle. The emitter also stands down under the
+# class-merge umbrella switches (`ESS_KERNEL_CLASS_MERGE_DISABLE=1` /
+# `ESS_OOP_MERGE_DISABLE=1`): those mean "no lane-batched class kernels in
+# this build", and a direct-emitted class kernel would violate that contract.
+_direct_class_emit_disabled() =
+    get(ENV, "ESS_DIRECT_CLASS_EMIT_DISABLE", "") == "1"
+_direct_class_emit_enabled() =
+    !_direct_class_emit_disabled() && !_oop_merge_disabled()
+
+# SHAPE token of a spec the direct emitter can lane-table, `nothing` for
+# anything it cannot (which then keys by content/identity exactly as before).
+# Mirrors `_oop_merge_fn_sig_token` (oop_merge.jl) for the scalar spec types;
+# per-lane specs never appear in per-cell entries (they are minted by merges).
+_direct_fn_shape_token(::Any) = nothing
+_direct_fn_shape_token(s::_InterpLinearSpec) = string("L", length(s.axis))
+_direct_fn_shape_token(s::_InterpBilinearSpec) =
+    string("B", length(s.axis_x), "x", length(s.axis_y))
+_direct_fn_shape_token(s::_InterpSearchsortedSpec) = string("S", length(s.xs))
+
+# Same fn name + same spec type + same knot shape ⇒ the group can ride one
+# per-lane spec table. Cross-type pairs are unequal by dispatch.
+_direct_lane_shape_ok(::Any, ::Any) = false
+_direct_lane_shape_ok(a::_InterpLinearSpec, b::_InterpLinearSpec) =
+    length(a.axis) == length(b.axis)
+_direct_lane_shape_ok(a::_InterpBilinearSpec, b::_InterpBilinearSpec) =
+    length(a.axis_x) == length(b.axis_x) && length(a.axis_y) == length(b.axis_y)
+_direct_lane_shape_ok(a::_InterpSearchsortedSpec, b::_InterpSearchsortedSpec) =
+    length(a.xs) == length(b.xs)
+
+_direct_is_lanespec(::Any) = false
+_direct_is_lanespec(::_InterpLinearLaneSpec) = true
+_direct_is_lanespec(::_InterpBilinearLaneSpec) = true
+_direct_is_lanespec(::_InterpSearchsortedLaneSpec) = true
+
+# Does this (pre-CSE, tree-shaped) merged spine carry a per-lane spec — i.e.
+# did direct emission produce a true CLASS kernel (one the content-keyed
+# pipeline would have split)? Observability only.
+function _acc_spine_has_lanespec(n::_Node)
+    if n.kind === _NK_OP && n.op === :fn
+        pl = n.payload
+        pl isa Tuple && length(pl) >= 2 && _direct_is_lanespec(pl[2]) && return true
+    end
+    return any(_acc_spine_has_lanespec, n.children)
+end
+
+# Merged payload for one aligned per-cell `:fn` group under direct emission
+# (each cell is exactly ONE lane, in group cell order). Content-equal specs
+# ride the representative's payload — byte-for-byte the pre-direct behavior.
+# Varying specs whose (name, type, shape) agree — guaranteed by the shape-
+# keyed signature — transpose into a per-lane spec table with `_outs_cells`
+# addressing (1,0,0,1): the interp analog of the varying-literal
+# `_AccConstBox` right above it in `_acc_merge_nodes`. Anything else reaching
+# here is a grouping-invariant break and fails LOUDLY through
+# `_check_fn_group_specs` — never silent wrong numbers. The `_Interp*LaneSpec`
+# outer constructors intern their `.specs` through the build-scoped lane pool,
+# same as the post-hoc merge's mints.
+function _direct_merge_fn_payload(nodes::Vector{_Node})
+    m = length(nodes)
+    fname1, spec1 = (nodes[1].payload)::Tuple{String,Any}
+    varying = false
+    @inbounds for k in 2:m
+        fnamek, speck = (nodes[k].payload)::Tuple{String,Any}
+        if !(fnamek == fname1 &&
+             (speck === spec1 || _fn_spec_content_equal(speck, spec1)))
+            varying = true
+            break
+        end
+    end
+    varying || return nodes[1].payload
+    ok = spec1 isa _InterpLinearSpec || spec1 isa _InterpBilinearSpec ||
+         spec1 isa _InterpSearchsortedSpec
+    if ok
+        @inbounds for k in 2:m
+            fnamek, speck = (nodes[k].payload)::Tuple{String,Any}
+            if !(fnamek == fname1 && _direct_lane_shape_ok(spec1, speck))
+                ok = false
+                break
+            end
+        end
+    end
+    if ok
+        if spec1 isa _InterpLinearSpec
+            specs = _InterpLinearSpec[((nodes[k].payload)::Tuple{String,Any})[2]
+                                      for k in 1:m]
+            return (fname1, _InterpLinearLaneSpec(specs, 1, 0, 0, 1))
+        elseif spec1 isa _InterpBilinearSpec
+            specs = _InterpBilinearSpec[((nodes[k].payload)::Tuple{String,Any})[2]
+                                        for k in 1:m]
+            return (fname1, _InterpBilinearLaneSpec(specs, 1, 0, 0, 1))
+        else # _InterpSearchsortedSpec
+            specs = _InterpSearchsortedSpec[((nodes[k].payload)::Tuple{String,Any})[2]
+                                            for k in 1:m]
+            return (fname1, _InterpSearchsortedLaneSpec(specs, 1, 0, 0, 1))
+        end
+    end
+    _check_fn_group_specs(nodes)   # loud: grouping-invariant break
+    return nodes[1].payload        # unreachable — the guard throws on mismatch
+end
+
 
 # ---- Structural grouping signature (moved here from the deleted _VecNode
 # overlay, vectorize.jl — same bytes, same partition) ----------------------
@@ -60,7 +216,13 @@ _acc_node_has_lazy(n::_Node) =
 # allocated an intermediate `String` at every interior node and re-copied every
 # descendant's bytes at each level up the tree — O(nodes × depth) garbage. The
 # emitted bytes are unchanged, so the grouping is identical.
-function _struct_sig!(io::IOBuffer, n::_Node)
+#
+# `direct` (direct class emission, see the section above): key a lane-tablable
+# interp spec's SHAPE instead of its content, so same-shape cells share one
+# group and the merge mints a per-lane spec table. `false` (the 2-arg form and
+# the kill-switch path) emits byte-for-byte the content-keyed signature.
+_struct_sig!(io::IOBuffer, n::_Node) = _struct_sig!(io, n, false)
+function _struct_sig!(io::IOBuffer, n::_Node, direct::Bool)
     k = n.kind
     if k === _NK_STATE
         print(io, 'S')
@@ -78,7 +240,7 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, 'T')
     elseif k === _NK_CONTRACTION
         print(io, "C:", n.op, '(')
-        _sig_children!(io, n.children)
+        _sig_children!(io, n.children, direct)
         print(io, ')')
     elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR
         # Defensive: a runtime contraction loop (ess-runtime-contraction) is
@@ -110,23 +272,38 @@ function _struct_sig!(io::IOBuffer, n::_Node)
             # merge and destroy the N-independence of the kernel count. Content keying
             # keeps it: the number of DISTINCT tables is a property of the document,
             # not of the grid.
-            print(io, '@', pl[1], '#', _fn_spec_hash(pl[2]))
+            #
+            # Under DIRECT CLASS EMISSION the interp families key their SHAPE
+            # instead (`_direct_fn_shape_token`): same-shape different-content
+            # cells then share one group whose merged node carries a per-lane
+            # spec table (`_direct_merge_fn_payload`) — each lane still reads
+            # ITS OWN table, so the hazard the content key excluded stays
+            # excluded, by tabling instead of splitting. Non-interp payloads
+            # (boxed fn / typed core / unknown spec) keep the content key and
+            # the loud `_check_fn_group_specs` guard byte-for-byte.
+            tok = direct ? _direct_fn_shape_token(pl[2]) : nothing
+            if tok === nothing
+                print(io, '@', pl[1], '#', _fn_spec_hash(pl[2]))
+            else
+                print(io, '@', pl[1], '#', tok)
+            end
         elseif pl isa Tuple && length(pl) >= 1
             print(io, '@', pl[1])
         end
         print(io, '(')
-        _sig_children!(io, n.children)
+        _sig_children!(io, n.children, direct)
         print(io, ')')
     end
     return io
 end
 
-function _sig_children!(io::IOBuffer, children)
+_sig_children!(io::IOBuffer, children) = _sig_children!(io, children, false)
+function _sig_children!(io::IOBuffer, children, direct::Bool)
     first = true
     for ch in children
         first || print(io, ',')
         first = false
-        _struct_sig!(io, ch)
+        _struct_sig!(io, ch, direct)
     end
     return io
 end
@@ -291,8 +468,16 @@ end
 #             (`_check_fn_group_specs`) since the merged node carries ONE spec
 # The ordinal tables use box-local addressing `s1=1, off=1` — the outs runner
 # threads the cell ordinal through `midx[1]`.
+#
+# `direct` (direct class emission): a `:fn` group whose same-shape specs VARY
+# in content becomes a per-lane spec table (`_direct_merge_fn_payload`) — the
+# interp analog of the varying-literal `_AccConstBox` — instead of a build
+# error. The 3-arg form (white-box tests, kill-switch path) keeps today's
+# content-equal-or-throw contract byte for byte.
+_acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})::_Node =
+    _acc_merge_nodes(nodes, len, acc, false)
 function _acc_merge_nodes(nodes::Vector{_Node}, len::Int,
-                          acc::Vector{_AccDesc})::_Node
+                          acc::Vector{_AccDesc}, direct::Bool)::_Node
     n1 = nodes[1]
     k = n1.kind
     if k === _NK_LITERAL
@@ -326,16 +511,25 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int,
         return _acc(length(acc))
     elseif k === _NK_CONTRACTION
         m = length(n1.children)
-        ch = _Node[_acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc)
+        ch = _Node[_acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len,
+                                    acc, direct)
                    for c in 1:m]
         return _mknode(kind=_NK_CONTRACTION, op=n1.op, literal=n1.literal,
                        children=ch)
     else  # _NK_OP / fn
-        n1.op === :fn && _check_fn_group_specs(nodes)
+        pay = n1.payload
+        if n1.op === :fn
+            if direct
+                pay = _direct_merge_fn_payload(nodes)
+            else
+                _check_fn_group_specs(nodes)
+            end
+        end
         m = length(n1.children)
-        ch = _Node[_acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc)
+        ch = _Node[_acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len,
+                                    acc, direct)
                    for c in 1:m]
-        return _mknode(kind=_NK_OP, op=n1.op, payload=n1.payload, children=ch)
+        return _mknode(kind=_NK_OP, op=n1.op, payload=pay, children=ch)
     end
 end
 
@@ -344,11 +538,17 @@ end
 # deterministic kernel boundaries, lane order, and out-slot order.
 function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccKernel}
     isempty(entries) && return _AccKernel[]
+    # Direct class emission (see the section above `_direct_class_emit_disabled`):
+    # group by SHAPE-keyed signature and mint per-lane spec tables at merge
+    # time, so the kernel count is grid-independent by construction. Disabled
+    # (or under the class-merge umbrella switches) this is byte-for-byte the
+    # content-keyed assemble-then-merge front half.
+    direct = _direct_class_emit_enabled()
     order = String[]
     groups = Dict{String,Tuple{Vector{Int},Vector{_Node}}}()
     sigbuf = IOBuffer()
     for (slot, node) in entries
-        sig = String(take!(_struct_sig!(sigbuf, node)))
+        sig = String(take!(_struct_sig!(sigbuf, node, direct)))
         if !haskey(groups, sig)
             groups[sig] = (Int[], _Node[])
             push!(order, sig)
@@ -362,7 +562,13 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccK
         slots, nds = groups[sig]
         len = length(slots)
         acc = _AccDesc[]
-        spine = _acc_merge_nodes(nds, len, acc)
+        spine = _acc_merge_nodes(nds, len, acc, direct)
+        # Observability (test/direct_class_emission_test.jl): one bump per
+        # emitted kernel that carries a per-lane spec table — a TRUE class
+        # kernel the content-keyed pipeline would have split and the post-hoc
+        # merge would have had to repair. Grid-independent (a per-group fact).
+        direct && _acc_spine_has_lanespec(spine) &&
+            _tally_cascade!(:direct_class_kernel)
         # CSE + invariant hoisting on the merged spine — skipped on a
         # lazy-bearing one (see the header) so the SCALAR reference stays lazy;
         # the tape sanitizes and eager-blends the guards from this same spine.

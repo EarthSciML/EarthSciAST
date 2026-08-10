@@ -554,6 +554,13 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
             end
         else
             push!(out_kernels, merged[1]); push!(out_plans, merged[2])
+            # Cascade observability (direct class emission): one bump per
+            # class this REPAIR pass actually had to merge. On kernels the
+            # direct emitter produced (per-cell-path classes) this must stay
+            # zero — pinned by test/direct_class_emission_test.jl; nonzero
+            # counts mean genuinely residual work (cross-equation / affine-box
+            # classes the emitter does not see).
+            _tally_cascade!(:classmerge_round1_merge)
         end
     end
     for j in passthrough
@@ -970,6 +977,8 @@ function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
             end
         else
             push!(out_kernels, merged[1]); push!(out_plans, merged[2])
+            # Round-2 twin of the round-1 repair counter above.
+            _tally_cascade!(:classmerge_round2_merge)
         end
     end
     for j in passthrough

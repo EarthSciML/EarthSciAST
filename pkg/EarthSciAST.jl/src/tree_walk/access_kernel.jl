@@ -857,6 +857,23 @@ end
 @inline _acc_desc_invariant(k::UInt8) =
     k === _AK_STATE_FIXED || k === _AK_ARR_FIXED || k === _AK_SCALAR
 
+# A `:fn` payload carrying a per-LANE spec table (`_Interp*LaneSpec` — minted
+# by the direct class emitter in `_acc_merge_nodes`, or reaching a hand-built
+# spine) selects per-lane data by the CELL multi-index, so the node is
+# cell-VARYING even when every scalar child is invariant: hoisting it to the
+# invariant tier — evaluated ONCE per call at the dummy midx (1,1,1) — would
+# read lane 1's table for every lane. The post-hoc class merge pins the same
+# hazard on its side (the kept-inv `nacc0` assert, oop_merge.jl); this is the
+# scalarizer-side twin. Ordinary scalar specs stay hoistable exactly as before
+# (no lane spec existed pre-CSE before direct emission, so the disabled build
+# is byte-identical).
+@inline function _acc_fn_pay_lane_varying(pl)
+    pl isa Tuple && length(pl) >= 2 || return false
+    s = pl[2]
+    return s isa _InterpLinearLaneSpec || s isa _InterpBilinearLaneSpec ||
+           s isa _InterpSearchsortedLaneSpec
+end
+
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
     key_to_vn = Dict{Any,Int}()
@@ -903,7 +920,8 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             k = n.kind
             inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ?  true :
                   k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
-                  k === _NK_OP     ? all(v -> is_inv[v], childvns) :
+                  k === _NK_OP     ? (all(v -> is_inv[v], childvns) &&
+                                      !_acc_fn_pay_lane_varying(n.payload)) :
                   false                       # _NK_REDUCE excluded upstream; be safe
             push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
         end
