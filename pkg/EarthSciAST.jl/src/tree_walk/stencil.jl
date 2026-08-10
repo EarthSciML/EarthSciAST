@@ -28,6 +28,11 @@
 # (`arrayop`/`aggregate`/`makearray`/`integral`/`index`-of-those/`table_lookup`/…)
 # throws `_StencilFallback` and the caller runs the unchanged per-cell path. So the
 # fast path is provably identical WHERE it applies and simply absent elsewhere.
+# ONE refinement keeps the failure mode SUBTERM-granular instead of
+# whole-equation: a construct that would throw but is BUILD-TIME EVALUABLE
+# (free references only loop indices / literals / const arrays) becomes a
+# `LANE_EXPRTBL` lane materialized as a per-box value table — see the
+# SUBTREE-TABLE RESCUE section below. Everything else still throws.
 #
 # `ESS_STENCIL_DISABLE=1` forces the per-cell SCALAR reference (compiled cell
 # nodes on `rhs_list`, evaluated by `_eval_node`) — the differential oracle.
@@ -36,7 +41,7 @@ struct _StencilFallback <: Exception
     reason::String
 end
 
-@enum _LaneKind LANE_STATE LANE_CONST LANE_PGATHER LANE_LOOPLIT
+@enum _LaneKind LANE_STATE LANE_CONST LANE_PGATHER LANE_LOOPLIT LANE_EXPRTBL
 
 # One loop-var-dependent leaf, evaluated per output cell to a slot / value.
 struct _LaneRecipe
@@ -368,7 +373,182 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
         new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
         return reconstruct(e; args=new_args)
     end
+    # SUBTERM-GRANULAR fallback (subtree-table rescue): before declining the
+    # WHOLE equation over this one construct, try to isolate it as a
+    # build-time-evaluable lane (see `_try_exprtbl_lane` below). CONSERVATIVE
+    # BY CONSTRUCTION: this call sits exactly where the walk THREW until now,
+    # so every currently-succeeding equation lowers byte-identically — the
+    # rescue can only run where the old code dropped the equation to the
+    # per-cell tier.
+    lane = _try_exprtbl_lane(e, ctx)
+    lane === nothing || return lane
     throw(_StencilFallback("unsupported loop-var-dependent op '$op'"))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUBTREE-TABLE RESCUE (subterm-granular fallback). Historically ONE
+# unsupported loop-var-dependent construct anywhere in a rule body threw
+# `_StencilFallback` and the ENTIRE equation dropped to per-cell
+# scalarization — O(#cells) IR and build time (the GEOS-FP incident: one
+# declined equation was ~910k of ~935k `_compile` calls). The escape hatch the
+# box processor already carries for LEAVES — a non-uniform state/const/pgather
+# lane materializes a per-box table instead of declining
+# (`_materialize_state_tbl` / `_materialize_const_box` /
+# `_materialize_pgather_tbl`, stencil_affine.jl) — generalizes to SUBTREES:
+# when the offending subtree is BUILD-TIME EVALUABLE (its free references are
+# only loop indices, literals, and const arrays — NO state, NO `t`, NO scalar
+# params, NO live forcing, NO non-const-materialized observeds), it becomes a
+# `LANE_EXPRTBL` lane whose per-box lowering is a dense VALUE table
+# (`_materialize_const_box`'s exhaustive per-cell evaluation, all-equal fold
+# included), and the rest of the equation stays on the affine path.
+#
+# Evaluation reuses the wall2 Phase C compile-once machinery
+# (`_cellwise_compile_once_impl` + `_CellEval`, tree_walk/helpers.jl) — the
+# existing evaluator for "a scalar expression at a loop-index environment over
+# const arrays": the subtree is resolved+compiled ONCE with the loop indices
+# bound as Float64 parameters, and each cell only rebinds them. `_eval_node`
+# computes every leaf in Float64, so a loop index bound as a Float64 param
+# equals that index folded to a Float64 literal (the `_try_field_ic_fastpath`
+# identity argument) — the table entries are bit-for-bit what the per-cell
+# reference computes for the same subtree.
+#
+# KILL SWITCH: `ESS_SUBTREE_TBL_DISABLE=1` restores the pre-rescue
+# whole-equation decline byte-for-byte — the differential-oracle escape hatch
+# (test/stencil_subtree_tbl_test.jl), mirroring `ESS_OBSREF_DISABLE`.
+_subtree_tbl_disabled() = get(ENV, "ESS_SUBTREE_TBL_DISABLE", "") == "1"
+
+# One rescued subtree: the expression, the loop-index binding ORDER (sorted —
+# deterministic, and consistent between compile and per-cell rebinding), and
+# the compiled `_CellEval` (attached by `_attach_exprtbl_evals!` once
+# `reg_funcs` is in scope — `_StencilCtx` does not carry it). Mutable so the
+# attach mutates the spec shared by every recipe vector that references it
+# (a variant's recipes are appended to parents by reference).
+mutable struct _ExprTblSpec
+    expr::ASTExpr
+    idx_names::Vector{String}
+    ce::Any                       # _CellEval once attached; nothing before
+end
+
+# Is `e` evaluable at build time from loop indices + literals + const arrays
+# ALONE? A conservative free-reference check: every VarExpr must be a bound
+# name (a loop index, or a binder introduced by an enclosing aggregate-like
+# node — `ranges` keys / `output_idx` strings) or a const-array name. This
+# rejects state (array_var_info names), scalar params, live forcing (pgather),
+# non-inlined observeds, and — explicitly, since `_compile` maps the NAME "t"
+# to `_NK_TIME` and `_CellEval` evaluates at t=0.0, which would be SILENTLY
+# wrong — anything called "t". Over-acceptance is safe: the compile attempt in
+# `_cellwise_compile_once_impl` is wrapped in try/catch and any failure
+# restores the original whole-equation decline. Field coverage mirrors
+# `_scan_refs_idxset` (args / lower / upper / expr_body / filter / key /
+# values / table_axes / ranges bounds), so nothing an expression can carry
+# slips through unchecked; `bindings` (pre-lowered template sugar) is
+# conservatively rejected outright. Cold path — once per offending subtree
+# per branch template, never per cell.
+function _exprtbl_evaluable(e::ASTExpr, bound::Set{String},
+                            const_arrays::AbstractDict)::Bool
+    (e isa NumExpr || e isa IntExpr) && return true
+    if e isa VarExpr
+        nm = (e::VarExpr).name
+        nm == "t" && return false
+        return nm in bound || haskey(const_arrays, nm)
+    end
+    o = e::OpExpr
+    o.bindings === nothing || return false
+    # Binders this node introduces (checked against "t" too — a binder named
+    # "t" could shadow the time guard above).
+    binders = String[]
+    if o.ranges !== nothing
+        for (k, rv) in o.ranges
+            nm = String(k)
+            nm == "t" && return false
+            push!(binders, nm)
+            if rv isa AbstractVector
+                for x in rv
+                    # Range BOUNDS evaluate in the OUTER scope.
+                    x isa ASTExpr && !_exprtbl_evaluable(x, bound, const_arrays) &&
+                        return false
+                end
+            end
+        end
+    end
+    if o.output_idx !== nothing
+        for s in o.output_idx
+            s isa AbstractString || continue
+            String(s) == "t" && return false
+            push!(binders, String(s))
+        end
+    end
+    inner = isempty(binders) ? bound : union(bound, binders)
+    chk(x) = x === nothing || _exprtbl_evaluable(x, inner, const_arrays)
+    for a in o.args
+        chk(a) || return false
+    end
+    (chk(o.lower) && chk(o.upper) && chk(o.expr_body) && chk(o.filter) &&
+     chk(o.key)) || return false
+    if o.values !== nothing
+        for v in o.values
+            chk(v) || return false
+        end
+    end
+    if o.table_axes !== nothing
+        for (_, v) in o.table_axes
+            chk(v) || return false
+        end
+    end
+    return true
+end
+
+# The rescue proper: emit a `LANE_EXPRTBL` recipe for a loop-var-dependent
+# subtree the stencil vocabulary cannot model, or `nothing` to throw exactly
+# as before. Array producers are excluded (this is a SCALAR position; an
+# array-valued subtree here is ill-formed and must keep today's error path).
+# TALLY: one `:affine_subtree_tbl` increment PER RESCUED SUBTREE LANE PER
+# BRANCH TEMPLATE (bounded by structural groups — grid-independent; the smemo
+# in `_stencilize` dedupes a shared subtree within one walk), NOT per
+# equation; it increments even when the equation later declines for another
+# construct, so it counts rescue FIRINGS, not final cascade routing (that is
+# `:affine` / `:percell_acc`).
+function _try_exprtbl_lane(e::OpExpr, ctx::_StencilCtx)
+    _subtree_tbl_disabled() && return nothing
+    _is_array_producer(e) && return nothing
+    _exprtbl_evaluable(e, ctx.idxset, ctx.const_arrays) || return nothing
+    names = sort!(collect(ctx.idxset))
+    push!(ctx.recipes, _LaneRecipe(LANE_EXPRTBL, "", ASTExpr[], Int[], Int[],
+                                   _ExprTblSpec(e, names, nothing), ""))
+    _tally_cascade!(:affine_subtree_tbl)
+    if get(ENV, "ESS_STENCIL_DEBUG", "") == "1"
+        println(stderr, "[ess-affine] subtree-table rescue: op '", e.op,
+                "' -> lane ", length(ctx.recipes))
+        flush(stderr)
+    end
+    return VarExpr(_lane_name(length(ctx.recipes)))
+end
+
+# Attach the compiled evaluator to every not-yet-attached `LANE_EXPRTBL`
+# recipe — called from the two places recipe vectors are finalized
+# (`_build_branch_template` and the variant compile in `_stencilize_shared`),
+# where `reg_funcs` is in scope. Loop indices bind as parameters; scalar
+# params are deliberately ABSENT (`_EMPTY_PARAMS`) — the evaluability contract
+# is loop indices + literals + const arrays only. A compile failure (an op
+# `_compile` cannot evaluate, an unresolvable gather, a loop index named "t")
+# throws the whole-equation `_StencilFallback` the rescue displaced — the
+# original decline, one hop later.
+function _attach_exprtbl_evals!(rs::Vector{_LaneRecipe},
+                                const_arrays::AbstractDict, reg_funcs)
+    for r in rs
+        r.kind == LANE_EXPRTBL || continue
+        spec = r.arr::_ExprTblSpec
+        spec.ce === nothing || continue
+        ce = _cellwise_compile_once_impl(spec.expr, length(spec.idx_names),
+                                         const_arrays, reg_funcs, _EMPTY_PARAMS;
+                                         bind_syms=spec.idx_names)
+        ce === nothing && throw(_StencilFallback(
+            "subtree-table lane: compile-once evaluator declined (op '" *
+            (spec.expr isa OpExpr ? (spec.expr::OpExpr).op : string(typeof(spec.expr))) *
+            "')"))
+        spec.ce = ce
+    end
+    return rs
 end
 
 # Compile a template expansion root ONCE per (use site, region class) and emit a
@@ -413,6 +593,10 @@ function _stencilize_shared(node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
                              IdDict{OpExpr,ASTExpr}(), tctx.gmemo,
                              _SubCallSite[], nothing)
         spine = bypass ? _stencilize_op_core(node, subctx) : _stencilize(node, subctx)
+        # Rescued-subtree lanes need their compile-once evaluator before any
+        # box materializes them; the variant path finalizes recipes here, not
+        # in `_build_branch_template` (which never sees a variant's rs).
+        _attach_exprtbl_evals!(rs, ctx.const_arrays, tctx.reg_funcs)
         vm_ext = _ext_var_map(tctx.var_map, rs, subctx.subcalls)
         bmemo = _BuildMemo()
         tmpl = _compile(_resolve_indices(spine, ctx.array_var_info, vm_ext,
@@ -842,6 +1026,23 @@ function _eval_recipe(rec::_LaneRecipe, idx_env::Dict{String,Int},
     if rec.kind == LANE_LOOPLIT
         return Float64(idx_env[rec.loop_name])
     end
+    if rec.kind == LANE_EXPRTBL
+        # Rescued build-time-evaluable subtree: rebind the loop indices on the
+        # compile-once evaluator (`_CellEval` binds them as Float64 params —
+        # bit-identical to the per-cell path's literal fold, see the rescue
+        # header above). `ce::Any` costs a dynamic dispatch, but this runs only
+        # inside `_materialize_const_box`'s O(box cells) sweep — the same cost
+        # class as the state/pgather table materializers — never per eval.
+        spec = rec.arr::_ExprTblSpec
+        ce = spec.ce
+        ce === nothing && throw(_StencilFallback(
+            "subtree-table lane evaluated before its evaluator was attached"))
+        cell = Vector{Int}(undef, length(spec.idx_names))
+        @inbounds for d in eachindex(spec.idx_names)
+            cell[d] = idx_env[spec.idx_names[d]]
+        end
+        return (ce(cell))::Float64
+    end
     n = length(rec.idx_args)
     if rec.kind == LANE_STATE
         aff = rec.affine
@@ -981,6 +1182,10 @@ function _build_branch_template(body::ASTExpr, ctx_proto::_StencilCtx,
         rs[k] = _LaneRecipe(r.kind, r.var_name, r.idx_args, r.lo, r.hi,
                             r.arr, r.loop_name, aff)
     end
+    # Rescued-subtree lanes: compile each spec's `_CellEval` now that
+    # `reg_funcs` is in scope (once per branch template, cold; a compile
+    # failure restores the whole-equation decline).
+    _attach_exprtbl_evals!(rs, ctx.const_arrays, reg_funcs)
     vm_ext = _ext_var_map(var_map, rs, ctx.subcalls)
     # Identity memo so `_resolve_indices` + `_compile` carry the DAG that
     # `_stencilize` now preserves straight through to the compiled `_Node`

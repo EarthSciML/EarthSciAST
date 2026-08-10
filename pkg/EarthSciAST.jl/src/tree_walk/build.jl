@@ -3263,6 +3263,18 @@ end
 # One increment per array equation, at the cascade's dispatch below. Cheap
 # (a Dict bump per EQUATION, not per cell) and always on; read it via
 # `EarthSciAST._CASCADE_TALLY`, reset with `EarthSciAST._reset_cascade_tally!()`.
+#
+# One NON-routing key rides the same tally:
+#   :affine_subtree_tbl — the subtree-table rescue fired (stencil.jl
+#                         `_try_exprtbl_lane`): a build-time-evaluable subtree
+#                         the stencil vocabulary could not model became a
+#                         `LANE_EXPRTBL` per-box table lane instead of
+#                         declining the whole equation. Counted PER RESCUED
+#                         SUBTREE LANE PER BRANCH TEMPLATE (grid-independent;
+#                         bounded by structural groups), not per equation —
+#                         and it increments even when the equation later
+#                         declines over some OTHER construct, so it measures
+#                         rescue firings, not final routing.
 const _CASCADE_TALLY = Dict{Symbol,Int}()
 _tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)

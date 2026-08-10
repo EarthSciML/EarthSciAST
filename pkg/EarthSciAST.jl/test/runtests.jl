@@ -82,6 +82,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("stencil_affine_pgather_tbl_test.jl")    # A2 non-affine forcing table ≡ per-cell (ESS_OBSREF_DISABLE oracle)
     include("stencil_affine_contract_test.jl")       # ess-affine const-bound contraction ≡ per-cell
     include("stencil_affine_const_fold_test.jl")     # ess-affine LANE_CONST fold is index-derived, not value-sampled
+    include("stencil_subtree_tbl_test.jl")           # subterm-granular fallback: const-evaluable subtree → per-box table (ESS_SUBTREE_TBL_DISABLE oracle)
     include("scan_prefix_test.jl")                   # ess-scan O(N) prefix reduction ≡ per-cell
     include("stencil_affine_cse_test.jl")            # ess-affine per-cell CSE ≡ per-cell
     include("stencil_affine_invariant_test.jl")      # ess-affine invariant hoist ≡ per-cell
