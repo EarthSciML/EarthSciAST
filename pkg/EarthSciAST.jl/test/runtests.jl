@@ -91,6 +91,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("array_obs_materialize_test.jl")         # factored array observeds ≡ ESS_ARRAY_OBS_INLINE=1
     include("codegen_kernel_test.jl")                # B1 codegen tier ≡ pre-codegen (differential)
     include("codegen_lanespec_test.jl")              # B1 tier accepts per-lane interp specs (class merge)
+    include("dual_fast_path_test.jl")                # ess-dualfp Dual overflow tier ≡ interpreter (ESS_DUAL_CODEGEN_DISABLE oracle)
     include("tree_walk_oop_test.jl")
     include("oop_merge_test.jl")                     # :oop kernel-CLASS merge ≡ unmerged
     include("tree_walk_iip_generic_test.jl")
