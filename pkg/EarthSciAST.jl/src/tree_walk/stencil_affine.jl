@@ -667,7 +667,10 @@ end
 # Materialize a NON-AFFINE const lane as a dense per-box VALUE table, addressed
 # box-locally through the existing `_AccConstBox` descriptor. The values are
 # `_eval_recipe`'s per-cell outputs (boundary folds included), so a fetch is
-# bit-identical to the per-cell resolve.
+# bit-identical to the per-cell resolve. Generic over the recipe KIND — it
+# only calls `_eval_recipe` — so `LANE_EXPRTBL` (a rescued build-time-
+# evaluable subtree, whose recipe evaluates a compiled `_CellEval`) routes
+# here too and inherits both the dense table and the exhaustive fold below.
 #
 # Having paid for every cell, the all-equal case folds to a literal — an
 # EXHAUSTIVE invariance test (`vals` is the whole box), not a sampled one. This
@@ -727,6 +730,23 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         dim = findfirst(==(rec.loop_name), idx_names)
         dim === nothing && throw(_StencilFallback("loop-lit name not an output index"))
         return thin[dim] ? _LitRepl(Float64(rep[dim])) : _AccRepl(_AccLoopIdx(dim))
+    elseif rec.kind == LANE_EXPRTBL
+        # Rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE
+        # RESCUE): the value is an arbitrary function of the loop indices, so
+        # there is no index-affine map to derive, and the LANE_CONST comment
+        # below forbids folding from sampled VALUES — so ALWAYS materialize
+        # the dense per-box value table. `_materialize_const_box` is generic
+        # over `_eval_recipe` (which routes this kind to its `_CellEval`),
+        # its exhaustive all-equal fold collapses a box-invariant subtree to
+        # a literal, and its cost is O(box cells) per lane — the same class
+        # as `_materialize_state_tbl` / `_materialize_pgather_tbl`. The
+        # resulting `_AccConstBox` keys by table object identity in
+        # `_desc_key`, exactly like every materialized const/state/pgather
+        # table: boxes never falsely SHARE a spine (over-split only), so
+        # spine memoization stays sound with no branch-key change — the lane
+        # is one sentinel leaf to the branch key, and its per-cell values are
+        # exact by exhaustive evaluation, never assumed uniform.
+        return _materialize_const_box(rec, idx_names, box, D, var_map, const_arrays)
     elseif rec.kind == LANE_CONST
         # Loop-invariance is derived from the INDEX, never sampled from the
         # VALUES.  The historical fast path here compared `_eval_recipe`'s value
