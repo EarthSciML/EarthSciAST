@@ -110,6 +110,51 @@ _direct_class_emit_disabled() =
 _direct_class_emit_enabled() =
     !_direct_class_emit_disabled() && !_oop_merge_disabled()
 
+# CROSS-EQUATION + AFFINE-BOX direct class emission — the two class families
+# the per-equation emitter above cannot see, folded into direct emission:
+#
+#   1. CROSS-EQUATION per-cell classes. The scalarizer's grouping runs per
+#      `_acc_from_cell_entries` call, and that call used to be per EQUATION —
+#      so structurally identical cells arising in DIFFERENT equations (twin
+#      species balances, per-band photolysis equations) always split into one
+#      kernel per equation and reached a class only through the post-hoc
+#      repair pass. Under this switch `_compile_derivative_equations`
+#      (build.jl) POOLS every per-cell equation's cell entries and calls
+#      `_acc_from_cell_entries` ONCE, above the equation loop — the same
+#      emitter, the same shape-keyed signature, one global grouping. Out-slot
+#      uniqueness across equations is guaranteed by `covered` (a duplicate
+#      derivative throws at compile), and kernels only read `u`/`p`/`t`/live
+#      forcing and assignment-scatter disjoint `du` slots, so which kernel
+#      hosts a cell — and where in the kernel list it lands — cannot change
+#      any evaluated bit.
+#
+#   2. AFFINE-BOX (assembled-kernel) classes. The affine stencil path mints
+#      `_AccKernel`s per box directly — including the subterm-granular
+#      LANE_EXPRTBL per-box tables (`:affine_subtree_tbl`, stencil.jl) — with
+#      no per-cell scalar trees for the scalarizer-level emitter to pool:
+#      the box compiler exists precisely to never scalarize. For that family
+#      the class facts only come into existence AT ASSEMBLY, so the emitter
+#      for it is sited at the assembled-kernel level:
+#      `_merge_acc_kernel_classes` (oop_merge.jl) runs its two class-merge
+#      rounds as a DIRECT EMISSION stage (tallies
+#      `:direct_classmerge_round{1,2}_merge`) and then re-runs them as the
+#      counted repair safety net — which is expected to find NOTHING
+#      (`:classmerge_round{1,2}_merge` == 0, pinned by
+#      test/cross_eq_class_emission_test.jl). Reusing the proven lockstep
+#      clone instead of writing a parallel box-level emitter keeps the
+#      bit-identity argument exactly the one the repair pass already carries.
+#
+# KILL SWITCH. `ESS_CROSS_EQ_CLASS_EMIT_DISABLE=1` restores the per-equation
+# emitter + repair-only pipeline byte for byte. The stage also stands down
+# whenever per-equation direct emission itself is off — under
+# `ESS_DIRECT_CLASS_EMIT_DISABLE=1` and under the class-merge umbrella
+# switches (`_direct_class_emit_enabled` folds both in), so every existing
+# oracle configuration behaves exactly as before this landed.
+_cross_eq_class_emit_disabled() =
+    get(ENV, "ESS_CROSS_EQ_CLASS_EMIT_DISABLE", "") == "1"
+_cross_eq_class_emit_enabled() =
+    !_cross_eq_class_emit_disabled() && _direct_class_emit_enabled()
+
 # SHAPE token of a spec the direct emitter can lane-table, `nothing` for
 # anything it cannot (which then keys by content/identity exactly as before).
 # Mirrors `_oop_merge_fn_sig_token` (oop_merge.jl) for the scalar spec types;
