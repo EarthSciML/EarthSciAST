@@ -194,7 +194,11 @@ function _xfn_content_key(payload)
     payload isa Tuple{String,Any} || return nothing
     fname, spec = payload
     if spec === nothing
-        return (fname, :none)                      # boxed all-scalar path (`datetime.*`)
+        return (fname, :none)                      # boxed all-scalar path (undeclared fn)
+    elseif spec isa _FnTypedCoreSpec
+        # Typed-core rider (ess-dtcore): the spec is a pure function of the
+        # fname, so the name plus the row id is the whole content.
+        return (fname, :typed_core, spec.id)
     elseif spec isa _InterpLinearSpec
         return (fname, :linear, _xf64_bits(spec.table), _xf64_bits(spec.axis))
     elseif spec isa _InterpBilinearSpec

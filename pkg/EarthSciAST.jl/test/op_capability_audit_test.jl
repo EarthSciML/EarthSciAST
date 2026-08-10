@@ -130,6 +130,13 @@ const ESM = EarthSciAST
     # The payload-shape universe: everything ANY tier accepts today, keyed for
     # the manifests below. (name, payload, nargs) — nargs matches the interp
     # kernel's query arity so the interpreter probe really evaluates.
+    # Typed-core rider (ess-dtcore): what `_compile_fn_node` now mints for a
+    # registry-declared all-scalar fn (`datetime.*`). The `:boxed` shape stays
+    # in the universe as the fallback contract for UNDECLARED all-scalar fns —
+    # unminted by the compiler for the v0.3.0 set, but every tier must keep
+    # accepting it (it is what a declaration-less future fn compiles to).
+    tcore = ESM._fn_typed_core_spec("datetime.hour")
+    @test tcore isa ESM._FnTypedCoreSpec   # datetime.* must be declared
     shapes = [
         (:linear,            ("interp.linear",       lin),     1),
         (:bilinear,          ("interp.bilinear",     bil),     2),
@@ -138,6 +145,7 @@ const ESM = EarthSciAST
         (:bilinear_lane,     ("interp.bilinear",     bilL),    2),
         (:searchsorted_lane, ("interp.searchsorted", ssL),     1),
         (:boxed,             ("datetime.hour",       nothing), 1),
+        (:typed_core,        ("datetime.hour",       tcore),   1),
     ]
     ALL_SHAPES = Set(first.(shapes))
 

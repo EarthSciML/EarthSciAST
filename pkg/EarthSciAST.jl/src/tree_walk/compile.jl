@@ -443,9 +443,20 @@ function _compile_fn_node(expr::OpExpr, compile_child)
     cspec = _fn_const_arg_spec(fname)
     if cspec === nothing
         children = _Node[compile_child(a) for a in expr.args]
-        # Datetime.* etc.: `(fname, nothing)`; the eval arm's concrete-tuple
-        # split takes the boxed `evaluate_closed_function` fallback.
-        payload = (fname, nothing)
+        # All-scalar closed function. If the registry DECLARES a typed scalar
+        # core (`_FN_TYPED_SCALAR_CORES`, registered_functions.jl — the nine
+        # `datetime.*` entries), mint the CONCRETE `(fname, _FnTypedCoreSpec)`
+        # payload: every tier's `:fn` arm `isa`-matches it and takes the
+        # unboxed `_fn_typed_core_call` route at `T === Float64`. The typed
+        # payload is minted ONLY when the declared arity is 1 (all the tier
+        # executors implement) AND matches the call: a wrong-arity call keeps
+        # the boxed payload so the registry's eval-time `closed_function_arity`
+        # diagnostic is unchanged, and an undeclared function keeps the boxed
+        # `(fname, nothing)` route on every tier exactly as before.
+        tc = _fn_typed_core_spec(fname)
+        payload = (tc !== nothing && tc.arity == 1 &&
+                   length(children) == tc.arity) ? (fname, tc) :
+                                                   (fname, nothing)
     else
         length(expr.args) == cspec.arity ||
             throw(TreeWalkError("E_TREEWALK_FN_ARITY",
@@ -1941,8 +1952,26 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
             # derivative), but the ARM must still land in the evaluator's value
             # type or the `:fn` arm infers as a `Union` under ForwardDiff.
             return convert(T, _interp_searchsorted_core("interp.searchsorted", x, spec.xs))
+        elseif pl isa Tuple{String,_FnTypedCoreSpec}
+            # Registry-declared typed scalar core (registered_functions.jl,
+            # ess-dtcore). `T === Float64` folds at compile time (the same
+            # fold `_eval_closed_fn` runs on): the Float64 walk calls the
+            # unary core directly — no `Any[]` arg box, and bit-identical to
+            # the boxed registry by construction (each core IS the pinned
+            # registry arm's composition). EVERY OTHER `T` (ForwardDiff duals,
+            # traced values) drops to the boxed route below — verbatim the
+            # pre-typed-core behavior, `evaluate_closed_function_ad` widening
+            # included.
+            if T === Float64
+                return _fn_typed_core_call(pl[2].id, _eval_node(c[1], u, p, t, T))
+            end
+            args_evaluated = Any[_eval_node(ci, u, p, t, T) for ci in c]
+            return convert(T, _eval_closed_fn(pl[1], args_evaluated, T))
         elseif pl isa Tuple{String,Nothing}
-            # All-scalar closed functions (e.g. `datetime.*`): boxed path. The
+            # All-scalar closed functions WITHOUT a typed-core declaration:
+            # boxed path (no such function exists in the v0.3.0 set — every
+            # `datetime.*` entry declares a core — but the arm stays as the
+            # registry's fallback contract for undeclared functions). The
             # children are the full spec-order arg list; a cold case off the
             # numeric RHS hot path, so the residual `Vector{Any}` is tolerated.
             #

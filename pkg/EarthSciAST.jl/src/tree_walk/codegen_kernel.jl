@@ -430,9 +430,26 @@ function _cg_emit_fn(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
                      convert(_cgT, _interp_searchsorted_core("interp.searchsorted",
                                  $(_cg_emit(ctx, kc, ch[1])), $sp.xs))
                  end)
+    elseif pl isa Tuple{String,_FnTypedCoreSpec}
+        # Registry-declared typed scalar core (ess-dtcore). `_cgT === Float64`
+        # folds under the constant propagation the per-chunk `local _cgT =
+        # _rhs_value_type(u, p, t)` exists to enable: the Float64 specialization
+        # calls the typed core with the row id spliced as a LITERAL — the
+        # ladder in `_fn_typed_core_call` then folds to the one core, no arg
+        # box — and the `Dual` specialization keeps the boxed registry-on-`T`
+        # route below verbatim (AD widening unchanged). The `let` binds the
+        # query once so the two arms cannot double-evaluate it.
+        spec = pl[2]
+        x = _cg_name(ctx, "x")
+        return :(let $x = $(_cg_emit(ctx, kc, ch[1]))
+                     _cgT === Float64 ?
+                         _fn_typed_core_call($(spec.id), $x) :
+                         convert(_cgT, _eval_closed_fn($(pl[1]::String), Any[$x], _cgT))
+                 end)
     elseif pl isa Tuple{String,Nothing}
-        # Boxed all-scalar closed fn (`datetime.*`): same eager `Any[…]` arg
-        # boxing, same `_eval_closed_fn` registry-on-`T` call, same convert.
+        # Boxed all-scalar closed fn WITHOUT a typed-core row (none in the
+        # v0.3.0 set): same eager `Any[…]` arg boxing, same `_eval_closed_fn`
+        # registry-on-`T` call, same convert.
         args = Any[_cg_emit(ctx, kc, c) for c in ch]
         return :(convert(_cgT, _eval_closed_fn($(pl[1]::String),
                      $(Expr(:ref, :Any, args...)), _cgT)))

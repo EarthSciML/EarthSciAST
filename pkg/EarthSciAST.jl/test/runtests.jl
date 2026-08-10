@@ -182,6 +182,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")
+    include("datetime_typed_core_test.jl")     # registry-declared typed cores (ess-dtcore)
     include("closed_functions_mtk_test.jl")
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")

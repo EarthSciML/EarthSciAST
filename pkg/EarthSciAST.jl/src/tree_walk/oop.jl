@@ -936,11 +936,16 @@ function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopF
 end
 
 # Closed functions. `interp.*` carries a build-time-validated typed spec (the
-# `_FN_CONST_ARG_SPECS` protocol); `datetime.*` is all-scalar and boxed. The
-# boxed call goes through `_eval_closed_fn`, which selects the `Float64`-pinned
-# registry or its eltype-generic twin on the compile-time `T` — so a `Dual` walk
+# `_FN_CONST_ARG_SPECS` protocol); an all-scalar fn carries its typed-core
+# rider (`_FnTypedCoreSpec`, ess-dtcore) when the registry declares one —
+# `datetime.*` does — and `nothing` (boxed) otherwise. At `T === Float64` the
+# typed rider calls the core directly; every OTHER `T` — and every boxed
+# payload — goes through `_eval_closed_fn`, which selects the `Float64`-pinned
+# registry or its eltype-generic twin on the compile-time `T`: a `Dual` walk
 # differentiates `datetime.julian_day` (a real function of `t`, which IS a
-# differentiation variable for a Rosenbrock ∂f/∂t term) instead of throwing on it.
+# differentiation variable for a Rosenbrock ∂f/∂t term), and a traced walk
+# keeps the decomposition inside the program (`evaluate_closed_function_ad`),
+# exactly as before typed cores existed.
 function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     pl = n.payload
     c = n.children
@@ -951,6 +956,12 @@ function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::
                                     _oop_eval(c[2], u, p, t, cache, fb), T)
     elseif pl isa Tuple{String,_InterpSearchsortedSpec}
         return _oop_interp_searchsorted(pl[2], _oop_eval(c[1], u, p, t, cache, fb), T)
+    elseif pl isa Tuple{String,_FnTypedCoreSpec}
+        if T === Float64      # compile-time fold, as in `_eval_closed_fn`
+            return _fn_typed_core_call(pl[2].id, _oop_eval(c[1], u, p, t, cache, fb))
+        end
+        args = Any[_oop_eval(ci, u, p, t, cache, fb) for ci in c]
+        return convert(T, _eval_closed_fn(pl[1], args, T))
     elseif pl isa Tuple{String,Nothing}
         args = Any[_oop_eval(ci, u, p, t, cache, fb) for ci in c]
         return convert(T, _eval_closed_fn(pl[1], args, T))
@@ -1695,9 +1706,25 @@ function _oop_acck_fn(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         return _oop_interp_bilinear_lanes(pl[2], ev(ch[1]), ev(ch[2]), T)
     elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
         return _oop_interp_searchsorted_lanes(pl[2], ev(ch[1]), T)
+    elseif pl isa Tuple{String,_FnTypedCoreSpec}
+        # Registry-declared typed scalar core (ess-dtcore). At `T === Float64`
+        # ONE typed broadcast over the lane vector — same `_fn_typed_core_call`
+        # as every other tier's Float64 path, no per-lane `Any[]` box, no
+        # opaque per-lane call. Every other `T` (a `Dual` walk, a traced walk)
+        # keeps the boxed per-lane route below verbatim — including its
+        # loud-failure property under a trace (the calendar decomposition then
+        # stays inside the program via `evaluate_closed_function_ad`).
+        if T === Float64
+            return _fn_typed_core_call.(pl[2].id, ev(ch[1]))
+        end
+        fname = pl[1]
+        cv = Any[ev(ci) for ci in ch]
+        return broadcast((as...) -> convert(T, _eval_closed_fn(fname, Any[as...], T)),
+                         cv...)
     elseif pl isa Tuple{String,Nothing}
-        # All-scalar closed functions (`datetime.*`): boxed, one call per lane —
-        # host-correct; a trace fails loudly inside the opaque callee.
+        # All-scalar closed functions WITHOUT a typed-core row (none in the
+        # v0.3.0 set): boxed, one call per lane — host-correct; a trace fails
+        # loudly inside the opaque callee.
         fname = pl[1]
         cv = Any[ev(ci) for ci in ch]
         return broadcast((as...) -> convert(T, _eval_closed_fn(fname, Any[as...], T)),
