@@ -5,9 +5,8 @@
  * Separates concerns: JSON parsing → schema validation → type coercion.
  */
 
-import type { ErrorObject, ValidateFunction } from 'ajv'
-import Ajv from 'ajv'
-import addFormats from 'ajv-formats'
+import type { ErrorObject } from 'ajv'
+import validator from './generated-validator.js'
 import type { EsmFile } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
 import { losslessJsonParse, stripNumericLiterals } from './numeric-literal.js'
@@ -94,23 +93,25 @@ export const SCHEMA_VERSION: string = (() => {
   return m[1]
 })()
 
-// Compile schema validator once at module load time
-let validator: ValidateFunction
-
-try {
-  const ajv = new Ajv({
-    allErrors: true,
-    verbose: true,
-    strict: false, // Allow unknown keywords for compatibility
-    addUsedSchema: false, // Don't add the schema to cache
-    validateSchema: false, // Skip schema validation for now
-  })
-  addFormats(ajv)
-
-  validator = ajv.compile(schema)
-} catch (error) {
-  throw new Error(`Failed to compile embedded ESM schema: ${error}`, { cause: error })
-}
+// The schema validator is PRECOMPILED, not compiled here.
+//
+// `ajv.compile(schema)` used to run at this point, on module load. Ajv is a code
+// generator — it builds JavaScript for the schema and evaluates it — so that
+// call requires `'unsafe-eval'`. Under a Content-Security-Policy without it the
+// compile threw before anything rendered, which did not degrade validation in a
+// consuming app: it blanked the page. And granting `'unsafe-eval'` to get it
+// back re-permits exactly the string-to-code execution a CSP is bought to
+// prevent, which is a bad trade for a library that parses untrusted documents.
+//
+// `src/generated-validator.js` is the same schema compiled ahead of time by
+// `scripts/generate-standalone-validator.mjs` (Ajv's own `ajv/dist/standalone`),
+// under the options in `src/ajv-options.mjs`. Same logic, same errors — verified
+// against the fixture corpus, valid and malformed, before the swap — but the
+// browser only ever loads the code, never builds it.
+//
+// The generator is a drift guard too (`--check`, wired into
+// `scripts/sync-schema.sh`), so a schema change that skips regeneration fails CI
+// rather than shipping a validator for the previous schema.
 
 /**
  * Validate data against the ESM schema
