@@ -505,16 +505,21 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
 end
 
 """
-    _merge_oop_acc_kernels(kernels, plans) -> (kernels′, plans′, diag)
+    _merge_oop_acc_kernels(kernels, plans[, tally]) -> (kernels′, plans′, diag)
 
 The :oop kernel-class merge pass (see the file header). Returns the merged
 kernel/plan vectors — value-exact replacements for the inputs — plus a
 diagnostics NamedTuple `(n_in, n_out, n_classes, n_blocked, n_failed)`.
 Falls back to the inputs (whole pass or per group) whenever a precondition
-does not hold; never errors on a merge-ineligible input.
+does not hold; never errors on a merge-ineligible input. `tally` names the
+cascade counter bumped per merged class: the default is the REPAIR-pass
+counter; the direct class-emission stage passes its own
+(`:direct_classmerge_round1_merge`) so emission work and residual repair work
+stay separately countable.
 """
 function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
-                                plans::AbstractVector{_OopAccPlan})
+                                plans::AbstractVector{_OopAccPlan},
+                                tally::Symbol=:classmerge_round1_merge)
     nodiag = (; n_in = length(kernels), n_out = length(kernels),
               n_classes = 0, n_blocked = length(kernels), n_failed = 0)
     length(kernels) <= 1 && return (kernels, plans, nodiag)
@@ -555,12 +560,16 @@ function _merge_oop_acc_kernels(kernels::AbstractVector{_AccKernel},
         else
             push!(out_kernels, merged[1]); push!(out_plans, merged[2])
             # Cascade observability (direct class emission): one bump per
-            # class this REPAIR pass actually had to merge. On kernels the
-            # direct emitter produced (per-cell-path classes) this must stay
-            # zero — pinned by test/direct_class_emission_test.jl; nonzero
-            # counts mean genuinely residual work (cross-equation / affine-box
-            # classes the emitter does not see).
-            _tally_cascade!(:classmerge_round1_merge)
+            # class this round actually merged, on the caller-named counter.
+            # As the REPAIR pass (the default `tally`) this must stay zero on
+            # kernels the direct emitters produced — pinned by
+            # test/direct_class_emission_test.jl and
+            # test/cross_eq_class_emission_test.jl; nonzero repair counts mean
+            # genuinely residual work no emission stage saw. As the DIRECT
+            # stage (`:direct_classmerge_round1_merge`) it counts emission
+            # work — the assembled-kernel classes (affine boxes et al.)
+            # being emitted as classes at build time.
+            _tally_cascade!(tally)
         end
     end
     for j in passthrough
@@ -939,9 +948,11 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
 end
 
 # Round-2 driver: mirrors `_merge_oop_acc_kernels` (same preconditions, same
-# per-class fallback posture) with the expansion-normalized hash signature.
+# per-class fallback posture, same caller-named `tally` counter) with the
+# expansion-normalized hash signature.
 function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
-                              plans::AbstractVector{_OopAccPlan})
+                              plans::AbstractVector{_OopAccPlan},
+                              tally::Symbol=:classmerge_round2_merge)
     nodiag = (; n_in = length(kernels), n_out = length(kernels),
               n_classes = 0, n_blocked = length(kernels), n_failed = 0)
     length(kernels) <= 1 && return (kernels, plans, nodiag)
@@ -977,8 +988,9 @@ function _merge_oop_x_kernels(kernels::AbstractVector{_AccKernel},
             end
         else
             push!(out_kernels, merged[1]); push!(out_plans, merged[2])
-            # Round-2 twin of the round-1 repair counter above.
-            _tally_cascade!(:classmerge_round2_merge)
+            # Round-2 twin of the round-1 counter above (repair by default,
+            # `:direct_classmerge_round2_merge` under the direct stage).
+            _tally_cascade!(tally)
         end
     end
     for j in passthrough
@@ -1004,24 +1016,62 @@ kernels. The `_OopAccPlan`s built here serve purely as the host-side per-lane
 table source for the merge (`pl.gathers`/`consts`/`forc`/`ghost`); each
 emitter rebuilds its own plans from the merged kernels. Returns the input
 unchanged (diag `nothing`) when disabled or trivially small.
+
+Under cross-equation/affine-box direct class emission (acc_merge.jl,
+`_cross_eq_class_emit_enabled`) the two rounds run TWICE: first as the DIRECT
+emission stage for assembled-kernel class families (affine-box `LANE_EXPRTBL`
+tables, descriptor-family mixes — counted `:direct_classmerge_round{1,2}_merge`),
+then again as the post-hoc REPAIR pass over the emission output — the counted
+safety net, expected to find nothing (`:classmerge_round{1,2}_merge` == 0;
+round 2's family-normalized leaf tokens make the rounds idempotent, so a
+second application only ever fires on genuinely residual work). The repair
+pass is deliberately KEPT, not skipped: a nonzero safety-net count is the
+observable that flags an emission gap while still repairing it. The kill
+switch (or any direct-emission disable) restores the single repair-only run
+byte for byte. Diag: `n_in`/`n_classes`/`n_blocked` describe the stage that
+DECIDED the classes (the direct stage when it ran — so `n_in` is always the
+pre-merge kernel count), `n_out` the final list, `n_failed` the sum over
+every stage.
 """
 function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel})
     (_oop_merge_disabled() || length(kernels) <= 1) && return (kernels, nothing)
     plans = _OopAccPlan[_build_oop_acc_plan(K) for K in kernels]
-    merged, mplans, diag = _merge_oop_acc_kernels(kernels, plans)
+
+    # ---- DIRECT class-emission stage (cross-eq/affine-box families) ------
+    ddiag = nothing
+    dxdiag = nothing
+    if _cross_eq_class_emit_enabled()
+        kernels, plans, ddiag = _merge_oop_acc_kernels(kernels, plans,
+            :direct_classmerge_round1_merge)
+        if !_oop_merge_expand_disabled() && length(kernels) > 1
+            kernels, plans, dxdiag = _merge_oop_x_kernels(kernels, plans,
+                :direct_classmerge_round2_merge)
+        end
+    end
+
+    # ---- REPAIR pass (the only pass when direct emission is off; the
+    # counted safety net over the emission output when it is on) -----------
+    merged, mplans, rdiag = _merge_oop_acc_kernels(kernels, plans)
     # Round 2 (expansion-normalized; see the section header above): collapse
     # classes that differ only in per-kernel CSE slicing / slot numbering /
     # literal-vs-frozen-const leaves / same-shape interp tables. Same
     # per-class fallback posture; ESS_OOP_MERGE_EXPAND_DISABLE=1 keeps the
     # round-1 output byte for byte.
+    rxdiag = nothing
     if !_oop_merge_expand_disabled() && length(merged) > 1
-        merged2, _plans2, diag2 = _merge_oop_x_kernels(merged, mplans)
-        diag = (; n_in = diag.n_in, n_out = length(merged2),
-                diag.n_classes, diag.n_blocked,
-                n_failed = diag.n_failed + diag2.n_failed,
-                n_x_in = diag2.n_in, n_x_out = diag2.n_out,
-                n_x_classes = diag2.n_classes, n_x_blocked = diag2.n_blocked)
-        merged = merged2
+        merged, mplans, rxdiag = _merge_oop_x_kernels(merged, mplans)
+    end
+
+    base  = ddiag === nothing ? rdiag : ddiag
+    basex = ddiag === nothing ? rxdiag : dxdiag
+    n_failed = rdiag.n_failed + (rxdiag === nothing ? 0 : rxdiag.n_failed) +
+               (ddiag === nothing ? 0 : ddiag.n_failed) +
+               (dxdiag === nothing ? 0 : dxdiag.n_failed)
+    diag = (; n_in = base.n_in, n_out = length(merged),
+            base.n_classes, base.n_blocked, n_failed)
+    if basex !== nothing
+        diag = (; diag..., n_x_in = basex.n_in, n_x_out = basex.n_out,
+                n_x_classes = basex.n_classes, n_x_blocked = basex.n_blocked)
     end
     return (merged, diag)
 end

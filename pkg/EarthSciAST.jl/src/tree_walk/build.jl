@@ -2906,6 +2906,14 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
     # note in stencil.jl). `ESS_XEQ_VARIANT_DISABLE=1` restores the
     # per-equation caches exactly.
     xeq = _xeq_disabled() ? nothing : _XEqStore()
+    # Cross-equation direct class emission (acc_merge.jl,
+    # ESS_CROSS_EQ_CLASS_EMIT_DISABLE): pool every per-cell equation's cell
+    # entries here and run the scalarizer-level class emitter ONCE, above the
+    # equation loop, so structurally identical cells arising in DIFFERENT
+    # equations share a class kernel directly — no post-hoc repair needed.
+    # `nothing` (the kill switch, or per-equation direct emission itself off)
+    # keeps the per-equation `_acc_from_cell_entries` call byte for byte.
+    pooled_cells = _cross_eq_class_emit_enabled() ? Tuple{Int,_Node}[] : nothing
 
     for eq in derivative_eqs
         if _is_scalar_D_lhs(eq.lhs)
@@ -2946,9 +2954,17 @@ function _compile_derivative_equations(derivative_eqs::Vector{Equation},
             _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds, covered, eq, resolved_obs,
                                        array_var_info, var_map, const_registry,
                                        pgather, param_sym_set, reg_funcs;
-                                       template_sites=template_sites, xeq=xeq)
+                                       template_sites=template_sites, xeq=xeq,
+                                       pooled_cells=pooled_cells)
         end
     end
+    # The pooled scalarizer-level emitter: one grouping over EVERY per-cell
+    # equation's cells. Same-signature cells merge into one class kernel no
+    # matter which equation minted them; a group's lanes keep entry order
+    # (equation order, cell order within an equation), so the build stays
+    # deterministic. Empty whenever no equation took the per-cell path.
+    pooled_cells === nothing || isempty(pooled_cells) ||
+        append!(acc_kernels, _acc_from_cell_entries(pooled_cells))
     return scalar_entries, percell_scalar, acc_kernels, scan_folds
 end
 
@@ -3293,6 +3309,23 @@ end
 #                         and it increments even when the equation later
 #                         declines over some OTHER construct, so it measures
 #                         rescue firings, not final routing.
+#
+# Class-emission observability keys (also non-routing) ride the same tally:
+#   :direct_class_kernel  — the per-cell scalarizer emitted a kernel carrying
+#                           a per-lane spec table (acc_merge.jl, direct class
+#                           emission); one bump per such kernel.
+#   :direct_classmerge_round{1,2}_merge
+#                         — the assembled-kernel DIRECT emission stage
+#                           (oop_merge.jl `_merge_acc_kernel_classes` under
+#                           cross-eq/affine-box direct emission) merged one
+#                           class; this is where affine-box classes are
+#                           expected to land.
+#   :classmerge_round{1,2}_merge
+#                         — the post-hoc REPAIR pass merged one class. With
+#                           direct emission on (the default) these are the
+#                           safety-net counters and are expected to be ZERO;
+#                           nonzero means genuinely residual work the direct
+#                           stages did not see.
 const _CASCADE_TALLY = Dict{Symbol,Int}()
 _tally_cascade!(k::Symbol) = (_CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1; nothing)
 _reset_cascade_tally!() = (empty!(_CASCADE_TALLY); nothing)
@@ -3305,7 +3338,14 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
         template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
         # `nothing` or an `_XEqStore` (untyped: stencil.jl defines the type and
         # is included after this file; `_try_affine_stencil` checks it).
-        xeq=nothing)
+        xeq=nothing,
+        # `nothing`, or the cross-equation cell-entry pool, a
+        # `Vector{Tuple{Int,_Node}}` (untyped in the signature: `_Node` lives
+        # in compile.jl, included after this file — same reason as `xeq`).
+        # See `_compile_derivative_equations`: per-cell entries are APPENDED
+        # here instead of being merged per equation, and the caller runs
+        # `_acc_from_cell_entries` once after the whole equation loop.
+        pooled_cells=nothing)
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -3491,7 +3531,7 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
         resolved_obs=resolved_obs, array_var_info=array_var_info,
         var_map=var_map, const_registry=const_registry, pgather=pgather,
         param_sym_set=param_sym_set, reg_funcs=reg_funcs,
-        contraction_loop=use_contraction_loop)
+        contraction_loop=use_contraction_loop, pooled_cells=pooled_cells)
     return nothing
 end
 
@@ -3521,7 +3561,8 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
         resolved_obs::Dict{String,ASTExpr}, array_var_info,
         var_map::Dict{String,Int}, const_registry::AbstractDict,
         pgather::AbstractDict, param_sym_set, reg_funcs,
-        contraction_loop::Bool=false)
+        contraction_loop::Bool=false,
+        pooled_cells=nothing)   # `nothing` or `Vector{Tuple{Int,_Node}}` — see above
     cell_entries = Tuple{Int,_Node}[]
     cell_memo = _BuildMemo()
     # A scalar aggregate NESTED in this array-equation cell body must keep
@@ -3650,6 +3691,12 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
         # passes entirely (ess-runtime-contraction) — this IS the stencil-disabled
         # reference path, so the result is the reference result.
         append!(percell_scalar, cell_entries)
+    elseif pooled_cells !== nothing
+        # Cross-equation direct class emission: defer to the ONE
+        # `_acc_from_cell_entries` call sited above the equation loop
+        # (`_compile_derivative_equations`), so cells of identical shape in
+        # DIFFERENT equations share a class kernel directly.
+        append!(pooled_cells, cell_entries)
     else
         append!(acc_kernels, _acc_from_cell_entries(cell_entries))
     end
