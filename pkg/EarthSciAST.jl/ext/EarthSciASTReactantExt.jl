@@ -253,6 +253,20 @@ const _RxTbl = Union{Vector{Vector{Float64}},Matrix{Vector{Float64}}}
 # construction, and when no two lanes agree the groups degenerate to
 # `gid[l] = l` and the emitted constant is byte-for-byte the old one.
 #
+# RELATION TO BUILD-TIME INTERNING (tree_walk/acc_merge.jl `_lane_intern`).
+# Since the lane-table intern pool landed, content-equal `_Interp*Spec`s are
+# already the SAME object (`===`) in `h.specs` when these seams run — sharing
+# now exists in the build product, not just in the trace. This grouping stays
+# anyway, and deliberately so: it is PER COLUMN COLLECTION (the axis columns
+# group independently of the table columns), which is strictly FINER than the
+# spec-level identity the pool provides — Fast-JX's 18 bands hold 18 distinct
+# SPECS but ONE shared axis, so the axis constant dedupes to D = 1 here where
+# a spec-identity key would stop at D = 18. The seams also only ever see the
+# knot COLUMNS, not `h`, so spec identity is not even observable here. What
+# interning did retire is the last O(lanes) constant these seams could not
+# reach: the clamp/edge boundary columns are collapsed to scalars host-side by
+# `_oop_lane_bound` (oop.jl) before the broadcast, so they never arrive at all.
+#
 # Returns (reps, gid): `reps[g]` is a lane index witnessing group `g`, and
 # `gid[l]` is lane `l`'s group. Host-side, trace time only.
 function _rx_lane_groups(cols::AbstractArray{Vector{Float64}})

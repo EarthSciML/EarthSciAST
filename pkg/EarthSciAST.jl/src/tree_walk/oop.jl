@@ -539,6 +539,36 @@ end
 # and the emitted program stays independent of the lane count's origin. `q` may
 # be a lane vector OR an invariant scalar; the columns force a length-L result
 # either way (each lane still owns its own table).
+#
+# CLAMP/EDGE BOUNDS are the exception to "every knot read is a seam": the outer
+# clamp (`ax[1]`/`ax[Nx]`, and the linear form's edge values `table[1]`/
+# `table[n]`) is a plain broadcast over the boundary COLUMN, so under a trace
+# each such column used to be embedded as a lane-wide constant even when every
+# lane held the same bound — the one remaining O(lanes) constant after the
+# knot/table gathers went grid-independent (4 per bilinear; ~3.8 MB at 13×7×72
+# against the table's former 1.32 GB — see test/reactant_lane_dedup_test.jl).
+# `_oop_lane_bound` collapses a boundary column whose lanes are all BITWISE
+# equal (`isequal` per element: NaN unifies, `-0.0` stays apart from `0.0` —
+# the same key the trace-time lane dedup groups by) to its one scalar, which a
+# trace then embeds as a scalar constant. Bit-identical by construction: the
+# broadcasts consume one value per lane either way, and it is the same value.
+# RESULT LENGTH is unchanged in every case — the length-L knot columns flow
+# through `_oop_knot_count`/`_oop_knot_pair`/`_oop_bilinear_corners` on every
+# path, so the lane axis is carried by the located/gathered terms even when a
+# collapsed bound meets a lane-invariant scalar query (the `Lq` trap the
+# Reactant ext's `_rx_knot_matrix` guard documents). A mixed column (lanes
+# genuinely differing in their bound) stays a column — exactly today.
+# `ESS_LANE_INTERN_DISABLE=1` turns the collapse off with the rest of the
+# lane-intern feature, restoring today's lane-wide bounds as the oracle.
+function _oop_lane_bound(col::Vector{Float64})
+    _lane_intern_disabled() && return col
+    @inbounds v1 = col[1]
+    @inbounds for k in 2:length(col)
+        isequal(col[k], v1) || return col
+    end
+    return v1
+end
+
 function _oop_interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where {T}
     axis = h.axis_cols; table = h.table_cols
     n = length(axis)
@@ -547,8 +577,9 @@ function _oop_interp_linear_lanes(h::_InterpLinearLaneSpec, q, ::Type{T}) where 
     ai, ai1, ti, ti1 = _oop_knot_pair2(axis, table, i)
     w = (q .- ai) ./ (ai1 .- ai)
     blend = ti .+ w .* (ti1 .- ti)
-    return ifelse.(q .<= axis[1], table[1],
-                   ifelse.(q .>= axis[n], table[n], blend))
+    return ifelse.(q .<= _oop_lane_bound(axis[1]), _oop_lane_bound(table[1]),
+                   ifelse.(q .>= _oop_lane_bound(axis[n]), _oop_lane_bound(table[n]),
+                           blend))
 end
 
 function _oop_interp_searchsorted_lanes(h::_InterpSearchsortedLaneSpec, q,
@@ -564,8 +595,10 @@ function _oop_interp_bilinear_lanes(h::_InterpBilinearLaneSpec, x, y,
                                     ::Type{T}) where {T}
     ax = h.axis_x_cols; ay = h.axis_y_cols; table = h.table_cols
     Nx = length(ax); Ny = length(ay)
-    x_q = ifelse.(x .<= ax[1], ax[1], ifelse.(x .>= ax[Nx], ax[Nx], x))
-    y_q = ifelse.(y .<= ay[1], ay[1], ifelse.(y .>= ay[Ny], ay[Ny], y))
+    ax1 = _oop_lane_bound(ax[1]); axN = _oop_lane_bound(ax[Nx])
+    ay1 = _oop_lane_bound(ay[1]); ayN = _oop_lane_bound(ay[Ny])
+    x_q = ifelse.(x .<= ax1, ax1, ifelse.(x .>= axN, axN, x))
+    y_q = ifelse.(y .<= ay1, ay1, ifelse.(y .>= ayN, ayN, y))
     i = min.(max.(_oop_knot_count(ax, x_q, <=), 1.0), Float64(Nx - 1))
     j = min.(max.(_oop_knot_count(ay, y_q, <=), 1.0), Float64(Ny - 1))
     xi, xip1 = _oop_knot_pair(ax, i)
