@@ -748,9 +748,78 @@ function _acc_has_reduce(n::_Node, seen::IdDict{_Node,Nothing})
     return false
 end
 
+# Content identity for a closed-function (`:fn`) payload in the vn key. Keying by
+# `objectid` was sound but needlessly conservative: `_compile_fn_node` mints a fresh
+# spec object per SOURCE `fn` node, so two calls over content-equal const tables
+# never shared a slot. A shared slot is sound iff content-equal payloads always
+# compute equal values — true here: every admitted function is a pure, deterministic
+# function of (spec, scalar args), and the args are already pinned by `childvns`.
+# Collision-proofing is structural, not probabilistic: `key_to_vn` is a `Dict`, which
+# confirms `isequal` after the hash bucket, and this wrapper's `isequal` re-checks
+# spec CONTENT — a hash collision degrades to a duplicate slot, never to aliasing
+# two different tables. (`==` follows `isequal` — same NaN-tolerant contract as the
+# merge guard; a table holding a NaN must still share with its content-twin.)
+struct _AccFnPayKey
+    fname::String
+    spec::Any
+end
+Base.hash(k::_AccFnPayKey, h::UInt) = hash(k.fname, hash(_acc_fn_spec_hash0(k.spec), h))
+Base.isequal(a::_AccFnPayKey, b::_AccFnPayKey) =
+    a.fname == b.fname && _acc_fn_spec_eq(a.spec, b.spec)
+Base.:(==)(a::_AccFnPayKey, b::_AccFnPayKey) = isequal(a, b)
+
+# Spec content hash/equality behind `_AccFnPayKey`. The `Nothing`/`_Interp*Spec`
+# families delegate to acc_merge.jl's `_fn_spec_hash`/`_fn_spec_content_equal` — the
+# SAME matched (hash, isequal) pair the merge guard trusts. The `_Interp*LaneSpec`
+# families never reach that guard (they are minted AFTER grouping, by
+# `_oop_merge_fn_payload`), so acc_merge deliberately does not model them; they are
+# keyed here on (per-lane spec content, s1/s2/s3/off lane addressing) — the derived
+# `*_cols` fields are pure functions of `specs`, so they carry no extra identity,
+# while the addressing decides WHICH lane a cell reads and so must split the key.
+# `isequal ⇒ equal hash` holds arm by arm: each eq/hash pair folds the same fields.
+_acc_fn_spec_hash0(s) = _fn_spec_hash(s)
+_acc_fn_spec_eq(a, b) = _fn_spec_content_equal(a, b)
+for (LS, seed) in ((:_InterpLinearLaneSpec, 0x44), (:_InterpBilinearLaneSpec, 0x55),
+                   (:_InterpSearchsortedLaneSpec, 0x66))
+    @eval function _acc_fn_spec_hash0(h::$LS)
+        x = UInt($seed)
+        for s in h.specs
+            x = hash(_fn_spec_hash(s), x)
+        end
+        return hash(h.off, hash(h.s3, hash(h.s2, hash(h.s1, x))))
+    end
+    @eval _acc_fn_spec_eq(a::$LS, b::$LS) =
+        a.s1 == b.s1 && a.s2 == b.s2 && a.s3 == b.s3 && a.off == b.off &&
+        length(a.specs) == length(b.specs) &&
+        all(i -> _fn_spec_content_equal(a.specs[i], b.specs[i]), eachindex(a.specs))
+end
+
+# The closed set of spec types `_acc_fn_pay_key` content-keys. Anything else —
+# a spec type added without updating the methods above — stays on the IDENTITY
+# path below (the pre-content behavior): declining to share costs a recompute,
+# guessing costs correctness. Deliberately NOT `_acc_fn_spec_hash0 !== objectid`
+# introspection — an explicit list fails closed under method-table drift too.
+_acc_fn_spec_keyable(::Nothing) = true
+_acc_fn_spec_keyable(::_InterpLinearSpec) = true
+_acc_fn_spec_keyable(::_InterpBilinearSpec) = true
+_acc_fn_spec_keyable(::_InterpSearchsortedSpec) = true
+_acc_fn_spec_keyable(::_InterpLinearLaneSpec) = true
+_acc_fn_spec_keyable(::_InterpBilinearLaneSpec) = true
+_acc_fn_spec_keyable(::_InterpSearchsortedLaneSpec) = true
+_acc_fn_spec_keyable(::Any) = false
+
+function _acc_fn_pay_key(payload)
+    if payload isa Tuple{String,Any}
+        fname, spec = payload
+        _acc_fn_spec_keyable(spec) && return _AccFnPayKey(fname, spec)
+    end
+    return objectid(payload)       # unmodelled payload — fail closed on identity
+end
+
 # Structural key: two nodes share a value number iff their keys are equal. ACCESS
 # keys on descriptor CONTENT (`_desc_key`); an OP with a payload (interp `:fn`)
-# keys on the payload's identity, so distinct specs never merge (conservative).
+# keys on the payload's CONTENT (`_AccFnPayKey`, above) so content-equal specs
+# minted as distinct objects still merge; unmodelled payloads key on identity.
 function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
     k = n.kind
     k === _NK_ACCESS  && return (0x1, _desc_key(acc[n.idx]))
@@ -758,7 +827,8 @@ function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
     k === _NK_PARAM   && return (0x3, n.sym)
     k === _NK_TIME    && return (0x4, :t)
     k === _NK_OP      && return (0x5, n.op,
-                                 n.payload === nothing ? UInt(0) : objectid(n.payload),
+                                 n.payload === nothing ? UInt(0) :
+                                                         _acc_fn_pay_key(n.payload),
                                  childvns)
     return (0xff, objectid(n))     # _NK_CACHED / anything else — never merged
 end

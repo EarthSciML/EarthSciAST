@@ -129,9 +129,12 @@ const _XCSE_EXPENSIVE_OPS =
 # NOTE — this is emphatically NOT `_struct_sig!` (acc_merge.jl). That signature
 # DELIBERATELY ignores leaf values so cells differing only in them merge into
 # one vectorized template; keying sharing on it would merge nodes that compute
-# different values. Nor is it `_acc_vn_key` (access_kernel.jl), which keys `fn`
-# payloads by object identity — sound within one kernel, useless across kernels
-# where each compile mints a fresh spec object for the same table.
+# different values. Nor is it `_acc_vn_key` (access_kernel.jl): that key now also
+# reaches through `fn` payloads to spec CONTENT (`_acc_fn_pay_key`, isequal-
+# flavoured like the merge guard), but it numbers ONE kernel's spine in isolation —
+# this pass is the one that shares across kernels and with the scalar prelude, and
+# its bit-level content key (`_xfn_content_key`, strictly finer: raw-bits, so NaN
+# payload bits split where `isequal` merges) stays its own.
 
 const _XVN_NONE = 0    # "unkeyable" — never a real value number (those start at 1)
 
