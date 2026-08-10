@@ -147,15 +147,11 @@ const ESM = EarthSciAST
     # codegen tier is the interpreter minus CG_FN_PAYLOAD_GAP.
     INTERP_FN_ACCEPTS = ALL_SHAPES
     TAPE_FN_ACCEPTS   = ALL_SHAPES
-    # KNOWN GAP: the codegen tier has no arms for the three per-lane spec
-    # boxes (kernel-class merge payloads) — kernels carrying them keep the
-    # tape/interpreter runner. A fix is in flight; when `_cg_emit_fn` learns
-    # a lane shape, delete its line here (one line per shape).
-    CG_FN_PAYLOAD_GAP = Set([
-        :linear_lane,        # _InterpLinearLaneSpec: no _cg_emit_fn arm yet
-        :bilinear_lane,      # _InterpBilinearLaneSpec: no _cg_emit_fn arm yet
-        :searchsorted_lane,  # _InterpSearchsortedLaneSpec: no _cg_emit_fn arm yet
-    ])
+    # No known gaps: `_cg_emit_fn` covers the per-lane spec boxes too, so a
+    # kernel the class merge produced stays on the compiled tier. A shape
+    # added to one tier but not the others belongs here, one line per shape,
+    # with the reason — not silently dropped from ALL_SHAPES.
+    CG_FN_PAYLOAD_GAP = Set(Symbol[])
     CG_FN_ACCEPTS = setdiff(ALL_SHAPES, CG_FN_PAYLOAD_GAP)
 
     fnnode(payload, nargs) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
