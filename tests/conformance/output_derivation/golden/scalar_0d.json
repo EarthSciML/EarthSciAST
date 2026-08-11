@@ -1,0 +1,46 @@
+{
+  "schema": "earthsciast/output-derivation-plan/v1",
+  "case": "scalar_0d",
+  "description": "ONE grid holding all four scalars. Each variable's on-disk dims are exactly [time]: shape [], no spatial axes, no synthetic <base>_d0 singleton. `Box.flux` is an observed field the caller named, so it is written alongside the state.",
+  "grids": [
+    {
+      "dims": [],
+      "time_dim": "time",
+      "coords": [],
+      "vars": [
+        {
+          "name": "Box.C",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "kg", "description": "Box tracer mass." },
+          "shape": [],
+          "flat_indices": [1]
+        },
+        {
+          "name": "Box.E",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "J" },
+          "shape": [],
+          "flat_indices": [2]
+        },
+        {
+          "name": "Box.T",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "K", "description": "Box temperature." },
+          "shape": [],
+          "flat_indices": [0]
+        },
+        {
+          "name": "Box.flux",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "kg/s", "description": "Derived loss rate; written only when the caller names it." },
+          "shape": [],
+          "flat_indices": [3]
+        }
+      ]
+    }
+  ]
+}

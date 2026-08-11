@@ -144,6 +144,12 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # records must not move, drop, or duplicate a record — no fill-valued phantom
     # slots at shard tails, no records written past the declared `shape[time]`.
     include("streaming_flush_gap_test.jl")
+    # Streaming output sinks: the CROSS-LANGUAGE derivation gate
+    # (`tests/conformance/output_derivation/`, RFC §16.12). Julia and Rust each
+    # derive the same plan from the same .esm fixtures + flat slot names and
+    # assert the same committed golden, so golden agreement IS cross-language
+    # agreement. Needs no solver and no EarthSciIO — it is pure derivation.
+    include("output_derivation_conformance_test.jl")
     include("discrete_materialize_test.jl")
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")
