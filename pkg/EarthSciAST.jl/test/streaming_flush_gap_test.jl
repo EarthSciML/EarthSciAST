@@ -81,10 +81,11 @@ import Blosc            # activates EarthSciIOBloscExt so the Zarr writer can co
         grid = derive_output_gridding(var_map)
         for (s, g) in enumerate(grid)
             v = nds.variables[g.base]
-            @test v.dims == String[g.dimnames..., "time"]
-            @test size(v.data) == (NX, NY, NREC)
+            # Record axis FIRST, then the spatial axes (RFC §16.12).
+            @test v.dims == String["time", g.dimnames...]
+            @test size(v.data) == (NREC, NX, NY)
             for r in 1:NREC, j in 1:NY, i in 1:NX
-                @test v.data[i, j, r] == _val(s, i, j, r)
+                @test v.data[r, i, j] == _val(s, i, j, r)
             end
         end
     end

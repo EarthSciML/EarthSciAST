@@ -1,0 +1,96 @@
+{
+  "esm": "0.9.0",
+  "metadata": {
+    "name": "OutputDerivationMixed",
+    "description": "Output-derivation conformance fixture: scalar AND gridded variables in ONE document, over TWO different spatial-dim signatures. This is where a shape-signature grouping bug actually shows up — the derivation must emit exactly THREE emergent grids: the 0-D grid holding both scalars (`mass`, `energy`), the [lon, lat] grid holding `conc`, and the [lev] grid holding `col`. If a scalar were given a synthetic singleton axis it would fragment into two extra single-member grids instead of sharing one, and the count would be five. The record axis is named `t` (not `time`) so the derivation is forced to read `domain.independent_variable` rather than assume a name, and `lev` alone carries a `coordinates` entry so a grid WITH and a grid WITHOUT dimension coordinates are both covered.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-08-11T00:00:00Z",
+    "tags": [
+      "conformance",
+      "output-derivation",
+      "streaming-output",
+      "multi-grid",
+      "scalar",
+      "gridded"
+    ]
+  },
+  "domain": {
+    "independent_variable": "t"
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 2
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "coordinates": {
+    "lev": {
+      "values": [1000.0, 850.0, 500.0],
+      "standard_name": "air_pressure",
+      "units": "Pa",
+      "axis": "Z"
+    }
+  },
+  "models": {
+    "Mix": {
+      "reference": {
+        "notes": "One model carrying three distinct output shapes at once: two bare scalars, a rank-2 field over [lon, lat], and a rank-1 column over [lev]."
+      },
+      "variables": {
+        "mass": {
+          "type": "state",
+          "units": "kg",
+          "default": 1.0,
+          "description": "Total mass — a bare scalar."
+        },
+        "energy": {
+          "type": "state",
+          "units": "J",
+          "default": 0.0
+        },
+        "conc": {
+          "type": "state",
+          "units": "kg/m3",
+          "shape": ["lon", "lat"],
+          "default": 0.0,
+          "description": "Gridded concentration."
+        },
+        "col": {
+          "type": "state",
+          "units": "kg/m2",
+          "shape": ["lev"],
+          "default": 0.0,
+          "description": "Column profile on the vertical axis."
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["mass"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.01, "mass"] }
+        },
+        {
+          "lhs": { "op": "D", "args": ["energy"], "wrt": "t" },
+          "rhs": "mass"
+        },
+        {
+          "lhs": { "op": "D", "args": ["conc"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.001, "conc"] }
+        },
+        {
+          "lhs": { "op": "D", "args": ["col"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.002, "col"] }
+        }
+      ]
+    }
+  }
+}

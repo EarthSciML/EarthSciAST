@@ -1,0 +1,71 @@
+{
+  "category": "output_derivation_conformance",
+  "version": "1.0",
+  "description": "Cross-language SIMULATION-OUTPUT DERIVATION conformance (streaming-output-sinks RFC §7-§9, §16.12). The derivation turns (.esm document + flat state element names + caller-named observed subset) into the dimension-labeled, CF-annotated output plan a Zarr writer is handed. It exists in Julia (`pkg/EarthSciAST.jl/src/data_output.jl`) and Rust (`pkg/earthsci-ast-rs/src/data_output.rs`) and had NO cross-language gate at all until this corpus: EarthSciIO's `conformance/write_spec.json` is an ALREADY-DERIVED schema, so the write corpus starts downstream of derivation and drives the three writers from a hand-authored shape. A derivation corpus's OUTPUT type is that write corpus's INPUT type, so the two chain end to end: .esm -> [derivation, here] -> OutputSchema -> [writers, EarthSciIO] -> Zarr store.",
+  "reference_binding": "golden",
+  "bindings_required": ["julia", "rust"],
+  "bindings_optional": [],
+  "scope_excluded": {
+    "python": "no derivation counterpart exists; EarthSciIO's Python track is a WRITER, which consumes an already-derived schema",
+    "go": "rewrite-only port; no output derivation",
+    "typescript": "rewrite-only port; no output derivation"
+  },
+  "inputs": {
+    "document": "the .esm fixture, parsed as-is (no build, no solve)",
+    "slot_names": "the flat state element names in flat order — element i of the list is flat index i. This is the runner's `state_variable_names`, following the column-major `name[i,j,...]` cell-key scheme (RFC §7), which is byte-identical across bindings.",
+    "observed": "the caller-named observed/derived fields to write alongside the state (RFC decision 8). A declared `observed` variable that has a slot but is NOT named here is dropped from the plan."
+  },
+  "contract": {
+    "flat_indices": "0-BASED flat-state indices in ROW-MAJOR (C-order) cell order within `shape` — the layout a Zarr writer consumes, with the column-major->row-major transposition already applied. Julia's `VarGridding` stores 1-based indices in enumeration order plus a `cart` map; `row_major_flat_indices` converts, so both bindings compare on one representation.",
+    "var_dims": "the ON-DISK dimension list: the record axis FIRST, then the variable's spatial axes. A scalar's dims are therefore exactly [time_dim].",
+    "grid_order": "first-seen spatial-dim-signature order; the signature is the SORTED SET of a variable's dim names, so axis order does not fragment a grid and every scalar (empty signature) lands in ONE shared 0-D grid.",
+    "var_order": "sorted by base name within a grid (the derivation sorts groups by base name so a derived schema is reproducible)."
+  },
+  "cases": [
+    {
+      "id": "scalar_0d",
+      "fixture": "fixtures/scalar_0d.esm",
+      "golden": "golden/scalar_0d.json",
+      "slot_names": ["Box.T", "Box.C", "Box.E", "Box.flux"],
+      "observed": ["flux"],
+      "tags": ["scalar", "zero-dimensional", "observed-requested"],
+      "notes": "The case that exposed the divergence: four scalars, ONE grid, every variable's dims exactly [time]. The observed `flux` has a slot AND is requested, so it is written."
+    },
+    {
+      "id": "scalar_0d_state_only",
+      "fixture": "fixtures/scalar_0d.esm",
+      "golden": "golden/scalar_0d_state_only.json",
+      "slot_names": ["Box.T", "Box.C", "Box.E", "Box.flux"],
+      "observed": [],
+      "tags": ["scalar", "zero-dimensional", "observed-dropped"],
+      "notes": "Same document and same flat state, but the caller names no observed field, so `Box.flux` is DROPPED (RFC decision 8: output is the state plus a caller-named subset, not every observed)."
+    },
+    {
+      "id": "gridded",
+      "fixture": "fixtures/gridded.esm",
+      "golden": "golden/gridded.json",
+      "slot_names": [
+        "Grid.c[1,1]", "Grid.c[2,1]", "Grid.c[3,1]",
+        "Grid.c[1,2]", "Grid.c[2,2]", "Grid.c[3,2]",
+        "Grid.w[1,1]", "Grid.w[2,1]", "Grid.w[3,1]",
+        "Grid.w[1,2]", "Grid.w[2,2]", "Grid.w[3,2]"
+      ],
+      "observed": [],
+      "tags": ["gridded", "cf-coordinates", "column-major-inversion"],
+      "notes": "Two variables on one 3x2 [lon, lat] grid. Cell keys are listed in the column-major order a build emits them (dim 0 fastest); the golden's row-major `flat_indices` are the transposition. Both axes carry `coordinates` entries, so both CF dimension coordinates are planned."
+    },
+    {
+      "id": "mixed",
+      "fixture": "fixtures/mixed.esm",
+      "golden": "golden/mixed.json",
+      "slot_names": [
+        "Mix.mass", "Mix.energy",
+        "Mix.conc[1,1]", "Mix.conc[2,1]", "Mix.conc[1,2]", "Mix.conc[2,2]",
+        "Mix.col[1]", "Mix.col[2]", "Mix.col[3]"
+      ],
+      "observed": [],
+      "tags": ["multi-grid", "scalar", "gridded", "named-record-axis"],
+      "notes": "Scalar AND gridded in one document over two spatial signatures => exactly THREE grids. With a synthetic singleton axis per scalar it would be five, which is what makes this the fixture a shape-signature grouping bug shows up in. The record axis is `t`, so a binding that assumes the name `time` fails here."
+    }
+  ]
+}

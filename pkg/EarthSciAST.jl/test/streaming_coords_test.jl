@@ -74,8 +74,9 @@ using OrdinaryDiffEqTsit5: Tsit5
     @test ta["units"] == "degrees_north"
     @test ta["axis"] == "Y"
 
-    # the data variable carries its own units + the real dimension order.
+    # the data variable carries its own units + the real dimension order: the
+    # record axis FIRST, then the spatial axes (CF T,Z,Y,X — RFC §16.12).
     ca = read_attrs("Grid.c")
     @test ca["units"] == "kg"
-    @test ca["_ARRAY_DIMENSIONS"] == ["lon", "lat", "time"]
+    @test ca["_ARRAY_DIMENSIONS"] == ["time", "lon", "lat"]
 end
