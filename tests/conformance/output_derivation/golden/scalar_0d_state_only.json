@@ -1,0 +1,38 @@
+{
+  "schema": "earthsciast/output-derivation-plan/v1",
+  "case": "scalar_0d_state_only",
+  "description": "The same document and the same flat state as `scalar_0d`, with no observed field requested. `Box.flux` is declared `observed`, so it is dropped even though it occupies a flat slot (RFC decision 8). The three states still share ONE 0-D grid.",
+  "grids": [
+    {
+      "dims": [],
+      "time_dim": "time",
+      "coords": [],
+      "vars": [
+        {
+          "name": "Box.C",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "kg", "description": "Box tracer mass." },
+          "shape": [],
+          "flat_indices": [1]
+        },
+        {
+          "name": "Box.E",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "J" },
+          "shape": [],
+          "flat_indices": [2]
+        },
+        {
+          "name": "Box.T",
+          "dims": ["time"],
+          "dtype": "float64",
+          "attrs": { "units": "K", "description": "Box temperature." },
+          "shape": [],
+          "flat_indices": [0]
+        }
+      ]
+    }
+  ]
+}

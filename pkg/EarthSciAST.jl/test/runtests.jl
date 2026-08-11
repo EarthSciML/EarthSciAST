@@ -111,6 +111,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
         include("reactant_oop_test.jl")
         include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
+        include("reactant_scan_test.jl")             # traced prefix scan ≢ grid size
     else
         @info "skipping reactant_oop_test.jl (set ESM_TEST_REACTANT=1, with Reactant " *
               "in the environment, to run the XLA tracing tests)"
@@ -144,11 +145,18 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # records must not move, drop, or duplicate a record — no fill-valued phantom
     # slots at shard tails, no records written past the declared `shape[time]`.
     include("streaming_flush_gap_test.jl")
+    # Streaming output sinks: the CROSS-LANGUAGE derivation gate
+    # (`tests/conformance/output_derivation/`, RFC §16.12). Julia and Rust each
+    # derive the same plan from the same .esm fixtures + flat slot names and
+    # assert the same committed golden, so golden agreement IS cross-language
+    # agreement. Needs no solver and no EarthSciIO — it is pure derivation.
+    include("output_derivation_conformance_test.jl")
     include("discrete_materialize_test.jl")
     include("discrete_materialize_conformance_test.jl")
     include("tree_walk_cse_test.jl")
     include("tree_walk_observed_slots_test.jl")
     include("contraction_loop_test.jl")             # runtime contraction loop (ess-runtime-contraction)
+    include("oop_scalar_batch_test.jl")             # :oop lane-batched scalar entries (ess-oop-batch)
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     include("tree_walk_xcse_test.jl")
     include("tree_walk_const_array_boundary_test.jl")
@@ -182,6 +190,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
     include("phase5_clean_auto_test.jl")          # projection-pushdown Phase 5 (LCC@build + fully-automatic)
     include("prepare_pushdown_record_gate_test.jl") # Phase 1 consolidation (public prepare + record-derived gating)
+    include("prepare_pushdown_single_member_test.jl") # n=1 support-set pin (cross-language scalarisation footgun)
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")

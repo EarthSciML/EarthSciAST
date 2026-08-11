@@ -8,7 +8,16 @@
 # (`julia --project -e 'using EarthSciAST, Test; include("test/<file>")'`)
 # AND under runtests.jl (where many files include this prelude) without
 # double-definition warnings.
-if !isdefined(Main, :ESM_TESTUTILS_LOADED)
+#
+# The guard is per-INCLUDING-MODULE (`@__MODULE__`), not `Main`: a test file
+# that wraps itself in a `module` gets its own copy of the prelude. Guarding on
+# `Main` instead made the prelude a silent no-op inside such a module (Main's
+# bindings are not visible there), so every name it defines —
+# `TESTUTILS_REPO_ROOT` above all — was UndefVarError under runtests.jl while
+# the same file passed standalone. Top-level (Main-scoped) files are unaffected:
+# runtests.jl loads the prelude into Main once and every later top-level include
+# still short-circuits exactly as before.
+if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
 
 const ESM_TESTUTILS_LOADED = true
 

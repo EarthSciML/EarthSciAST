@@ -1,0 +1,41 @@
+{
+  "schema": "earthsciast/output-derivation-plan/v1",
+  "case": "gridded",
+  "description": "One 3x2 [lon, lat] grid holding both tracers. `flat_indices` is the column-major -> row-major transposition: the build emits cells with dim 0 fastest, so cell (i,j) sits at row-major offset (i-1)*2 + (j-1), giving [0,3,1,4,2,5] for the flat slots 0..5 listed in cell-key order. Both axes have `coordinates` entries keyed by the dimension name, so both are planned as CF dimension coordinates.",
+  "grids": [
+    {
+      "dims": [["lon", 3], ["lat", 2]],
+      "time_dim": "time",
+      "coords": [
+        {
+          "name": "lon",
+          "values": [-100.0, -99.0, -98.0],
+          "attrs": { "standard_name": "longitude", "units": "degrees_east", "axis": "X" }
+        },
+        {
+          "name": "lat",
+          "values": [30.0, 31.0],
+          "attrs": { "standard_name": "latitude", "units": "degrees_north", "axis": "Y" }
+        }
+      ],
+      "vars": [
+        {
+          "name": "Grid.c",
+          "dims": ["time", "lon", "lat"],
+          "dtype": "float64",
+          "attrs": { "units": "kg/kg", "description": "Gridded tracer." },
+          "shape": [3, 2],
+          "flat_indices": [0, 3, 1, 4, 2, 5]
+        },
+        {
+          "name": "Grid.w",
+          "dims": ["time", "lon", "lat"],
+          "dtype": "float64",
+          "attrs": { "units": "m/s" },
+          "shape": [3, 2],
+          "flat_indices": [6, 9, 7, 10, 8, 11]
+        }
+      ]
+    }
+  ]
+}

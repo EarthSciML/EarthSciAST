@@ -22,6 +22,7 @@ use crate::{EsmFile, error::EsmError};
 /// use earthsci_ast::{EsmFile, Metadata, save};
 ///
 /// let esm_file = EsmFile {
+///     coordinates: None,
 ///     coupling_roles: None,
 ///     esm: "0.1.0".to_string(),
 ///     metadata: Metadata {
@@ -84,6 +85,7 @@ mod tests {
     #[test]
     fn test_save_minimal_file() {
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -164,6 +166,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -206,6 +209,7 @@ mod tests {
     #[test]
     fn test_save_compact() {
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,

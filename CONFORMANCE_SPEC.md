@@ -2022,6 +2022,94 @@ the committed goldens: **Julia** —
 `["julia", "python", "rust"]`. Each runner additionally pins the §11.4 seeding
 precedence directly on its own typed build path.
 
+### 5.17 Simulation-Output Derivation (normative)
+
+The `streaming-output-sinks` RFC §7–§9 derivation turns a document plus the flat
+state's element names into the dimension-labeled, CF-annotated **output plan** a
+Zarr writer is handed. It exists in two bindings —
+`pkg/EarthSciAST.jl/src/data_output.jl` and
+`pkg/earthsci-ast-rs/src/data_output.rs` — and the shared **offline** corpus lives
+in `tests/conformance/output_derivation/`.
+
+This is a **quiet-wrong-shape** gate, and it closes a hole rather than deepening
+an existing one: until this corpus the derivation had **no cross-language gate at
+any level**. The gate one reaches for is EarthSciIO's
+`conformance/write_spec.json`, but that is an *already-derived* schema (`dims`,
+`time_dim`, `coords`, `vars`, `chunk_shape`, `shard_shape`), so the write corpus
+starts **downstream** of derivation and drives the writers from a hand-authored
+shape. The two compose end to end, because a derivation corpus's output type is
+the write corpus's input type:
+
+```
+.esm ──[derivation, §5.17]──▶ OutputSchema ──[writers, EarthSciIO]──▶ Zarr store
+```
+
+Four divergences were carried silently until the corpus existed; all are resolved
+in RFC §16.12, two of them changing normative on-disk behaviour.
+
+#### 5.17.1 What is compared
+
+For each case the binding derives the plan from three inputs — the `.esm`
+document, the `slot_names` (the flat state element names, **in flat order**), and
+the caller-named `observed` subset — and compares the whole plan structurally
+against the committed golden. Comparison is **exact**, not tolerance-based: every
+field is a name, a count, an index or a declared coordinate value, so there is no
+band to allow.
+
+The corpus keeps `slot_names` an **input** rather than running a build. The
+cell-key scheme (`name[i,j,…]`, 1-based, column-major, dim 0 fastest) is itself
+specified by RFC §7 and is byte-identical across bindings, so making it an input
+keeps the gate on the derivation seam instead of admitting a compiler, a solver
+and their version skew into a metadata test.
+
+Representation contract, so the two bindings compare on one form:
+
+| Field | Contract |
+|-------|----------|
+| `vars[].flat_indices` | 0-based, **row-major (C-order)** within `shape` — the writer-facing layout, transposition applied. Rust stores this natively; Julia converts from its 1-based `cart` form with `row_major_flat_indices`. |
+| `vars[].dims` | the **on-disk** dimension list: record axis FIRST, then spatial axes. A scalar's dims are exactly `[time_dim]`. |
+| `grids[].dims` | that grid's *spatial* axes only, `[name, length]` in first-seen order. The record count is absent — a plan is derived once and stays valid however many records are written. |
+| grid order | first-seen spatial-dim-**signature** order, the signature being the SORTED SET of a variable's dim names, so axis order does not fragment a grid and every scalar (empty signature) lands in ONE shared 0-D grid. |
+| variable order | sorted by base name within a grid. |
+| `chunk_shape` / `shard_shape` | **not** compared — writer policy chosen by the sink, not derived from the document. |
+
+#### 5.17.2 Non-vacuity
+
+`scalar_0d.esm` is purely 0-D: four bare scalars, so a binding that gives a scalar
+a synthetic singleton axis emits four grids where the golden has one, and dims
+`[<base>_d0, time]` where the golden has `[time]`. `scalar_0d_state_only` reuses
+the same document and the same flat state with an empty `observed`, so RFC
+decision 8 (output is the state **plus a caller-named subset**) is pinned in both
+directions on one fixture — a binding that writes every observed field fails one
+case and a binding that writes none fails the other. `mixed.esm` carries scalars
+**and** two different gridded signatures in one document and must yield exactly
+**three** grids; under the old scalar handling it yields five, which is what makes
+it the fixture a shape-signature grouping bug shows up in. `mixed.esm` also names
+its record axis `t`, so a binding that assumes the literal `"time"` instead of
+reading `domain.independent_variable` is caught. `gridded.esm` lists its cell keys
+in the column-major order a build emits them while the golden's `flat_indices` are
+the row-major transposition, so an identity mapping fails.
+
+Goldens are authored **by hand**, never blessed from a binding's own output: a
+blessed golden pins only that binding's current behaviour, which is precisely the
+failure this corpus exists to prevent.
+
+#### 5.17.3 Gate
+
+Per-binding runners drive every case and gate the whole derived plan against the
+committed goldens: **Julia** —
+`pkg/EarthSciAST.jl/test/output_derivation_conformance_test.jl`; **Rust** —
+`pkg/earthsci-ast-rs/tests/output_derivation_conformance.rs`. Both are driven in
+one shot by
+`tests/conformance/output_derivation/run_output_derivation_conformance.sh`.
+`bindings_required` is `["julia", "rust"]`; Python, Go and TypeScript are out of
+scope because no output derivation exists in them (EarthSciIO's Python track is a
+**writer**, which consumes an already-derived schema). Each runner also asserts
+the scalar clause directly, so a regression names itself instead of surfacing as
+a golden diff. Each runner *renders* the production `derive_output_plan` result
+into the golden's shape and compares; neither re-derives anything in the adapter,
+so a derivation bug cannot hide behind the test.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

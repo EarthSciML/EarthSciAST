@@ -23,6 +23,24 @@ pub struct EsmFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_sets: Option<HashMap<String, IndexSet>>,
 
+    /// Document-scoped, OPTIONAL registry of coordinate variables
+    /// (RFC streaming-output-sinks §8.3), keyed by name.
+    ///
+    /// Purely additive: a document without it validates and emits exactly as
+    /// before (bare integer axes). Each entry marks an existing data array —
+    /// referenced by name, exactly as a `ragged` [`IndexSet`] references its
+    /// `offsets`/`values` factors — or an inline literal `values` vector as a
+    /// physical coordinate, and attaches CF metadata. It is read by
+    /// [`crate::data_output::derive_output_meta`] so a streaming writer can
+    /// emit CF dimension/auxiliary coordinates.
+    ///
+    /// The key is already in `esm-schema.json` and in the Julia `EsmFile`, but
+    /// the Rust binding did not model it at all — so a `parse → emit` round
+    /// trip silently DROPPED the whole registry (the same class of defect as
+    /// the `IndexSet::member_factor` omission below).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinates: Option<HashMap<String, Coordinate>>,
+
     /// Top-level rewrite-rule registry — the payload of a template-library file
     /// (esm-spec §9.7.1).
     ///
@@ -1486,6 +1504,46 @@ pub struct IndexSet {
     /// Member backing-factor name for `kind: "ragged"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<String>,
+}
+
+/// One entry of the document-scoped [`EsmFile::coordinates`] registry
+/// (RFC streaming-output-sinks §8.3): marks an existing data array — or an
+/// inline literal vector — as a physical coordinate and attaches CF metadata.
+///
+/// Exactly one of `source` and `values` is present. The coordinate's shape
+/// comes from its source, so it is NOT attached to any single axis: that one
+/// rule covers rectilinear (1-D monotonic → CF *dimension* coordinate),
+/// unstructured (1-D over a shared dimension) and curvilinear (2-D `lat(y,x)`)
+/// grids, the latter two emitting CF *auxiliary* coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Coordinate {
+    /// Name of an existing data array (model variable, parameter, or loader
+    /// field) supplying this coordinate's values. Mutually exclusive with
+    /// `values`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    /// Inline literal 1-D coordinate vector for the simple rectilinear case,
+    /// mirroring [`FunctionTableAxis::values`]. Mutually exclusive with
+    /// `source`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<f64>>,
+
+    /// CF standard name (e.g. `"latitude"`), emitted verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_name: Option<String>,
+
+    /// CF/UDUNITS units string (e.g. `"degrees_north"`). Advisory at load
+    /// time, matching [`FunctionTableAxis::units`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<String>,
+
+    /// CF axis role (`"X"` / `"Y"` / `"Z"` / `"T"`) for a 1-D monotonic
+    /// dimension coordinate; absent for auxiliary coordinates, which have no
+    /// single axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<String>,
 }
 
 /// ODE-based model component

@@ -1003,6 +1003,554 @@ function _oop_fn(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::
         "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
 end
 
+# ---- Lane-batched scalar entries (ess-oop-batch) -----------------------------
+#
+# WHY. The per-CELL scalar surface of this emitter — `rhs_list` entries a state
+# equation lowers to when it declines the kernel path (a runtime contraction
+# loop routes there BY DESIGN, see resolve.jl's `_ARRAY_CELL_DEPTH` note), and
+# the per-column `scalars` of a materialized-observed fill level — is walked one
+# entry at a time through `_oop_eval`. Correct, and on host cheap; under a TRACE
+# it is the one remaining place the emitted program's size scales with the grid:
+# every entry re-traces its whole tree, so a contraction loop over L levels
+# inside a per-column fill emits O(columns × L) scalar-indexed reads (measured
+# on ReSEACT CONUS: ~80 `stablehlo.dynamic_slice` PER GRID CELL, a 410 MB HLO
+# module at 7×7×72 — the multi-day-XLA-hang term).
+#
+# WHAT. Those entries are per-cell INSTANTIATIONS of one expression: same tree,
+# same ops, same loop ranges — only the baked-in cell data differ (state slots,
+# forcing offsets, gather subscripts, inlined per-cell constants). So at closure
+# build the entries are GROUPED by a canonical structural signature
+# (`_oop_batch_sig`) that wildcards exactly those lane-varying leaves, each
+# group is lowered ONCE to a lane-batched tree (`_OopBatchNode`,
+# `_oop_batch_lower`), and the whole group evaluates through `_oop_eval_batch`
+# as whole-array ops over its lane axis: a state leaf is ONE `_oop_gather` over
+# the per-lane slots, a contraction loop runs its L iterations ONCE with a
+# whole-lane accumulate per iteration, and the group's result lands through ONE
+# `_oop_scatter`. Emitted-program size: O(tree × L), independent of the lane
+# (grid) count.
+#
+# BIT-IDENTITY. Per lane, every arm performs the same operations in the same
+# order the scalar walker performs them (broadcast is elementwise; the loop
+# fold accumulates per lane in the same ascending-k order seeded from the same
+# 0̄; a ghost state-gather selects the same 0; a pow keeps its literal exponent
+# — the signature PINS the exponent, so a group never blends the power rule).
+# The one semantic divergence is inherited from every vectorized tier of this
+# codebase: `ifelse`/`and`/`or` evaluate EAGERLY over lanes (the `_oop_op`
+# folded arms, value-identical to the lazy scalar arms) rather than
+# short-circuiting, so a guard that exists to dodge a DomainError does not
+# dodge it here — exactly the `_eval_vec` / `_oop_run_acc_vec` contract. Under
+# a trace the lazy arms could not run anyway (branching on a traced Bool
+# throws), so for the traced consumer this path is strictly more capable.
+#
+# SAFETY. Grouping is conservative: a signature mismatch, a singleton group, an
+# unknown node kind, or any congruence check failing in `_oop_batch_lower`
+# leaves the affected entries on the existing one-at-a-time scalar path,
+# unchanged. `ESS_OOP_BATCH=0` disables the whole feature (every entry single).
+# Entries within one batch surface write DISJOINT slots and never read each
+# other (rhs_list writes `du` reading only `ue`/cache; a fill level's scalars
+# read only strictly-lower levels — the level scheduler's invariant), so
+# evaluating groups after the leftover singles reorders only WRITES to disjoint
+# slots, never a read-after-write.
+_oop_batch_enabled() = get(ENV, "ESS_OOP_BATCH", "1") != "0"
+
+# One position of a lane-batched tree. `kind` mirrors the `_NK_*` of every
+# lane's node at this position; which fields are live depends on it:
+#   _NK_LITERAL       shared `literal`, or per-lane `lanes_f`
+#   _NK_STATE         shared `idx`, or per-lane `slots` (one whole-array gather)
+#   _NK_PARAM/_NK_TIME/_NK_CACHED  shared `sym`/`idx` (lane-invariant scalar)
+#   _NK_PARAM_GATHER  `payload` the ONE shared buffer; shared `idx` or `slots`
+#   _NK_CONST_GATHER / _NK_STATE_GATHER  `nodes`: each lane's ORIGINAL node,
+#                     resolved per lane at eval (subscripts are host integer
+#                     arithmetic — `_oop_index_int` — so this is host work; the
+#                     state read is still one whole-array gather)
+#   _NK_LOOPVAR       `refs`: each lane's counter Ref (values read per lane)
+#   _NK_CONTRACTION_LOOP  shared `op`/`literal`/`lo:step:hi`; `refs` all lanes'
+#                     counters; `children[1]` the batched body
+#   _NK_CONTRACTION   shared `op`/`literal`; batched children
+#   _NK_OP            shared `op` (+ `payload` for `:fn`); batched children
+struct _OopBatchNode
+    kind::UInt8
+    op::Symbol
+    literal::Float64
+    idx::Int
+    sym::Symbol
+    payload::Any
+    lanes_f::Vector{Float64}
+    slots::Vector{Int}
+    nodes::Vector{_Node}
+    refs::Vector{Base.RefValue{Int}}
+    lo::Int
+    hi::Int
+    step::Int
+    children::Vector{_OopBatchNode}
+end
+function _mkbatch(; kind::UInt8, op::Symbol=Symbol(""), literal::Float64=0.0,
+                  idx::Int=0, sym::Symbol=Symbol(""), payload=nothing,
+                  lanes_f::Vector{Float64}=Float64[], slots::Vector{Int}=Int[],
+                  nodes::Vector{_Node}=_Node[],
+                  refs::Vector{Base.RefValue{Int}}=Base.RefValue{Int}[],
+                  lo::Int=0, hi::Int=0, step::Int=1,
+                  children::Vector{_OopBatchNode}=_OopBatchNode[])
+    return _OopBatchNode(kind, op, literal, idx, sym, payload, lanes_f, slots,
+                         nodes, refs, lo, hi, step, children)
+end
+
+# One batched group: the (disjoint) output slots, lane-aligned, and the lowered
+# tree. `_OopScalarBatches` is one whole batch surface (rhs_list, or one fill
+# level's scalars): the groups plus the leftover singles in their ORIGINAL
+# relative order. `n_batched` is Σ group lanes — the build-observability number
+# (and the closure-reflection witness the tests pin).
+struct _OopScalarBatch
+    slots::Vector{Int}
+    root::_OopBatchNode
+end
+struct _OopScalarBatches
+    groups::Vector{_OopScalarBatch}
+    rest::Vector{Tuple{Int,_Node}}
+    n_batched::Int
+end
+const _OOP_NO_BATCH = _OopScalarBatches(_OopScalarBatch[], Tuple{Int,_Node}[], 0)
+
+# Canonical structural signature: two entries share one iff `_oop_batch_lower`
+# can lane-batch them together. Writes into `io`; returns `false` for a node
+# kind the batch walker does not model (the entry then stays single). What is
+# PINNED (in the key) vs WILDCARDED (varies per lane):
+#   pinned:    tree shape, every op, param syms, cache slot ids, loop ranges +
+#              ⊕ + 0̄, fn identity (typed-core id / boxed name / interp spec
+#              object), the forcing BUFFER identity, pow's literal exponent
+#              (so a Dual walk keeps the power rule — see `_oop_pow`)
+#   wildcard:  state slot idx, forcing offset idx, value-position literals,
+#              const/state-gather payloads AND their whole subscript subtrees
+#              (each lane resolves its own — congruence across lanes is not
+#              required there, only that the kind sits at the same position)
+function _oop_batch_sig!(io::IO, n::_Node, fixed_lit::Bool)::Bool
+    k = n.kind
+    if k === _NK_LITERAL
+        fixed_lit ? print(io, "L", n.literal) : print(io, "l")
+    elseif k === _NK_STATE
+        print(io, "s")
+    elseif k === _NK_PARAM
+        print(io, "p", n.sym)
+    elseif k === _NK_TIME
+        print(io, "t")
+    elseif k === _NK_CACHED
+        print(io, "c", n.idx)
+    elseif k === _NK_PARAM_GATHER
+        print(io, "pg", objectid(n.payload))
+    elseif k === _NK_CONST_GATHER
+        print(io, "cg")
+    elseif k === _NK_STATE_GATHER
+        print(io, "sg")
+    elseif k === _NK_LOOPVAR
+        print(io, "lv")
+    elseif k === _NK_CONTRACTION_LOOP
+        spec = n.payload::_ContractLoop
+        print(io, "cl(", n.op, ",", n.literal, ",", spec.lo, ":", spec.step,
+              ":", spec.hi, "){")
+        _oop_batch_sig!(io, n.children[1], false) || return false
+        print(io, "}")
+    elseif k === _NK_CONTRACTION
+        print(io, "cn(", n.op, ",", n.literal, "){")
+        for c in n.children
+            _oop_batch_sig!(io, c, false) || return false
+            print(io, ",")
+        end
+        print(io, "}")
+    elseif k === _NK_OP
+        op = n.op
+        if op === :fn
+            pl = n.payload
+            if pl isa Tuple{String,_FnTypedCoreSpec}
+                print(io, "fn(", pl[1], ",", pl[2].id, ")")
+            elseif pl isa Tuple{String,Nothing}
+                print(io, "fn0(", pl[1], ")")
+            elseif pl isa Tuple{String,_InterpLinearSpec} ||
+                   pl isa Tuple{String,_InterpBilinearSpec} ||
+                   pl isa Tuple{String,_InterpSearchsortedSpec}
+                # Spec OBJECT identity: the build memo shares one compiled node
+                # (hence one spec) across cells; content-equal distinct objects
+                # merely fragment the group, never miscompile it.
+                print(io, "fni", objectid(pl[2]))
+            else
+                return false
+            end
+            print(io, "{")
+            for c in n.children
+                _oop_batch_sig!(io, c, false) || return false
+                print(io, ",")
+            end
+            print(io, "}")
+        elseif op === :^ || op === :pow
+            length(n.children) == 2 || return false
+            print(io, "pw{")
+            _oop_batch_sig!(io, n.children[1], false) || return false
+            print(io, ",")
+            # The exponent's IMMEDIATE literal is pinned; a non-literal exponent
+            # recurses normally (its own literals stay wildcards).
+            _oop_batch_sig!(io, n.children[2], true) || return false
+            print(io, "}")
+        else
+            print(io, "o(", op, "){")
+            for c in n.children
+                _oop_batch_sig!(io, c, false) || return false
+                print(io, ",")
+            end
+            print(io, "}")
+        end
+    else
+        return false
+    end
+    return true
+end
+function _oop_batch_sig(n::_Node)::Union{Nothing,String}
+    io = IOBuffer()
+    return _oop_batch_sig!(io, n, false) ? String(take!(io)) : nothing
+end
+
+# Lower `L` congruent lane nodes to one batched node. Defensive: every
+# congruence the signature promises is RE-CHECKED here (a `nothing` return
+# declines the whole group back to the scalar path — a signature collision can
+# lose batching, never correctness).
+function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing,_OopBatchNode}
+    n1 = @inbounds nodes[1]
+    k = n1.kind
+    @inbounds for l in 2:length(nodes)
+        nodes[l].kind === k || return nothing
+    end
+    if k === _NK_LITERAL
+        all(nd -> isequal(nd.literal, n1.literal), nodes) &&
+            return _mkbatch(kind=k, literal=n1.literal)
+        return _mkbatch(kind=k, lanes_f=Float64[nd.literal for nd in nodes])
+    elseif k === _NK_STATE
+        all(nd -> nd.idx == n1.idx, nodes) && return _mkbatch(kind=k, idx=n1.idx)
+        return _mkbatch(kind=k, slots=Int[nd.idx for nd in nodes])
+    elseif k === _NK_PARAM
+        all(nd -> nd.sym === n1.sym, nodes) || return nothing
+        return _mkbatch(kind=k, sym=n1.sym)
+    elseif k === _NK_TIME
+        return _mkbatch(kind=k)
+    elseif k === _NK_CACHED
+        all(nd -> nd.idx == n1.idx && nd.payload === n1.payload, nodes) || return nothing
+        return _mkbatch(kind=k, idx=n1.idx, payload=n1.payload)
+    elseif k === _NK_PARAM_GATHER
+        arr = n1.payload::Vector{Float64}
+        all(nd -> nd.payload === arr, nodes) || return nothing
+        all(nd -> nd.idx == n1.idx, nodes) &&
+            return _mkbatch(kind=k, idx=n1.idx, payload=arr)
+        return _mkbatch(kind=k, payload=arr, slots=Int[nd.idx for nd in nodes])
+    elseif k === _NK_CONST_GATHER || k === _NK_STATE_GATHER
+        return _mkbatch(kind=k, nodes=nodes)
+    elseif k === _NK_LOOPVAR
+        return _mkbatch(kind=k,
+            refs=Base.RefValue{Int}[nd.payload::Base.RefValue{Int} for nd in nodes])
+    elseif k === _NK_CONTRACTION_LOOP
+        spec = n1.payload::_ContractLoop
+        for nd in nodes
+            sp = nd.payload::_ContractLoop
+            (nd.op === n1.op && isequal(nd.literal, n1.literal) &&
+             sp.lo == spec.lo && sp.hi == spec.hi && sp.step == spec.step &&
+             length(nd.children) == 1) || return nothing
+        end
+        body = _oop_batch_lower(_Node[nd.children[1] for nd in nodes])
+        body === nothing && return nothing
+        return _mkbatch(kind=k, op=n1.op, literal=n1.literal,
+            refs=Base.RefValue{Int}[(nd.payload::_ContractLoop).ref for nd in nodes],
+            lo=spec.lo, hi=spec.hi, step=spec.step,
+            children=_OopBatchNode[body])
+    elseif k === _NK_CONTRACTION || k === _NK_OP
+        nc = length(n1.children)
+        for nd in nodes
+            (nd.op === n1.op && length(nd.children) == nc &&
+             (k !== _NK_CONTRACTION || isequal(nd.literal, n1.literal))) ||
+                return nothing
+        end
+        if k === _NK_OP && n1.op === :fn
+            pl = n1.payload
+            ok = if pl isa Tuple{String,_FnTypedCoreSpec}
+                all(nd -> (q = nd.payload;
+                           q isa Tuple{String,_FnTypedCoreSpec} &&
+                           q[1] == pl[1] && q[2].id === pl[2].id), nodes)
+            elseif pl isa Tuple{String,Nothing}
+                all(nd -> (q = nd.payload;
+                           q isa Tuple{String,Nothing} && q[1] == pl[1]), nodes)
+            elseif pl isa Tuple{String,_InterpLinearSpec} ||
+                   pl isa Tuple{String,_InterpBilinearSpec} ||
+                   pl isa Tuple{String,_InterpSearchsortedSpec}
+                all(nd -> nd.payload isa Tuple && length(nd.payload) == 2 &&
+                          nd.payload[2] === pl[2], nodes)
+            else
+                false
+            end
+            ok || return nothing
+        end
+        children = Vector{_OopBatchNode}(undef, nc)
+        for i in 1:nc
+            ci = _oop_batch_lower(_Node[nd.children[i] for nd in nodes])
+            ci === nothing && return nothing
+            children[i] = ci
+        end
+        return _mkbatch(kind=k, op=n1.op, literal=n1.literal,
+                        payload=(k === _NK_OP ? n1.payload : nothing),
+                        children=children)
+    end
+    return nothing
+end
+
+# Group one batch surface. Groups (≥2 congruent lanes, lowered successfully)
+# come out in first-appearance order with lanes in original entry order; every
+# other entry stays in `rest`, original relative order preserved. With the
+# feature disabled (`ESS_OOP_BATCH=0`) everything is `rest` — byte-identical to
+# the pre-feature closure. `ESS_OOP_PROBE=1` tallies the outcome per entry
+# (`:oop_batch_lane` / `:oop_batch_single`) and per group (`:oop_batch_group`).
+function _oop_batch_scalars(entries::AbstractVector{Tuple{Int,_Node}})
+    (!_oop_batch_enabled() || length(entries) < 2) &&
+        return _OopScalarBatches(_OopScalarBatch[],
+                                 collect(Tuple{Int,_Node}, entries), 0)
+    order = Dict{String,Int}()          # key -> first-appearance group ordinal
+    members = Vector{Vector{Int}}()     # ordinal -> entry indices
+    for (i, (_, nd)) in enumerate(entries)
+        s = _oop_batch_sig(nd)
+        s === nothing && continue
+        g = get!(order, s) do
+            push!(members, Int[])
+            length(members)
+        end
+        push!(members[g], i)
+    end
+    groups = _OopScalarBatch[]
+    single = trues(length(entries))
+    n_batched = 0
+    probe = get(ENV, "ESS_OOP_PROBE", "") == "1"
+    for idxs in members
+        length(idxs) >= 2 || continue
+        root = _oop_batch_lower(_Node[entries[i][2] for i in idxs])
+        root === nothing && continue
+        push!(groups, _OopScalarBatch(Int[entries[i][1] for i in idxs], root))
+        n_batched += length(idxs)
+        for i in idxs
+            single[i] = false
+        end
+        probe && _tally_cascade!(:oop_batch_group)
+    end
+    rest = Tuple{Int,_Node}[entries[i] for i in eachindex(entries) if single[i]]
+    if probe
+        for _ in 1:n_batched; _tally_cascade!(:oop_batch_lane); end
+        for _ in 1:length(rest); _tally_cascade!(:oop_batch_single); end
+    end
+    return _OopScalarBatches(groups, rest, n_batched)
+end
+
+# The lane-batched fn arm: children already evaluated (lane vectors and/or
+# invariant scalars). Interp goes through the SAME lane evaluators the
+# vectorized acc path uses (host: the scalar cores per lane, bit-identical by
+# construction; trace: the branch-free forms / the ext's gather seams). A
+# typed-core fn at Float64 is one typed broadcast; every other case is the
+# boxed per-lane broadcast — host-correct, loud under a trace, exactly the
+# `_oop_acck_fn` contract.
+function _oop_batch_fn(pl, cv::Vector{Any}, ::Type{T}) where {T}
+    if pl isa Tuple{String,_InterpLinearSpec}
+        return _oop_interp_linear_lanes(pl[2], cv[1], T)
+    elseif pl isa Tuple{String,_InterpBilinearSpec}
+        return _oop_interp_bilinear_lanes(pl[2], cv[1], cv[2], T)
+    elseif pl isa Tuple{String,_InterpSearchsortedSpec}
+        return _oop_interp_searchsorted_lanes(pl[2], cv[1], T)
+    elseif pl isa Tuple{String,_FnTypedCoreSpec}
+        T === Float64 && return _fn_typed_core_call.(pl[2].id, cv[1])
+        fname = pl[1]
+        return broadcast((as...) -> convert(T, _eval_closed_fn(fname, Any[as...], T)),
+                         cv...)
+    elseif pl isa Tuple{String,Nothing}
+        fname = pl[1]
+        return broadcast((as...) -> convert(T, _eval_closed_fn(fname, Any[as...], T)),
+                         cv...)
+    end
+    throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
+        "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
+end
+
+# Evaluate a batched tree over its whole lane axis. Returns a length-L lane
+# vector, or a bare scalar where the subtree is lane-invariant — broadcast makes
+# them interchangeable, exactly as in `_oop_eval_acck`. Per lane this computes
+# what `_oop_eval` computes on that lane's original node (see the bit-identity
+# note at the section header).
+function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
+                         fb::_OopForcing) where {T}
+    k = b.kind
+    if k === _NK_LITERAL
+        return isempty(b.lanes_f) ? convert(T, b.literal) : b.lanes_f
+    elseif k === _NK_STATE
+        return isempty(b.slots) ? convert(T, _oop_read_state(u, b.idx)) :
+               _oop_gather(u, b.slots)
+    elseif k === _NK_PARAM
+        return convert(T, getfield(p, b.sym))
+    elseif k === _NK_TIME
+        return convert(T, t)
+    elseif k === _NK_CACHED
+        return @inbounds cache[b.idx]
+    elseif k === _NK_PARAM_GATHER
+        buf = _oop_forcing_slab(fb, b.payload::Vector{Float64})
+        return isempty(b.slots) ? convert(T, _oop_read_forcing(buf, b.idx)) :
+               _oop_gather(buf, b.slots)
+    elseif k === _NK_LOOPVAR
+        # Per LANE: positionally-matched loop counters normally all hold the
+        # same k (the batched loop below writes every lane's ref), but two
+        # congruent trees may bind DIFFERENT enclosing loops at this position
+        # (Σ_k Σ_l f(k) grouped with Σ_k Σ_l f(l)), so read each lane's own.
+        refs = b.refs
+        v1 = @inbounds refs[1][]
+        same = true
+        @inbounds for l in 2:length(refs)
+            same &= (refs[l][] == v1)
+        end
+        return same ? convert(T, v1) : Float64[Float64(r[]) for r in refs]
+    elseif k === _NK_CONST_GATHER
+        # Host-resolved per lane (subscripts are loop-counter integer
+        # arithmetic; `_oop_index_int` guarantees a host Int — the same
+        # resolution `_oop_const_gather` performs per entry), collapsed to one
+        # scalar when every lane reads the same value.
+        nds = b.nodes
+        L = length(nds)
+        vals = Vector{Float64}(undef, L)
+        @inbounds for l in 1:L
+            nd = nds[l]
+            cg = nd.payload::_ConstGatherArray
+            off = 1
+            for d in eachindex(nd.children)
+                off += (_oop_index_int(nd.children[d], u, p, t, cache, fb) - 1) *
+                       cg.strides[d]
+            end
+            (1 <= off <= cg.len) || throw(BoundsError(cg.flat, off))
+            vals[l] = cg.flat[off]
+        end
+        allsame = true
+        @inbounds for l in 2:L
+            allsame &= isequal(vals[l], vals[1])
+        end
+        return allsame ? convert(T, @inbounds vals[1]) : vals
+    elseif k === _NK_STATE_GATHER
+        # Per-lane slot resolution on host (`_oop_index_int`, the CONTROL-side
+        # ghost test `_oop_state_gather` performs), then ONE whole-array gather;
+        # ghost lanes gather a SAFE slot and select 0 — the in-place runners'
+        # `s == 0 ? 0.0 : u[s]`, bit-identical (the `_AK_STATE_TBL_BOX` pattern).
+        nds = b.nodes
+        L = length(nds)
+        slots = Vector{Int}(undef, L)
+        mask = Vector{Bool}(undef, L)
+        anyghost = false
+        @inbounds for l in 1:L
+            nd = nds[l]
+            sg = nd.payload::_StateGather
+            off = 0
+            g = false
+            for d in eachindex(nd.children)
+                sub = _oop_index_int(nd.children[d], u, p, t, cache, fb)
+                if !(sg.lo[d] <= sub <= sg.hi[d])
+                    g = true
+                    break
+                end
+                off += (sub - sg.lo[d]) * sg.strides[d]
+            end
+            mask[l] = g
+            slots[l] = g ? 1 : sg.slot_flat[off + 1]
+            anyghost |= g
+        end
+        gth = _oop_gather(u, slots)
+        return anyghost ? ifelse.(mask, zero(T), gth) : gth
+    elseif k === _NK_CONTRACTION_LOOP
+        # The whole group's reduction in ONE loop of L_iter whole-lane steps:
+        # per iteration, write every lane's counter, evaluate the body once over
+        # lanes, accumulate elementwise. Per lane this is the scalar loop's
+        # ascending-k fold seeded from the same 0̄ — bit-identical.
+        body = @inbounds b.children[1]
+        op = b.op
+        refs = b.refs
+        s::Any = convert(T, b.literal)
+        if op === :+
+            for kk in b.lo:b.step:b.hi
+                @inbounds for r in refs; r[] = kk; end
+                s = s .+ _oop_eval_batch(body, u, p, t, cache, fb)
+            end
+        elseif op === :*
+            for kk in b.lo:b.step:b.hi
+                @inbounds for r in refs; r[] = kk; end
+                s = s .* _oop_eval_batch(body, u, p, t, cache, fb)
+            end
+        elseif op === :max
+            for kk in b.lo:b.step:b.hi
+                @inbounds for r in refs; r[] = kk; end
+                s = max.(s, _oop_eval_batch(body, u, p, t, cache, fb))
+            end
+        else  # :min
+            for kk in b.lo:b.step:b.hi
+                @inbounds for r in refs; r[] = kk; end
+                s = min.(s, _oop_eval_batch(body, u, p, t, cache, fb))
+            end
+        end
+        return s
+    elseif k === _NK_CONTRACTION
+        # Fixed-width ⊕-fold, child order, seeded from 0̄ — `_oop_contraction`
+        # per lane.
+        ch = b.children
+        res::Any = convert(T, b.literal)
+        if b.op === :+
+            for i in eachindex(ch)
+                res = res .+ _oop_eval_batch(ch[i], u, p, t, cache, fb)
+            end
+        elseif b.op === :*
+            for i in eachindex(ch)
+                res = res .* _oop_eval_batch(ch[i], u, p, t, cache, fb)
+            end
+        elseif b.op === :max
+            for i in eachindex(ch)
+                res = max.(res, _oop_eval_batch(ch[i], u, p, t, cache, fb))
+            end
+        else  # :min
+            for i in eachindex(ch)
+                res = min.(res, _oop_eval_batch(ch[i], u, p, t, cache, fb))
+            end
+        end
+        return res
+    else  # _NK_OP
+        op = b.op
+        ch = b.children
+        if op === :fn
+            cv = Any[_oop_eval_batch(c, u, p, t, cache, fb) for c in ch]
+            return _oop_batch_fn(b.payload, cv, T)
+        elseif (op === :^ || op === :pow) && length(ch) == 2
+            # A literal exponent stays a literal (see `_oop_pow`); the signature
+            # pinned it, so a literal exponent is always the SHARED-literal form.
+            base = _oop_eval_batch(ch[1], u, p, t, cache, fb)
+            e = @inbounds ch[2]
+            (e.kind === _NK_LITERAL && isempty(e.lanes_f)) && return base .^ e.literal
+            return base .^ _oop_eval_batch(e, u, p, t, cache, fb)
+        end
+        c = Vector{Any}(undef, length(ch))
+        for i in eachindex(ch)
+            c[i] = _oop_eval_batch(ch[i], u, p, t, cache, fb)
+        end
+        return _oop_op(op, c, T)
+    end
+end
+
+# Run one batch surface: leftover singles first (original order), then each
+# group as one whole-lane evaluation landing through ONE scatter. Slots within
+# the surface are disjoint and the entries never read each other (section
+# header), so the values are the per-entry scalar walk's, bit for bit.
+function _oop_run_scalar_batches(du, sb::_OopScalarBatches, ue, p, t,
+                                 cache::AbstractVector{T}, fb::_OopForcing) where {T}
+    rl = sb.rest
+    @inbounds for i in eachindex(rl)
+        slot, node = rl[i]
+        du = _oop_store(du, slot, _oop_eval(node, ue, p, t, cache, fb))
+    end
+    gs = sb.groups
+    for i in eachindex(gs)
+        g = gs[i]
+        du = _oop_scatter(du, g.slots, _oop_eval_batch(g.root, ue, p, t, cache, fb))
+    end
+    return du
+end
+
 # ---- The closure ------------------------------------------------------------
 #
 # Mirrors `_make_rhs` phase for phase (CSE prelude → scalar equations → array
@@ -1884,12 +2432,17 @@ forcing_buffer_index(f::_OopRHS) = f.buffer_index
 # (`_materialized_fill_equation` goes straight through `_compile`), so it gets an
 # empty view of the caller's — allocating a fresh empty vector per level per call
 # would defeat the point of the seam.
-@inline function _oop_fill_level(ue, lvl, p, t, ::Type{T}, fb, empty_cache) where {T}
+#
+# The level's `scalars` run through the lane-batched surface (`sb`, built once
+# at closure build by `_make_rhs_oop` — see the ess-oop-batch section): the
+# per-column fills a level fragments into are exactly the congruent-instance
+# shape batching exists for, and under a trace they were the last O(grid)
+# scalar surface. Singles first, then groups; disjoint slots + the
+# strictly-lower-level read invariant make that reorder value-exact.
+@inline function _oop_fill_level(ue, lvl, sb::_OopScalarBatches, p, t, ::Type{T},
+                                 fb, empty_cache) where {T}
     scalars, kernels, plans, scans = lvl
-    @inbounds for m in eachindex(scalars)
-        slot, node = scalars[m]
-        ue = _oop_store(ue, slot, _oop_eval(node, ue, p, t, empty_cache, fb))
-    end
+    ue = _oop_run_scalar_batches(ue, sb, ue, p, t, empty_cache, fb)
     for j in eachindex(kernels)
         plan = plans[j]
         ue = plan.vectorizable ?
@@ -1903,10 +2456,11 @@ end
 # Walk the levels as a TUPLE by tail recursion, for the reason `_fill_obs_levels!`
 # does: a `Vector` of heterogeneously-parameterized levels boxes each one and
 # costs an allocation per level per call.
-@inline _oop_fill_levels(ue, ::Tuple{}, p, t, ::Type{T}, fb, ec) where {T} = ue
-@inline function _oop_fill_levels(ue, levels::Tuple, p, t, ::Type{T}, fb, ec) where {T}
-    ue = _oop_fill_level(ue, levels[1], p, t, T, fb, ec)
-    return _oop_fill_levels(ue, Base.tail(levels), p, t, T, fb, ec)
+@inline _oop_fill_levels(ue, ::Tuple{}, sbs::Tuple, p, t, ::Type{T}, fb, ec) where {T} = ue
+@inline function _oop_fill_levels(ue, levels::Tuple, sbs::Tuple, p, t, ::Type{T},
+                                  fb, ec) where {T}
+    ue = _oop_fill_level(ue, levels[1], sbs[1], p, t, T, fb, ec)
+    return _oop_fill_levels(ue, Base.tail(levels), Base.tail(sbs), p, t, T, fb, ec)
 end
 
 function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
@@ -1939,6 +2493,16 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # as a NamedTuple of the aliased flat host views. `host_keys` carries the same
     # arrays positionally: the walkers identity-match a node payload / acc
     # descriptor against it to swap the captured array for the argument entry.
+    # Lane-batched scalar surfaces (ess-oop-batch), grouped ONCE at closure
+    # build: the rhs_list per-cell entries and each fill level's per-column
+    # scalars. `rhs_list`/`mat_levels` stay captured under their stable field
+    # names (external tooling reflects on them); `rhs_batches`/`mat_batches`
+    # are ADDITIVE fields — the closure-reflection witness for the feature (a
+    # group count of zero means everything runs the scalar path, exactly as
+    # before this feature existed).
+    rhs_batches = _oop_batch_scalars(rhs_list)
+    mat_batches = map(lvl -> _oop_batch_scalars(lvl[1]::Vector{Tuple{Int,_Node}}),
+                      mat_levels)
     buf_names = sort!(String[String(k) for k in keys(pgather)])
     host_bufs = NamedTuple{Tuple(Symbol(n) for n in buf_names)}(
         Tuple((pgather[n]::_PGatherArray).flat for n in buf_names))
@@ -1977,7 +2541,8 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
         ue = u
         if !isempty(mat_levels)
             ue = _oop_prefix_copy(_oop_du_zeros(u, T, n_total), u, n_states)
-            ue = _oop_fill_levels(ue, mat_levels, p, t, T, fb, _EMPTY_OOP_CACHE(T))
+            ue = _oop_fill_levels(ue, mat_levels, mat_batches, p, t, T, fb,
+                                  _EMPTY_OOP_CACHE(T))
         end
 
         cache = Vector{T}(undef, n_cse)
@@ -1985,10 +2550,15 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
             cache[s] = _oop_eval(cse_prelude[s], ue, p, t, cache, fb)
         end
 
+        # Scalar state equations, through the lane-batched surface (ess-oop-
+        # batch): the leftover singles are the pre-feature per-entry walk; each
+        # group is one whole-lane evaluation + one scatter into disjoint slots.
+        # (The `isempty(rhs_list)` guard is also what keeps `rhs_list` a
+        # captured field of this closure — part of its stable reflection
+        # surface — now that the entries themselves live in `rhs_batches`.)
         du = _oop_du_zeros(u, T, n_states)
-        @inbounds for k in eachindex(rhs_list)
-            slot, node = rhs_list[k]
-            du = _oop_store(du, slot, _oop_eval(node, ue, p, t, cache, fb))
+        if !isempty(rhs_list)
+            du = _oop_run_scalar_batches(du, rhs_batches, ue, p, t, cache, fb)
         end
 
         # Access kernels (the unified array IR), out of place. The vectorized form
