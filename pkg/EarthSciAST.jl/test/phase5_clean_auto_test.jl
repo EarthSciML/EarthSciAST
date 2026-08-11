@@ -38,10 +38,12 @@
 # oracle to machine precision — with the only inputs being raw lon/lat + the
 # provider.
 #
-# NOTE ON SCALE: full-SCALE (52411 src cells) validation through the observed
-# evaluator is blocked by a separate, pre-existing type-instability (Wall #2),
-# independent of this projection change. L1-scale machine precision is the
-# Phase-5 acceptance criterion; Wall #2 remains as documented future work.
+# NOTE ON SCALE: L1-scale machine precision is the Phase-5 acceptance
+# criterion here. Full SCALE (52,411 src cells) through the REWRITTEN clean
+# graph was validated in the Phase-1 clean consolidation (isrm.esm run-jl
+# shim): |ppl| = 1520, deaths totals bit-identical to the pushdown-era
+# runtime record. (An earlier note called full scale "blocked by Wall #2";
+# that wall was closed by build-time array-observed materialization.)
 
 # Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
 # stay isolated from other test files' identically-named helpers in the shared

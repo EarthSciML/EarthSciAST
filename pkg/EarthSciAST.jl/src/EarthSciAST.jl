@@ -219,6 +219,9 @@ export
     build_refresh_callback, RefreshBuffers, RefreshError,
     provider_refresh_times, provider_is_const, provider_sample,
     provider_supports_selection, provider_gate_spec, provider_is_gated,
+    # Document-declared provider construction (Phase 1 clean consolidation;
+    # implemented by the EarthSciIO extension, stub errors without it).
+    providers_from_document,
     # Streaming output sinks (streaming-output-sinks RFC §16, Wave 1; callback
     # ctor in the DiffEqCallbacks/SciMLBase extension). The OUTPUT mirror of the
     # Provider/refresh input seam: a `PresetTimeCallback` snapshots state and
@@ -249,7 +252,7 @@ export
     # `prepare` runs the deterministic-per-document pipeline ONCE into a cached
     # `PreparedModel`; `simulate(prep, tspan; …)` skips prep/build entirely.
     simulate, SimulationResult, SimulateError, seed_expression_ic!, final_state,
-    prepare, PreparedModel,
+    prepare, PreparedModel, observed_field,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,
