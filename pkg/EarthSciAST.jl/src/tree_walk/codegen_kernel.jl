@@ -100,17 +100,16 @@ _dual_codegen_node_budget() =
 # cells), 0 B/call either way.
 #
 # THE TAPE IS NOT RETIRED. It remains built, reachable, and load-bearing:
-#   * kill switch ESS_F64_OVERFLOW_CODEGEN=0 restores today's routing exactly
+#   * kill switch ESS_F64_OVERFLOW_CODEGEN=0 restores the tape routing exactly
 #     (tape at Float64 for every residual kernel) — the differential oracle;
-#   * whenever Polyester threading is active (`_threads_available()`), the
-#     routing defers to the tape AT CALL TIME: the tape's cell axis is
-#     Polyester-threaded (T2) and the overflow RGF is single-threaded, so
-#     compiled-serial would be a runtime REGRESSION at large grids for
-#     threaded users. The guard is per call, so `using Polyester` after the
-#     build still gets the threaded tape. (Finer per-plan arbitration —
-#     compiled code for plans whose threading verdict is serial — is future
-#     work; the coarse guard keeps threaded users byte-for-byte on today's
-#     path.)
+#   * with Polyester threading active, the overflow RGF now runs CHUNKED on
+#     its own threaded cell axis (see "Threaded cell axis for the codegen
+#     tier" below) — compiled+threaded, which measured faster than the
+#     threaded tape it used to defer to. The tape remains the call-time
+#     fallback whenever the section may NOT chunk for safety
+#     (`:cg_serial_shared_outs`): its per-kernel threading is still safe
+#     there, and the guard is per call, so `using Polyester` after the build
+#     still engages it.
 #   * kernels even the overflow emission declines (`dual_resid`) keep the
 #     tape/interpreter at Float64, exactly as before.
 # The routing is inert unless the PRIMARY emission declined something and the
@@ -587,6 +586,19 @@ function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
 end
 
 # ---- One kernel → its loop nest (mirrors `_run_acc_kernel!`) ----------------
+# CHUNK-PARAMETERIZED (threaded cell axis, see "Threaded cell axis for the
+# codegen tier" below): every loop nest iterates the cell ordinals `[a, b)` of
+# ITS OWN cell set for chunk `_cgci` of `_cgnc`, where `(a, b)` is the tape's
+# exact static partition (`_chunk_ordinals`, access_kernel.jl — shared, not
+# re-derived). The serial call is the `(1, 1)` instance: `a == 0, b == ncells`
+# reproduces today's full loops with the inner-loop body instruction-identical
+# (outs/contig/rank-1 boxes differ only in loop-bound arithmetic; rank-2/3
+# boxes add two per-ROW range clamps that select the full range at `(1, 1)`).
+# Partition and iteration order are pure functions of `(ncells, nchunks)`, and
+# a cell computes the same instruction sequence on the same inputs whichever
+# chunk it lands in, so any chunking reproduces the serial values BIT FOR BIT
+# as long as no two cells share a `du` slot (checked at build — see
+# `_cg_covered_outs_disjoint`).
 function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # Invariant tiers, nested-first (K.subs holds every transitive sub).
     for S in K.subs
@@ -603,6 +615,14 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     end
 
     cs = K.cells
+    # This kernel's chunk of the cell-ordinal axis (0-based, half-open).
+    ncells = _plan_ncells(cs)
+    tv = _cg_name(ctx, "ab")
+    av = _cg_name(ctx, "a")
+    bv = _cg_name(ctx, "b")
+    hdr = Any[:(local $tv = _chunk_ordinals($ncells, _cgci, _cgnc)),
+              :(local $av = $tv[1]),
+              :(local $bv = $tv[2])]
     if _is_outs(cs)
         outs = _cg_tab!(ctx, cs.outs)
         c = _cg_name(ctx, "c")
@@ -610,7 +630,8 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
         kc = _CGKernCtx(K, c, 0, oln, c, 1, 1, Symbol[], invsyms)
         body = cellbody(kc)
         return quote
-            for $c in 1:$(length(cs.outs))
+            $(hdr...)
+            for $c in ($av + 1):$bv
                 local $oln = $outs[$c]
                 $(body...)
             end
@@ -621,13 +642,19 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
         kc = _CGKernCtx(K, c, 0, c, c, 1, 1, Symbol[], invsyms)
         body = cellbody(kc)
         return quote
-            for $c in $(first(rng)):$(last(rng))
+            $(hdr...)
+            for $c in ($(first(rng)) + $av):($(first(rng)) + $bv - 1)
                 $(body...)
             end
         end
     end
     # Strided Cartesian box, rank ≤ 3, in `_run_box_kernel!`'s exact iteration
-    # order (k-outer, i-inner). c == oln for a box.
+    # order (k-outer, i-inner). c == oln for a box. The flat cell ordinal `o`
+    # of `(i, j, k)` is `(i-i0) + ni·((j-j0) + nj·(k-k0))` — exactly the serial
+    # enumeration position — and a chunk `[a, b)` is walked as whole i-ROWS
+    # with the FIRST and LAST row's i-range clamped to the chunk boundary
+    # (`_plan_walk!` decodes the same ordinals per cell; here the decode is
+    # hoisted to the row level so the inner loop stays today's instructions).
     nd = length(cs.strides)
     nd <= 3 || throw(_CodegenDecline(:box_rank))
     st = cs.strides
@@ -641,23 +668,70 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     nd >= 3 && (olnexpr = :($olnexpr + $kv * $(st[3])))
     kc = _CGKernCtx(K, oln, 0, oln, iv, jv, kv, Symbol[], invsyms)
     body = cellbody(kc)
-    inner = quote
-        for $iv in $(first(rg[1])):$(last(rg[1]))
-            local $oln = $olnexpr
-            $(body...)
+    i0 = first(rg[1]); i1 = last(rg[1]); ni = length(rg[1])
+    if nd == 1
+        return quote
+            $(hdr...)
+            for $iv in ($i0 + $av):($i0 + $bv - 1)
+                local $oln = $olnexpr
+                $(body...)
+            end
         end
     end
-    nd >= 2 && (inner = quote
-        for $jv in $(first(rg[2])):$(last(rg[2]))
-            $inner
+    ohi = _cg_name(ctx, "e")          # last ordinal of the chunk (b - 1)
+    ilo = _cg_name(ctx, "il")
+    ihi = _cg_name(ctx, "ih")
+    jlo = _cg_name(ctx, "jl")
+    jhi = _cg_name(ctx, "jh")
+    j0 = first(rg[2]); j1 = last(rg[2])
+    if nd == 2
+        return quote
+            $(hdr...)
+            if $av < $bv
+                local $ohi = $bv - 1
+                local $jlo = $j0 + div($av, $ni)
+                local $jhi = $j0 + div($ohi, $ni)
+                for $jv in $jlo:$jhi
+                    local $ilo = $jv == $jlo ? $i0 + rem($av, $ni) : $i0
+                    local $ihi = $jv == $jhi ? $i0 + rem($ohi, $ni) : $i1
+                    for $iv in $ilo:$ihi
+                        local $oln = $olnexpr
+                        $(body...)
+                    end
+                end
+            end
         end
-    end)
-    nd >= 3 && (inner = quote
-        for $kv in $(first(rg[3])):$(last(rg[3]))
-            $inner
+    end
+    # nd == 3: rows are indexed by the flat (j, k) row ordinal `r = o ÷ ni`;
+    # the chunk's first/last row clamp j (per k) and i (on exactly the first
+    # and last row, `k == klo && j == jlo` / `k == khi && j == jhi`).
+    rlo = _cg_name(ctx, "rl")
+    rhi = _cg_name(ctx, "rh")
+    klo = _cg_name(ctx, "kl")
+    khi = _cg_name(ctx, "kh")
+    nj = length(rg[2]); k0 = first(rg[3])
+    return quote
+        $(hdr...)
+        if $av < $bv
+            local $ohi = $bv - 1
+            local $rlo = div($av, $ni)
+            local $rhi = div($ohi, $ni)
+            local $klo = $k0 + div($rlo, $nj)
+            local $khi = $k0 + div($rhi, $nj)
+            for $kv in $klo:$khi
+                local $jlo = $kv == $klo ? $j0 + rem($rlo, $nj) : $j0
+                local $jhi = $kv == $khi ? $j0 + rem($rhi, $nj) : $j1
+                for $jv in $jlo:$jhi
+                    local $ilo = ($kv == $klo && $jv == $jlo) ? $i0 + rem($av, $ni) : $i0
+                    local $ihi = ($kv == $khi && $jv == $jhi) ? $i0 + rem($ohi, $ni) : $i1
+                    for $iv in $ilo:$ihi
+                        local $oln = $olnexpr
+                        $(body...)
+                    end
+                end
+            end
         end
-    end)
-    return inner
+    end
 end
 
 # ---- Build the fused generated RHS section ----------------------------------
@@ -665,6 +739,83 @@ struct _CGBuilt{F,TB}
     f::F
     tabs::TB
     covered::Vector{Bool}
+    # Threaded cell axis (see "Threaded cell axis for the codegen tier"):
+    # total cells across the covered kernels, and the build-time verdict that
+    # every covered out-slot is globally unique (section-chunking is only
+    # enabled when it holds).
+    ncells::Int
+    outs_disjoint::Bool
+end
+
+# Every output slot of `cs` pushed into `seen`; false on the first duplicate.
+# The cross-KERNEL generalization of `_plan_output_disjoint` (access_kernel.jl):
+# that check may short-circuit a contiguous set as disjoint-by-construction
+# because it only ever compares a set against itself, while here a contiguous
+# range must also collide with the OTHER kernels' slots, so every kind
+# enumerates. Same slot arithmetic as the runners, exact Int.
+function _cellset_outs_disjoint!(seen::Set{Int}, cs::_CellSet)
+    if _is_outs(cs)
+        for o in cs.outs
+            o in seen && return false
+            push!(seen, o)
+        end
+        return true
+    end
+    if _is_contig(cs)
+        for o in cs.ranges[1]
+            o in seen && return false
+            push!(seen, o)
+        end
+        return true
+    end
+    st = cs.strides; rg = cs.ranges; b = cs.base; nd = length(st)
+    if nd == 1
+        s1 = st[1]
+        for i in rg[1]
+            o = b + i*s1
+            o in seen && return false
+            push!(seen, o)
+        end
+    elseif nd == 2
+        s1 = st[1]; s2 = st[2]
+        for j in rg[2], i in rg[1]
+            o = b + i*s1 + j*s2
+            o in seen && return false
+            push!(seen, o)
+        end
+    else
+        s1 = st[1]; s2 = st[2]; s3 = st[3]
+        for k in rg[3], j in rg[2], i in rg[1]
+            o = b + i*s1 + j*s2 + k*s3
+            o in seen && return false
+            push!(seen, o)
+        end
+    end
+    return true
+end
+
+# Build-time SECTION-chunking safety check: are the emitted kernels' output
+# slots globally pairwise-distinct ACROSS the whole generated function? Only
+# then may one chunk run ALL kernels' cell sub-ranges without a barrier —
+# two chunks could otherwise read-modify-write one `du` slot from different
+# kernels (indirect-out / scatter merges CAN alias across kernels; the
+# `_KernelSection` derivative-section comment says they don't for state
+# equations, but this VERIFIES rather than trusts, and materialized-observed
+# sections go through the same builder). Returns `(total cells, disjoint)`.
+function _cg_covered_outs_disjoint(acc_kernels::AbstractVector{_AccKernel},
+                                   covered::Vector{Bool})
+    ncells = 0
+    for (j, K) in enumerate(acc_kernels)
+        covered[j] || continue
+        ncells += _plan_ncells(K.cells)
+    end
+    seen = Set{Int}()
+    sizehint!(seen, ncells)
+    for (j, K) in enumerate(acc_kernels)
+        covered[j] || continue
+        _cellset_outs_disjoint!(seen, K.cells) || return ncells, false
+    end
+    return ncells, true
 end
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
@@ -697,7 +848,10 @@ function _cg_local_lhs(stmt)
 end
 
 # Emit + compile every codegen-able kernel into a RuntimeGeneratedFunction
-# `(du, u, p, t, tabs) -> nothing`. The shared invariant prologue is computed
+# `(du, u, p, t, tabs, ci, nchunks) -> nothing` — the per-CHUNK form of the
+# section (see `_cg_emit_kernel!`): each kernel's loop nest covers its cell
+# ordinals `[a, b)` for chunk `ci` of `nchunks`, and `(1, 1)` is the serial
+# call. The shared invariant prologue is computed
 # once in the outer function; the kernel loop nests are partitioned into
 # `@noinline` sub-functions (each ≤ `_codegen_fn_node_cap()` nodes) so no single
 # function is too large for LLVM to compile. Each sub-function receives du/u/p/t
@@ -762,6 +916,11 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         s = _cg_local_lhs(stmt)
         s === nothing || push!(outer_passed, s)
     end
+    # The chunk index pair rides through like any other outer name: every
+    # kernel loop nest references it (its `_chunk_ordinals` header), so the
+    # sym-collection below forwards it into each `@noinline` sub-function.
+    push!(outer_passed, :_cgci)
+    push!(outer_passed, :_cgnc)
 
     # Partition the loop nests into chunks capped by emitted-node count.
     cap = _codegen_fn_node_cap()
@@ -802,17 +961,124 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                 fndefs...,
                 callstmts...,
                 :(return nothing))
-    ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs), body)
+    ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
         @__MODULE__, @__MODULE__, ex)
+    # Threaded cell axis: total covered cells + the global out-slot
+    # disjointness verdict, both facts of the BUILD (the runtime chunk verdict
+    # is `_sec_prep_threads!`'s).
+    ncells, disjoint = _cg_covered_outs_disjoint(acc_kernels, covered)
     if _codegen_debug()
         ms = (time_ns() - t0) / 1e6
         println(stderr, "[ess-codegen/$tally] emitted $(count(covered))/$(length(covered)) ",
                 "kernels in $(length(chunks)) fn(s), $(ctx.nodes) nodes, ",
-                "$(length(ctx.tabs)) tab objects, build $(round(ms; digits=1)) ms")
+                "$(length(ctx.tabs)) tab objects, $(ncells) cells ",
+                "(outs $(disjoint ? "disjoint" : "SHARED")), ",
+                "build $(round(ms; digits=1)) ms")
     end
-    return _CGBuilt(f, Tuple(ctx.tabs), covered)
+    return _CGBuilt(f, Tuple(ctx.tabs), covered, ncells, disjoint)
 end
+
+# ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
+# The lane tape's threaded cell axis (access_kernel.jl, "Threaded cell axis" —
+# read that first, the safety argument lives there) made the tape the ONLY
+# threaded tier: compiled kernels always ran serial, and the f64 overflow
+# routing had to DEFER to the tape whenever Polyester threading was active.
+# This section threads the generated functions themselves.
+#
+# GRANULARITY: the WHOLE SECTION is chunked, not each kernel. One batch
+# dispatch runs chunk `c` of every emitted kernel back to back —
+# `f(du, u, p, t, tabs, c, nchunks)` — instead of the tape's one dispatch per
+# kernel with an implicit inter-kernel barrier. The tape needs that barrier
+# because it cannot see across kernels (plans are built one kernel at a time);
+# the section builder CAN, so it proves the stronger property up front:
+# `_cg_covered_outs_disjoint` verifies at build time that every covered
+# out-slot is globally unique ACROSS all emitted kernels. When that holds, no
+# two cells anywhere in the section touch the same `du` slot, kernels share no
+# other mutable state (locals only; `u`/`p`/`t`/tabs are read-only here), and
+# the inter-kernel barrier is unnecessary — one dispatch per RHS call, the
+# per-kernel wake-up latency the tape's design comment measures as the
+# threading killer paid ONCE instead of #kernels times. When it does NOT hold
+# (`:cg_serial_shared_outs`), the section never chunks: the primary function
+# stays serial, and the overflow routing falls back to the tape loop — whose
+# per-kernel threading (Option 2 semantics: chunked kernels with barriers
+# between them) still applies wherever `_plan_output_disjoint` holds
+# per-kernel.
+#
+# BIT-IDENTITY: same argument as the tape's, per kernel — chunk boundaries are
+# not observable (a cell computes the same instruction sequence on the same
+# inputs whichever chunk it lands in; every ⊕-fold is WITHIN a cell — REDUCE/
+# CONTRACTION loops are per-cell in the emitted body), the partition is the
+# tape's own static `_chunk_ordinals`, and disjoint writes commute. Threaded
+# `du` is bitwise `===` serial `du`.
+#
+# OPT-IN semantics are the tape's, unchanged: no Polyester ⇒ serial,
+# ESS_THREADS_DISABLE=1 ⇒ serial, section total below the per-chunk min-cells
+# threshold (ESS_THREADS_MIN_CELLS) ⇒ serial. ESS_CG_THREADS_DISABLE=1
+# additionally forces THIS tier serial while leaving the tape's threading
+# untouched — the codegen-threading differential oracle. Verdicts land in
+# `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
+# `:cg_serial_shared_outs`), documented with the existing keys.
+_cg_threads_disabled() = get(ENV, "ESS_CG_THREADS_DISABLE", "") == "1"
+
+# One-time threading verdict for one generated function's cell axes, the
+# `_PlanTCache` pattern: `state` is 0 unexamined, 1 chunked, -1 serial (too
+# few cells), -2 serial (globally shared out-slots — permanent, decided at
+# build). `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
+# at the first threaded call, so the partition is identical call to call.
+mutable struct _SecTCache
+    state::Int
+    ncells::Int
+    disjoint::Bool
+    nchunks::Int
+end
+_SecTCache(ncells::Int, disjoint::Bool) = _SecTCache(0, ncells, disjoint, 1)
+_sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint)
+_sec_tcache(::Nothing) = _SecTCache(0, false)
+
+# Decide once whether this generated function may run chunked. Mirrors
+# `_plan_prep_threads!` check for check (size first, then disjointness), with
+# the section's cell total standing in for the plan's: the threshold guards
+# per-DISPATCH work, and the section is one dispatch.
+function _sec_prep_threads!(tc::_SecTCache)
+    tc.state == 0 || return tc
+    minc = _thread_min_cells()
+    nchunks = min(Threads.nthreads(), max(1, div(tc.ncells, max(minc, 1))))
+    if nchunks < 2
+        tc.state = -1                 # too few cells to be worth a dispatch
+        _tally_thread!(:cg_serial_small)
+        return tc
+    end
+    if !tc.disjoint
+        tc.state = -2                 # shared out-slots: chunks would race
+        _tally_thread!(:cg_serial_shared_outs)
+        return tc
+    end
+    tc.nchunks = nchunks
+    tc.state = 1
+    _tally_thread!(:cg_threaded)
+    return tc
+end
+
+# Run one generated function's cells as `nchunks` STATIC chunks — the same
+# `_BATCH_RUNNER` hook (EarthSciASTPolyesterExt) and the same partition the
+# tape uses; each chunk re-runs the (pure) tab-hoist + invariant prologue on
+# its own stack and walks its `[a, b)` slice of every kernel. Only reached
+# when `_threads_available()` was true, so the runner is non-null.
+function _run_cg_section_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
+    nchunks = tc.nchunks
+    run_chunk = function (c::Int)
+        f(du, u, p, t, tabs, c, nchunks)
+        return nothing
+    end
+    _BATCH_RUNNER[](run_chunk, nchunks)
+    return nothing
+end
+
+# Per-call gate for the chunked path (the tape's `_threads_available()` plus
+# the codegen-specific kill switch; both re-read per call, so toggling either
+# env var between calls flips the route without touching the cached verdict).
+@inline _cg_threads_available() = _threads_available() && !_cg_threads_disabled()
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
@@ -840,14 +1106,29 @@ struct _KernelSection{F,TB,G,GTB}
     n_dual_emitted::Int
     dual_resid::Vector{Int}
     # Float64 overflow routing (ess-f64ofl): when true, the overflow function
-    # above also serves Float64 calls (in place of the lane tape) whenever
-    # Polyester threading is not active. Baked at build time from
-    # ESS_F64_OVERFLOW_CODEGEN (default on).
+    # above also serves Float64 calls (in place of the lane tape). Baked at
+    # build time from ESS_F64_OVERFLOW_CODEGEN (default on).
     f64cg::Bool
+    # Threaded cell axis: one lazily-decided chunk verdict per generated
+    # function (primary / overflow), see `_SecTCache` above.
+    tcache::_SecTCache
+    dual_tcache::_SecTCache
 end
 
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
-    F !== Nothing && s.cgf(du, u, p, t, s.cgtabs)
+    if F !== Nothing
+        # PRIMARY generated function, chunked at Float64 when the section
+        # verdict allows (threaded cell axis above; Float64-only exactly like
+        # the tape's — Dual calls stay serial). Any serial verdict (small,
+        # shared outs, no Polyester, either kill switch) runs the (1, 1)
+        # instance — the serial entry.
+        if T === Float64 && _cg_threads_available() &&
+           _sec_prep_threads!(s.tcache).state == 1
+            _run_cg_section_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache)
+        else
+            s.cgf(du, u, p, t, s.cgtabs, 1, 1)
+        end
+    end
     kernels = s.kernels
     plans = s.plans
     if G !== Nothing && T !== Float64
@@ -855,31 +1136,49 @@ end
         # `dual_resid`. Emitted kernels write disjoint du slots from residual
         # ones (each state slot has exactly one equation/cell), so the order
         # generated-first is value-identical to the in-order kernel loop.
-        s.dualf(du, u, p, t, s.dualtabs)
+        s.dualf(du, u, p, t, s.dualtabs, 1, 1)
         @inbounds for j in s.dual_resid
             _run_acc_kernel!(du, u, p, t, kernels[j], T)
         end
         return nothing
     end
-    if G !== Nothing && T === Float64 && s.f64cg && !_threads_available()
+    if G !== Nothing && T === Float64 && s.f64cg
         # Float64 overflow routing (ess-f64ofl): budget-declined kernels run
         # the SAME compiled overflow function as the Dual path, bit-identical
-        # to the tape/interpreter by the emitter's contract. Deferred to the
-        # tape whenever Polyester threading is active — the tape's cell axis
-        # is threaded (T2) and this function is not, so the guard (checked per
-        # call, exactly as `_run_acc_plan!` checks it) keeps threaded users on
-        # today's path. Kernels the overflow emission itself declined keep
-        # their pre-codegen runners, in the same order as the plain loop below.
-        s.dualf(du, u, p, t, s.dualtabs)
-        @inbounds for j in s.dual_resid
-            P = plans[j]
-            if P !== nothing
-                _run_acc_plan!(du, u, p, t, kernels[j], P)
-            else
-                _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
-            end
+        # to the tape/interpreter by the emitter's contract — and, since the
+        # threaded cell axis, CHUNKED whenever the section verdict allows, so
+        # threaded users get compiled+threaded rather than deferring to the
+        # tape (measured on reseact.esm at 8 threads, whole mechanism forced
+        # onto the overflow tier via budget 0: chemistry 2.44 ms/call chunked
+        # RGF vs 3.55 ms threaded tape, 1.46x; transport 11.1 ms vs 1.26 s —
+        # its kernels are not tape-eligible, so the old deferral left them on
+        # the per-cell interpreter). The tape loop
+        # remains the fallback on the `:cg_serial_shared_outs` verdict, where
+        # its per-kernel chunking (barriers between kernels) is still safe.
+        # Kernels the overflow emission itself declined keep their pre-codegen
+        # runners, in the same order as the plain loop below.
+        route = 1                     # 1 ⇒ serial (1,1) call, 2 ⇒ chunked, 3 ⇒ tape
+        if _cg_threads_available()
+            st = _sec_prep_threads!(s.dual_tcache).state
+            route = st == 1 ? 2 : st == -2 ? 3 : 1
         end
-        return nothing
+        if route != 3
+            if route == 2
+                _run_cg_section_threaded!(s.dualf, s.dualtabs, du, u, p, t,
+                                          s.dual_tcache)
+            else
+                s.dualf(du, u, p, t, s.dualtabs, 1, 1)
+            end
+            @inbounds for j in s.dual_resid
+                P = plans[j]
+                if P !== nothing
+                    _run_acc_plan!(du, u, p, t, kernels[j], P)
+                else
+                    _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
+                end
+            end
+            return nothing
+        end
     end
     @inbounds for j in 1:length(kernels)
         P = plans[j]
@@ -931,7 +1230,7 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
     if dg === nothing
         return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
-                              false)
+                              false, _sec_tcache(cg), _sec_tcache(nothing))
     end
     # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
     # function exists and ESS_F64_OVERFLOW_CODEGEN has not turned it off.
@@ -941,5 +1240,6 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
     f64cg && _tally_cascade!(:f64_overflow_armed)
     dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
     return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
-                          dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg)
+                          dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
+                          _sec_tcache(cg), _sec_tcache(dg))
 end

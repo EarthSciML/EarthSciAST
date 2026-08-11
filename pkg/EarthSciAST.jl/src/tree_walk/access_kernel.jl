@@ -2167,6 +2167,14 @@ _set_batch_runner!(f) = (_BATCH_RUNNER[] = f; nothing)
 #   :threaded                 — cell axis runs as `nchunks` static chunks
 #   :serial_small             — fewer than 2 chunks' worth of cells
 #   :serial_overlapping_outs  — two cells target the same `du` slot
+# The CODEGEN tier's section verdicts (bumped once per generated SECTION, by
+# `_sec_prep_threads!` in codegen_kernel.jl) land in the same tally:
+#   :cg_threaded              — the section's cell axes run as static chunks
+#   :cg_serial_small          — fewer than 2 chunks' worth of cells (summed
+#                               across the section's emitted kernels)
+#   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
+#                               target the same `du` slot; the section never
+#                               chunks (see `_cg_covered_outs_disjoint`)
 const _THREAD_TALLY = Dict{Symbol,Int}()
 _tally_thread!(k::Symbol) = (_THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1; nothing)
 _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
@@ -2378,25 +2386,34 @@ function _plan_walk!(du, u, P::_AccPlan, cs::_CellSet, t0::Int, t1::Int)
     return du
 end
 
+# The static partition itself: chunk `c` of `nchunks` covers the half-open
+# 0-based ordinal range `[a, b)` of `n` cells, sizes differing by at most one.
+# A pure function of `(n, nchunks, c)` — identical run to run, no dynamic work
+# stealing, nothing that could reorder a fold. SHARED with the codegen tier's
+# chunked loop emission (codegen_kernel.jl, "Threaded cell axis"), which is
+# what keeps the two threaded tiers' partitions provably the same arithmetic.
+@inline function _chunk_ordinals(n::Int, c::Int, nchunks::Int)
+    base = div(n, nchunks)
+    rem = n - base * nchunks
+    a = (c - 1) * base + min(c - 1, rem)
+    b = c * base + min(c, rem)
+    return a, b
+end
+
 # Run the plan's cells as `nchunks` STATIC contiguous ordinal ranges, one private
-# scratch clone each. The partition is a pure function of `(ncells, nchunks)`, so
-# it is identical run to run — no dynamic work stealing, nothing that could
-# reorder a fold.
+# scratch clone each (partition: `_chunk_ordinals`).
 function _run_acc_plan_threaded!(du, u, p, t, P::_AccPlan, cs::_CellSet,
                                  tc::_PlanTCache)
     ncells = tc.ncells
     nchunks = tc.nchunks
     ws = tc.ws
     scs = P.scalars
-    base = div(ncells, nchunks)
-    rem = ncells - base * nchunks
     # Body for one static chunk `c`; the Polyester `@batch` over `1:nchunks` lives
     # in EarthSciASTPolyesterExt (installed via `_set_batch_runner!`). This is only
     # reached when `_threads_available()` was true, so the runner is non-null.
     run_chunk = function (c::Int)
         W = ws[c]::_AccPlan
-        a = (c - 1) * base + min(c - 1, rem)
-        b = c * base + min(c, rem)
+        a, b = _chunk_ordinals(ncells, c, nchunks)
         _plan_fill_scalars!(W.bufs, scs, u, p, t)
         _plan_walk!(du, u, W, cs, a, b)
         return nothing
