@@ -30,6 +30,7 @@ using EarthSciAST: RefreshError, OutputError, StateSnapshot, VarGridding,
     plan_dimension_coordinates
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
+import EarthSciAST: providers_from_document
 import EarthSciAST: build_zarr_sink, sink_output_times, sink_open!, sink_write!,
     sink_flush!, sink_close!, sink_observed_names, zarr_restart_state
 import EarthSciIO
@@ -108,6 +109,72 @@ function provider_sample(p::EarthSciIO.Provider, t::Real; selection = nothing)
         "provider per consumer variable (providers[\"Loader.var\"] => provider) so " *
         "each sample is a single field, or slice the provider upstream"))
     return nds[vars[1]].data
+end
+
+# --------------------------------------------------------------------------- #
+# providers_from_document — document-declared provider construction (Phase 1
+# clean consolidation). The document's `data_loaders` already say WHAT to read
+# (source URL, variables), and Phase 0 added `metadata.esio_format` saying HOW
+# (the EarthSciIO format registry name). This closes the loop: the runner no
+# longer hand-constructs providers — it asks the document.
+#
+# One provider PER VARIABLE (keyed "<Loader>.<var>"), matching (a) `prepare`'s
+# providers contract ("bind one provider per consumer variable"), (b) the
+# single-variable sample the `provider_sample` adapter above returns, and
+# (c) the per-key gate the record-derived pushdown path attaches. All of a
+# loader's providers share one Cache (per-loader subdir under `cache_root`), so
+# a store's metadata objects are fetched once.
+# --------------------------------------------------------------------------- #
+
+# Raw `data_loaders` map from any accepted document carrier.
+_doc_loaders(doc::AbstractDict) = get(doc, "data_loaders", nothing)
+_doc_loaders(doc::AbstractString) = _doc_loaders(EarthSciAST.load(doc))
+function _doc_loaders(file)
+    # EsmFile (or anything typed that serializes): reuse the round-trip emitter.
+    return _doc_loaders(EarthSciAST.serialize_esm_file(file))
+end
+
+function providers_from_document(doc;
+                                 cache_root::AbstractString,
+                                 loaders = nothing,
+                                 url_overrides::AbstractDict = Dict{String,String}())
+    dls = _doc_loaders(doc)
+    dls isa AbstractDict || throw(RefreshError(
+        "providers_from_document: the document declares no data_loaders"))
+    want = loaders === nothing ? nothing : Set(String(l) for l in loaders)
+    out = Dict{String,Any}()
+    for (lname0, ld) in dls
+        lname = String(lname0)
+        want !== nothing && !(lname in want) && continue
+        ld isa AbstractDict || continue
+        md = get(ld, "metadata", nothing)
+        fmt = md isa AbstractDict ? get(md, "esio_format", nothing) : nothing
+        if fmt === nothing
+            # An explicitly requested loader MUST be constructible; an
+            # unrestricted sweep just skips format-less loaders.
+            want === nothing && continue
+            throw(RefreshError(
+                "providers_from_document: data_loaders.$lname declares no " *
+                "metadata.esio_format — cannot construct a provider for it"))
+        end
+        src = get(ld, "source", nothing)
+        url = get(url_overrides, lname,
+                  src isa AbstractDict ? get(src, "url_template", nothing) : nothing)
+        url isa AbstractString || throw(RefreshError(
+            "providers_from_document: data_loaders.$lname has no source.url_template " *
+            "(and no url_overrides entry)"))
+        vars = get(ld, "variables", nothing)
+        vars isa AbstractDict || continue
+        cache = EarthSciIO.Cache(; root = joinpath(String(cache_root), lname))
+        for (vname0, vd) in vars
+            vname = String(vname0)
+            fv = vd isa AbstractDict ? get(vd, "file_variable", vname) : vname
+            out["$lname.$vname"] = EarthSciIO.const_provider(
+                cache, String(url); format = String(fmt),
+                variables = [String(fv)], source_loader = lname)
+        end
+    end
+    return out
 end
 
 # --------------------------------------------------------------------------- #

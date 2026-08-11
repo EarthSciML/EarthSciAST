@@ -127,6 +127,36 @@ function provider_gate_spec end
 provider_gate_spec(::Any) = nothing
 
 """
+    providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict()) -> Dict{String,Any}
+
+Construct the data providers a document DECLARES: one CONST provider per
+`data_loaders.<name>` variable whose loader carries a `metadata.esio_format`
+("zarr", "ff10", …), keyed `"<Loader>.<var>"` — exactly the `providers` keys
+[`prepare`](@ref) consumes (and, with `pushdown_rewrite=true`, gates from the
+rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or a path.
+
+Keywords:
+  * `cache_root` — filesystem root for the download cache (per-loader subdir).
+  * `loaders` — restrict to these loader names (`nothing` = every loader with
+    an `esio_format`). Lets a runner exclude a loader whose format the reader
+    stack cannot construct yet (the FF10-in-zip EGU case until Phase 2) and
+    slot it in later without an API change.
+  * `url_overrides` — loader name ⇒ URL, replacing `source.url_template`
+    (e.g. a local mirror of a live store).
+
+Implemented by the EarthSciIO extension — load `EarthSciIO` alongside
+EarthSciAST so the `EarthSciASTEarthSciIOExt` extension defines the method
+(without it the call is a `MethodError`; this generic deliberately carries no
+fallback so the extension's method is an addition, not an overwrite). The
+construction is format-agnostic: `esio_format` goes straight to
+`EarthSciIO.const_provider(...; format=...)`, whose registry decides what is
+readable. Selection capability (projection pushdown) is the provider's own
+(`provider_supports_selection`), so a zarr-store loader produced here is
+directly compatible with the gated-deferral path.
+"""
+function providers_from_document end
+
+"""
     provider_is_gated(provider) -> Bool
 
 True iff `provider` carries a projection-pushdown [`provider_gate_spec`](@ref) —

@@ -43,6 +43,14 @@ BINS records into cells with a containment / overlap predicate
 cells that contain ≥1 record, derivable at const time.
 """
 function desugar_pushdown(esm::AbstractDict; model_name=nothing)
+    # IDEMPOTENCY GUARD: a document that already carries the rewrite's
+    # provenance record (`metadata.x_esd.pushdown`) has been desugared — the
+    # generated constructs (compact E over the derived set, cell-gather rect
+    # observeds) would otherwise re-match the pattern and stack a second
+    # `pd_support__pd_support__…` layer. This makes the pass safe to request
+    # from BOTH `prepare` (which must run it before flattening/provider
+    # classification) and the `build_evaluator` front door.
+    _pushdown_record(esm) === nothing || return esm
     file = coerce_esm_file(esm)
     m = _select_model_or_nothing(file, model_name)
     m === nothing && return esm
@@ -51,6 +59,23 @@ function desugar_pushdown(esm::AbstractDict; model_name=nothing)
     plan = _pd_detect(m, file.index_sets)
     plan === nothing && return esm
     return _pd_apply(esm, mname, plan)
+end
+
+"""
+    _pushdown_record(doc) -> Union{Nothing,AbstractDict}
+
+The rewrite's provenance record `metadata.x_esd.pushdown` written by
+[`desugar_pushdown`](@ref) (see `_pd_apply`), or `nothing` when `doc` carries
+none. This is the record the engine reads BACK to derive provider gates —
+callers no longer hand-author gate dicts (`prepare(...; pushdown_rewrite=true)`
++ `providers`)."""
+function _pushdown_record(doc::AbstractDict)
+    md = get(doc, "metadata", nothing)
+    md isa AbstractDict || return nothing
+    xe = get(md, "x_esd", nothing)
+    xe isa AbstractDict || return nothing
+    rec = get(xe, "pushdown", nothing)
+    return rec isa AbstractDict ? rec : nothing
 end
 
 _pd_model_name(file, model_name) = model_name !== nothing ? String(model_name) :
@@ -405,4 +430,211 @@ function _pd_apply(esm, mname::AbstractString, plan)
             "gated_by" => setname, "applies_to" => Any[plan.A_names...],
             "gated_axis" => 0))
     return d
+end
+
+# ============================================================================
+# RECORD-DERIVED PROVIDER GATING (Phase 1, clean consolidation).
+#
+# `desugar_pushdown` records `metadata.x_esd.pushdown.gated_select` — which
+# derived set gates which model arrays on which axis — but until Phase 1
+# NOTHING read that record back: callers hand-implemented `provider_gate_spec`
+# or hand-authored gate dicts. These helpers close the loop for `prepare`:
+# given the REWRITTEN (pre-flatten) document and the caller's public
+# `providers` dict, derive the engine gate (`Dict("axes"=>…, "applies_to"=>…)`,
+# the `_fetch_gated_providers` format) for every provider that the document's
+# coupling identifies as feeding a rewritten array.
+# ============================================================================
+
+"""
+    _pushdown_provider_gates(doc, providers) -> Dict{String,Any}
+
+Provider-key ⇒ engine gate, derived from `doc`'s rewrite record
+(`metadata.x_esd.pushdown.gated_select`).
+
+A provider is GATED when its key names a `data_loaders` variable (`"<Loader>"`
+or `"<Loader>.<var>"`) that a coupling `variable_map` routes onto one of the
+record's `applies_to` model arrays. The gate's per-NATIVE-axis `axes` come from
+the loader's own `metadata.x_esd.gated_select.axes` template when it declares
+one (the record's GENERATED set name — `pd_support__*` — replacing whatever set
+the template names, since the template predates the rewrite), else from the
+model array's rank with `gated_by` at the record's `gated_axis`. `applies_to`
+carries the LOADER-variable tails, whose `_const_factor_aliases` expansion
+covers the post-flatten `"<Loader>.<var>"` spelling the run equations gather.
+
+Empty when `doc` carries no record, no coupling routes a provider onto a gated
+array, or `providers === nothing` — record-derived gating is a coupling-scoped
+mechanism; a provider outside it falls back to `provider_gate_spec`.
+"""
+function _pushdown_provider_gates(doc::AbstractDict, providers)
+    gates = Dict{String,Any}()
+    providers === nothing && return gates
+    rec = _pushdown_record(doc)
+    rec === nothing && return gates
+    gs = get(rec, "gated_select", nothing)
+    gs isa AbstractDict || return gates
+    applies = String[String(a) for a in get(gs, "applies_to", Any[])]
+    gset = String(get(gs, "gated_by", ""))
+    gaxis = Int(get(gs, "gated_axis", 0))
+    (isempty(applies) || isempty(gset)) && return gates
+
+    # coupling: "<Loader>.<var>" => the gated model array's LOCAL (tail) name.
+    fed = Dict{String,String}()
+    cp = get(doc, "coupling", nothing)
+    if cp isa AbstractVector
+        for c in cp
+            (c isa AbstractDict && get(c, "type", nothing) == "variable_map") || continue
+            frm = String(get(c, "from", "")); to = String(get(c, "to", ""))
+            (isempty(frm) || isempty(to) || !occursin('.', frm)) && continue
+            String(split(to, '.')[end]) in applies && (fed[frm] = to)
+        end
+    end
+    isempty(fed) && return gates
+
+    mrank = _pushdown_gated_rank(doc, applies)
+    for k0 in keys(providers)
+        k = String(k0)
+        if haskey(fed, k)                              # "<Loader>.<var>" provider
+            loader = String(split(k, '.'; limit=2)[1])
+            lvars = String[String(split(k, '.'; limit=2)[2])]
+        else                                           # whole-loader provider?
+            loader = k
+            lvars = sort!(String[String(split(f, '.'; limit=2)[2])
+                                 for f in keys(fed)
+                                 if String(split(f, '.'; limit=2)[1]) == k])
+            isempty(lvars) && continue
+        end
+        axes = _pushdown_gate_axes(doc, loader, gset, gaxis, mrank)
+        gates[k] = Dict{String,Any}("axes" => axes, "applies_to" => Any[lvars...])
+    end
+    return gates
+end
+
+# Rank of the (rewritten) gated model arrays — the fallback native rank when a
+# loader declares no axes template. After `_pd_apply` every applies_to array is
+# `[<derived set>, <rcv>]`, so this is 2 for the ISRM shape; read it from the
+# document rather than hard-coding.
+function _pushdown_gated_rank(doc::AbstractDict, applies::Vector{String})
+    models = get(doc, "models", nothing)
+    models isa AbstractDict || return 2
+    for (_, m) in models
+        m isa AbstractDict || continue
+        mv = get(m, "variables", nothing)
+        mv isa AbstractDict || continue
+        for a in applies
+            v = get(mv, a, nothing)
+            v isa AbstractDict || continue
+            shp = get(v, "shape", nothing)
+            shp isa AbstractVector && !isempty(shp) && return length(shp)
+        end
+    end
+    return 2
+end
+
+# Per-NATIVE-axis gate `axes` for `loader`: the loader's declared
+# `metadata.x_esd.gated_select.axes` template with the GENERATED set name
+# substituted into its `gated_by` slot (validated: the gated axis must sit at
+# `gaxis` among the non-fixed axes, or the record and template disagree about
+# which native axis is gated); else a rank-`mrank` all-axes gate with
+# `gated_by` at `gaxis`.
+function _pushdown_gate_axes(doc::AbstractDict, loader::AbstractString,
+                             gset::AbstractString, gaxis::Int, mrank::Int)
+    tpl = nothing
+    loaders = get(doc, "data_loaders", nothing)
+    if loaders isa AbstractDict
+        ld = get(loaders, String(loader), nothing)
+        if ld isa AbstractDict
+            md = get(ld, "metadata", nothing)
+            xe = md isa AbstractDict ? get(md, "x_esd", nothing) : nothing
+            gsel = xe isa AbstractDict ? get(xe, "gated_select", nothing) : nothing
+            gsel isa AbstractDict && (tpl = get(gsel, "axes", nothing))
+        end
+    end
+    if tpl isa AbstractVector
+        axes = Any[]
+        nonfixed = 0
+        gpos = -1
+        for ax in tpl
+            if ax isa AbstractDict && haskey(ax, "gated_by")
+                push!(axes, Dict{String,Any}("gated_by" => String(gset)))
+                gpos = nonfixed
+                nonfixed += 1
+            elseif ax isa AbstractDict && haskey(ax, "fixed")
+                fx = ax["fixed"]
+                fi = fx isa AbstractVector ? Int(first(fx)) : Int(fx)
+                push!(axes, Dict{String,Any}("fixed" => Any[fi]))
+            else
+                push!(axes, "all")
+                nonfixed += 1
+            end
+        end
+        gpos == gaxis || throw(RefreshError(
+            "data_loaders.$loader gated_select template puts the gated axis at " *
+            "non-fixed position $gpos, but the rewrite record gates model axis " *
+            "$gaxis — the loader template and the rewritten arrays disagree"))
+        return axes
+    end
+    (0 <= gaxis < mrank) || throw(RefreshError(
+        "rewrite record gated_axis $gaxis out of range for rank-$mrank gated arrays"))
+    axes = Any[fill("all", mrank)...]
+    axes[gaxis + 1] = Dict{String,Any}("gated_by" => String(gset))
+    return axes
+end
+
+"""
+    _inject_pushdown_aliases!(dst, run_doc, coupling_pairs) -> dst
+
+Alias-key injection for the `prepare` pushdown path (same-object references,
+no copies). The flattener rewrites EQUATION references through the coupling
+`variable_map` (`ISRM.SR_SOA → ISRM_SR.SOA`) but leaves the VARIABLES'
+`expression` fields namespaced-only (`ISRM.emis_lon`) — and the build-front-door
+consumers that run BEFORE the impl parse (`_derive_binning_coords`,
+`materialize_value_invention`, `_observed_field`) read those expressions. So a
+const array registered under its provider key (`"EGU_Emis.lon"`) or its bare
+authored name (`"src_W"`) must ALSO resolve under:
+
+  * the coupling `to` name (`"ISRM.emis_lon"`) for every `variable_map`
+    `from` key present — the deleted consumer parameter's spelling; and
+  * every flattened model-variable key whose final dotted segment matches a
+    bare key (`"src_W"` ⇒ `"ISRM.src_W"`) — `_const_factor_aliases` semantics,
+    applied dict-side to the caller's arrays.
+
+Existing keys are never overwritten.
+"""
+function _inject_pushdown_aliases!(dst::AbstractDict, run_doc::AbstractDict,
+                                   coupling_pairs::AbstractVector)
+    for (frm, to) in coupling_pairs
+        haskey(dst, frm) && !haskey(dst, to) && (dst[to] = dst[frm])
+    end
+    models = get(run_doc, "models", nothing)
+    models isa AbstractDict || return dst
+    vnames = String[]
+    for (_, m) in models
+        m isa AbstractDict || continue
+        mv = get(m, "variables", nothing)
+        mv isa AbstractDict || continue
+        append!(vnames, (String(k) for k in keys(mv)))
+    end
+    for k in collect(keys(dst))
+        ks = String(k)
+        occursin('.', ks) && continue
+        for v in vnames
+            occursin('.', v) || continue
+            String(split(v, '.')[end]) == ks && !haskey(dst, v) && (dst[v] = dst[k])
+        end
+    end
+    return dst
+end
+
+# The coupling `variable_map` (from ⇒ to) pairs of a raw document — captured
+# BEFORE `_prepare_run_doc` flattens them away, for `_inject_pushdown_aliases!`.
+function _pushdown_coupling_pairs(doc::AbstractDict)
+    out = Pair{String,String}[]
+    cp = get(doc, "coupling", nothing)
+    cp isa AbstractVector || return out
+    for c in cp
+        (c isa AbstractDict && get(c, "type", nothing) == "variable_map") || continue
+        frm = String(get(c, "from", "")); to = String(get(c, "to", ""))
+        (isempty(frm) || isempty(to)) || push!(out, frm => to)
+    end
+    return out
 end

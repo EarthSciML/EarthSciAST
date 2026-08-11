@@ -180,6 +180,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
     include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
     include("phase5_clean_auto_test.jl")          # projection-pushdown Phase 5 (LCC@build + fully-automatic)
+    include("prepare_pushdown_record_gate_test.jl") # Phase 1 consolidation (public prepare + record-derived gating)
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")

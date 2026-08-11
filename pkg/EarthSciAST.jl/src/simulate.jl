@@ -351,6 +351,12 @@ struct PreparedModel
     buffer_time::Base.RefValue{Float64}   # t the discrete buffers currently hold
     dirty::Base.RefValue{Bool}            # true once a run may have refreshed them
     output_meta::OutputMeta               # doc-derived output naming/CF metadata (RFC §7–§8)
+    # The prepared (flattened, single-model) RUN DOCUMENT the evaluator was
+    # built from — the carrier [`observed_field`](@ref) resolves shapes and
+    # index sets against, so a caller can read build-time observeds through the
+    # PUBLIC prepare surface instead of re-running the document pipeline.
+    run_doc::Dict{String,Any}
+    run_file::Base.RefValue{Any}          # lazy coerce_esm_file(run_doc) memo
 end
 
 function Base.show(io::IO, prep::PreparedModel)
@@ -414,6 +420,16 @@ Keyword arguments (the BUILD-time subset of `simulate`'s keywords):
 * `materialize_out::DiscreteMaterializer` — optional discrete-cadence
   materialization sink (reused, and thus inspectable); else an internal one.
 
+* `pushdown_rewrite::Bool = false` — opt in to the automatic projection-pushdown
+  desugar ([`desugar_pushdown`](@ref)) at the PUBLIC entry point. The rewrite
+  runs on the authored document BEFORE flattening (the pattern is authored in
+  the un-namespaced model), and the engine then derives every provider gate
+  from the rewrite's own `metadata.x_esd.pushdown` record: a `providers` entry
+  that the document's coupling routes onto a rewritten array is DEFERRED and
+  fetched pre-sliced to the invented support set — the caller hand-authors no
+  gate dict and implements no `provider_gate_spec` (which still works, as the
+  fallback, for providers outside the record's coupling scope).
+
 Per-RUN knobs (`alg`, `initial_conditions`, `seed_ic!`, `reltol`, `abstol`,
 `saveat`) belong to `simulate(prep, tspan; …)`.
 """
@@ -425,7 +441,37 @@ function prepare(input;
                  model_name::Union{Nothing,AbstractString} = nothing,
                  sample_time::Real = 0.0,
                  inspect::Union{Nothing,BuildInspection} = nothing,
-                 materialize_out::Union{Nothing,DiscreteMaterializer} = nothing)
+                 materialize_out::Union{Nothing,DiscreteMaterializer} = nothing,
+                 pushdown_rewrite::Bool = false)
+    # ---- Phase 1 (clean consolidation): pushdown prepass, BEFORE flatten ----
+    # The desugar must see the AUTHORED (namespaced-not-yet-flattened) model:
+    # the flattener rewrites coupling-fed references in equations but not in the
+    # variables' `expression` fields, so the pattern no longer matches
+    # post-flatten. Running it here also puts the provenance record in hand
+    # BEFORE the provider classification below needs it. `desugar_pushdown` is
+    # idempotent (guarded on its own record), so the front door's own hook —
+    # never triggered from here — stays safe for direct callers.
+    pd_gates = Dict{String,Any}()
+    pd_coupling = Pair{String,String}[]
+    if pushdown_rewrite
+        pfile = input isa EsmFile ? input :
+                input isa AbstractString ?
+                    (isfile(input) || throw(SimulateError("prepare: no such file '$input'"));
+                     load(input)) :
+                input isa AbstractDict ? load(input; base_path=pwd()) :
+                throw(SimulateError(
+                    "prepare: pushdown_rewrite=true needs a path, native Dict, or " *
+                    "EsmFile input — a FlattenedSystem is already past the rewrite point"))
+        raw = serialize_esm_file(pfile)
+        rewritten = desugar_pushdown(raw; model_name=model_name)
+        if rewritten !== raw                       # the pattern matched
+            pd_gates = _pushdown_provider_gates(rewritten, providers)
+            pd_coupling = _pushdown_coupling_pairs(rewritten)
+            input = rewritten
+        else
+            input = pfile                          # no re-load, no rewrite
+        end
+    end
     doc = _prepare_run_doc(input)
 
     overrides = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in parameters)
@@ -449,7 +495,14 @@ function prepare(input;
         t0 = Float64(sample_time)
         for (rawk, prov) in providers
             k = String(rawk)
-            if provider_is_gated(prov)
+            pd_gate = get(pd_gates, k, nothing)
+            if pd_gate !== nothing
+                # Phase 1: RECORD-DERIVED gate — the rewrite's own
+                # `metadata.x_esd.pushdown.gated_select`, mapped onto this
+                # provider through the document coupling. Takes precedence over
+                # a provider-implemented `provider_gate_spec`.
+                gated_providers[k] = (prov=prov, gate=pd_gate)
+            elseif provider_is_gated(prov)
                 # Defer: value-invention must derive the gating set's members
                 # before we know which rows to fetch. Bundle the gate spec so the
                 # build resolves the selection without re-consulting the provider.
@@ -469,6 +522,16 @@ function prepare(input;
                 discrete_providers[k] = prov
             end
         end
+    end
+
+    # Phase 1: pushdown-path name aliasing. The build-front-door consumers that
+    # run BEFORE the impl parse (`_derive_binning_coords`, value-invention,
+    # `_observed_field`) read the flattened VARIABLES' expressions, which keep
+    # namespaced pre-coupling names — inject the caller's/providers' arrays
+    # under those spellings too (same objects, no copies).
+    if pushdown_rewrite
+        _inject_pushdown_aliases!(merged_const, doc, pd_coupling)
+        _inject_pushdown_aliases!(merged_param, doc, pd_coupling)
     end
 
     # Discrete-cadence materialization sink (the middle cadence phase): opt IN so a
@@ -492,7 +555,48 @@ function prepare(input;
     return PreparedModel(f!, u0, p, var_map, merged_param, discrete_providers, dm,
                          Float64(sample_time), _doc_equation_count(doc),
                          Ref(Float64(sample_time)), Ref(false),
-                         derive_output_meta(doc))
+                         derive_output_meta(doc), doc, Ref{Any}(nothing))
+end
+
+"""
+    observed_field(prep::PreparedModel, insp::BuildInspection, name) -> Array
+
+Evaluate the state-free observed `name` at BUILD time through the prepared
+document's own graph — the public face of the build-observability path
+(`_observed_field`) for `prepare` callers. `insp` is the same
+[`BuildInspection`](@ref) that was passed to [`prepare`](@ref) (it carries the
+resolved observed definitions, const-array registry, and value-invention
+extents this evaluation reads). `name` may be spelled with the flattener's
+namespacing (`"ISRM.deathsK"`) or locally (`"deathsK"`, resolved against the
+single run model's variable tails).
+
+Throws a `SimulateError` when `name` is not a build-time-evaluable observed
+(state-dependent, unsized axis, or not an observed at all).
+"""
+function observed_field(prep::PreparedModel, insp::BuildInspection,
+                        name::AbstractString)
+    if prep.run_file[] === nothing
+        prep.run_file[] = coerce_esm_file(prep.run_doc)
+    end
+    file = prep.run_file[]::EsmFile
+    (file.models !== nothing && !isempty(file.models)) || throw(SimulateError(
+        "observed_field: prepared document has no model"))
+    mname = String(first(keys(file.models)))
+    v = String(name)
+    fld = _observed_field(insp, file, mname, v)
+    if fld === nothing && !occursin('.', v)
+        # local spelling: resolve against the run model's variable tails.
+        for k in keys(file.models[mname].variables)
+            ks = String(k)
+            (occursin('.', ks) && String(split(ks, '.')[end]) == v) || continue
+            fld = _observed_field(insp, file, mname, ks)
+            fld === nothing || break
+        end
+    end
+    fld === nothing && throw(SimulateError(
+        "observed_field: '$name' is not a build-time-evaluable observed of the " *
+        "prepared document"))
+    return fld[1]
 end
 
 # Re-seed the DISCRETE forcing buffers at the run's t0 and recompute the
