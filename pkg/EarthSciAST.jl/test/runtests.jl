@@ -94,6 +94,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("codegen_lanespec_test.jl")              # B1 tier accepts per-lane interp specs (class merge)
     include("dual_fast_path_test.jl")                # ess-dualfp Dual overflow tier ≡ interpreter (ESS_DUAL_CODEGEN_DISABLE oracle)
     include("f64_overflow_codegen_test.jl")          # ess-f64ofl overflow RGF serves budget-declined Float64 kernels (ESS_F64_OVERFLOW_CODEGEN oracle)
+    include("cg_foreign_scratch_test.jl")            # ess-cgfsc codegen emits xcse shared-prelude reads (ESS_CG_FOREIGN_SCRATCH_DISABLE oracle)
     include("lane_table_intern_test.jl")             # content-equal lane tables `===` at build (ESS_LANE_INTERN_DISABLE oracle)
     include("direct_class_emission_test.jl")         # per-cell scalarizer emits class kernels directly (ESS_DIRECT_CLASS_EMIT_DISABLE oracle)
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (ESS_CROSS_EQ_CLASS_EMIT_DISABLE oracle)
