@@ -376,3 +376,210 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
     );
     assert!(prep.observed_field("no_such_observed").is_err());
 }
+
+/// n=1 pin (cross-language: the Python binding's scalarisation footgun): every
+/// emission record lands in ONE grid cell, so the engine-derived support set
+/// has exactly one member and the `pd_member_factor__*` feedback vector is a
+/// SIZE-1 array. A one-member axis must stay an axis — the generated
+/// `index(F, index(mf, c))` gathers, the one-member gated selection, and the
+/// full downstream graph must all evaluate. Rust never had the footgun; this
+/// keeps it that way.
+#[test]
+fn prepare_pushdown_l1_single_member_support_set() {
+    const GRID: usize = 9;
+    const N_RCV: usize = 4;
+    const N_REC: usize = 5;
+    const N_LAYER: usize = 3;
+
+    let mut w = vec![0.0; GRID];
+    let mut sv = vec![0.0; GRID];
+    let mut ev = vec![0.0; GRID];
+    let mut nv = vec![0.0; GRID];
+    for row in 1..=3usize {
+        for col in 1..=3usize {
+            let k = (row - 1) * 3 + col - 1;
+            w[k] = (col - 1) as f64 * 2.0;
+            ev[k] = col as f64 * 2.0;
+            sv[k] = (row - 1) as f64 * 2.0;
+            nv[k] = row as f64 * 2.0;
+        }
+    }
+
+    // All five records inside cell 0 (rect [0,2) × [0,2)).
+    let c = lcc_consts(33.0, 45.0, 40.0, -97.0);
+    let xtarget = [0.5, 1.0, 1.5, 0.5, 1.2];
+    let ytarget = [0.5, 0.5, 1.0, 1.5, 0.8];
+    let mut lon = Vec::new();
+    let mut lat = Vec::new();
+    for r in 0..N_REC {
+        let (lo, la) = lcc_inv(xtarget[r], ytarget[r], &c);
+        lon.push(lo);
+        lat.push(la);
+    }
+
+    let emis_annual = [10.0, 20.0, 30.0, 40.0, 50.0];
+    let is_voc = [1.0, 0.0, 1.0, 0.0, 0.0];
+    let is_nox = [0.0, 1.0, 0.0, 0.0, 0.0];
+    let is_nh3 = [0.0, 0.0, 0.0, 0.0, 1.0];
+    let is_sox = [0.0, 0.0, 0.0, 0.0, 0.0];
+    let is_pm25 = [0.0, 0.0, 0.0, 1.0, 0.0];
+    let total_pop = [100.0, 200.0, 300.0, 400.0];
+    let mortality = [500.0, 600.0, 700.0, 800.0];
+    const FACT: f64 = 28766.639;
+    const POP_SCALE: f64 = 1.0465819687408728;
+    const MORT_SCALE: f64 = 1.025229357798165;
+    const RR_K: f64 = 1.06;
+    const RR_L: f64 = 1.14;
+    const LVARS: [&str; 5] = ["SOA", "pNO3", "pNH4", "pSO4", "PrimaryPM25"];
+    let base: HashMap<&str, f64> = [
+        ("SOA", 1.0),
+        ("pNO3", 2.0),
+        ("pNH4", 3.0),
+        ("pSO4", 4.0),
+        ("PrimaryPM25", 5.0),
+    ]
+    .into_iter()
+    .collect();
+    let mut full_sr: HashMap<&str, ArrayD<f64>> = HashMap::new();
+    for name in LVARS {
+        let mut a = ArrayD::zeros(IxDyn(&[N_LAYER, GRID, N_RCV]));
+        for l in 0..N_LAYER {
+            for s in 0..GRID {
+                for r in 0..N_RCV {
+                    a[[l, s, r]] =
+                        l as f64 * 1.0e6 + base[name] * 1000.0 + (s + 1) as f64 * 10.0 + (r + 1) as f64;
+                }
+            }
+        }
+        full_sr.insert(name, a);
+    }
+
+    // Oracle with the one-member support set {cell 0}: every record contributes.
+    let pathway_is: HashMap<&str, &[f64; 5]> = [
+        ("SOA", &is_voc),
+        ("pNO3", &is_nox),
+        ("pNH4", &is_nh3),
+        ("pSO4", &is_sox),
+        ("PrimaryPM25", &is_pm25),
+    ]
+    .into_iter()
+    .collect();
+    let oracle_e = |is_p: &[f64; 5]| -> Vec<f64> {
+        vec![(0..N_REC).map(|r| emis_annual[r] * is_p[r]).sum()]
+    };
+    let oracle_conc = |name: &str| -> Vec<f64> {
+        let ep = oracle_e(pathway_is[name]);
+        (0..N_RCV)
+            .map(|rcv| full_sr[name][[0, 0, rcv]] * ep[0])
+            .collect()
+    };
+    let oracle_total: Vec<f64> = (0..N_RCV)
+        .map(|rcv| FACT * LVARS.iter().map(|n| oracle_conc(n)[rcv]).sum::<f64>())
+        .collect();
+    let oracle_deaths = |rr: f64| -> Vec<f64> {
+        (0..N_RCV)
+            .map(|rcv| {
+                ((rr.ln() / 10.0 * oracle_total[rcv]).exp() - 1.0)
+                    * total_pop[rcv]
+                    * POP_SCALE
+                    * mortality[rcv]
+                    * MORT_SCALE
+                    / 100000.0
+            })
+            .collect()
+    };
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    let doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
+            .expect("parse pushdown_l1.esm");
+
+    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+        ("MockSR.TotalPop".into(), Box::new(MockConst(total_pop.to_vec()))),
+        (
+            "MockSR.MortalityRate".into(),
+            Box::new(MockConst(mortality.to_vec())),
+        ),
+        ("MockPts.lon".into(), Box::new(MockConst(lon.clone()))),
+        ("MockPts.lat".into(), Box::new(MockConst(lat.clone()))),
+        (
+            "MockPts.annual".into(),
+            Box::new(MockConst(emis_annual.to_vec())),
+        ),
+        ("MockPts.vVOC".into(), Box::new(MockConst(is_voc.to_vec()))),
+        ("MockPts.vNOx".into(), Box::new(MockConst(is_nox.to_vec()))),
+        ("MockPts.vNH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
+        ("MockPts.vSOx".into(), Box::new(MockConst(is_sox.to_vec()))),
+        ("MockPts.vPM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
+    ];
+    let mut call_logs: HashMap<String, Rc<RefCell<Vec<Call>>>> = HashMap::new();
+    for v in LVARS {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        call_logs.insert(v.to_string(), calls.clone());
+        providers.push((
+            format!("MockSR.{v}"),
+            Box::new(MockGated {
+                full: full_sr[v].clone(),
+                calls,
+            }),
+        ));
+    }
+    let ca: HashMap<String, ArrayD<f64>> = [
+        ("src_W".to_string(), arr1(&w)),
+        ("src_S".to_string(), arr1(&sv)),
+        ("src_E".to_string(), arr1(&ev)),
+        ("src_N".to_string(), arr1(&nv)),
+    ]
+    .into_iter()
+    .collect();
+
+    let opts = PrepareOptions {
+        model_name: Some("ISRM".to_string()),
+        pushdown_rewrite: true,
+        ..Default::default()
+    };
+    let prep = prepare(&doc, ca, providers, &opts).expect("prepare with |members| = 1");
+
+    // The engine derived a ONE-member support set…
+    assert_eq!(&prep.members["pd_faq__src_cells"], &vec![1i64]);
+    // …and each gated fetch pushed exactly that one-member selection down.
+    let expect_sel = vec![
+        AxisSel::Indices(vec![0]),
+        AxisSel::Indices(vec![0]),
+        AxisSel::All,
+    ];
+    for v in LVARS {
+        let calls = call_logs[v].borrow();
+        assert_eq!(calls.len(), 1, "{v}: expected one gated fetch, got {calls:?}");
+        match &calls[0] {
+            Call::Selection(sel) => assert_eq!(sel, &expect_sel, "{v}: wrong selection"),
+            Call::Wholesale => panic!("{v}: fetched WHOLESALE"),
+        }
+    }
+
+    // The full downstream graph evaluated off the one-member axis.
+    let e_voc = prep.observed_field("E_VOC").unwrap();
+    assert_eq!(e_voc.len(), 1, "E_VOC must stay a length-1 ARRAY");
+    assert_close("E_VOC", e_voc, &oracle_e(&is_voc));
+    assert_close(
+        "conc_SOA",
+        prep.observed_field("conc_SOA").unwrap(),
+        &oracle_conc("SOA"),
+    );
+    assert_close(
+        "TotalPM25",
+        prep.observed_field("TotalPM25").unwrap(),
+        &oracle_total,
+    );
+    assert_close(
+        "deathsK",
+        prep.observed_field("deathsK").unwrap(),
+        &oracle_deaths(RR_K),
+    );
+    assert_close(
+        "deathsL",
+        prep.observed_field("deathsL").unwrap(),
+        &oracle_deaths(RR_L),
+    );
+}

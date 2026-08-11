@@ -639,6 +639,7 @@ def _materialize_observeds(
     ordered_observed: list[tuple[str, Expr]],
     ctx: EvalContext,
     skip_unresolved: bool = False,
+    skip_reasons: dict[str, str] | None = None,
 ) -> None:
     """Evaluate observed assignments into ``ctx`` in dependency order.
 
@@ -660,6 +661,14 @@ def _materialize_observeds(
     fails clearly at that read. Used by the per-step RHS driver (parity with the
     Julia reference, which evaluates only the state-derivative dependency cone)
     and by the read-only :class:`BuildInspection` fill.
+
+    ``skip_reasons`` (optional, with ``skip_unresolved``) records WHY each
+    dropped observed failed (``{name: first evaluation error}``) so a later
+    reader of a missing name — :func:`prepare.observed_field` — can surface
+    the root cause instead of a bare "not build-time-evaluable": a skip
+    cascades (everything downstream of the first failure also fails), and
+    without the recorded reason the visible symptom is the LAST name in the
+    chain, far from the defect.
     """
     # Opt-in build progress: ESS_OBSERVED_PROGRESS=1 logs each observed's
     # evaluation time to stderr — the const-geometry hoist of a large document
@@ -676,7 +685,9 @@ def _materialize_observeds(
         if skip_unresolved:
             try:
                 val = eval_expr(rhs, ctx)
-            except NumpyInterpreterError:
+            except NumpyInterpreterError as exc:
+                if skip_reasons is not None:
+                    skip_reasons[name] = str(exc)
                 if _progress:
                     print(
                         f"[ess-observed] {name}: unresolved (skipped) "
@@ -771,6 +782,11 @@ class _NumpyRhsBuild:
     varying_observed: list[tuple[str, Expr]] = field(default_factory=list)
     static_observed_values: dict[str, float] = field(default_factory=dict)
     static_derived_rings: dict[str, np.ndarray] = field(default_factory=dict)
+    # Why each static observed the tolerant hoist DROPPED failed to evaluate
+    # (``{name: first evaluation error}``): a skip cascades through everything
+    # downstream, so a reader of a missing name (prepare.observed_field) uses
+    # this to report the ROOT cause instead of the far-downstream symptom.
+    static_skip_reasons: dict[str, str] = field(default_factory=dict)
     join_key_buffers: dict[str, np.ndarray] = field(default_factory=dict)
     join_key_index_sets: dict[str, str] = field(default_factory=dict)
     # Keyed-factor scope map (bare ragged offsets/values factor → in-scope
@@ -1633,7 +1649,10 @@ def _partition_and_materialize_observeds(
     factor_scope: dict[str, str],
     static_cache: dict[str, Any] | None,
     derived_extents: dict[str, int] | None = None,
-) -> tuple[list[tuple[str, Expr]], dict[str, float], dict[str, np.ndarray]]:
+    axis_valued_input_names: frozenset[str] = frozenset(),
+) -> tuple[
+    list[tuple[str, Expr]], dict[str, float], dict[str, np.ndarray], dict[str, str]
+]:
     """Split the dependency-ordered observeds and materialize the static ones ONCE.
 
     Performs the const-geometry hoist for :func:`_build_numpy_rhs`: a first split
@@ -1642,10 +1661,12 @@ def _partition_and_materialize_observeds(
     (materialized once and cached in ``static_cache``) vs loader-VOLATILE
     (re-materialized per cadence segment, seeded with the invariant products).
 
-    Returns ``(varying_observed, static_observed_values, static_derived_rings)``:
-    the dependency-ordered time-varying subset the per-step RHS must re-evaluate,
-    and the once-materialized static scalars / arrays every context is seeded
-    with. Behaviour is identical to a single combined pass — a state-free body is
+    Returns ``(varying_observed, static_observed_values, static_derived_rings,
+    static_skip_reasons)``: the dependency-ordered time-varying subset the
+    per-step RHS must re-evaluate, the once-materialized static scalars /
+    arrays every context is seeded with, and — for each static observed the
+    tolerant hoist DROPPED — the evaluation error that dropped it (so a later
+    reader can report the root cause). Behaviour is identical to a single combined pass — a state-free body is
     constant along the trajectory, and a const observed can never reference a
     loader-dependent one — but the expensive const geometry runs once instead of
     per step / per segment.
@@ -1688,9 +1709,11 @@ def _partition_and_materialize_observeds(
     invariant_static = [(n, r) for n, r in static_observed if n not in _volatile_names]
     volatile_static = [(n, r) for n, r in static_observed if n in _volatile_names]
 
+    static_skip_reasons: dict[str, str] = {}
     if static_cache is not None and "invariant_observed_values" in static_cache:
         invariant_observed_values = static_cache["invariant_observed_values"]
         invariant_derived_rings = static_cache["invariant_derived_rings"]
+        static_skip_reasons.update(static_cache.get("invariant_skip_reasons", {}))
     else:
         invariant_observed_values = {}
         invariant_derived_rings = {}
@@ -1705,15 +1728,22 @@ def _partition_and_materialize_observeds(
                 index_sets=flat.index_sets,
                 derived_extents=dict(derived_extents or {}),
                 input_arrays=loader_arrays if loader_arrays is not None else {},
+                axis_valued_input_names=axis_valued_input_names,
                 join_key_buffers=join_key_buffers,
                 join_key_index_sets=join_key_index_sets,
                 factor_scope=factor_scope,
             )
-            _materialize_observeds(invariant_static, _inv_ctx, skip_unresolved=True)
+            _materialize_observeds(
+                invariant_static,
+                _inv_ctx,
+                skip_unresolved=True,
+                skip_reasons=static_skip_reasons,
+            )
             invariant_derived_rings = _inv_ctx.derived_rings
         if static_cache is not None:
             static_cache["invariant_observed_values"] = invariant_observed_values
             static_cache["invariant_derived_rings"] = invariant_derived_rings
+            static_cache["invariant_skip_reasons"] = dict(static_skip_reasons)
 
     # Reusable constant-geometry OPERATOR cache (#3): every name the invariant pass
     # materialized is loader-invariant, so a weight operator capturing only those
@@ -1738,17 +1768,23 @@ def _partition_and_materialize_observeds(
             derived_extents=dict(derived_extents or {}),
             derived_rings=static_derived_rings,
             input_arrays=loader_arrays if loader_arrays is not None else {},
+            axis_valued_input_names=axis_valued_input_names,
             join_key_buffers=join_key_buffers,
             join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
             op_cache=op_cache,
             invariant_names=invariant_names,
         )
-        _materialize_observeds(volatile_static, _vol_ctx, skip_unresolved=True)
+        _materialize_observeds(
+            volatile_static,
+            _vol_ctx,
+            skip_unresolved=True,
+            skip_reasons=static_skip_reasons,
+        )
         static_observed_values = _vol_ctx.observed_values
         static_derived_rings = _vol_ctx.derived_rings
 
-    return varying_observed, static_observed_values, static_derived_rings
+    return varying_observed, static_observed_values, static_derived_rings, static_skip_reasons
 
 
 def _declared_axes_map(flat: FlattenedSystem) -> dict[str, tuple[str, ...]]:
@@ -2027,11 +2063,17 @@ def _build_numpy_rhs(
         + list(flat.parameters)
         + list(flat.observed_variables)
     )
+    # Names both hooks bind are DECLARED axis-valued (a member-factor feedback
+    # vector spans its derived set; a gated slab spans the gate's axes), so the
+    # bare-reference scalarisation in ``_resolve_symbol`` must not collapse
+    # them when a derived set materialises exactly ONE member (size-1 array).
+    axis_valued_input_names: set[str] = set()
     if vi_members:
         for _k, _v in _feed_back_vi_members(
             flat.index_sets, vi_members, _all_var_names
         ).items():
             loader_arrays[_k] = _v  # engine-derived: overwrites, like Julia merge!
+            axis_valued_input_names.add(_k)
 
     # ---- Phase 3 pushdown hook 2: gated-provider deferral → post-VI selective
     # fetch. Providers stashed by `prepare` (skipped by its eager const loop)
@@ -2049,6 +2091,8 @@ def _build_numpy_rhs(
             _all_var_names,
         ).items():
             loader_arrays[_k] = _v
+            axis_valued_input_names.add(_k)
+    axis_valued_names = frozenset(axis_valued_input_names)
 
     # Initial conditions.
     y0 = np.zeros(total_size, dtype=float)
@@ -2089,7 +2133,7 @@ def _build_numpy_rhs(
     # STATE-FREE (loader-invariant, then loader-volatile) observeds ONCE here and
     # return the dependency-ordered TIME-VARYING subset the per-step RHS must
     # re-evaluate. See :func:`_partition_and_materialize_observeds`.
-    varying_observed, static_observed_values, static_derived_rings = (
+    varying_observed, static_observed_values, static_derived_rings, static_skip_reasons = (
         _partition_and_materialize_observeds(
             ordered_observed,
             state_names,
@@ -2104,6 +2148,7 @@ def _build_numpy_rhs(
             factor_scope,
             static_cache,
             derived_extents,
+            axis_valued_input_names=axis_valued_names,
         )
     )
 
@@ -2151,6 +2196,7 @@ def _build_numpy_rhs(
             # segment its contents are fixed, so the RHS is pure; the segmenting
             # driver mutates it in place between segments to advance the cadence.
             input_arrays=loader_arrays if loader_arrays is not None else {},
+            axis_valued_input_names=axis_valued_names,
             join_key_buffers=join_key_buffers,
             join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
@@ -2202,6 +2248,7 @@ def _build_numpy_rhs(
         varying_observed=varying_observed,
         static_observed_values=static_observed_values,
         static_derived_rings=static_derived_rings,
+        static_skip_reasons=static_skip_reasons,
         join_key_buffers=join_key_buffers,
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,

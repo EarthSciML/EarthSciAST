@@ -282,3 +282,112 @@ def test_prepare_pushdown_record_gate_end_to_end(oracle):
     np.testing.assert_allclose(observed_field(prep, "deathsL"), oracle["oracle_deaths"](RR_L))
     with pytest.raises(SimulationError):
         observed_field(prep, "no_such_observed")
+
+
+def test_prepare_pushdown_single_member_support_set(oracle):
+    """n=1 regression (the pre-existing scalarisation footgun): every emission
+    record lands in ONE grid cell, so the engine-derived support set has exactly
+    one member and the ``pd_member_factor__*`` feedback vector is a SIZE-1
+    array. ``_resolve_symbol``'s bare-reference scalarisation used to collapse
+    it to a float, breaking the generated ``index(F, index(mf, c))`` gathers —
+    the whole downstream graph was then silently dropped by the tolerant hoist
+    and ``observed_field`` failed far from the cause. A one-member axis must
+    stay an axis (``EvalContext.axis_valued_input_names``)."""
+    doc = json.loads(_FIXTURE.read_text())
+    C = oracle["C"]
+
+    # All five records inside cell 0 (rect [0,2) × [0,2)).
+    xt = [0.5, 1.0, 1.5, 0.5, 1.2]
+    yt = [0.5, 0.5, 1.0, 1.5, 0.8]
+    lon, lat = [], []
+    for r in range(N_REC):
+        lo, la = _lcc_inv(xt[r], yt[r], C)
+        lon.append(lo)
+        lat.append(la)
+
+    gmocks = {v: MockGated(oracle["full_sr"][v]) for v in LVARS}
+    providers = {
+        "MockSR.TotalPop": MockConst(oracle["total_pop"]),
+        "MockSR.MortalityRate": MockConst(oracle["mortality"]),
+        "MockPts.lon": MockConst(lon),
+        "MockPts.lat": MockConst(lat),
+        "MockPts.annual": MockConst(oracle["emis_annual"]),
+        "MockPts.vVOC": MockConst(oracle["masks"]["SOA"]),
+        "MockPts.vNOx": MockConst(oracle["masks"]["pNO3"]),
+        "MockPts.vNH3": MockConst(oracle["masks"]["pNH4"]),
+        "MockPts.vSOx": MockConst(oracle["masks"]["pSO4"]),
+        "MockPts.vPM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+    }
+    for v in LVARS:
+        providers[f"MockSR.{v}"] = gmocks[v]
+    ca = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
+
+    insp = BuildInspection()
+    prep = prepare(
+        doc,
+        providers=providers,
+        const_arrays=ca,
+        inspect=insp,
+        pushdown_rewrite=True,
+    )
+
+    # The single-member feedback vector survived as a 1-element ARRAY.
+    mf = [k for k in insp.const_arrays if str(k).startswith("pd_member_factor__")]
+    assert mf, "member_factor feedback missing from the inspection const registry"
+    mf_arr = np.asarray(insp.const_arrays[mf[0]])
+    assert mf_arr.shape == (1,) and int(mf_arr[0]) == 1  # 1-based cell 1
+
+    # Gated fetches pushed the one-member selection down, never wholesale.
+    for v in LVARS:
+        sel = [c for c in gmocks[v].calls if c[0] == "selection"]
+        assert not [c for c in gmocks[v].calls if c[0] == "wholesale"]
+        assert len(sel) == 1 and sel[0][1][1] == [0]
+
+    # Plain-Python oracle with the one-member support set.
+    emis, masks = oracle["emis_annual"], oracle["masks"]
+    E_or = {v: np.array([float(np.sum(emis * masks[v]))]) for v in LVARS}
+    conc = {v: oracle["full_sr"][v][0][[0], :].T @ E_or[v] for v in LVARS}
+    tot = FACT * sum(conc[v] for v in LVARS)
+
+    for v in LVARS:
+        got = observed_field(prep, f"E_{'VOC' if v == 'SOA' else 'NOx' if v == 'pNO3' else 'NH3' if v == 'pNH4' else 'SOx' if v == 'pSO4' else 'PM25'}")
+        assert np.asarray(got).shape == (1,)
+        np.testing.assert_allclose(got, E_or[v])
+    np.testing.assert_allclose(observed_field(prep, "TotalPM25"), tot)
+    for rr, name in ((RR_K, "deathsK"), (RR_L, "deathsL")):
+        want = (
+            (np.exp(math.log(rr) / 10 * tot) - 1)
+            * oracle["total_pop"]
+            * POP_SCALE
+            * oracle["mortality"]
+            * MORT_SCALE
+            / 100000
+        )
+        np.testing.assert_allclose(observed_field(prep, name), want)
+
+
+def test_observed_field_reports_hoist_skip_root_cause(oracle):
+    """When the tolerant hoist drops an unresolvable observed chain, the
+    ``observed_field`` error must carry the ROOT cause (the first recorded
+    skip), not just "not a build-time-evaluable observed" — a skip cascades,
+    and the name the caller reads is usually far downstream of the defect."""
+    doc = json.loads(_FIXTURE.read_text())
+    providers = {
+        "MockPts.lon": MockConst(oracle["lon"]),
+        "MockPts.lat": MockConst(oracle["lat"]),
+        "MockPts.annual": MockConst(oracle["emis_annual"]),
+        "MockPts.vVOC": MockConst(oracle["masks"]["SOA"]),
+        "MockPts.vNOx": MockConst(oracle["masks"]["pNO3"]),
+        "MockPts.vNH3": MockConst(oracle["masks"]["pNH4"]),
+        "MockPts.vSOx": MockConst(oracle["masks"]["pSO4"]),
+        "MockPts.vPM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+        # MortalityRate / TotalPop / the gated SR providers are intentionally
+        # ABSENT: everything downstream of them is dropped by the hoist.
+    }
+    ca = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
+    try:
+        prep = prepare(doc, providers=providers, const_arrays=ca, pushdown_rewrite=True)
+    except SimulationError:
+        pytest.skip("prepare itself rejects the missing providers (also fine)")
+    with pytest.raises(SimulationError, match=r"hoist dropped"):
+        observed_field(prep, "deathsK")

@@ -236,9 +236,29 @@ def observed_field(prep: PreparedModel, name: str):
             if got is not None:
                 break
     if got is None:
+        # The hoist records WHY it dropped each unresolvable observed; a skip
+        # cascades, so report the FIRST recorded failure (the root cause) along
+        # with the requested name's own reason — without this the visible error
+        # names whatever the caller happened to read, far from the defect.
+        reasons = getattr(build, "static_skip_reasons", {}) or {}
+        own = reasons.get(v)
+        if own is None and "." not in v:
+            for k in sorted(reasons):
+                if "." in k and k.rsplit(".", 1)[-1] == v:
+                    own = reasons[k]
+                    break
+        detail = ""
+        if reasons:
+            root_name = next(iter(reasons))
+            detail = (
+                f"; build-time hoist dropped {len(reasons)} observed(s), "
+                f"first '{root_name}': {reasons[root_name]}"
+            )
+            if own is not None and own != reasons[root_name]:
+                detail += f"; '{name}': {own}"
         raise SimulationError(
             f"observed_field: '{name}' is not a build-time-evaluable observed of "
             f"the prepared document (state-dependent, unresolved, or not an "
-            f"observed at all)"
+            f"observed at all){detail}"
         )
     return got

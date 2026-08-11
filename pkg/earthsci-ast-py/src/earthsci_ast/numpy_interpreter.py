@@ -103,6 +103,18 @@ class EvalContext:
     # only at cadence boundaries, so the RHS is pure within a segment. Empty ⇒ no
     # data-loader fields are bound. See `simulation._simulate_with_loaders`.
     input_arrays: dict[str, np.ndarray] = field(default_factory=dict)
+    # Names in ``input_arrays`` whose value is DECLARED axis-valued — bound to
+    # an index-set axis by construction, not by inspecting the runtime array:
+    # the engine-derived pushdown products (the ``member_factor`` feedback
+    # vectors and gated compact slabs, simulation_array hooks 1–2). The
+    # bare-reference scalarisation in :func:`_resolve_symbol` must never
+    # collapse these: a derived set with exactly ONE member yields a size-1
+    # member-factor vector that is still an axis, and collapsing it to a float
+    # breaks the generated ``index(F, index(<member_factor>, c))`` gathers.
+    # A name NOT listed keeps the value-based behaviour (a genuine scalar
+    # loader field referenced bare resolves to its value). Empty ⇒ no
+    # engine-derived axis-valued inputs are bound.
+    axis_valued_input_names: frozenset[str] = field(default_factory=frozenset)
     # Build-time value-invention MAP buffers (RFC §5.3): a per-cell key buffer
     # (e.g. the broad-phase bins ``rg_src_bin`` / ``rg_tgt_bin``) that an
     # aggregate ``join.on [[rg_src_bin, rg_tgt_bin]]`` gates on. Each value is a
@@ -264,10 +276,17 @@ def _resolve_symbol(name: str, ctx: EvalContext) -> float | np.ndarray:
     # as the loaded-`ic` path (`_resolve_field_ic`: ``float(arr.flat[0])``) and the
     # Julia gather resolver do — so ``D(c) = raw.k - c`` sees the value, not a
     # 1-vector that later fails ``float(...)``; a multi-element field stays an array
-    # for gather / whole-array consumption.
+    # for gather / whole-array consumption. EXCEPT names DECLARED axis-valued
+    # (``axis_valued_input_names``): a size-1 array there is a one-member AXIS
+    # (a derived set that materialised a single member), not a scalar field,
+    # and must stay an ndarray so ``index(name, c)`` gathers keep working.
     if name in ctx.input_arrays:
         arr = ctx.input_arrays[name]
-        if isinstance(arr, np.ndarray) and arr.size == 1:
+        if (
+            isinstance(arr, np.ndarray)
+            and arr.size == 1
+            and name not in ctx.axis_valued_input_names
+        ):
             return float(arr.reshape(-1)[0])
         return arr
     if name in ctx.state_layout:
