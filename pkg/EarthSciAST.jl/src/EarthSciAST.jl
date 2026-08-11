@@ -234,10 +234,14 @@ export
     # Flat→gridded inversion (RFC §7) + the concrete Zarr sink constructor
     # (implemented in the EarthSciIO extension, mirror of build_output_callback).
     VarGridding, derive_output_gridding, scatter_grid!, build_zarr_sink,
+    row_major_flat_indices,
     # Document-derived output metadata (RFC §7–§8): real dim names + CF
     # coordinate emission (dimension coordinates from the `coordinates` registry).
     OutputMeta, derive_output_meta, DimCoord, plan_dimension_coordinates,
     group_gridding_by_grid,
+    # The derived output PLAN (RFC §7–§9) — the writer-facing shape, and the
+    # artifact the cross-language derivation conformance corpus compares.
+    VarPlan, GridPlan, OutputPlan, derive_output_plan, output_var_dims,
     # Checkpoint / restart (RFC §10, §16.7): flat-gather (restart-read inverse of
     # scatter), predicate constructors + OR-combinator, and the predicate-driven
     # checkpoint callback (DiscreteCallback in the DiffEqCallbacks extension).

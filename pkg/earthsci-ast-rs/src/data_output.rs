@@ -41,35 +41,53 @@
 //! module with a bare `unreachable`, which once killed every spatial run in the
 //! browser. There is no timing or instrumentation here, deliberately.
 //!
-//! ## Deliberate divergences from the Julia reference
+//! ## Cross-language agreement with the Julia reference
 //!
-//! * **Scalars carry no synthetic axis.** `data_output.jl` gives a scalar
-//!   variable the singleton shape `[1]` with the positional dim name
-//!   `"<base>_d0"`, which makes every scalar its own single-member grid under
-//!   `group_gridding_by_grid`. That is a Wave-2 placeholder (the same comment
-//!   block calls the positional names provisional) and it is wrong for the
-//!   0-D models this crate mostly runs: 66 scalar states would emit 66
-//!   length-1 dimensions named after their own variables and 66 separate
-//!   grids. Here a scalar has `shape == []` and `dim_names == []`, so it is
-//!   genuinely 0-spatial-dimensional, every scalar lands in ONE grid, and its
-//!   on-disk dims are exactly `[time]` — which is what CF, Zarr and xarray all
-//!   expect. Positional `"<base>_d0"` naming is retained verbatim for *gridded*
-//!   variables with no declared `shape`, where it is load-bearing.
-//! * **Density is validated.** The Julia derives each axis length as the max
-//!   cell index and never checks that the cells actually cover the grid, so a
-//!   gap leaves an uninitialized hole. Here an incomplete or double-covered
-//!   grid is [`OutputError::SparseGrid`] / [`OutputError::DuplicateCell`].
-//! * **`standard_name` is not retained per variable.** `derive_output_meta` in
-//!   Julia copies `units` / `standard_name` / `description` off the raw
-//!   variable dict. `ModelVariable` (and `esm-schema.json`'s `ModelVariable`)
-//!   has no `standard_name` property, so the typed Rust binding cannot carry
-//!   one; `units` and `description` are retained.
-//! * **Namespaced lookups.** The Julia looks a var_map base name up directly in
-//!   a table keyed by *bare* variable name, so a flattened `Model.u` silently
-//!   falls back to positional axis names. [`OutputMeta`] registers both the
-//!   bare and the `Model.`-qualified key (dropping a bare key that two models
-//!   would make ambiguous) and additionally falls back to the last dotted
-//!   segment, so a namespaced flat state still gets its real dim names.
+//! This module and `EarthSciAST.jl`'s `src/data_output.jl` are the same
+//! derivation in two languages, and they are gated as such: the corpus at
+//! `tests/conformance/output_derivation/` drives both from one set of `.esm`
+//! fixtures + flat slot names and asserts one committed golden per case
+//! (`tests/output_derivation_conformance.rs` here, the
+//! `output_derivation_conformance_test.jl` twin there). Four behaviours below
+//! were divergences the two implementations carried silently until that corpus
+//! existed; RFC §16.12 records the reconciliation and the evidence. **All four
+//! resolved in this module's favour, and the Julia now matches.**
+//!
+//! * **Scalars carry no synthetic axis.** `data_output.jl` used to give a
+//!   scalar the singleton shape `[1]` with the positional dim name
+//!   `"<base>_d0"`, which made every scalar its own single-member grid under
+//!   `group_gridding_by_grid`: 66 scalar states meant 66 length-1 dimensions
+//!   named after their own variables and 66 separate grids. Here a scalar has
+//!   `shape == []` and `dim_names == []`, so it is genuinely
+//!   0-spatial-dimensional, every scalar lands in ONE grid, and its on-disk
+//!   dims are exactly `[time_dim]` — what CF, Zarr and xarray all expect, and a
+//!   rank the store already contains (the `time` coordinate is one). Positional
+//!   `"<base>_d0"` naming is retained verbatim for *gridded* variables with no
+//!   declared `shape`, where it is load-bearing.
+//! * **The record axis leads.** [`VarPlan::dims`] is the record axis followed by
+//!   the spatial axes. Julia's `ZarrSink` used to append the record axis last.
+//!   Record-first is CF §2.4's T,Z,Y,X recommendation, the order a NetCDF
+//!   unlimited dimension requires, the order EarthSciIO's shared
+//!   `write_spec.json` already pins for all three writers, and the layout that
+//!   keeps one appended record contiguous on disk.
+//! * **Density is validated.** The Julia used to derive each axis length as the
+//!   max cell index and never check that the cells cover the grid, so a gap left
+//!   an uninitialized hole and a repeat silently dropped a slot. An incomplete
+//!   or double-covered grid is [`OutputError::SparseGrid`] /
+//!   [`OutputError::DuplicateCell`].
+//! * **Namespaced lookups.** The Julia used to look a var_map base name up in a
+//!   table keyed by *bare* variable name, so a flattened `Model.u` silently fell
+//!   back to positional axis names. [`OutputMeta`] registers both the bare and
+//!   the `Model.`-qualified key (dropping a bare key that two models would make
+//!   ambiguous) and additionally falls back to the last dotted segment.
+//!
+//! One difference remains, and is not a divergence in behaviour:
+//! **`standard_name` is not retained per variable.** `derive_output_meta` in
+//! Julia copies `units` / `standard_name` / `description` off the raw variable
+//! dict. Neither `ModelVariable` nor `esm-schema.json`'s `ModelVariable` has a
+//! `standard_name` property — `additionalProperties` is `false` — so no
+//! schema-valid document can carry one and the typed Rust binding models
+//! `units` and `description` only.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
