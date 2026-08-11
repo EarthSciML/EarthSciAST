@@ -281,12 +281,13 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 /// Flattens and solves the `.esm` file through diffsol's Faer backend, entirely
 /// client-side. Pure-ODE / 0-D box models and — since the `simulate_array` wasm
 /// gate was lifted (EarthSciAST-akz) — array-op and discretized-PDE
-/// files both run here through the same dispatch the native backend uses. The
-/// one remaining wasm limitation is **spherical/geodesic
-/// geometry** (conservative regridding via s2geometry): those leaf ops hit the
-/// `crate::geometry` wasm stub and return a runtime `GeometryError`, since the
-/// s2bindings C++ kernel is not linked into this `wasm32-unknown-unknown` build.
-/// Planar-grid and geometry-free PDEs are unaffected.
+/// files both run here through the same dispatch the native backend uses.
+/// **Spherical/geodesic geometry** (conservative regridding) runs here too, as of
+/// the move to the pure-Rust `s2rst` kernel: it links into this
+/// `wasm32-unknown-unknown` build like any other dependency, so the clip runs
+/// in-module with no host setup. (Previously these leaf ops hit a wasm stub and
+/// returned a runtime `GeometryError`, because the C++ s2geometry kernel could
+/// not be linked and had to be reached through a separate Emscripten module.)
 ///
 /// Arguments:
 /// - `json_str`: the `.esm` file as a JSON string.
@@ -489,9 +490,8 @@ pub fn component_graph(json_str: &str) -> Result<JsValue, JsValue> {
 /// `"planar" | "spherical" | "geodesic"`. Returns the planar shoelace area for
 /// `planar`, or the great-circle area in **steradians** for `spherical`/`geodesic`.
 ///
-/// The spherical/geodesic path delegates to the s2bindings Emscripten module,
-/// which the host must install on `globalThis.__earthsci_s2` first (see
-/// `js/s2_interop.mjs`); without it, or without a degenerate ring, it errors.
+/// The spherical/geodesic path runs the in-module `s2rst` kernel — no host setup,
+/// no JS bridge. Only a degenerate ring errors.
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn polygon_area(ring_json: &str, manifold: &str) -> Result<f64, JsValue> {
@@ -505,8 +505,8 @@ pub fn polygon_area(ring_json: &str, manifold: &str) -> Result<f64, JsValue> {
 /// Clip lon/lat polygon rings `a` and `b` on `manifold` and return the overlap
 /// ring as a JSON array of `[lon, lat]` pairs (degrees; `[]` for a disjoint or
 /// edge-touching clip). `a_json`/`b_json` are JSON `[lon, lat]` arrays; `manifold`
-/// is `"planar" | "spherical" | "geodesic"`. Same s2bindings requirement as
-/// [`polygon_area`] for the spherical/geodesic manifolds.
+/// is `"planar" | "spherical" | "geodesic"`. Like [`polygon_area`], every
+/// manifold is served in-module — the spherical/geodesic clip needs no host setup.
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn intersect_polygon(a_json: &str, b_json: &str, manifold: &str) -> Result<String, JsValue> {

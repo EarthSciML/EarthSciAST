@@ -536,7 +536,9 @@ run_pde_simulation_conformance_julia() {
 }
 
 # Rust drives the vectorized arrayop evaluator (ArrayCompiled::debug_eval_rhs) +
-# diffsol. `cargo run` provisions the s2bindings shim lib path. ess-fmw.
+# diffsol. ess-fmw. (`cargo run` used to be required here to provision the
+# s2bindings shim lib path; the geometry kernel is pure Rust now, so the adapter
+# binary is self-contained.)
 run_pde_simulation_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
         error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
@@ -609,7 +611,8 @@ run_pde_pipeline_conformance_julia() {
 
 # Rust drives the vectorized arrayop evaluator (ArrayCompiled::from_flattened +
 # debug_eval_rhs) + diffsol, with the provider forcing installed into the
-# compiled instance. `cargo run` provisions the s2bindings shim lib path.
+# compiled instance. (No shim lib path to provision any more — the geometry
+# kernel is pure Rust, so the adapter binary is self-contained.)
 run_pde_pipeline_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
         error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"

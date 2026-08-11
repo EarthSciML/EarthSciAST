@@ -39,14 +39,20 @@ Ensure you have the following installed:
 - **Node.js** 20+ and npm (for TypeScript/JavaScript packages)
 - **Python** 3.8+ and pip (for Python package development)
 - **Rust** 1.75.0+ and Cargo (for Rust package development)
-  - Also needs **CMake** and **OpenSSL headers**: the `s2bindings-sys` dependency
-    builds vendored s2geometry, which includes `<openssl/bn.h>`. On Linux the
-    distro package (`libssl-dev` / `openssl-devel`) puts these on the default
-    include path. On **macOS**, Homebrew's openssl is keg-only, so the crate ships
-    a `pkg/earthsci-ast-rs/.cargo/config.toml` that adds both Homebrew prefixes to
-    `CXXFLAGS` — `brew install cmake openssl@3` and `cargo build` works with no
-    manual environment. (Upstream bug: the shim CMake target does not inherit
-    OpenSSL's include dirs; see that config for the full note.)
+  - No C/C++ toolchain needed. The spherical-geometry kernel is `s2rst`, a
+    pure-Rust port of Google's s2geometry, so `cargo build` works from a clean
+    checkout with nothing but Cargo — and cross-compiles to `wasm32-unknown-unknown`
+    unchanged.
+  - **Only** for the opt-in `s2-cpp` feature (the C++ differential oracle,
+    `cargo test --features s2-cpp --test geometry_s2_differential`) do you also
+    need **CMake** and **OpenSSL headers**: that path builds vendored s2geometry
+    via `s2bindings-sys`, which includes `<openssl/bn.h>`. On Linux the distro
+    package (`libssl-dev` / `openssl-devel`) puts these on the default include
+    path. On **macOS**, Homebrew's openssl is keg-only, so the crate ships a
+    `pkg/earthsci-ast-rs/.cargo/config.toml` that adds both Homebrew prefixes to
+    `CXXFLAGS` — `brew install cmake openssl@3` and it builds with no manual
+    environment. (Upstream bug: the shim CMake target does not inherit OpenSSL's
+    include dirs; see that config for the full note.)
 - **Go** 1.19+ (for Go package development)
 - **Git** (for version control)
 

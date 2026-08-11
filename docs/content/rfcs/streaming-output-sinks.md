@@ -243,8 +243,9 @@ lock (`julia/src/store.jl`). The write path reuses this verbatim:
 - **Python:** `xarray` + `netcdf4` are already deps; add `zarr`. The streaming
   primitive is `Dataset.to_zarr(store, region=…, mode="a")`.
 - **Rust:** no zarr crate today; add `zarrs` under the existing
-  `cfg(not(target_arch = "wasm32"))` gating (the writer is a native-only feature,
-  like `s2bindings`).
+  `cfg(not(target_arch = "wasm32"))` gating — the writer is a native-only feature.
+  (This section used to cite `s2bindings` as the sibling example; that dependency
+  is now opt-in-only, so `zarrs` would be the sole occupant of that gate.)
 
 ---
 

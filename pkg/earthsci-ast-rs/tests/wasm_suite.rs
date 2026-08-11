@@ -8,10 +8,12 @@
 //! (requires `wasm-bindgen-test-runner`; see `.cargo/config.toml`). This lives in
 //! its own integration-test target on purpose: `cargo test --test wasm_suite`
 //! builds only the library plus this file, NOT the native-only unit tests and
-//! the other 40-odd integration tests — those read fixtures off disk, use
-//! tempfiles, and call the native s2 C++ kernel, none of which compile or run on
-//! `wasm32-unknown-unknown`. Fixtures are embedded with `include_str!` since wasm
-//! has no filesystem.
+//! the other 40-odd integration tests — those read fixtures off disk and use
+//! tempfiles, neither of which works on `wasm32-unknown-unknown`. Fixtures are
+//! embedded with `include_str!` since wasm has no filesystem. (The geometry
+//! kernel is no longer on that exclusion list: since it became the pure-Rust
+//! `s2rst` it compiles here like any other dependency, so the spherical clip and
+//! area are exercised below rather than asserted to be unavailable.)
 #![cfg(target_arch = "wasm32")]
 
 use std::collections::HashMap;
@@ -181,15 +183,33 @@ fn planar_geometry_is_pure_rust() {
 }
 
 #[wasm_bindgen_test]
-fn spherical_geometry_errors_without_s2() {
-    // No host has installed `globalThis.__earthsci_s2` in the test runner, so the
-    // spherical bridge must fail cleanly (a `GeometryError`, not a panic/trap).
+fn spherical_geometry_runs_natively_on_wasm() {
+    // Was `spherical_geometry_errors_without_s2`: the spherical kernel used to be
+    // a C++ module that could not be linked into a wasm build, so this asserted a
+    // clean *failure* unless the host had wired up `globalThis.__earthsci_s2`.
+    // The pure-Rust `s2rst` kernel compiles to wasm like any other dependency, so
+    // the assertion inverts — spherical geometry just works here, with no host
+    // setup and no JS boundary crossing.
     let tri = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
-    let err = polygon_area(&tri, Manifold::Spherical).unwrap_err();
+    let area = polygon_area(&tri, Manifold::Spherical).expect("spherical area on wasm");
     assert!(
-        err.message().contains("s2bindings") || err.message().contains("__earthsci_s2"),
-        "expected an s2-missing message, got: {}",
-        err.message()
+        (area - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "an octant is π/2 steradians, got {area}"
+    );
+}
+
+#[wasm_bindgen_test]
+fn spherical_clip_runs_natively_on_wasm() {
+    // The clip half of the same story: `intersect_polygon` on a spherical
+    // manifold was unreachable on wasm without the Emscripten bridge.
+    let a = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
+    let b = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0)];
+    let ring = intersect_polygon(&a, &b, Manifold::Spherical).expect("spherical clip on wasm");
+    assert!(ring.len() >= 3, "expected a non-empty overlap ring");
+    let area = polygon_area(&ring, Manifold::Spherical).expect("overlap area on wasm");
+    assert!(
+        (area - std::f64::consts::FRAC_PI_4).abs() < 1e-9,
+        "the two octant sectors overlap in π/4 steradians, got {area}"
     );
 }
 

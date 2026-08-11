@@ -1,7 +1,12 @@
 # Fetch git dependencies through the system `git` CLI rather than the built-in
 # libgit2 client.
 #
-# Required by the `s2bindings` git dependency (ess-my4.4.11). On the EarthSciML
+# Required by the `s2bindings` git dependency, which is now OPT-IN (the `s2-cpp`
+# differential-oracle feature) — the default build has no git dependency at all,
+# so this block only matters when that feature is on. Kept because that feature
+# must stay usable here.
+#
+# On the EarthSciML
 # build cluster a global git rewrite maps `https://github.com/` to
 # `git@github.com:` (SSH), and libgit2's ssh-agent path cannot satisfy that
 # auth, so cargo's built-in fetcher fails. The system `git` honors the rewrite
@@ -11,7 +16,10 @@
 [net]
 git-fetch-with-cli = true
 
-# Make `cargo build` work from a CLEAN `target/` with no manual environment.
+# Make `cargo build --features s2-cpp` work from a CLEAN `target/` with no manual
+# environment. Only the opt-in `s2-cpp` feature compiles C++ at all; the default
+# build needs neither CMake nor OpenSSL since the geometry kernel became the
+# pure-Rust `s2rst`.
 #
 # THE BUG. `s2bindings-sys` builds vendored s2geometry through CMake. Its
 # `s2bindings_shim` target compiles `shim.cc`, which includes

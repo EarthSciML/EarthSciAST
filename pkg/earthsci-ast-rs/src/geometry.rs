@@ -12,12 +12,14 @@
 //! The clip is governed by the node's required `manifold` flag (§5.8.4):
 //!
 //! * [`Manifold::Spherical`] / [`Manifold::Geodesic`] — edges are **great-circle
-//!   arcs**; the clip is delegated to Google's `s2geometry` engine via the
-//!   [`s2bindings`] crate. This is the same S2 core that backs Python's
-//!   `spherely`, so the Rust and Python bindings share a geometry kernel and
-//!   agree to a much tighter tolerance than either does with Julia/GeometryOps
-//!   (CONFORMANCE_SPEC.md §5.8.2). A flat lon/lat clip is wrong at the poles and
-//!   the antimeridian, which is exactly why the kernel is required.
+//!   arcs**; the clip is delegated to the `s2rst` crate, a **pure-Rust** port of
+//!   Google's `s2geometry` (S2Builder + S2BooleanOperation + the exact
+//!   predicates). It runs the same S2 algorithms Python's `spherely` gets from
+//!   the C++ original, so the Rust and Python bindings still agree to a much
+//!   tighter tolerance than either does with Julia/GeometryOps (CONFORMANCE_SPEC.md
+//!   §5.8.2) — the C++ kernel remains available behind the `s2-cpp` feature as the
+//!   differential oracle that pins that claim. A flat lon/lat clip is wrong at the
+//!   poles and the antimeridian, which is exactly why the kernel is required.
 //! * [`Manifold::Planar`] — edges are **straight lines in the lon/lat plane**;
 //!   the clip is a pure-Rust Sutherland–Hodgman convex-polygon intersection.
 //!   Exact and dependency-free, used where a flat interpretation is intended
@@ -32,89 +34,18 @@
 //! `y = lat`) — the GeoJSON / GeometryOps order. Rings are **implicitly closed**:
 //! each vertex appears once and the final edge joins the last vertex back to the
 //! first. A disjoint or edge-touching clip yields an **empty** ring (length 0).
+//!
+//! # One kernel on every target
+//!
+//! `s2rst` is pure Rust with no C/FFI/OS dependencies, so the spherical path
+//! compiles to `wasm32-unknown-unknown` exactly as it does natively. There is a
+//! SINGLE implementation of each spherical function below — no `#[cfg]` arms, no
+//! JS bridge. (The predecessor kernel, the `s2bindings` C++ FFI crate, could not
+//! target wasm; the in-browser build had to marshal every overlap pair out to a
+//! separate Emscripten module through `globalThis.__earthsci_s2`, and spherical
+//! geometry was a hard runtime error whenever the host had not wired it up.)
 
-#[cfg(not(target_arch = "wasm32"))]
-use s2bindings::SphericalPolygon;
-
-/// Bridge to the s2geometry **Emscripten** module (s2bindings.rs `wasm/dist`) on
-/// wasm. The native `s2bindings` crate compiles vendored abseil + s2geometry C++
-/// and cannot target `wasm32-unknown-unknown`; the s2 wasm build is instead a
-/// separate Emscripten ES module exposing a JS API. So on wasm the spherical
-/// clip/area are delegated to that module through a small synchronous interface
-/// the host installs on `globalThis.__earthsci_s2` (see `js/s2_interop.mjs`):
-///
-/// * `clip(a, b)` — flat `[lon,lat,…]` shells → flat `[lon,lat,…]` overlap-shell
-///   vertices (holes dropped, empty for disjoint), degrees.
-/// * `area(ring)` — flat `[lon,lat,…]` shell → steradians.
-///
-/// Going through `globalThis` keeps this crate free of any bundler/module-path
-/// coupling (identical in node and the browser) and lets a missing module
-/// surface as a clean [`GeometryError`] rather than a wasm instantiation
-/// failure. The host awaits s2's async `load()` once and installs these sync
-/// wrappers before running any spherical model.
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-mod s2_wasm {
-    use super::GeometryError;
-    use js_sys::{Float64Array, Function, Reflect};
-    use wasm_bindgen::{JsCast, JsValue};
-
-    fn flatten(v: &[(f64, f64)]) -> Vec<f64> {
-        let mut out = Vec::with_capacity(v.len() * 2);
-        for &(lon, lat) in v {
-            out.push(lon);
-            out.push(lat);
-        }
-        out
-    }
-
-    /// Resolve `globalThis.__earthsci_s2[name]` to a callable, plus the object to
-    /// bind as `this`. A missing/undefined interface is the "s2 not wired" case.
-    fn method(name: &str) -> Result<(JsValue, Function), GeometryError> {
-        let global: JsValue = js_sys::global().into();
-        let obj = Reflect::get(&global, &JsValue::from_str("__earthsci_s2"))
-            .map_err(|_| GeometryError::new("globalThis lookup failed"))?;
-        if obj.is_undefined() || obj.is_null() {
-            return Err(GeometryError::new(
-                "spherical/geodesic geometry on wasm needs the s2bindings module; \
-                 call installS2() from js/s2_interop.mjs to set globalThis.__earthsci_s2",
-            ));
-        }
-        let f = Reflect::get(&obj, &JsValue::from_str(name))
-            .map_err(|_| GeometryError::new("s2 method lookup failed"))?
-            .dyn_into::<Function>()
-            .map_err(|_| {
-                GeometryError::new(format!("globalThis.__earthsci_s2.{name} is not a function"))
-            })?;
-        Ok((obj, f))
-    }
-
-    pub(super) fn clip(
-        a: &[(f64, f64)],
-        b: &[(f64, f64)],
-    ) -> Result<Vec<(f64, f64)>, GeometryError> {
-        let (this, f) = method("clip")?;
-        let fa = Float64Array::from(flatten(a).as_slice());
-        let fb = Float64Array::from(flatten(b).as_slice());
-        let res = f
-            .call2(&this, fa.as_ref(), fb.as_ref())
-            .map_err(|e| GeometryError::new(format!("s2 clip threw: {e:?}")))?;
-        let flat = res
-            .dyn_into::<Float64Array>()
-            .map_err(|_| GeometryError::new("s2 clip did not return a Float64Array"))?
-            .to_vec();
-        Ok(flat.chunks_exact(2).map(|c| (c[0], c[1])).collect())
-    }
-
-    pub(super) fn area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
-        let (this, f) = method("area")?;
-        let fr = Float64Array::from(flatten(ring).as_slice());
-        let res = f
-            .call1(&this, fr.as_ref())
-            .map_err(|e| GeometryError::new(format!("s2 area threw: {e:?}")))?;
-        res.as_f64()
-            .ok_or_else(|| GeometryError::new("s2 area did not return a number"))
-    }
-}
+use s2rst::s2::{LatLng, Loop, Polygon};
 
 /// The geometric interpretation of an `intersect_polygon` node's edges — the
 /// value of its required `manifold` flag (RFC §8.1; CONFORMANCE_SPEC.md §5.8.4).
@@ -152,9 +83,10 @@ impl Manifold {
     }
 }
 
-/// An error from the geometry kernel — a degenerate input ring, a failed clip,
-/// or (on `wasm32`) the absence of the native spherical backend. Wraps the
-/// human-readable reason reported by the underlying engine.
+/// An error from the geometry kernel — a degenerate input ring or a failed clip.
+/// Wraps the human-readable reason reported by the underlying engine. (It no
+/// longer carries a "spherical backend unavailable" case: since the kernel is
+/// pure Rust it links on every target, wasm included.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeometryError {
     message: String,
@@ -248,54 +180,61 @@ fn as_ring(poly: &[(f64, f64)], who: &str) -> Result<Vec<(f64, f64)>, GeometryEr
     Ok(arr)
 }
 
-/// Spherical / geodesic clip via Google's `s2geometry` (the `s2bindings` crate).
-/// The overlap of two convex cells is a single shell ring; any shell loops are
-/// concatenated in S2's output order (interior on the left).
-#[cfg(not(target_arch = "wasm32"))]
-fn intersect_spherical(
-    a: &[(f64, f64)],
-    b: &[(f64, f64)],
-) -> Result<Vec<(f64, f64)>, GeometryError> {
-    let pa = SphericalPolygon::from_lon_lat(a).map_err(|e| GeometryError::new(e.to_string()))?;
-    let pb = SphericalPolygon::from_lon_lat(b).map_err(|e| GeometryError::new(e.to_string()))?;
-    let clip = pa
-        .intersection(&pb)
-        .map_err(|e| GeometryError::new(e.to_string()))?;
-    if clip.is_empty() {
-        return Ok(Vec::new());
-    }
+/// Build the `s2rst` polygon for a single lon/lat shell `ring` (degrees, `n`
+/// distinct vertices, implicit closure).
+///
+/// `Loop::normalize` inverts the loop when its enclosed area exceeds a
+/// hemisphere, which is what makes the result **winding-independent**: a
+/// clockwise and a counter-clockwise lon/lat cell both become the same "small"
+/// interior-on-the-left loop, so the caller's ring orientation cannot silently
+/// turn a cell into its complement. `validate` then rejects the degenerate rings
+/// the C++ kernel used to reject at construction (duplicate/antipodal vertices,
+/// self-intersections), keeping the error surface of this module unchanged.
+fn s2_polygon(ring: &[(f64, f64)]) -> Result<Polygon, GeometryError> {
+    // s2rst takes LatLng (lat, lng); this module's order is (lon, lat).
+    let pts = ring
+        .iter()
+        .map(|&(lon, lat)| LatLng::from_degrees(lat, lon).to_point())
+        .collect();
+    let mut l = Loop::new(pts);
+    l.normalize();
+    let p = Polygon::from_loops(vec![l]);
+    p.validate()
+        .map_err(|e| GeometryError::new(format!("degenerate spherical ring: {e}")))?;
+    Ok(p)
+}
+
+/// Collect a clipped `s2rst` polygon's SHELL vertices back to `(lon, lat)`
+/// degrees. Holes are dropped and shell loops concatenated in S2's output order
+/// (interior on the left) — the overlap of two convex cells is a single shell
+/// ring, so this is one loop in the conservative-regridding case.
+fn shell_vertices(p: &Polygon) -> Vec<(f64, f64)> {
     let mut verts = Vec::new();
-    for ring in clip.rings() {
-        if !ring.is_hole {
-            verts.extend(ring.vertices);
+    for l in p.loops() {
+        if l.is_hole() {
+            continue;
+        }
+        for v in l.vertices() {
+            let ll = LatLng::from_point(*v);
+            verts.push((ll.lng.degrees(), ll.lat.degrees()));
         }
     }
-    Ok(verts)
+    verts
 }
 
-/// On `wasm32` the native S2 C++ backend can't be linked, so a spherical clip is
-/// delegated to the s2bindings Emscripten module via [`s2_wasm`] (the host must
-/// have installed `globalThis.__earthsci_s2`). The planar path stays pure-Rust.
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+/// Spherical / geodesic clip via `s2rst`'s port of S2BooleanOperation. Runs on
+/// every target — native and wasm alike (see the module header).
 fn intersect_spherical(
     a: &[(f64, f64)],
     b: &[(f64, f64)],
 ) -> Result<Vec<(f64, f64)>, GeometryError> {
-    s2_wasm::clip(a, b)
-}
-
-/// Without the `wasm` feature there is no JS-interop bridge (js-sys / wasm-bindgen
-/// are off), so a spherical clip on wasm is a runtime error — the planar path
-/// remains fully available.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
-fn intersect_spherical(
-    _a: &[(f64, f64)],
-    _b: &[(f64, f64)],
-) -> Result<Vec<(f64, f64)>, GeometryError> {
-    Err(GeometryError::new(
-        "spherical/geodesic intersect_polygon on wasm requires the `wasm` feature \
-         (which bridges to the s2bindings Emscripten module)",
-    ))
+    let mut pa = s2_polygon(a)?;
+    let mut pb = s2_polygon(b)?;
+    let clip = Polygon::intersection(&mut pa, &mut pb);
+    if clip.is_empty_polygon() {
+        return Ok(Vec::new());
+    }
+    Ok(shell_vertices(&clip))
 }
 
 /// Planar Sutherland–Hodgman intersection of a subject polygon against a convex
@@ -363,12 +302,10 @@ pub fn shoelace_area(ring: &[(f64, f64)]) -> f64 {
 }
 
 /// Spherical polygon area in **steradians** (unit sphere, range `[0, 4π]`) via
-/// `s2geometry`. The reference value for the spherical `polygon_area` FAQ /
-/// the §5.8.2 tolerance anchor. Multiply by `R²` for a physical area.
-#[cfg(not(target_arch = "wasm32"))]
+/// `s2rst`. The reference value for the spherical `polygon_area` FAQ / the
+/// §5.8.2 tolerance anchor. Multiply by `R²` for a physical area. Runs on every
+/// target — native and wasm alike (see the module header).
 pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
-    // (On wasm32 a stub below returns a runtime GeometryError instead, the
-    // same pattern as `polygon_area`, so the two public fns gate uniformly.)
     // Dedup consecutive / wrap duplicate vertices before the S2 constructor —
     // S2 rejects zero-length edges as degenerate (esm-spec §8.6.1). A ring with
     // fewer than 3 distinct vertices is a degenerate / empty clip: area 0.
@@ -376,45 +313,21 @@ pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
     if ring.len() < 3 {
         return Ok(0.0);
     }
-    let p = SphericalPolygon::from_lon_lat(&ring).map_err(|e| GeometryError::new(e.to_string()))?;
-    Ok(p.area())
-}
-
-/// On wasm (with the `wasm` feature) `spherical_area` delegates to the
-/// s2bindings Emscripten module via [`s2_wasm`]. It mirrors the native path's
-/// dedup + degenerate-ring handling so a `< 3`-distinct-vertex ring is `0.0`
-/// without ever crossing the JS boundary.
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
-    let ring = dedup_consecutive(ring);
-    if ring.len() < 3 {
-        return Ok(0.0);
-    }
-    s2_wasm::area(&ring)
-}
-
-/// Without the `wasm` feature there is no JS-interop bridge, so `spherical_area`
-/// on wasm is a runtime error — the stub keeps the public surface uniform.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
-pub fn spherical_area(_ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
-    Err(GeometryError::new(
-        "spherical_area on wasm requires the `wasm` feature (which bridges to the \
-         s2bindings Emscripten module)",
-    ))
+    Ok(s2_polygon(&ring)?.area())
 }
 
 /// Unsigned `polygon_area` of an overlap ring under `manifold` — the imperative
 /// **cross-check oracle** for the `polygon_area` `sum_product` FAQ (RFC §8.1).
 /// Planar ⇒ shoelace / Gauss–Green; spherical / geodesic ⇒ the great-circle-edge
-/// area in **steradians** (unit sphere) via `s2geometry`. A degenerate (< 3
+/// area in **steradians** (unit sphere) via `s2rst`. A degenerate (< 3
 /// vertex) ring — an empty clip — is `0.0`. The conservative-regridding assembly
 /// ([`crate::regrid`]) now computes the build-once factor `A_ij` through the FAQ
 /// ([`crate::area_faq::polygon_area_faq`]); this function is the same value that
 /// FAQ encodes, kept as the independent oracle (mirrors Python `geometry.polygon_area`).
 ///
-/// Target-agnostic: the spherical arm defers to [`spherical_area`], which is the
-/// native S2 kernel off wasm and the s2bindings Emscripten bridge on wasm (a
-/// runtime error only when the wasm `wasm` feature / s2 module is absent).
+/// Target-agnostic in the strong sense: the spherical arm defers to
+/// [`spherical_area`], which is the SAME pure-Rust `s2rst` kernel on every
+/// target — there is no wasm-only failure mode left to guard against.
 pub fn polygon_area(ring: &[(f64, f64)], manifold: Manifold) -> Result<f64, GeometryError> {
     match manifold {
         Manifold::Planar => Ok(shoelace_area(ring)),
@@ -634,7 +547,6 @@ mod tests {
         assert!((shoelace_area(&ring) - 1.0).abs() < TOL);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn spherical_clip_of_octant_sectors_matches_analytic() {
         // Two quarter-hemisphere sectors; overlap is the lon∈[45,90] northern
@@ -693,7 +605,6 @@ mod tests {
     /// The pin-3 unblock: an MPAS-style padded ring (trailing duplicate
     /// vertices) MUST now clip in S2. Before the dedup coercion, S2 rejected the
     /// zero-length edge with "Edge N is degenerate (duplicate vertex)".
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn spherical_clip_accepts_padded_rings() {
         // The s2bindings octant example, each operand padded with a repeated
@@ -724,7 +635,6 @@ mod tests {
         assert!((spherical_area(&ring).unwrap() - spherical_area(&ring_u).unwrap()).abs() < 1e-12);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn geodesic_manifold_uses_the_spherical_path() {
         let a = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
@@ -743,7 +653,6 @@ mod tests {
         let ring = [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)];
         assert!((polygon_area(&ring, Manifold::Planar).unwrap() - 1.0).abs() < TOL);
         // A spherical octant triangle is π/2 steradians on the unit sphere.
-        #[cfg(not(target_arch = "wasm32"))]
         {
             let octant = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
             let area = polygon_area(&octant, Manifold::Spherical).unwrap();

@@ -1316,9 +1316,18 @@ tolerance** against the reference binding:
   equal-to-zero** — "present-but-tiny" and "absent" **both pass**. This snapping /
   tie-break regime MUST NOT fail conformance, and it does not affect weights.
 - `rtol` is **empirically calibrated** and MUST accommodate the **loosest binding
-  pair**. Python and Rust share the **same S2 core** and agree to a much tighter
-  `rtol` than either agrees with Julia/GeometryOps; the spec tolerance is set by
-  the GeometryOps-vs-S2 pair, never the S2-vs-S2 pair.
+  pair**. Python and Rust run the **same S2 algorithms** and agree to a much
+  tighter `rtol` than either agrees with Julia/GeometryOps; the spec tolerance is
+  set by the GeometryOps-vs-S2 pair, never the S2-vs-S2 pair.
+  - They no longer share the same *binary*: Python's `spherely` wraps Google's
+    C++ s2geometry, while Rust uses `s2rst`, a pure-Rust port of it (chosen so the
+    kernel cross-compiles to wasm — the C++ build cannot). Two implementations of
+    the same algorithms are not automatically the same numbers, so this is pinned
+    by a test rather than assumed: `pkg/earthsci-ast-rs/tests/geometry_s2_differential.rs`
+    (opt-in `s2-cpp` feature) links BOTH kernels and diffs area and overlap area
+    across the regimes that actually separate clippers — pole, antimeridian,
+    near-tangent sliver, disjoint, edge-touching — at `rtol = 1e-12`, three orders
+    tighter than the spec tolerance. Run it when bumping the pinned `s2rst`.
 
 Per-pair area equality is **secondary**: it is precisely the unstable sliver
 regime, which is why the primary gate is the invariants (§5.8.3), not per-pair
