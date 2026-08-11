@@ -390,6 +390,7 @@ mod tests {
         let mut models = HashMap::new();
         models.insert(model_name.into(), model);
         EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,

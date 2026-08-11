@@ -845,6 +845,115 @@ Live S3-bucket I/O is verified only offline (fsspec-memory / `object_store` Loca
 no credentials in the test environment). The `s3` **cache** store remains a spec-pinned
 stub pending a coordinated cross-language activation.
 
+**Rust output DERIVATION** (`pkg/earthsci-ast-rs/src/data_output.rs`) — the piece that feeds
+the Rust writer, and the mirror of `data_output.jl`'s §7–§9 surface. Ported: the flat→gridded
+column-major cell-key inversion (`derive_output_gridding` / `scatter` / `gather`, the restart
+direction included), `derive_output_meta` (real `index_sets` axis names, per-axis lengths,
+retained CF variable attributes, the `coordinates` registry, the record-axis name),
+`plan_dimension_coordinates` (§8 inline-`values` dimension coordinates), and
+`group_gridding_by_grid` (§9). On top of those Rust adds `derive_output_plan`, which assembles
+an `OutputPlan` — per grid: ordered dims, CF coordinates, and per-variable dims/attrs/scatter —
+implementing RFC decision 8 (output is the state **plus a caller-named subset** of observed
+fields). The plan converts mechanically into EarthSciIO's `OutputSchema`, verified end to end
+by a `write_zarr_v3` → `Provider` round trip under the `wasm` profile (`--features esio`). The
+module is `wasm32-unknown-unknown`-clean (no filesystem, no threads, no wall clock). The Sink
+protocol, `build_output_callback`, the checkpoint predicates and `zarr_restart_state` are
+**not** ported — they are the solver-integration layer, not the derivation.
+
+The Rust `EsmFile` also gained the `coordinates` field itself: the registry is in
+`esm-schema.json` and in the Julia `EsmFile`, but the Rust binding never modeled it, so a
+`parse → emit` round trip silently **dropped** the whole registry (the same class of defect as
+the `IndexSet.member_factor` omission).
+
+#### The derivation had no cross-language gate — and four divergences to show for it
+
+The two derivations disagreed in four places, silently, and **nothing in the test estate could
+have caught any of them.** The gate one reaches for is EarthSciIO's
+`conformance/write_spec.json`, but that is an *already-derived* schema — its keys are `dims`,
+`time_dim`, `coords`, `vars`, `chunk_shape`, `shard_shape` — so the write corpus starts
+**downstream** of derivation and drives the three writers from a hand-authored shape. No level
+of coverage there reaches the derivation. Outside each language's own private tests,
+`derive_output_meta` / `derive_output_plan` / `OutputMeta` / `group_gridding_by_grid` had no
+callers in any shared harness at all.
+
+**The missing tier now exists**: `tests/conformance/output_derivation/` — `.esm` fixtures plus
+the flat slot names, each binding deriving a plan, both asserting one committed golden per case
+(`pkg/EarthSciAST.jl/test/output_derivation_conformance_test.jl`,
+`pkg/earthsci-ast-rs/tests/output_derivation_conformance.rs`, both driven by
+`run_output_derivation_conformance.sh`). It composes with the write corpus rather than
+duplicating it, because **a derivation corpus's output type is the write corpus's input type**:
+
+```
+.esm ──[derivation, tests/conformance/output_derivation]──▶ OutputSchema ──[writers, EarthSciIO]──▶ Zarr
+```
+
+Three fixtures, chosen for where the bugs actually live: a purely 0-D model (several scalars,
+one of them `observed`), a gridded model with CF coordinates on both axes, and a **mixed**
+model carrying scalars and two different gridded signatures in one document — the case a
+shape-signature grouping bug shows up in, since it must yield exactly three grids and would
+yield five under the old scalar handling. The corpus keeps the slot names as an *input* rather
+than running a build: the cell-key scheme is itself specified by §7 and is byte-identical
+across bindings, so making it an input keeps the tier on the derivation seam instead of
+dragging a compiler and a solver into a metadata test.
+
+**The four reconciliations. Every one resolved in Rust's favour; `data_output.jl` and its
+`ZarrSink` now match. Two of them change normative on-disk behaviour and are called out as
+such.**
+
+1. **A scalar is 0-spatial-dimensional — NORMATIVE CHANGE.** Julia gave a scalar the singleton
+   shape `[1]` and a synthetic `<base>_d0` axis, so every scalar became its own single-member
+   grid: a 0-D model with 66 scalar states emitted 66 length-1 dimensions named after their own
+   variables and 66 separate grids, and under this RFC's one-Sink-per-grid decomposition, 66
+   stores. A scalar now has `shape == []`, `dim_names == []`, and on-disk dims **exactly
+   `[time_dim]`**; all scalars share one grid. *Evidence the `[1]` was not load-bearing:* the
+   `ZarrSink` → `write_record!` → Zarr v3 path already writes rank-1 `[time_dim]` arrays — the
+   time coordinate is one — and a 0-D model driven end to end through the real sink now writes
+   three `[time]` arrays into one store and reads them back through `ZarrReader` unchanged.
+   Zarr v3 imposes no minimum rank, and `[time]` is what CF, xarray and every Zarr reader
+   expect of a time series.
+2. **The record axis leads — NORMATIVE CHANGE.** `ZarrSink` appended the record axis **last**
+   (`[…spatial, time]`); Rust puts it **first**. Record-first wins on four independent grounds:
+   CF §2.4 recommends the relative order T, Z, Y, X; a NetCDF unlimited dimension (reserved
+   behind the writer registry for a later phase) *must* be the first dimension; EarthSciIO's own
+   shared `write_spec.json` — the contract all three writers already pass — is
+   `["time","lat","lon"]`, so the Julia sink was inconsistent with the spec its own writer is
+   conformance-tested against; and appending to the outermost axis keeps one record contiguous.
+   A store written by Julia and one written by Rust for the same model were previously not
+   structurally identical, in a system whose contract is cross-language parity — and would have
+   failed the existing write corpus's `dimension_names` check the moment the two ever wrote the
+   same document.
+3. **The record axis is named by the document.** §7 says the time axis *is* the document's
+   `Domain.independent_variable`. Rust reads it; Julia hardcoded `"time"` as a `build_zarr_sink`
+   keyword default and never consulted the document, so a model whose independent variable is
+   `t` got an axis named `time` in Julia and `t` in Rust. `OutputMeta` now carries `time_dim`,
+   the sink defaults to it, and `zarr_restart_state` no longer looks for the literal `"time"`.
+4. **Density is validated, and namespaced names resolve.** Julia derived each axis length as the
+   max cell index and never checked coverage, so a gap left an uninitialized hole on disk and a
+   repeated cell silently dropped a flat slot; both are now `OutputError`s, matching Rust's
+   `SparseGrid` / `DuplicateCell` / `ZeroIndex`. And Julia looked a base name up in a table keyed
+   by *bare* variable name, so a flattened `Model.u` silently fell back to positional axis names;
+   `OutputMeta` now registers the bare **and** `Model.`-qualified keys (dropping a bare key two
+   models would make ambiguous) with a last-dotted-segment fallback.
+
+One difference remains and is **not** a behavioural divergence: per-variable `standard_name` is
+retained by the Julia and not by Rust, because neither `ModelVariable` nor the schema's
+`ModelVariable` has that property and `additionalProperties` is `false` — no schema-valid
+document can carry one.
+
+To keep the two derivations structurally comparable rather than merely equal today, Julia gained
+the plan layer Rust already had — `VarPlan` / `GridPlan` / `OutputPlan` / `derive_output_plan`,
+with `output_var_dims` as the single place the record-axis-first order is decided and
+`row_major_flat_indices` converting Julia's 1-based `cart` form to the corpus's shared
+0-based row-major representation. `ZarrSink` builds its `OutputSchema` through those, so the
+conformance corpus exercises production code rather than a parallel adapter.
+
+**Other bindings.** There is no Python, Go or TypeScript derivation to fix: the Python runner
+counterpart named above (`earthsciio/backends/zarr_write.py`) is a **writer**, which consumes an
+already-derived schema and is agnostic to how a variable got its dims. `parse_cell_key` /
+`derive_output_gridding` / `VarGridding` have no implementation anywhere outside
+`data_output.jl` and `data_output.rs`. Should a third derivation ever be written, the corpus is
+the contract it must meet, and `manifest.json`'s `bindings_required` is where it gets added.
+
 ### 16.13 Codec profiles (and the `wasm` profile)
 
 The writers pin **three** inner-codec profiles. Only the inner (per-chunk) compressor

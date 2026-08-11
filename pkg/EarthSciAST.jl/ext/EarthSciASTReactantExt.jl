@@ -75,7 +75,8 @@ using Reactant: Reactant, TracedRArray, TracedRNumber, @allowscalar
 
 import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
     _oop_scatter, _oop_read_forcing, _oop_prefix_copy,
-    _oop_knot_count, _oop_knot_pair, _oop_knot_pair2, _oop_bilinear_corners
+    _oop_knot_count, _oop_knot_pair, _oop_knot_pair2, _oop_bilinear_corners,
+    _scan_lanes_oop, _ScanFold
 
 # ---- State reads -------------------------------------------------------------
 #
@@ -148,6 +149,87 @@ end
 # arithmetic, so it cannot perturb the result the way a `res .+ zeros(n)` would.
 @inline function _oop_scatter(du::TracedRArray{T,1}, out::Vector{Int}, res) where {T}
     du[out] = res isa AbstractArray ? res : fill(res, length(out))
+    return du
+end
+
+# ---- Prefix (cumulative) scans, one whole LEVEL at a time --------------------
+#
+# `_scan_lanes_oop` (src/tree_walk/scan.jl) walks lane × level and touches ONE
+# element per step: a scalar read of `du`, a ⊕, a scalar write back. On host
+# that is the right program — the accumulator stays in a register and nothing
+# allocates. Under a trace it was the LAST O(grid) surface in this emitter, and
+# by a wide margin. Each element costs a `dynamic_slice` + a
+# `dynamic_update_slice` (each rewriting the WHOLE extended state tensor) + 4
+# index constants + 2 reshapes + a broadcast, so the emitted program grows by
+# `2·len` slice ops and `~4·len` constants PER LANE. Measured on ReSEACT at
+# NLEV=16 — one exclusive scan of `len = 17` half levels, one lane per column,
+# two traced RHS sites per SSPRK43 step — that is 34 `stablehlo.dynamic_slice`,
+# 34 `stablehlo.dynamic_update_slice` and 140 `stablehlo.constant` per GRID
+# COLUMN, i.e. 100% of what still scaled with the grid once the per-cell scalar
+# surface was lane-batched (ess-oop-batch).
+#
+# The recurrence is sequential along the LEVEL axis only; lanes never read each
+# other. So run it level-major: one whole-array gather of level `k` across every
+# lane, one broadcast ⊕ into the running lane vector, one whole-array scatter
+# back. `len` gathers + `len` scatters, INDEPENDENT of the number of lanes —
+# the same "one whole-array op per structural step, never one per cell"
+# discipline `_oop_scatter` above is written to.
+#
+# BIT-IDENTITY, which is the acceptance bar. Lane `l`'s accumulator visits
+# exactly the same terms in the same ascending order, seeded from the same 0̄,
+# and broadcasting is elementwise — so each lane's fold is the scalar loop's
+# fold operation for operation, for all four ⊕ and both window kinds. Every
+# term is read from the ORIGINAL `du`: in the scalar loop the read of level `k`
+# precedes the write of level `k`, and a fold's slots are pairwise distinct
+# state indices, so no read there ever observed a write either. Pinned over
+# `+`/`*`/`max`/`min` × inclusive/exclusive against the scalar form.
+#
+# The seed is materialised as a length-`nlanes` CONSTANT rather than left as a
+# host `Float64`: `combine(z::Float64, ::TracedRNumber)` resolves to a method
+# that returns the host operand for `max`/`min` (a `max(-Inf, x) === -Inf` the
+# scalar path silently emitted), which broadcasting against a real traced array
+# does not do.
+function _scan_lanes_oop(du::TracedRArray{T,1}, S::_ScanFold, combine::F) where {T,F}
+    slots = S.slots
+    len = S.len
+    len >= 1 || return du
+    nlanes = div(length(slots), len)
+    nlanes >= 1 || return du
+    # Level `k`'s slot across every lane — the scalar loop's `slots[(l-1)*len+k]`
+    # read column-wise instead of row-wise. Host `Int`s, trace time only.
+    lev = Vector{Vector{Int}}(undef, len)
+    @inbounds for k in 1:len
+        v = Vector{Int}(undef, nlanes)
+        for l in 1:nlanes
+            v[l] = slots[(l - 1) * len + k]
+        end
+        lev[k] = v
+    end
+    term = Vector{Any}(undef, len)
+    @inbounds for k in 1:len
+        term[k] = _oop_gather(du, lev[k])
+    end
+    zbar = Reactant.Ops.constant(fill(convert(T, S.zerobar), nlanes))
+    out = Vector{Any}(undef, len)
+    acc = combine.(zbar, term[1])
+    if S.inclusive
+        out[1] = acc
+        @inbounds for k in 2:len
+            acc = combine.(acc, term[k])
+            out[k] = acc
+        end
+    else
+        # Strict window: cell 1 is the empty reduction and takes 0̄ verbatim;
+        # cell k emits the accumulation BEFORE its own term.
+        out[1] = zbar
+        @inbounds for k in 2:len
+            out[k] = acc
+            acc = combine.(acc, term[k])
+        end
+    end
+    @inbounds for k in 1:len
+        du = _oop_scatter(du, lev[k], out[k])
+    end
     return du
 end
 

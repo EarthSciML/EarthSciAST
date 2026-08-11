@@ -1,0 +1,66 @@
+{
+  "schema": "earthsciast/output-derivation-plan/v1",
+  "case": "mixed",
+  "description": "THREE grids, in first-seen spatial-dim-signature order over the base-name-sorted variables (Mix.col, Mix.conc, Mix.energy, Mix.mass): the [lev] column grid, the [lon, lat] field grid, and the 0-D grid holding BOTH scalars. Five grids here would mean scalars were fragmented by a synthetic singleton axis. The record axis is `t` (`domain.independent_variable`), not `time`. Only `lev` has a `coordinates` entry, so the [lon, lat] grid plans no dimension coordinates at all.",
+  "grids": [
+    {
+      "dims": [["lev", 3]],
+      "time_dim": "t",
+      "coords": [
+        {
+          "name": "lev",
+          "values": [1000.0, 850.0, 500.0],
+          "attrs": { "standard_name": "air_pressure", "units": "Pa", "axis": "Z" }
+        }
+      ],
+      "vars": [
+        {
+          "name": "Mix.col",
+          "dims": ["t", "lev"],
+          "dtype": "float64",
+          "attrs": { "units": "kg/m2", "description": "Column profile on the vertical axis." },
+          "shape": [3],
+          "flat_indices": [6, 7, 8]
+        }
+      ]
+    },
+    {
+      "dims": [["lon", 2], ["lat", 2]],
+      "time_dim": "t",
+      "coords": [],
+      "vars": [
+        {
+          "name": "Mix.conc",
+          "dims": ["t", "lon", "lat"],
+          "dtype": "float64",
+          "attrs": { "units": "kg/m3", "description": "Gridded concentration." },
+          "shape": [2, 2],
+          "flat_indices": [2, 4, 3, 5]
+        }
+      ]
+    },
+    {
+      "dims": [],
+      "time_dim": "t",
+      "coords": [],
+      "vars": [
+        {
+          "name": "Mix.energy",
+          "dims": ["t"],
+          "dtype": "float64",
+          "attrs": { "units": "J" },
+          "shape": [],
+          "flat_indices": [1]
+        },
+        {
+          "name": "Mix.mass",
+          "dims": ["t"],
+          "dtype": "float64",
+          "attrs": { "units": "kg", "description": "Total mass — a bare scalar." },
+          "shape": [],
+          "flat_indices": [0]
+        }
+      ]
+    }
+  ]
+}

@@ -27,7 +27,7 @@ module EarthSciASTEarthSciIOExt
 
 using EarthSciAST: RefreshError, OutputError, StateSnapshot, VarGridding,
     derive_output_gridding, scatter_grid!, gather_flat!, OutputMeta, DimCoord,
-    plan_dimension_coordinates
+    plan_dimension_coordinates, output_var_dims, DEFAULT_TIME_DIM
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
 import EarthSciAST: providers_from_document
@@ -220,14 +220,23 @@ dimension coordinates (RFC §8); with a bare `var_map` and no `meta`, axes keep
 positional names and no coordinates are written. Keyword `output_times` are the
 solver-second anchors; `profile` (`:diagnostic`/`:checkpoint`) selects codec
 params; `records_per_shard` sets how many time records pack into one shard object;
-`time_dim` names the growable axis.
+`time_dim` overrides the growable axis name, which otherwise comes from the
+document's `domain.independent_variable` via `meta` (RFC §7), falling back to
+`"time"`.
+
+Every variable's on-disk dims are the record axis FIRST, then its spatial axes
+(`output_var_dims`), so a scalar variable's dims are exactly `[time_dim]`.
 """
 function build_zarr_sink(var_map::AbstractDict, base_url::AbstractString;
                          output_times, profile::Symbol = :diagnostic,
                          records_per_shard::Integer = 8,
-                         time_dim::AbstractString = "time",
+                         time_dim::Union{Nothing,AbstractString} = nothing,
                          meta::Union{Nothing,OutputMeta} = nothing,
                          variables::Union{Nothing,AbstractVector} = nothing)
+    # The record-axis name is the document's `domain.independent_variable`
+    # (RFC §7), carried on the OutputMeta; an explicit kwarg still wins.
+    tdim = time_dim !== nothing ? String(time_dim) :
+           meta !== nothing ? meta.time_dim : DEFAULT_TIME_DIM
     g = meta === nothing ? derive_output_gridding(var_map) :
         derive_output_gridding(var_map, meta)
     # Optional per-grid restriction (RFC §9): keep only the named base variables, so
@@ -243,7 +252,7 @@ function build_zarr_sink(var_map::AbstractDict, base_url::AbstractString;
     coords = meta === nothing ? DimCoord[] : plan_dimension_coordinates(g, meta)
     vattrs = meta === nothing ? Dict{String,Dict{String,Any}}() : meta.var_attrs
     return ZarrSink(String(base_url), g, coords, vattrs, collect(Float64, output_times),
-                    profile, Int(records_per_shard), String(time_dim), nothing, nothing, nothing)
+                    profile, Int(records_per_shard), tdim, nothing, nothing, nothing)
 end
 
 build_zarr_sink(prep, base_url::AbstractString; kwargs...) =
@@ -253,9 +262,10 @@ sink_output_times(s::ZarrSink) = s.output_times
 sink_observed_names(::ZarrSink) = String[]      # Wave 2/3: state only
 
 function sink_open!(s::ZarrSink)
-    # Collect distinct spatial dims (name => length) in first-seen order, then the
-    # growable time axis (length 0 placeholder — it grows one shard per flush).
-    dims = Pair{String,Int}[]
+    # The growable time axis FIRST (length 0 placeholder — it grows one shard per
+    # flush), then the distinct spatial dims in first-seen order. Record-axis-first
+    # is the one ordering decision, and it is made once in `output_var_dims`.
+    dims = Pair{String,Int}[s.time_dim => 0]
     seen = Set{String}()
     for g in s.gridding, d in eachindex(g.dimnames)
         nm = g.dimnames[d]
@@ -263,12 +273,11 @@ function sink_open!(s::ZarrSink)
             push!(dims, nm => g.shape[d]); push!(seen, nm)
         end
     end
-    push!(dims, s.time_dim => 0)
 
     # Per-variable CF attrs (units, standard_name, description) from the doc.
     vars = Pair{String,EarthSciIO.OutputVar}[]
     for g in s.gridding
-        odims = String[g.dimnames...]; push!(odims, s.time_dim)   # time last
+        odims = output_var_dims(g, s.time_dim)                    # time FIRST
         attrs = Dict{String,Any}(get(s.var_attrs, g.base, Dict{String,Any}()))
         push!(vars, g.base => EarthSciIO.OutputVar(odims, Float64; attrs = attrs))
     end
@@ -313,7 +322,9 @@ function sink_write!(s::ZarrSink, snap::StateSnapshot; selection = nothing)
     u = snap.state[1][1]::AbstractArray            # v1: the whole flat state, offset 0
     arrays = Dict{String,Any}()
     for g in s.gridding
-        grid = Array{Float64}(undef, Tuple(g.shape)...)
+        # A scalar's shape is `[]`, so this is a 0-d `Array{Float64,0}` — the
+        # gridded array of a variable whose only on-disk axis is the record axis.
+        grid = Array{Float64}(undef, Tuple(g.shape))
         scatter_grid!(grid, g, u)
         arrays[g.base] = grid
     end
@@ -366,18 +377,23 @@ function zarr_restart_state(prep, base_url::AbstractString; cache_dir = nothing)
                                 variables = varnames)
 
     u0 = zeros(Float64, length(prep.var_map))
+    tname = meta.time_dim
     for g in gridding
         v = nds.variables[g.base]
-        tdim = findfirst(==("time"), v.dims)
+        tdim = findfirst(==(tname), v.dims)
         tdim === nothing && throw(OutputError(
-            "restart: variable '$(g.base)' has no 'time' axis (dims $(v.dims))"))
+            "restart: variable '$(g.base)' has no '$tname' axis (dims $(v.dims))"))
         # last COMMITTED time index (1-based); the array may be longer only if a
         # crash left an uncommitted shape bump, so clamp to the manifest count.
         ti = min(nrec, size(v.data, tdim))
-        slab = v.data[ntuple(d -> d == tdim ? ti : Colon(), ndims(v.data))...]
+        # Slice with a length-1 RANGE and drop the axis, so a scalar variable
+        # (dims == [time_dim], rank 1) yields a 0-d array rather than a bare
+        # Float64 that `gather_flat!` could not accept.
+        slab = dropdims(v.data[ntuple(d -> d == tdim ? (ti:ti) : Colon(),
+                                      ndims(v.data))...]; dims = tdim)
         # reorder the sliced spatial slab into the gridding's dim order if the reader
         # returned the axes in a different order (robust to dim reordering).
-        spatial = String[d for d in v.dims if d != "time"]
+        spatial = String[d for d in v.dims if d != tname]
         if spatial != g.dimnames
             perm = Int[findfirst(==(dn), spatial) for dn in g.dimnames]
             any(isnothing, perm) && throw(OutputError(

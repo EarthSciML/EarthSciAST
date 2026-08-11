@@ -564,6 +564,7 @@ mod tests {
 
     fn create_empty_esm_file() -> EsmFile {
         EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
