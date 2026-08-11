@@ -36,22 +36,24 @@
 # exactly as the interpreter does, so the SAME generated code integrates at
 # Float64 and differentiates under ForwardDiff `Dual` (state or parameters).
 #
-# FALLBACK CONTRACT (identical to the affine/lane-tape tiers): anything the
-# emitter cannot model — an unknown node kind or descriptor, a foreign CSE
-# scratch (except the build's own shared scalar-prelude cache, which since
-# ess-cgfsc is emitted as the interpreter's `_cse_read`; see the tier note
-# below), a >3-D box, an oversized spine — declines THAT kernel silently
-# (`_CodegenDecline`); the kernel keeps its existing runner (lane tape at
-# Float64, scalar walk otherwise). Declines are counted per reason in
-# `_CASCADE_TALLY` (`:codegen_kernel` / `:codegen_decline_<reason>`), the
-# `_tally_cascade!` pattern.
+# FALLBACK CONTRACT: anything the emitter cannot model — an unknown node kind
+# or descriptor, a foreign CSE scratch (except the build's own shared
+# scalar-prelude cache, which since ess-cgfsc is emitted as the interpreter's
+# `_cse_read`; see the tier note below), a >3-D box, an oversized spine —
+# declines THAT kernel silently (`_CodegenDecline`); the kernel keeps the
+# per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
+# counted per reason in `_CASCADE_TALLY` (`:codegen_kernel` /
+# `:codegen_decline_<reason>`), the `_tally_cascade!` pattern.
 #
 # GENERATED CODE NEVER TOUCHES INTERPRETER STATE: CSE/invariant slots become
 # SSA-style locals, never writes into the kernel's `_AccScratch` buffers — so
 # an emitted kernel and an interpreted one coexist within one RHS call.
 #
-# Kill switch: ESS_CODEGEN_DISABLE=1 restores the pre-codegen tiers exactly
-# (the differential-oracle escape hatch, mirroring ESS_STENCIL_DISABLE).
+# Kill switch: ESS_CODEGEN_DISABLE=1 disables BOTH generated functions
+# (primary and overflow), so every kernel runs the per-cell interpreter — the
+# differential-oracle escape hatch, mirroring ESS_STENCIL_DISABLE. (Since the
+# lane-tape retirement this means interpreter-EVERYTHING: slower than it was
+# when the tape still served Float64 residuals, but still bit-identical.)
 # Debug: ESS_CODEGEN_DEBUG=1 prints per-build emission/decline/latency lines.
 # Budget: ESS_CODEGEN_NODE_BUDGET overrides the emitted-node cap (default
 # 400_000 across all kernels of one build) that bounds Julia compile latency.
@@ -64,19 +66,19 @@ _codegen_node_budget() =
 
 # ---- Dual overflow tier (ess-dualfp) ----------------------------------------
 # Kernels the primary emission declines — in practice on the node BUDGET, which
-# exists to bound Float64 build latency — keep the Float64 lane tape, but under
-# any OTHER value type (ForwardDiff `Dual` in a stiff-solver Jacobian) they used
-# to drop all the way to the per-cell interpreter `_run_acc_kernel!`. The dual
-# overflow tier re-emits those residual kernels into a SECOND generated function
-# with its own (default unbounded) budget. Under non-Float64 `T` it is called
-# unconditionally, so its native-compile cost is paid at the first Dual call.
+# exists to bound Float64 build latency — used to drop to the per-cell
+# interpreter `_run_acc_kernel!` under non-Float64 `T` (ForwardDiff `Dual` in a
+# stiff-solver Jacobian). The dual overflow tier re-emits those residual
+# kernels into a SECOND generated function with its own (default unbounded)
+# budget. Under non-Float64 `T` it is called unconditionally, so its
+# native-compile cost is paid at the first Dual call.
 # (Since ess-f64ofl, below, the same function also serves Float64 calls when
 # the Float64 overflow routing is armed; ESS_F64_OVERFLOW_CODEGEN=0 restores
-# the tape-at-Float64 routing byte-for-byte.)
+# the interpreter-at-Float64 routing for the residual kernels.)
 # Kill switch: ESS_DUAL_CODEGEN_DISABLE=1 restores the pre-dual routing exactly
 # (the differential-oracle escape hatch, mirroring ESS_CODEGEN_DISABLE); the
 # tier is also off whenever ESS_CODEGEN_DISABLE=1 disables codegen wholesale,
-# so the existing oracle stays a pure interpreter/tape build.
+# so the existing oracle stays a pure interpreter build.
 # Budget: ESS_DUAL_CODEGEN_NODE_BUDGET overrides the overflow emission budget
 # (default unbounded — per-function size is still capped by
 # ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory).
@@ -88,30 +90,25 @@ _dual_codegen_node_budget() =
 
 # ---- Float64 overflow routing (ess-f64ofl) ----------------------------------
 # The SAME overflow generated function, called at Float64 too — so a
-# budget-declined kernel stops running the Float64 lane tape and runs compiled
-# code, like every other kernel. The overflow RGF is eltype-generic and its
-# emission is already paid at build (a few ms); what this routing adds is the
-# residual kernels' NATIVE compile at the first Float64 call — measured at
-# ~0.13-0.15 s per 1000 emitted nodes (roughly linear, the per-function
-# ESS_CODEGEN_FN_NODE_CAP chunking is what keeps it linear), the same latency a
-# Dual caller already pays at its first call. Steady-state, the compiled
-# routing measured ~1.7-1.8x faster per RHS call than the serial tape on a
-# tape-class fixture (234 -> 137 us at 3528 cells; 4.5 -> 2.5 ms at 69768
-# cells), 0 B/call either way.
+# budget-declined kernel runs compiled code, like every other kernel. The
+# overflow RGF is eltype-generic and its emission is already paid at build (a
+# few ms); what this routing adds is the residual kernels' NATIVE compile at
+# the first Float64 call — measured at ~0.13-0.15 s per 1000 emitted nodes
+# (roughly linear, the per-function ESS_CODEGEN_FN_NODE_CAP chunking is what
+# keeps it linear), the same latency a Dual caller already pays at its first
+# call. With Polyester threading active, the overflow RGF runs CHUNKED on its
+# own threaded cell axis (see "Threaded cell axis for the codegen tier" below)
+# — measured on reseact.esm at 8 threads with the whole mechanism forced onto
+# the overflow tier via budget 0: chemistry 2.44 ms/call chunked RGF vs 3.55 ms
+# for the (since-retired) threaded Float64 lane tape.
 #
-# THE TAPE IS NOT RETIRED. It remains built, reachable, and load-bearing:
-#   * kill switch ESS_F64_OVERFLOW_CODEGEN=0 restores the tape routing exactly
-#     (tape at Float64 for every residual kernel) — the differential oracle;
-#   * with Polyester threading active, the overflow RGF now runs CHUNKED on
-#     its own threaded cell axis (see "Threaded cell axis for the codegen
-#     tier" below) — compiled+threaded, which measured faster than the
-#     threaded tape it used to defer to. The tape remains the call-time
-#     fallback whenever the section may NOT chunk for safety
-#     (`:cg_serial_shared_outs`): its per-kernel threading is still safe
-#     there, and the guard is per call, so `using Polyester` after the build
-#     still engages it.
-#   * kernels even the overflow emission declines (`dual_resid`) keep the
-#     tape/interpreter at Float64, exactly as before.
+# Kill switch ESS_F64_OVERFLOW_CODEGEN=0 routes every residual Float64 kernel
+# to the per-cell interpreter instead — the differential oracle for this
+# routing. (Historical note: before the lane-tape retirement this switch
+# restored the tape-at-Float64 routing; the tape is gone, so the oracle is now
+# the interpreter — slower, still bit-identical by the emitter's contract.)
+# Kernels even the overflow emission declines (`dual_resid`) keep the
+# interpreter at Float64, exactly as before.
 # The routing is inert unless the PRIMARY emission declined something and the
 # overflow function exists (`ESS_DUAL_CODEGEN_DISABLE=1` therefore also
 # disables it, keeping that switch a full pre-overflow oracle). On every model
@@ -124,7 +121,7 @@ _f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
 # defs into bare `_NK_CACHED` reads of the build's SCALAR prelude cache — a
 # `_CSECache` payload that is no kernel's scratch. The emitter used to decline
-# every such kernel (`:foreign_scratch`), dropping it to the tape/interpreter.
+# every such kernel (`:foreign_scratch`), dropping it to the interpreter.
 # This tier emits the read instead, as the very call the interpreter makes
 # (`_cse_read(cache, idx, T)` — eltype-generic, so the Float64 AND the Dual
 # specialization of the generated code read the same buffer the interpreter
@@ -149,7 +146,7 @@ _f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "
 _cg_foreign_scratch_disabled() =
     get(ENV, "ESS_CG_FOREIGN_SCRATCH_DISABLE", "") == "1"
 
-# Per-kernel decline: the kernel keeps the interpreter/lane-tape runner.
+# Per-kernel decline: the kernel keeps the per-cell interpreter runner.
 # Never an error — the tier is a pure optimization.
 struct _CodegenDecline <: Exception
     reason::Symbol
@@ -588,8 +585,8 @@ end
 # ---- One kernel → its loop nest (mirrors `_run_acc_kernel!`) ----------------
 # CHUNK-PARAMETERIZED (threaded cell axis, see "Threaded cell axis for the
 # codegen tier" below): every loop nest iterates the cell ordinals `[a, b)` of
-# ITS OWN cell set for chunk `_cgci` of `_cgnc`, where `(a, b)` is the tape's
-# exact static partition (`_chunk_ordinals`, access_kernel.jl — shared, not
+# ITS OWN cell set for chunk `_cgci` of `_cgnc`, where `(a, b)` is the shared
+# static partition (`_chunk_ordinals`, access_kernel.jl — one arithmetic, not
 # re-derived). The serial call is the `(1, 1)` instance: `a == 0, b == ncells`
 # reproduces today's full loops with the inner-loop body instruction-identical
 # (outs/contig/rank-1 boxes differ only in loop-bound arithmetic; rank-2/3
@@ -616,7 +613,7 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
 
     cs = K.cells
     # This kernel's chunk of the cell-ordinal axis (0-based, half-open).
-    ncells = _plan_ncells(cs)
+    ncells = _cellset_ncells(cs)
     tv = _cg_name(ctx, "ab")
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
@@ -653,8 +650,8 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # of `(i, j, k)` is `(i-i0) + ni·((j-j0) + nj·(k-k0))` — exactly the serial
     # enumeration position — and a chunk `[a, b)` is walked as whole i-ROWS
     # with the FIRST and LAST row's i-range clamped to the chunk boundary
-    # (`_plan_walk!` decodes the same ordinals per cell; here the decode is
-    # hoisted to the row level so the inner loop stays today's instructions).
+    # (the decode is hoisted to the row level so the inner loop stays today's
+    # instructions).
     nd = length(cs.strides)
     nd <= 3 || throw(_CodegenDecline(:box_rank))
     st = cs.strides
@@ -748,11 +745,11 @@ struct _CGBuilt{F,TB}
 end
 
 # Every output slot of `cs` pushed into `seen`; false on the first duplicate.
-# The cross-KERNEL generalization of `_plan_output_disjoint` (access_kernel.jl):
-# that check may short-circuit a contiguous set as disjoint-by-construction
-# because it only ever compares a set against itself, while here a contiguous
-# range must also collide with the OTHER kernels' slots, so every kind
-# enumerates. Same slot arithmetic as the runners, exact Int.
+# Cross-KERNEL by design: a per-kernel check could short-circuit a contiguous
+# set as disjoint-by-construction (it only compares a set against itself),
+# while here a contiguous range must also collide with the OTHER kernels'
+# slots, so every kind enumerates. Same slot arithmetic as the runners,
+# exact Int.
 function _cellset_outs_disjoint!(seen::Set{Int}, cs::_CellSet)
     if _is_outs(cs)
         for o in cs.outs
@@ -807,7 +804,7 @@ function _cg_covered_outs_disjoint(acc_kernels::AbstractVector{_AccKernel},
     ncells = 0
     for (j, K) in enumerate(acc_kernels)
         covered[j] || continue
-        ncells += _plan_ncells(K.cells)
+        ncells += _cellset_ncells(K.cells)
     end
     seen = Set{Int}()
     sizehint!(seen, ncells)
@@ -980,51 +977,44 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
 end
 
 # ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
-# The lane tape's threaded cell axis (access_kernel.jl, "Threaded cell axis" —
-# read that first, the safety argument lives there) made the tape the ONLY
-# threaded tier: compiled kernels always ran serial, and the f64 overflow
-# routing had to DEFER to the tape whenever Polyester threading was active.
-# This section threads the generated functions themselves.
+# The shared threading infrastructure (batch-runner hook, verdict tally,
+# static partition) lives in access_kernel.jl ("Threading infrastructure" —
+# the safety argument lives there). This section threads the generated
+# functions themselves; since the Float64 lane tape was retired it is the only
+# threaded tier.
 #
 # GRANULARITY: the WHOLE SECTION is chunked, not each kernel. One batch
 # dispatch runs chunk `c` of every emitted kernel back to back —
-# `f(du, u, p, t, tabs, c, nchunks)` — instead of the tape's one dispatch per
-# kernel with an implicit inter-kernel barrier. The tape needs that barrier
-# because it cannot see across kernels (plans are built one kernel at a time);
-# the section builder CAN, so it proves the stronger property up front:
+# `f(du, u, p, t, tabs, c, nchunks)` — with no inter-kernel barrier. That is
+# safe because the section builder proves the strong property up front:
 # `_cg_covered_outs_disjoint` verifies at build time that every covered
 # out-slot is globally unique ACROSS all emitted kernels. When that holds, no
 # two cells anywhere in the section touch the same `du` slot, kernels share no
 # other mutable state (locals only; `u`/`p`/`t`/tabs are read-only here), and
-# the inter-kernel barrier is unnecessary — one dispatch per RHS call, the
-# per-kernel wake-up latency the tape's design comment measures as the
-# threading killer paid ONCE instead of #kernels times. When it does NOT hold
-# (`:cg_serial_shared_outs`), the section never chunks: the primary function
-# stays serial, and the overflow routing falls back to the tape loop — whose
-# per-kernel threading (Option 2 semantics: chunked kernels with barriers
-# between them) still applies wherever `_plan_output_disjoint` holds
-# per-kernel.
+# the inter-kernel barrier is unnecessary — one dispatch per RHS call, so the
+# per-dispatch wake-up latency is paid ONCE instead of #kernels times. When it
+# does NOT hold (`:cg_serial_shared_outs`), the section never chunks and every
+# generated function runs its serial `(1, 1)` instance.
 #
-# BIT-IDENTITY: same argument as the tape's, per kernel — chunk boundaries are
-# not observable (a cell computes the same instruction sequence on the same
-# inputs whichever chunk it lands in; every ⊕-fold is WITHIN a cell — REDUCE/
-# CONTRACTION loops are per-cell in the emitted body), the partition is the
-# tape's own static `_chunk_ordinals`, and disjoint writes commute. Threaded
-# `du` is bitwise `===` serial `du`.
+# BIT-IDENTITY, per kernel: chunk boundaries are not observable (a cell
+# computes the same instruction sequence on the same inputs whichever chunk it
+# lands in; every ⊕-fold is WITHIN a cell — REDUCE/CONTRACTION loops are
+# per-cell in the emitted body), the partition is the static
+# `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
+# `===` serial `du`.
 #
-# OPT-IN semantics are the tape's, unchanged: no Polyester ⇒ serial,
-# ESS_THREADS_DISABLE=1 ⇒ serial, section total below the per-chunk min-cells
-# threshold (ESS_THREADS_MIN_CELLS) ⇒ serial. ESS_CG_THREADS_DISABLE=1
-# additionally forces THIS tier serial while leaving the tape's threading
-# untouched — the codegen-threading differential oracle. Verdicts land in
-# `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
+# OPT-IN semantics: no Polyester ⇒ serial, ESS_THREADS_DISABLE=1 ⇒ serial,
+# section total below the per-chunk min-cells threshold
+# (ESS_THREADS_MIN_CELLS) ⇒ serial. ESS_CG_THREADS_DISABLE=1 additionally
+# forces this tier serial — the codegen-threading differential oracle.
+# Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented with the existing keys.
 _cg_threads_disabled() = get(ENV, "ESS_CG_THREADS_DISABLE", "") == "1"
 
-# One-time threading verdict for one generated function's cell axes, the
-# `_PlanTCache` pattern: `state` is 0 unexamined, 1 chunked, -1 serial (too
-# few cells), -2 serial (globally shared out-slots — permanent, decided at
-# build). `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
+# One-time threading verdict for one generated function's cell axes:
+# `state` is 0 unexamined, 1 chunked, -1 serial (too few cells), -2 serial
+# (globally shared out-slots — permanent, decided at build).
+# `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
 # at the first threaded call, so the partition is identical call to call.
 mutable struct _SecTCache
     state::Int
@@ -1036,10 +1026,9 @@ _SecTCache(ncells::Int, disjoint::Bool) = _SecTCache(0, ncells, disjoint, 1)
 _sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint)
 _sec_tcache(::Nothing) = _SecTCache(0, false)
 
-# Decide once whether this generated function may run chunked. Mirrors
-# `_plan_prep_threads!` check for check (size first, then disjointness), with
-# the section's cell total standing in for the plan's: the threshold guards
-# per-DISPATCH work, and the section is one dispatch.
+# Decide once whether this generated function may run chunked: size first
+# (the min-cells threshold guards per-DISPATCH work, and the section is one
+# dispatch), then the build-time disjointness verdict.
 function _sec_prep_threads!(tc::_SecTCache)
     tc.state == 0 || return tc
     minc = _thread_min_cells()
@@ -1060,9 +1049,9 @@ function _sec_prep_threads!(tc::_SecTCache)
     return tc
 end
 
-# Run one generated function's cells as `nchunks` STATIC chunks — the same
-# `_BATCH_RUNNER` hook (EarthSciASTPolyesterExt) and the same partition the
-# tape uses; each chunk re-runs the (pure) tab-hoist + invariant prologue on
+# Run one generated function's cells as `nchunks` STATIC chunks — the
+# `_BATCH_RUNNER` hook (EarthSciASTPolyesterExt) over the `_chunk_ordinals`
+# partition; each chunk re-runs the (pure) tab-hoist + invariant prologue on
 # its own stack and walks its `[a, b)` slice of every kernel. Only reached
 # when `_threads_available()` was true, so the runner is non-null.
 function _run_cg_section_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
@@ -1075,14 +1064,14 @@ function _run_cg_section_threaded!(f, tabs, du, u, p, t, tc::_SecTCache)
     return nothing
 end
 
-# Per-call gate for the chunked path (the tape's `_threads_available()` plus
+# Per-call gate for the chunked path (the shared `_threads_available()` plus
 # the codegen-specific kill switch; both re-read per call, so toggling either
 # env var between calls flips the route without touching the cached verdict).
 @inline _cg_threads_available() = _threads_available() && !_cg_threads_disabled()
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
-# plus the residual kernels/plans that keep their pre-codegen runners. The
+# plus the residual kernels that keep the per-cell interpreter. The
 # `F === Nothing` branch folds away per closure specialization, so with the
 # tier disabled (or nothing emitted) `f!` is instruction-for-instruction the
 # pre-codegen RHS. Emitted kernels write disjoint du slots from residual ones
@@ -1092,22 +1081,21 @@ struct _KernelSection{F,TB,G,GTB}
     cgf::F
     cgtabs::TB
     n_emitted::Int                # kernels compiled into the generated function
-    kernels::Vector{_AccKernel}   # residual kernels (pre-codegen runners)
-    plans::Vector{Union{Nothing,_AccPlan}}
+    kernels::Vector{_AccKernel}   # residual kernels (interpreter runner)
     # Dual overflow tier (ess-dualfp): a second generated function covering the
     # residual kernels the PRIMARY emission declined (in practice on the node
-    # budget), called ONLY under non-Float64 `T` — so Duals run compiled code
-    # instead of the per-cell interpreter, and the Float64 path (tape /
-    # interpreter over `kernels`/`plans` above) is untouched. `dual_resid`
+    # budget). Under non-Float64 `T` it is called unconditionally, so Duals run
+    # compiled code instead of the per-cell interpreter; at Float64 it serves
+    # the residual kernels whenever `f64cg` below is armed. `dual_resid`
     # indexes `kernels`: the kernels even the overflow emission declined, which
-    # keep the eltype-generic interpreter under non-Float64 `T`.
+    # keep the eltype-generic interpreter under every `T`.
     dualf::G
     dualtabs::GTB
     n_dual_emitted::Int
     dual_resid::Vector{Int}
     # Float64 overflow routing (ess-f64ofl): when true, the overflow function
-    # above also serves Float64 calls (in place of the lane tape). Baked at
-    # build time from ESS_F64_OVERFLOW_CODEGEN (default on).
+    # above also serves Float64 calls (in place of the per-cell interpreter).
+    # Baked at build time from ESS_F64_OVERFLOW_CODEGEN (default on).
     f64cg::Bool
     # Threaded cell axis: one lazily-decided chunk verdict per generated
     # function (primary / overflow), see `_SecTCache` above.
@@ -1118,8 +1106,8 @@ end
 @inline function (s::_KernelSection{F,TB,G})(du, u, p, t, ::Type{T}) where {F,TB,G,T}
     if F !== Nothing
         # PRIMARY generated function, chunked at Float64 when the section
-        # verdict allows (threaded cell axis above; Float64-only exactly like
-        # the tape's — Dual calls stay serial). Any serial verdict (small,
+        # verdict allows (threaded cell axis above; Float64-only — Dual calls
+        # stay serial). Any serial verdict (small,
         # shared outs, no Polyester, either kill switch) runs the (1, 1)
         # instance — the serial entry.
         if T === Float64 && _cg_threads_available() &&
@@ -1130,7 +1118,6 @@ end
         end
     end
     kernels = s.kernels
-    plans = s.plans
     if G !== Nothing && T !== Float64
         # Dual fast path: the overflow function covers every kernel not in
         # `dual_resid`. Emitted kernels write disjoint du slots from residual
@@ -1145,48 +1132,32 @@ end
     if G !== Nothing && T === Float64 && s.f64cg
         # Float64 overflow routing (ess-f64ofl): budget-declined kernels run
         # the SAME compiled overflow function as the Dual path, bit-identical
-        # to the tape/interpreter by the emitter's contract — and, since the
-        # threaded cell axis, CHUNKED whenever the section verdict allows, so
-        # threaded users get compiled+threaded rather than deferring to the
-        # tape (measured on reseact.esm at 8 threads, whole mechanism forced
-        # onto the overflow tier via budget 0: chemistry 2.44 ms/call chunked
-        # RGF vs 3.55 ms threaded tape, 1.46x; transport 11.1 ms vs 1.26 s —
-        # its kernels are not tape-eligible, so the old deferral left them on
-        # the per-cell interpreter). The tape loop
-        # remains the fallback on the `:cg_serial_shared_outs` verdict, where
-        # its per-kernel chunking (barriers between kernels) is still safe.
-        # Kernels the overflow emission itself declined keep their pre-codegen
-        # runners, in the same order as the plain loop below.
-        route = 1                     # 1 ⇒ serial (1,1) call, 2 ⇒ chunked, 3 ⇒ tape
-        if _cg_threads_available()
-            st = _sec_prep_threads!(s.dual_tcache).state
-            route = st == 1 ? 2 : st == -2 ? 3 : 1
+        # to the interpreter by the emitter's contract — CHUNKED whenever the
+        # section verdict allows, serial `(1, 1)` otherwise. In particular, a
+        # shared-outs section (`:cg_serial_shared_outs`) under threading runs
+        # the overflow RGF SERIAL: before the lane-tape retirement this case
+        # fell back to the tape, whose per-kernel chunking (barriers between
+        # kernels) could still thread it. That is an accepted theoretical
+        # regression — the verdict has never been produced by any real build
+        # (globally shared out-slots require two equations writing one state
+        # slot; the threaded-codegen work could not construct it outside a
+        # hand-poisoned cache), and serial-compiled is still far faster than
+        # the per-cell interpreter. Kernels the overflow emission itself
+        # declined keep the interpreter, in the same order as the plain loop
+        # below.
+        if _cg_threads_available() && _sec_prep_threads!(s.dual_tcache).state == 1
+            _run_cg_section_threaded!(s.dualf, s.dualtabs, du, u, p, t,
+                                      s.dual_tcache)
+        else
+            s.dualf(du, u, p, t, s.dualtabs, 1, 1)
         end
-        if route != 3
-            if route == 2
-                _run_cg_section_threaded!(s.dualf, s.dualtabs, du, u, p, t,
-                                          s.dual_tcache)
-            else
-                s.dualf(du, u, p, t, s.dualtabs, 1, 1)
-            end
-            @inbounds for j in s.dual_resid
-                P = plans[j]
-                if P !== nothing
-                    _run_acc_plan!(du, u, p, t, kernels[j], P)
-                else
-                    _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
-                end
-            end
-            return nothing
+        @inbounds for j in s.dual_resid
+            _run_acc_kernel!(du, u, p, t, kernels[j], Float64)
         end
+        return nothing
     end
     @inbounds for j in 1:length(kernels)
-        P = plans[j]
-        if T === Float64 && P !== nothing
-            _run_acc_plan!(du, u, p, t, kernels[j], P)
-        else
-            _run_acc_kernel!(du, u, p, t, kernels[j], T)
-        end
+        _run_acc_kernel!(du, u, p, t, kernels[j], T)
     end
     return nothing
 end
@@ -1201,19 +1172,16 @@ end
 # section provably runs after that cache's prelude tiers were filled in the
 # same `f!` call. Every other caller keeps the default `nothing`, which keeps
 # the `:foreign_scratch` decline for shared-prelude reads.
-function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
-                              acc_plans::AbstractVector{Union{Nothing,_AccPlan}};
+function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel};
                               shared_cache::Union{Nothing,_CSECache}=nothing)
     cg = _codegen_disabled() ? nothing :
          _build_codegen_rhs(acc_kernels; shared_cache=shared_cache)
     if cg === nothing
         kernels = collect(_AccKernel, acc_kernels)
-        plans = collect(Union{Nothing,_AccPlan}, acc_plans)
         n_emitted = 0
     else
         resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
         kernels = _AccKernel[acc_kernels[j] for j in resid]
-        plans = Union{Nothing,_AccPlan}[acc_plans[j] for j in resid]
         n_emitted = count(cg.covered)
     end
     cgf = cg === nothing ? nothing : cg.f
@@ -1228,7 +1196,7 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
          _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
                             tally=:dual_codegen, shared_cache=shared_cache)
     if dg === nothing
-        return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
+        return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),
                               false, _sec_tcache(cg), _sec_tcache(nothing))
     end
@@ -1239,7 +1207,7 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
     f64cg = _f64_overflow_codegen_enabled()
     f64cg && _tally_cascade!(:f64_overflow_armed)
     dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
-    return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
+    return _KernelSection(cgf, cgtabs, n_emitted, kernels,
                           dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
                           _sec_tcache(cg), _sec_tcache(dg))
 end

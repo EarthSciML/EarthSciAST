@@ -115,8 +115,8 @@ function registry) op set per `esm-spec` §4 / §9.2:
     A closed function **must be total over real inputs**: it returns a value
     for every finite argument and **never throws** — an out-of-domain input
     yields `NaN` (or a spec-pinned clamp), not an exception. The vectorized
-    runners (`form=:oop` and the in-place lane tape) evaluate a closed `fn`
-    eagerly for **every** cell, then blend — including cells a guard
+    runner (`form=:oop`) evaluates a closed `fn`
+    eagerly for **every** cell, then blends — including cells a guard
     (`ifelse`/`and`/`or`) discards. The scalar reference walk short-circuits
     instead, so a `fn` that throws off-domain is observable only as a
     difference between runners, and is a **contract violation by the function

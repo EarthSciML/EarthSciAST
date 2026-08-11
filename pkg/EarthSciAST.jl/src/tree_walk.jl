@@ -62,8 +62,8 @@
 #                           retires the former _geo_eval interpreter)
 #   access_kernel.jl   §4b  the UNIFIED array-kernel IR (_AccKernel): access
 #                           descriptors, the eltype-generic scalar runner, the
-#                           per-cell/invariant CSE tiers, and the Float64
-#                           lane tape (tiled, zero-alloc, SIMD op loops)
+#                           per-cell/invariant CSE tiers, and the shared
+#                           threading infrastructure (batch runner, partition)
 #   oop.jl             §4d  out-of-place emitter over the SAME IR: eltype-generic
 #                           f(u,p,t) → du, the AD / device path (`form = :oop`)
 #   acc_merge.jl       §4e  the per-cell fallback's whole-array host (grouping

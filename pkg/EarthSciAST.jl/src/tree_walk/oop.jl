@@ -1129,9 +1129,9 @@ _acc_has_live_forcing(K::_AccKernel) =
 #       - TEMPLATE SUB-KERNEL calls (`K.subs` non-empty / `_NK_SUBCALL`). Needs the
 #         sub-kernel evaluated as its own whole-array op over the parent's lanes
 #         and its result array spliced into the parent operand stream (per
-#         (variant, region), shared). The in-place tape declines these the same
-#         way (`isempty(K.subs)` gate in `_build_acc_plan`); neither path
-#         vectorizes them yet.
+#         (variant, region), shared). The in-place codegen emitter declines
+#         these the same way (sub-kernel spines carry foreign scratch); this
+#         path does not vectorize them either.
 function _oop_run_acc_kernel(du, u, p, t, K::_AccKernel, ::Type{T}) where {T}
     for S in K.subs                                 # template-body sub-kernels:
         _fill_invariant!(S, u, p, t, T)             # invariant tier once per call
@@ -1410,7 +1410,7 @@ function _build_oop_desc_vectors(acc::Vector{_AccDesc},
         elseif k === _AK_STATE_TBL_BOX
             # Gather-of-gather resolved on host: the per-lane state slot is the
             # box-addressed table entry. A ghost slot (0) — which the in-place
-            # tape reads as 0.0 — is gathered at a SAFE index (1, always valid)
+            # runners read as 0.0 — is gathered at a SAFE index (1, always valid)
             # and masked: the eval selects 0.0 on those lanes, so the trace still
             # sees ONE whole-array gather plus a select against a constant mask.
             raw = Int[@inbounds a.conn[a.off + (m1[l]-1)*a.s1 +
@@ -1617,7 +1617,7 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
         elseif ak === _AK_STATE_TBL_BOX
             g = _oop_gather(u, plan.gathers[nd.idx])
             m = plan.ghost[nd.idx]
-            # ghost lanes (table slot 0) select 0.0 — the in-place tape's
+            # ghost lanes (table slot 0) select 0.0 — the in-place runners'
             # `s == 0 ? 0.0 : u[s]`, bit-identical; the gather used a safe index.
             return isempty(m) ? g : ifelse.(m, zero(T), g)
         elseif ak === _AK_STATE_FIXED
