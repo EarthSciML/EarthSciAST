@@ -1,0 +1,1813 @@
+{
+  "coupling": [
+    {
+      "from": "MockSR.SOA",
+      "to": "ISRM.SR_SOA",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockSR.pNO3",
+      "to": "ISRM.SR_pNO3",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockSR.pNH4",
+      "to": "ISRM.SR_pNH4",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockSR.pSO4",
+      "to": "ISRM.SR_pSO4",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockSR.PrimaryPM25",
+      "to": "ISRM.SR_PrimaryPM25",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockSR.TotalPop",
+      "to": "ISRM.TotalPop",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockSR.MortalityRate",
+      "to": "ISRM.MortalityRate",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.lon",
+      "to": "ISRM.emis_lon",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.lat",
+      "to": "ISRM.emis_lat",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.annual",
+      "to": "ISRM.emis_annual",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.vVOC",
+      "to": "ISRM.is_VOC",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.vNOx",
+      "to": "ISRM.is_NOx",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.vNH3",
+      "to": "ISRM.is_NH3",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.vSOx",
+      "to": "ISRM.is_SOx",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "MockPts.vPM25",
+      "to": "ISRM.is_PM25",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    }
+  ],
+  "data_loaders": {
+    "MockPts": {
+      "kind": "points",
+      "source": {
+        "url_template": "mock://pts"
+      },
+      "variables": {
+        "annual": {
+          "file_variable": "annual",
+          "units": "1"
+        },
+        "lat": {
+          "file_variable": "lat",
+          "units": "1"
+        },
+        "lon": {
+          "file_variable": "lon",
+          "units": "1"
+        },
+        "vNH3": {
+          "file_variable": "vNH3",
+          "units": "1"
+        },
+        "vNOx": {
+          "file_variable": "vNOx",
+          "units": "1"
+        },
+        "vPM25": {
+          "file_variable": "vPM25",
+          "units": "1"
+        },
+        "vSOx": {
+          "file_variable": "vSOx",
+          "units": "1"
+        },
+        "vVOC": {
+          "file_variable": "vVOC",
+          "units": "1"
+        }
+      }
+    },
+    "MockSR": {
+      "kind": "static",
+      "metadata": {
+        "x_esd": {
+          "gated_select": {
+            "applies_to": [
+              "SOA",
+              "pNO3",
+              "pNH4",
+              "pSO4",
+              "PrimaryPM25"
+            ],
+            "axes": [
+              {
+                "fixed": [
+                  0
+                ]
+              },
+              {
+                "gated_by": "stale_hand_authored_set"
+              },
+              "all"
+            ]
+          }
+        }
+      },
+      "source": {
+        "url_template": "mock://sr"
+      },
+      "variables": {
+        "MortalityRate": {
+          "file_variable": "MortalityRate",
+          "units": "1"
+        },
+        "PrimaryPM25": {
+          "file_variable": "PrimaryPM25",
+          "units": "1"
+        },
+        "SOA": {
+          "file_variable": "SOA",
+          "units": "1"
+        },
+        "TotalPop": {
+          "file_variable": "TotalPop",
+          "units": "1"
+        },
+        "pNH4": {
+          "file_variable": "pNH4",
+          "units": "1"
+        },
+        "pNO3": {
+          "file_variable": "pNO3",
+          "units": "1"
+        },
+        "pSO4": {
+          "file_variable": "pSO4",
+          "units": "1"
+        }
+      }
+    }
+  },
+  "esm": "0.9.0",
+  "index_sets": {
+    "emis_records": {
+      "kind": "interval",
+      "size": 5
+    },
+    "rcv_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "src_cells": {
+      "kind": "interval",
+      "size": 9
+    }
+  },
+  "metadata": {
+    "name": "prepare_pushdown_L1"
+  },
+  "models": {
+    "ISRM": {
+      "equations": [],
+      "variables": {
+        "E_NH3": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_NH3"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_NH3",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_NOx": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_NOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_NOx",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_PM25": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_PM25",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_SOx": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_SOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_SOx",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_VOC": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_VOC"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_VOC",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "MortalityRate": {
+          "default": 0.0,
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_PrimaryPM25": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_SOA": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_pNH4": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_pNO3": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_pSO4": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "TotalPM25": {
+          "expression": {
+            "args": [
+              "conc_SOA",
+              "conc_pNO3",
+              "conc_pNH4",
+              "conc_pSO4",
+              "conc_PrimaryPM25"
+            ],
+            "expr": {
+              "args": [
+                "fact",
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "conc_SOA",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_pNO3",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_pNH4",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_pSO4",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_PrimaryPM25",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "+"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "TotalPop": {
+          "default": 0.0,
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "X": {
+          "expression": {
+            "args": [
+              "emis_lon",
+              "emis_lat"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "lcc_rf",
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "lcc_qp",
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "emis_lat",
+                                            "e"
+                                          ],
+                                          "op": "index"
+                                        },
+                                        "lcc_d2r"
+                                      ],
+                                      "op": "*"
+                                    },
+                                    2.0
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "+"
+                            }
+                          ],
+                          "op": "tan"
+                        },
+                        "lcc_n"
+                      ],
+                      "op": "^"
+                    }
+                  ],
+                  "op": "/"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "lcc_n",
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    "emis_lon",
+                                    "e"
+                                  ],
+                                  "op": "index"
+                                },
+                                "lcc_d2r"
+                              ],
+                              "op": "*"
+                            },
+                            "lcc_lam0"
+                          ],
+                          "op": "-"
+                        }
+                      ],
+                      "op": "*"
+                    }
+                  ],
+                  "op": "sin"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "e"
+            ],
+            "ranges": {
+              "e": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed"
+        },
+        "Y": {
+          "expression": {
+            "args": [
+              "emis_lon",
+              "emis_lat"
+            ],
+            "expr": {
+              "args": [
+                "lcc_rho0",
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "lcc_rf",
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    "lcc_qp",
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "emis_lat",
+                                                "e"
+                                              ],
+                                              "op": "index"
+                                            },
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        },
+                                        2.0
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "+"
+                                }
+                              ],
+                              "op": "tan"
+                            },
+                            "lcc_n"
+                          ],
+                          "op": "^"
+                        }
+                      ],
+                      "op": "/"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "lcc_n",
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        "emis_lon",
+                                        "e"
+                                      ],
+                                      "op": "index"
+                                    },
+                                    "lcc_d2r"
+                                  ],
+                                  "op": "*"
+                                },
+                                "lcc_lam0"
+                              ],
+                              "op": "-"
+                            }
+                          ],
+                          "op": "*"
+                        }
+                      ],
+                      "op": "cos"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "e"
+            ],
+            "ranges": {
+              "e": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed"
+        },
+        "conc_PrimaryPM25": {
+          "expression": {
+            "args": [
+              "SR_PrimaryPM25",
+              "E_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_PrimaryPM25",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_PM25",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "conc_SOA": {
+          "expression": {
+            "args": [
+              "SR_SOA",
+              "E_VOC"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_SOA",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_VOC",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "conc_pNH4": {
+          "expression": {
+            "args": [
+              "SR_pNH4",
+              "E_NH3"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_pNH4",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_NH3",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "conc_pNO3": {
+          "expression": {
+            "args": [
+              "SR_pNO3",
+              "E_NOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_pNO3",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_NOx",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "conc_pSO4": {
+          "expression": {
+            "args": [
+              "SR_pSO4",
+              "E_SOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_pSO4",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_SOx",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "deathsK": {
+          "expression": {
+            "args": [
+              "TotalPM25",
+              "TotalPop",
+              "MortalityRate"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "rr_K"
+                                          ],
+                                          "op": "log"
+                                        },
+                                        10
+                                      ],
+                                      "op": "/"
+                                    },
+                                    {
+                                      "args": [
+                                        "TotalPM25",
+                                        "rcv"
+                                      ],
+                                      "op": "index"
+                                    }
+                                  ],
+                                  "op": "*"
+                                }
+                              ],
+                              "op": "exp"
+                            },
+                            1
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "TotalPop",
+                                "rcv"
+                              ],
+                              "op": "index"
+                            },
+                            "pop_scale"
+                          ],
+                          "op": "*"
+                        }
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "MortalityRate",
+                            "rcv"
+                          ],
+                          "op": "index"
+                        },
+                        100000
+                      ],
+                      "op": "/"
+                    }
+                  ],
+                  "op": "*"
+                },
+                "mort_scale"
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "deathsL": {
+          "expression": {
+            "args": [
+              "TotalPM25",
+              "TotalPop",
+              "MortalityRate"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "rr_L"
+                                          ],
+                                          "op": "log"
+                                        },
+                                        10
+                                      ],
+                                      "op": "/"
+                                    },
+                                    {
+                                      "args": [
+                                        "TotalPM25",
+                                        "rcv"
+                                      ],
+                                      "op": "index"
+                                    }
+                                  ],
+                                  "op": "*"
+                                }
+                              ],
+                              "op": "exp"
+                            },
+                            1
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "TotalPop",
+                                "rcv"
+                              ],
+                              "op": "index"
+                            },
+                            "pop_scale"
+                          ],
+                          "op": "*"
+                        }
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "MortalityRate",
+                            "rcv"
+                          ],
+                          "op": "index"
+                        },
+                        100000
+                      ],
+                      "op": "/"
+                    }
+                  ],
+                  "op": "*"
+                },
+                "mort_scale"
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "emis_annual": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "emis_lat": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "emis_lon": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "fact": {
+          "default": 28766.639,
+          "type": "parameter"
+        },
+        "is_NH3": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "is_NOx": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "is_PM25": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "is_SOx": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "is_VOC": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "lcc_d2r": {
+          "default": 0.017453292519943295,
+          "type": "parameter"
+        },
+        "lcc_lam0": {
+          "default": -1.6929693744344996,
+          "type": "parameter"
+        },
+        "lcc_n": {
+          "default": 0.6304776973154274,
+          "type": "parameter"
+        },
+        "lcc_qp": {
+          "default": 0.7853981633974483,
+          "type": "parameter"
+        },
+        "lcc_rf": {
+          "default": 1.9550002015937928,
+          "type": "parameter"
+        },
+        "lcc_rho0": {
+          "default": 1.2085155350027226,
+          "type": "parameter"
+        },
+        "mort_scale": {
+          "default": 1.025229357798165,
+          "type": "parameter"
+        },
+        "pop_scale": {
+          "default": 1.0465819687408728,
+          "type": "parameter"
+        },
+        "rr_K": {
+          "default": 1.06,
+          "type": "parameter"
+        },
+        "rr_L": {
+          "default": 1.14,
+          "type": "parameter"
+        },
+        "src_E": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_N": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_S": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_W": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        }
+      }
+    }
+  }
+}

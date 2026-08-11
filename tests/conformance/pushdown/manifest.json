@@ -1,0 +1,21 @@
+{
+  "category": "pushdown",
+  "version": "1.0",
+  "description": "Projection-pushdown auto-rewrite (desugar_pushdown) golden documents. Each fixture pairs an INPUT document with the GOLDEN rewritten document the Julia reference emits. Bindings run their own desugar_pushdown on the parsed input and deep-compare the result to the parsed golden (numeric equality by value, key order free); they must also assert idempotency (desugaring the golden returns it unchanged) and input purity (the input document is not mutated). Files are canonical JSON (sorted keys, 2-space indent) for byte-stable re-emission via scripts/generate-pushdown-goldens.jl.",
+  "fixtures": [
+    {
+      "id": "pushdown/l1",
+      "input": "conformance/pushdown/fixtures/pushdown_l1.esm",
+      "golden": "conformance/pushdown/golden/pushdown_l1.rewritten.json",
+      "model_name": "ISRM",
+      "tags": ["core", "pushdown", "l1"]
+    },
+    {
+      "id": "pushdown/isrm",
+      "input": "conformance/pushdown/fixtures/isrm.esm",
+      "golden": "conformance/pushdown/golden/isrm.rewritten.json",
+      "model_name": null,
+      "tags": ["pushdown", "isrm", "full_document"]
+    }
+  ]
+}

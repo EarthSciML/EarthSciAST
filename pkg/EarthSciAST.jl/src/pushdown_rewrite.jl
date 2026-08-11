@@ -275,6 +275,15 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
         any(e -> e[1] == Ename, E_specs) || push!(E_specs, (Ename, bind.c_sym))
     end
     isempty(conc_specs) && return nothing
+    # Deterministic plan order (Phase 3, cross-language goldens): `vars` is a
+    # hash-ordered Dict, so the collection order of `A_names` above is a Julia
+    # implementation detail. It leaks into the emitted document only through
+    # `gated_select.applies_to` (everything else the plan orders is either
+    # per-name or copied from the representative E, hence document-determined).
+    # Sort it so the rewritten document — and the conformance goldens — are
+    # identical across bindings and hash seeds. Consumers are membership-based
+    # (`_pushdown_provider_gates`, `_fetch_gated_providers`), so order is inert.
+    sort!(A_names)
     return (C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
             A_names = A_names, E_specs = E_specs, src_env = src_env, tgt_env = tgt_env,
             rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym)

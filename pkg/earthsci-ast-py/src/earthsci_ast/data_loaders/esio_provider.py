@@ -294,6 +294,87 @@ def to_esio_loader(field: FieldLike, target: Any = None, window: Window | None =
     )
 
 
+def providers_from_document(
+    doc: Any,
+    *,
+    cache_root: str,
+    loaders: Any = None,
+    url_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Document-declared provider construction (Phase 3 clean consolidation) —
+    the Python mirror of the Julia EarthSciIO extension's
+    ``providers_from_document``. The document's ``data_loaders`` say WHAT to
+    read (``source.url_template``, ``variables``) and ``metadata.esio_format``
+    says HOW (the EarthSciIO format-registry name); the runner no longer
+    hand-constructs providers — it asks the document.
+
+    One provider PER VARIABLE (keyed ``"<Loader>.<var>"``), matching (a)
+    ``prepare``'s providers contract (one provider per consumer variable),
+    (b) the single-variable sample the provider seam expects, and (c) the
+    per-key gate the record-derived pushdown path attaches. All of a loader's
+    providers share one ``Cache`` (a per-loader subdir under ``cache_root``)
+    so a store's metadata objects are fetched once.
+
+    ``doc`` is a raw document dict or a path to one. ``loaders`` restricts to
+    the named loaders (each MUST be constructible — a missing
+    ``metadata.esio_format`` raises); an unrestricted sweep skips format-less
+    loaders. ``url_overrides`` maps a loader name to a replacement URL (e.g. a
+    local ``file://`` mirror of the canonical source).
+    """
+    import json
+
+    import earthsciio as esio
+
+    if isinstance(doc, (str, bytes)):
+        with open(doc) as fh:
+            doc = json.load(fh)
+    dls = doc.get("data_loaders") if isinstance(doc, dict) else None
+    if not isinstance(dls, dict):
+        raise ValueError("providers_from_document: the document declares no data_loaders")
+    esio.register_format_readers()
+    want = None if loaders is None else {str(x) for x in loaders}
+    overrides = url_overrides or {}
+    out: dict[str, Any] = {}
+    for lname, ld in dls.items():
+        lname = str(lname)
+        if want is not None and lname not in want:
+            continue
+        if not isinstance(ld, dict):
+            continue
+        md = ld.get("metadata")
+        fmt = md.get("esio_format") if isinstance(md, dict) else None
+        if fmt is None:
+            if want is None:
+                continue
+            raise ValueError(
+                f"providers_from_document: data_loaders.{lname} declares no "
+                f"metadata.esio_format — cannot construct a provider for it"
+            )
+        src = ld.get("source")
+        url = overrides.get(
+            lname, src.get("url_template") if isinstance(src, dict) else None
+        )
+        if not isinstance(url, str):
+            raise ValueError(
+                f"providers_from_document: data_loaders.{lname} has no "
+                f"source.url_template (and no url_overrides entry)"
+            )
+        variables = ld.get("variables")
+        if not isinstance(variables, dict):
+            continue
+        import os as _os
+
+        cache = esio.Cache(root=_os.path.join(str(cache_root), lname))
+        for vname, vd in variables.items():
+            vname = str(vname)
+            fv = vd.get("file_variable", vname) if isinstance(vd, dict) else vname
+            loader = esio.DataLoader(
+                name=lname, format=str(fmt), url=url, variables=[str(fv)]
+            )
+            out[f"{lname}.{vname}"] = esio.Provider(loader, cache)
+    return out
+
+
 def esio_provider_factory(
     field: FieldLike, window: Window | None = None, *, target: Any = None
 ) -> Any:

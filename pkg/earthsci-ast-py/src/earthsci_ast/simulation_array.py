@@ -661,14 +661,39 @@ def _materialize_observeds(
     Julia reference, which evaluates only the state-derivative dependency cone)
     and by the read-only :class:`BuildInspection` fill.
     """
+    # Opt-in build progress: ESS_OBSERVED_PROGRESS=1 logs each observed's
+    # evaluation time to stderr — the const-geometry hoist of a large document
+    # (the isrm.esm E_* joins) can take hours, and an otherwise-silent build
+    # is indistinguishable from a hang. Purely observational.
+    import os as _os
+
+    _progress = bool(_os.environ.get("ESS_OBSERVED_PROGRESS"))
+    if _progress:
+        import sys as _sys
+        import time as _time
     for name, rhs in ordered_observed:
+        _t0 = _time.perf_counter() if _progress else 0.0
         if skip_unresolved:
             try:
                 val = eval_expr(rhs, ctx)
             except NumpyInterpreterError:
+                if _progress:
+                    print(
+                        f"[ess-observed] {name}: unresolved (skipped) "
+                        f"after {_time.perf_counter() - _t0:.1f}s",
+                        file=_sys.stderr,
+                        flush=True,
+                    )
                 continue
         else:
             val = eval_expr(rhs, ctx)
+        if _progress:
+            print(
+                f"[ess-observed] {name}: {_time.perf_counter() - _t0:.1f}s "
+                f"shape={getattr(val, 'shape', ())}",
+                file=_sys.stderr,
+                flush=True,
+            )
         if isinstance(val, np.ndarray) and val.ndim > 0:
             ctx.derived_rings[name] = val
         else:
@@ -760,6 +785,10 @@ class _NumpyRhsBuild:
     # resolves through the DESIGNED relational path. Empty when the system has no
     # value-invention producer (byte-identical to before).
     derived_extents: dict[str, int] = field(default_factory=dict)
+    # Value-invention derived-set MEMBERS keyed by producing faq id (Phase 3
+    # pushdown hooks: the member_factor feedback source and the contract-record
+    # support set a `prepare` caller reports). Empty without a producer.
+    vi_members: dict[str, list] = field(default_factory=dict)
 
 
 def _resolve_field_ic(
@@ -1072,6 +1101,8 @@ def _binning_coord_arrays(
     state_layout: dict[str, slice],
     total_size: int,
     factor_scope: dict[str, str] | None = None,
+    producer_seed_nodes: list[ExprNode] | None = None,
+    input_arrays: dict[str, np.ndarray] | None = None,
 ) -> dict[str, np.ndarray]:
     """Materialize the JOIN-FREE binning coordinates the broad-phase bins read,
     ONCE at setup, and return them as a name → array registry (RFC §5.3).
@@ -1092,8 +1123,25 @@ def _binning_coord_arrays(
     binning coordinates and their own inputs — are materialized. The returned dict
     is keyed by the same (flattened) names the front-door indexes (``rg_src_poly``
     → ``OceanDynamics.rg_src_poly``); it feeds the front-door's ``const_arrays``.
+
+    ``producer_seed_nodes`` (Phase 3, pushdown hook 3) additionally seeds the
+    closure from OVERLAP-GATED ``distinct`` producer aggregates: such a
+    producer contributes no ``bin_spec`` (its broad phase is the ``join.
+    overlap`` envelope, not a skolem bin), but its envelope factors and filter
+    references may be join-free observeds — the pushdown rewrite's in-model
+    LCC projections ``X`` / ``Y`` — that must be materialized here for
+    ``materialize_value_invention`` to run the producer at build time. These
+    seeded-only observeds are materialized with ``skip_unresolved=True`` so a
+    producer whose coordinates need factors absent pre-hoist degrades to the
+    existing maps-only/fail-closed contract instead of a hard build error;
+    the bin-spec closure keeps its strict (raising) behaviour.
+
+    ``input_arrays`` threads the loader/provider-bound arrays into the
+    evaluation context (the projection observeds read coupling-fed inputs,
+    e.g. ``EGU_Emis.lon``); absent arrays simply leave their dependents
+    unresolved under the seeded-only ``skip_unresolved`` pass.
     """
-    if not bin_specs:
+    if not bin_specs and not producer_seed_nodes:
         return {}
     ctx = EvalContext(
         state_layout=state_layout,
@@ -1103,6 +1151,7 @@ def _binning_coord_arrays(
         y=np.zeros(total_size, dtype=float),
         t=0.0,
         index_sets=index_sets,
+        input_arrays=dict(input_arrays or {}),
         factor_scope=dict(factor_scope or {}),
     )
     join_free = [
@@ -1112,22 +1161,35 @@ def _binning_coord_arrays(
     ]
     join_free_names = {name for name, _ in join_free}
     rhs_by_name = dict(ordered_observed)
-    # Dependency closure of the bin specs over the join-free observeds.
-    needed: set[str] = set()
-    frontier: list[str] = []
-    for _bn, node, _idx in bin_specs:
-        for r in _expr_referenced_names(node) & join_free_names:
-            if r not in needed:
-                needed.add(r)
-                frontier.append(r)
-    while frontier:
-        cur = frontier.pop()
-        for r in _expr_referenced_names(rhs_by_name[cur]) & join_free_names:
-            if r not in needed:
-                needed.add(r)
-                frontier.append(r)
+
+    def _closure(seed_nodes: list[Any]) -> set[str]:
+        needed: set[str] = set()
+        frontier: list[str] = []
+        for node in seed_nodes:
+            for r in _expr_referenced_names(node) & join_free_names:
+                if r not in needed:
+                    needed.add(r)
+                    frontier.append(r)
+        while frontier:
+            cur = frontier.pop()
+            for r in _expr_referenced_names(rhs_by_name[cur]) & join_free_names:
+                if r not in needed:
+                    needed.add(r)
+                    frontier.append(r)
+        return needed
+
+    # Dependency closure of the bin specs over the join-free observeds (strict),
+    # then the producer-seeded remainder (tolerant; see docstring).
+    needed = _closure([node for _bn, node, _idx in bin_specs])
+    producer_needed = _closure(list(producer_seed_nodes or [])) - needed
     # Preserve the dependency-sorted order of `ordered_observed`.
     _materialize_observeds([(name, rhs) for name, rhs in join_free if name in needed], ctx)
+    if producer_needed:
+        _materialize_observeds(
+            [(name, rhs) for name, rhs in join_free if name in producer_needed],
+            ctx,
+            skip_unresolved=True,
+        )
     # Array observeds land in `derived_rings`, scalars in `observed_values`; both
     # are valid const-array factors for the front-door's `_vi_eval`.
     return {**ctx.derived_rings, **ctx.observed_values}
@@ -1143,9 +1205,11 @@ def _frontdoor_join_keys_and_extents(
     total_size: int,
     factor_scope: dict[str, str],
     loader_arrays: dict[str, np.ndarray],
-) -> tuple[dict[str, np.ndarray], dict[str, str], dict[str, int]]:
+) -> tuple[dict[str, np.ndarray], dict[str, str], dict[str, int], dict[str, list]]:
     """Run the value-invention front-door ONCE at setup and return the broad-phase
-    join-key buffers plus the derived-index-set extents (RFC §5.3 / §6.1).
+    join-key buffers plus the derived-index-set extents AND the derived-set
+    MEMBERS (RFC §5.3 / §6.1; members feed the Phase-3 pushdown hooks — the
+    ``member_factor`` const feedback and the gated-provider selection).
 
     This is the single source of truth that RETIRES the former per-cell mirror
     (``_materialize_join_key_buffers`` + ``_value_invention_extents``): the
@@ -1170,8 +1234,23 @@ def _frontdoor_join_keys_and_extents(
         for s in flat.index_sets.values()
     )
     if not bin_specs and not has_derived:
-        return {}, {}, {}
+        return {}, {}, {}, {}
     model_json = _reconstruct_model_json(flat)
+    # Phase 3 pushdown hook 3: an OVERLAP-GATED `distinct` producer (the
+    # auto-rewrite's generated support-set aggregate) carries no bin_spec, but
+    # its envelope/filter factors may be join-free observeds (the in-model LCC
+    # projections) that must be materialized for the producer to run. Seed the
+    # binning-coordinate closure from those producer nodes too.
+    producer_seed_nodes: list[ExprNode] = []
+    for eq in flat.equations:
+        rhs = eq.rhs
+        if (
+            isinstance(rhs, ExprNode)
+            and rhs.op == "aggregate"
+            and getattr(rhs, "distinct", None) is True
+            and getattr(rhs, "join", None)
+        ):
+            producer_seed_nodes.append(rhs)
     const_arrays: dict[str, np.ndarray] = {
         str(k): np.asarray(v)
         for k, v in _binning_coord_arrays(
@@ -1183,10 +1262,29 @@ def _frontdoor_join_keys_and_extents(
             state_layout,
             total_size,
             factor_scope,
+            producer_seed_nodes=producer_seed_nodes,
+            input_arrays=loader_arrays,
         ).items()
     }
     for k, v in (loader_arrays or {}).items():
         const_arrays[str(k)] = np.asarray(v)
+    # Surface each namespaced const array under its BARE tail too (unique
+    # shallowest-suffix rule, the const-registry mirror of `_vi_scope_get`):
+    # the front-door's overlap-envelope lookup (`broad_phase.envelope_vectors`)
+    # and producer-body gathers resolve authored bare names (`X`, `src_W`, a
+    # producer's un-namespaced join metadata) EXACTLY, while a flattened build
+    # registers `ISRM.X`. Existing keys are never overwritten.
+    _tails: dict[str, list[str]] = {}
+    for k in const_arrays:
+        if "." in k:
+            _tails.setdefault(k.rsplit(".", 1)[-1], []).append(k)
+    for _tail, _keys in _tails.items():
+        if _tail in const_arrays:
+            continue
+        _mindepth = min(k.count(".") for k in _keys)
+        _best = [k for k in _keys if k.count(".") == _mindepth]
+        if len(_best) == 1:
+            const_arrays[_tail] = const_arrays[_best[0]]
 
     def _buffers(res: Any) -> tuple[dict[str, np.ndarray], dict[str, str]]:
         return (
@@ -1199,7 +1297,7 @@ def _frontdoor_join_keys_and_extents(
             model_json, const_arrays, param_values, index_sets=flat.index_sets
         )
         buffers, idx_sets = _buffers(res)
-        return buffers, idx_sets, dict(res.extents)
+        return buffers, idx_sets, dict(res.extents), dict(res.members)
     except ValueInventionError:
         # Producer materialisation needed a factor absent pre-hoist: still surface
         # the bins (maps-only never touches producers); extents degrade to {} —
@@ -1208,7 +1306,240 @@ def _frontdoor_join_keys_and_extents(
             model_json, const_arrays, param_values, index_sets=flat.index_sets, maps_only=True
         )
         buffers, idx_sets = _buffers(res)
-        return buffers, idx_sets, {}
+        return buffers, idx_sets, {}, {}
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 pushdown engine hooks (the Python mirror of the Julia tree_walk/build
+# hooks 1 & 2): value-invention MEMBERS fed back as const factors, and the
+# gated-provider deferral's post-VI selective fetch.
+# --------------------------------------------------------------------------- #
+
+
+def _const_factor_alias_names(all_var_names: Any, bare: str) -> set[str]:
+    """The const-array keys an authored bare factor name resolves to in this
+    build: the bare key itself plus every flattened variable name whose final
+    dotted segment matches it (mirrors the Julia ``_const_factor_aliases``)."""
+    keys_out = {str(bare)}
+    for k in all_var_names or ():
+        ks = str(k)
+        if ks == bare or ("." in ks and ks.rsplit(".", 1)[-1] == bare):
+            keys_out.add(ks)
+    return keys_out
+
+
+def _feed_back_vi_members(
+    index_sets: dict[str, Any],
+    vi_members: dict[str, list],
+    all_var_names: Any,
+) -> dict[str, np.ndarray]:
+    """Pushdown hook 1: for each ``kind:"derived"`` index set naming a
+    ``member_factor``, surface its value-invention MEMBERS (the invented,
+    sorted-distinct, 1-based full-grid ids) as a dense 1-D float const array
+    keyed by the factor name (and its namespaced aliases). This is the ONLY
+    path a derived set's member VALUES reach the observed graph:
+    ``cell_W[c] = index(W, index(<member_factor>, c))`` gathers the full-grid
+    rows the compact derived axis selects. Mirrors Julia build hook 1
+    (``_feed_back_vi_members``)."""
+    out: dict[str, np.ndarray] = {}
+    if not index_sets or not vi_members:
+        return out
+    for _sname, is_ in index_sets.items():
+        if not (isinstance(is_, dict) and is_.get("kind") == "derived"):
+            continue
+        mf = is_.get("member_factor")
+        faq = is_.get("from_faq")
+        if mf is None or faq is None or faq not in vi_members:
+            continue
+        mem = vi_members[faq]
+        vec = np.empty(len(mem), dtype=float)
+        for i, m in enumerate(mem):
+            if isinstance(m, bool) or not isinstance(m, (int, float)):
+                raise SimulationError(
+                    f"derived index set member_factor '{mf}' requires SCALAR members "
+                    f"(a single-component skolem key); got a composite member for "
+                    f"faq '{faq}'"
+                )
+            vec[i] = float(m)
+        for k in _const_factor_alias_names(all_var_names, str(mf)):
+            out[k] = vec
+    return out
+
+
+def _gated_supports_selection(prov: Any) -> bool:
+    """Whether a gated provider can push a per-axis selection down (an
+    EarthSciIO store-backed provider exposes ``supports_selection``; a plain
+    whole-array provider does not)."""
+    attr = getattr(prov, "supports_selection", None)
+    if attr is None:
+        return False
+    return bool(attr() if callable(attr) else attr)
+
+
+def _neutral_selection_to_native(selection: list[Any]) -> dict[str, Any]:
+    """Translate the per-axis neutral selection (``"all"`` | list of 0-based
+    ints) into EarthSciIO's native ``{"axes": [...]}`` select."""
+    axes: list[Any] = []
+    for ax in selection:
+        if ax == "all":
+            axes.append("all")
+        else:
+            axes.append({"indices": [int(i) for i in ax]})
+    return {"axes": axes}
+
+
+def _gated_sample(prov: Any, t: float, selection: list[Any] | None) -> np.ndarray:
+    """Sample a gated provider, pushing ``selection`` down when given.
+
+    ``selection`` is the neutral per-axis form (``"all"`` | 0-based index
+    list); a pushdown-capable provider returns the compact slab with EVERY
+    requested axis present (a fixed axis comes back length-1 and is dropped by
+    the caller). Duck-typed like :func:`simulation_loaders._provider_sample_field`:
+    an EarthSciIO ``Provider`` (``materialize(select=…)``), an object exposing
+    ``sample(t, selection=…)``, or — selection-free — any provider that
+    function accepts."""
+    from .simulation_loaders import _provider_sample_field, _single_var_array
+
+    if selection is None:
+        return np.asarray(_provider_sample_field(prov, t), dtype=float)
+    if hasattr(prov, "materialize") and hasattr(prov, "refresh_times"):
+        nds = prov.materialize(select=_neutral_selection_to_native(selection))
+        return np.asarray(_single_var_array(nds), dtype=float)
+    if hasattr(prov, "sample"):
+        return np.asarray(prov.sample(t, selection=selection), dtype=float)
+    raise SimulationError(
+        "gated provider must be an EarthSciIO Provider (materialize/refresh_times) "
+        f"or expose sample(t, selection=...); got {type(prov).__name__}"
+    )
+
+
+def _fetch_gated_providers(
+    gated: dict[str, Any],
+    index_sets: dict[str, Any],
+    vi_members: dict[str, list],
+    vi_extents: dict[str, int],
+    t0: float,
+    all_var_names: Any,
+) -> dict[str, np.ndarray]:
+    """Pushdown hook 2: resolve each deferred GATED provider's per-axis
+    ``selection`` from the now-materialised value-invention members, fetch ONLY
+    the compact slab, and return a ``model-var-name => compact array`` dict to
+    merge into the build's const registry. Mirrors Julia build hook 2
+    (``_fetch_gated_providers``).
+
+    ``gated`` maps a provider KEY to a ``(prov, gate)`` tuple or a
+    ``{"prov": …, "gate": …}`` dict. A gate is ``{"axes": […], "applies_to":
+    [names…]}`` where each native axis is one of ``{"fixed": [i]}`` (0-based
+    native index → DROPPED length-1 axis), ``{"gated_by": "<derived set>"}``
+    (the set's members as the new axis, in set order), or ``"all"``. The
+    compact gated axis length is asserted to equal the gating set's
+    materialised extent."""
+    out: dict[str, np.ndarray] = {}
+    if not gated:
+        return out
+    set_to_faq = {
+        str(sname): str(is_["from_faq"])
+        for sname, is_ in (index_sets or {}).items()
+        if isinstance(is_, dict) and is_.get("kind") == "derived" and is_.get("from_faq")
+    }
+
+    for key, entry in gated.items():
+        if isinstance(entry, dict) and "prov" in entry:
+            prov, gate = entry["prov"], entry.get("gate")
+        elif isinstance(entry, tuple) and len(entry) == 2:
+            prov, gate = entry
+        else:
+            prov, gate = entry, None
+        if gate is None:
+            gate = getattr(prov, "gate_spec", None)
+        if gate is None:
+            continue
+        axes = gate.get("axes")
+        applies = gate.get("applies_to")
+        if axes is None or applies is None:
+            raise SimulationError(
+                f"gated provider '{key}' gate spec needs both `axes` and `applies_to`"
+            )
+
+        selection: list[Any] = []
+        drop_axes: list[int] = []  # 0-based positions of `fixed` axes (dropped)
+        gated_pos = -1
+        gated_extent = 0
+        for ax_i, ax in enumerate(axes):
+            if ax == "all":
+                selection.append("all")
+            elif isinstance(ax, dict) and "fixed" in ax:
+                fx = ax["fixed"]
+                fi = int(fx[0]) if isinstance(fx, list) else int(fx)
+                selection.append([fi])  # length-1 native axis, dropped below
+                drop_axes.append(ax_i)
+            elif isinstance(ax, dict) and "gated_by" in ax:
+                sname = str(ax["gated_by"])
+                faq = set_to_faq.get(sname)
+                if faq is None:
+                    raise SimulationError(
+                        f"gated provider '{key}' gates on '{sname}' which is not a "
+                        f"derived index set with a from_faq"
+                    )
+                if faq not in vi_members:
+                    raise SimulationError(
+                        f"gated provider '{key}' gates on '{sname}' (faq '{faq}') but "
+                        f"its value-invention members were not materialised"
+                    )
+                mem0 = [int(m) - 1 for m in vi_members[faq]]  # 1-based ids → 0-based
+                selection.append(mem0)
+                gated_pos = ax_i
+                gated_extent = int(vi_extents.get(faq, len(mem0)))
+            else:
+                raise SimulationError(
+                    f"gated provider '{key}' axis {ax_i} is malformed (expected "
+                    f'"all", {{"fixed":[i]}}, or {{"gated_by":set}})'
+                )
+        if gated_pos < 0:
+            raise SimulationError(
+                f"gated provider '{key}' declares no {{\"gated_by\":…}} axis"
+            )
+        if len(applies) != 1:
+            # The Python provider seam binds ONE provider per consumer variable
+            # (a sample is a single field), so a gate fanning one provider out
+            # to several arrays has no field to select by name here.
+            raise SimulationError(
+                f"gated provider '{key}': applies_to lists {len(applies)} variables; "
+                f"bind one provider per variable (providers['Loader.var']) so each "
+                f"gated fetch is a single field"
+            )
+
+        # position of the compact gated axis AFTER dropping the fixed axes.
+        gated_pos_out = gated_pos - sum(1 for d in drop_axes if d < gated_pos)
+
+        if _gated_supports_selection(prov):
+            sample = _gated_sample(prov, t0, selection)
+            arr = np.asarray(sample, dtype=float)
+            if drop_axes:
+                arr = arr.reshape(
+                    tuple(s for d, s in enumerate(arr.shape) if d not in drop_axes)
+                )
+        else:
+            # FALLBACK: provider cannot push down — fetch whole, then slice. A
+            # fixed axis is sliced with a scalar (dropping it), so the result
+            # matches the pushdown result exactly.
+            full = _gated_sample(prov, t0, None)
+            idx = tuple(
+                slice(None)
+                if a == "all"
+                else (a[0] if i in drop_axes else np.asarray(a, dtype=int))
+                for i, a in enumerate(selection)
+            )
+            arr = np.asarray(full[idx], dtype=float)
+        if arr.shape[gated_pos_out] != gated_extent:
+            raise SimulationError(
+                f"gated provider '{key}': fetched compact axis is "
+                f"{arr.shape[gated_pos_out]} but the gating set extent is {gated_extent}"
+            )
+        for name in applies:
+            for k in _const_factor_alias_names(all_var_names, str(name)):
+                out[k] = arr
+    return out
 
 
 def _reconstruct_model_json(flat: FlattenedSystem) -> dict[str, Any]:
@@ -1301,6 +1632,7 @@ def _partition_and_materialize_observeds(
     join_key_index_sets: dict[str, str],
     factor_scope: dict[str, str],
     static_cache: dict[str, Any] | None,
+    derived_extents: dict[str, int] | None = None,
 ) -> tuple[list[tuple[str, Expr]], dict[str, float], dict[str, np.ndarray]]:
     """Split the dependency-ordered observeds and materialize the static ones ONCE.
 
@@ -1371,6 +1703,7 @@ def _partition_and_materialize_observeds(
                 y=y0,
                 t=0.0,
                 index_sets=flat.index_sets,
+                derived_extents=dict(derived_extents or {}),
                 input_arrays=loader_arrays if loader_arrays is not None else {},
                 join_key_buffers=join_key_buffers,
                 join_key_index_sets=join_key_index_sets,
@@ -1402,6 +1735,7 @@ def _partition_and_materialize_observeds(
             y=y0,
             t=0.0,
             index_sets=flat.index_sets,
+            derived_extents=dict(derived_extents or {}),
             derived_rings=static_derived_rings,
             input_arrays=loader_arrays if loader_arrays is not None else {},
             join_key_buffers=join_key_buffers,
@@ -1493,6 +1827,8 @@ def _build_numpy_rhs(
     initial_conditions: dict[str, float],
     loader_arrays: dict[str, np.ndarray] | None = None,
     static_cache: dict[str, Any] | None = None,
+    gated_providers: dict[str, Any] | None = None,
+    sample_time: float = 0.0,
 ) -> _NumpyRhsBuild:
     """Assemble the NumPy-interpreter RHS closure + state layout for a flattened
     array/PDE system. Shared by :func:`_simulate_with_numpy` (which integrates
@@ -1533,7 +1869,10 @@ def _build_numpy_rhs(
     vi_var_names, bin_specs = _detect_value_invention_states(flat)
     state_names = [n for n in flat.state_variables.keys() if n not in vi_var_names]
     observed_names: set[str] = set(flat.observed_variables.keys())
-    loader_arrays = loader_arrays or {}
+    # Keep the CALLER's dict identity (when given): the pushdown hooks below
+    # merge derived member-factor / gated-fetch arrays into this registry, and
+    # `prepare` reads them back through the same object for its inspection fill.
+    loader_arrays = {} if loader_arrays is None else loader_arrays
 
     # Layout: concatenate every state variable's flattened payload.
     state_layout: dict[str, slice] = {}
@@ -1545,7 +1884,12 @@ def _build_numpy_rhs(
         offset += size
     total_size = offset
 
-    if total_size == 0:
+    if total_size == 0 and not vi_var_names:
+        # A model whose ONLY states are value-invention producers (the pushdown
+        # rewrite's generated member set) is a legitimate pure build-time
+        # relational model: the build proceeds with an empty state vector so
+        # `prepare` can evaluate its observed graph (integrating it is
+        # meaningless and `simulate` still has nothing to integrate).
         raise SimulationError("Flattened system has no state variables to integrate")
 
     # Partition equations: an observed assignment is ``name = <body>`` whose
@@ -1652,8 +1996,9 @@ def _build_numpy_rhs(
         join_key_buffers = static_cache["join_key_buffers"]
         join_key_index_sets = static_cache["join_key_index_sets"]
         derived_extents = static_cache["derived_extents"]
+        vi_members = static_cache.get("vi_members", {})
     else:
-        join_key_buffers, join_key_index_sets, derived_extents = (
+        join_key_buffers, join_key_index_sets, derived_extents, vi_members = (
             _frontdoor_join_keys_and_extents(
                 flat,
                 ordered_observed,
@@ -1670,6 +2015,40 @@ def _build_numpy_rhs(
             static_cache["join_key_buffers"] = join_key_buffers
             static_cache["join_key_index_sets"] = join_key_index_sets
             static_cache["derived_extents"] = derived_extents
+            static_cache["vi_members"] = vi_members
+
+    # ---- Phase 3 pushdown hook 1: value-invention MEMBERS fed back as const
+    # factors. A `kind:"derived"` index set naming a `member_factor` gets that
+    # model parameter filled with the set's materialised member ids, so the
+    # generated `cell_*[c] = index(F, index(member_factor, c))` gathers resolve
+    # in the observed hoist below. No-op without such a set.
+    _all_var_names = (
+        list(flat.state_variables)
+        + list(flat.parameters)
+        + list(flat.observed_variables)
+    )
+    if vi_members:
+        for _k, _v in _feed_back_vi_members(
+            flat.index_sets, vi_members, _all_var_names
+        ).items():
+            loader_arrays[_k] = _v  # engine-derived: overwrites, like Julia merge!
+
+    # ---- Phase 3 pushdown hook 2: gated-provider deferral → post-VI selective
+    # fetch. Providers stashed by `prepare` (skipped by its eager const loop)
+    # are fetched HERE, pre-sliced to the gating derived set's members, and the
+    # compact slabs merged into the const registry under the model-variable
+    # aliases their gates name. This is the const-tier dependency edge:
+    # value-invention (above) → gated provider sample(selection) → const merge.
+    if gated_providers:
+        for _k, _v in _fetch_gated_providers(
+            gated_providers,
+            flat.index_sets,
+            vi_members,
+            derived_extents,
+            float(sample_time),
+            _all_var_names,
+        ).items():
+            loader_arrays[_k] = _v
 
     # Initial conditions.
     y0 = np.zeros(total_size, dtype=float)
@@ -1724,6 +2103,7 @@ def _build_numpy_rhs(
             join_key_index_sets,
             factor_scope,
             static_cache,
+            derived_extents,
         )
     )
 
@@ -1826,6 +2206,7 @@ def _build_numpy_rhs(
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
         derived_extents=derived_extents,
+        vi_members=vi_members,
     )
 
 
