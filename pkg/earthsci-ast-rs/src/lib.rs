@@ -116,6 +116,19 @@ pub mod area_faq;
 // rank) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
 pub mod value_invention;
 
+// Automatic projection-pushdown desugar (the Julia/Python `desugar_pushdown`
+// port): a raw-document → raw-document transform + the record-derived provider
+// gate helpers the `prepare` entry point consumes. Raw-JSON side by design —
+// see the module docs.
+pub mod pushdown_rewrite;
+
+// `prepare` — the build-time public surface mirroring the Julia binding's
+// `prepare`/`observed_field` and the Python `earthsci_ast.prepare`: rewrite →
+// value-invention → member-factor feedback → gated fetch → observed-graph
+// evaluation, all engine-side. Native-only (drives `simulate_array`).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod prepare;
+
 // OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
 // EarthSciIO — the two rigs stay decoupled, exactly as on the Python side
@@ -192,6 +205,13 @@ pub use value_invention::{
     BoundaryKind, ValueInventionError, ValueInventionResult, apply_value_invention,
     materialize_value_invention,
 };
+
+pub use pushdown_rewrite::{
+    GateAxis, ProviderGate, PushdownRewriteError, desugar_pushdown, pushdown_coupling_pairs,
+    pushdown_provider_gates, pushdown_record,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use prepare::{AxisSel, PrepareError, PrepareOptions, PrepareProvider, Prepared, prepare};
 
 pub use edit::{
     EditError, add_coupling, add_equation, add_model, add_reaction, add_reaction_system,

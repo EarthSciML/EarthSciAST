@@ -199,6 +199,175 @@ impl EsioProvider {
     }
 }
 
+// --------------------------------------------------------------------------- //
+// `prepare` integration (Phase 4 clean consolidation): the build-time
+// [`crate::prepare::PrepareProvider`] contract, so the engine's record-derived
+// gated deferral can drive a REAL EarthSciIO fetch pre-sliced to the invented
+// support set — the runner's hand-built `Selection::Orthogonal` moved into the
+// engine.
+// --------------------------------------------------------------------------- //
+
+#[cfg(not(target_arch = "wasm32"))]
+mod prepare_impl {
+    use super::*;
+    use crate::prepare::{AxisSel, PrepareError, PrepareProvider};
+    use earthsciio::format::AxisSelect;
+
+    fn perr(msg: impl Into<String>) -> PrepareError {
+        PrepareError(msg.into())
+    }
+
+    /// The single field of a `materialize` result (the `prepare` providers
+    /// contract is one provider per fed variable).
+    fn single_field(
+        fields: HashMap<String, NativeField>,
+    ) -> Result<ArrayD<f64>, PrepareError> {
+        if fields.len() != 1 {
+            let mut keys: Vec<_> = fields.keys().cloned().collect();
+            keys.sort();
+            return Err(perr(format!(
+                "prepare provider expects exactly one field per provider, got {keys:?}; \
+                 construct one EsioProvider per variable (providers_from_document does)"
+            )));
+        }
+        Ok(fields.into_values().next().unwrap().array)
+    }
+
+    fn to_selection(selection: &[AxisSel]) -> Selection {
+        Selection::Orthogonal(
+            selection
+                .iter()
+                .map(|ax| match ax {
+                    AxisSel::All => AxisSelect::All,
+                    AxisSel::Indices(idx) => AxisSelect::Indices(idx.clone()),
+                })
+                .collect(),
+        )
+    }
+
+    impl PrepareProvider for EsioProvider {
+        fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+            let fields = CadenceProvider::materialize(self).map_err(|e| perr(e.to_string()))?;
+            single_field(fields)
+        }
+
+        fn supports_selection(&self) -> bool {
+            EsioProvider::supports_selection(self)
+        }
+
+        fn sample_with_selection(
+            &mut self,
+            selection: &[AxisSel],
+        ) -> Result<ArrayD<f64>, PrepareError> {
+            let sel = to_selection(selection);
+            let fields = self
+                .inner
+                .materialize_with_select(Some(&sel))
+                .map_err(|e| perr(format!("EarthSciIO gated materialize failed: {e}")))?;
+            let fields = self.convert(fields).map_err(|e| perr(e.to_string()))?;
+            single_field(fields)
+        }
+
+        fn is_const(&self) -> bool {
+            CadenceProvider::refresh_times(self).is_empty()
+        }
+    }
+
+    /// Document-declared provider construction — the Rust mirror of the Python
+    /// `earthsci_ast.data_loaders.esio_provider.providers_from_document` (and
+    /// the Julia EarthSciIO extension's namesake). The document's
+    /// `data_loaders` say WHAT to read (`source.url_template`, `variables`)
+    /// and `metadata.esio_format` says HOW (the EarthSciIO format-registry
+    /// name); the runner no longer hand-constructs providers — it asks the
+    /// document.
+    ///
+    /// One provider PER VARIABLE (keyed `"<Loader>.<var>"`), matching (a)
+    /// `prepare`'s providers contract, (b) the single-field sample, and (c)
+    /// the per-key gate the record-derived pushdown path attaches. All of a
+    /// loader's providers share one [`Cache`] (a per-loader subdir under
+    /// `cache_root`) so a store's metadata objects are fetched once.
+    ///
+    /// `loaders` restricts to the named loaders (each MUST be constructible —
+    /// a missing `metadata.esio_format` errors); an unrestricted sweep skips
+    /// format-less loaders. `url_overrides` maps a loader name to a
+    /// replacement URL (e.g. a local `file://` mirror).
+    pub fn providers_from_document(
+        doc: &serde_json::Value,
+        cache_root: &std::path::Path,
+        loaders: Option<&[&str]>,
+        url_overrides: &HashMap<String, String>,
+    ) -> Result<Vec<(String, EsioProvider)>, PrepareError> {
+        let dls = doc
+            .get("data_loaders")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| perr("providers_from_document: the document declares no data_loaders"))?;
+        let mut out = Vec::new();
+        for (lname, ld) in dls {
+            if let Some(want) = loaders
+                && !want.contains(&lname.as_str())
+            {
+                continue;
+            }
+            let fmt = ld
+                .get("metadata")
+                .and_then(|m| m.get("esio_format"))
+                .and_then(|v| v.as_str());
+            let Some(fmt) = fmt else {
+                if loaders.is_none() {
+                    continue;
+                }
+                return Err(perr(format!(
+                    "providers_from_document: data_loaders.{lname} declares no \
+                     metadata.esio_format — cannot construct a provider for it"
+                )));
+            };
+            let url = url_overrides
+                .get(lname)
+                .map(String::as_str)
+                .or_else(|| {
+                    ld.get("source")
+                        .and_then(|s| s.get("url_template"))
+                        .and_then(|v| v.as_str())
+                })
+                .ok_or_else(|| {
+                    perr(format!(
+                        "providers_from_document: data_loaders.{lname} has no \
+                         source.url_template (and no url_overrides entry)"
+                    ))
+                })?;
+            let Some(variables) = ld.get("variables").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            let cache = Arc::new(
+                Cache::builder()
+                    .data_dir(cache_root.join(lname))
+                    .build()
+                    .map_err(|e| perr(format!("cache for {lname}: {e}")))?,
+            );
+            for (vname, vd) in variables {
+                let fv = vd
+                    .get("file_variable")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(vname);
+                let key = format!("{lname}.{vname}");
+                let loader = DataLoader::new(lname.clone(), fmt, url).variables([fv.to_string()]);
+                let provider = EsioProvider::builder(loader, cache.clone())
+                    .var(fv, key.clone())
+                    .build()
+                    .map_err(|e| perr(format!("provider {key}: {e}")))?;
+                out.push((key, provider));
+            }
+        }
+        // Deterministic key order (BTreeMap-like), matching the Python dict of
+        // sorted construction order closely enough for stable logs.
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use prepare_impl::providers_from_document;
+
 impl CadenceProvider for EsioProvider {
     fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
         let fields = self
