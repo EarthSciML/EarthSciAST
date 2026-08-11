@@ -497,10 +497,9 @@ end
     _alloc_of(K, M, t) = begin
         # Built with the B3 TIME tier disabled, deliberately: the whole sza→bands
         # chain depends only on `t`, so the tiered `f!` evaluates it once per
-        # `(p, t, epoch)` and every warm same-`t` call allocates ZERO — which would
-        # zero the per-CALL evaluation counter this testset reads. What is pinned
-        # here is the fn-barrier removal (evaluate once per call, independent of
-        # fan-out); the same-`t` skip has its own suite (tree_walk_tcadence_test.jl).
+        # `(p, t, epoch)` and warm same-`t` calls skip it entirely — this probe
+        # wants the per-CALL evaluation cost, not the memoized one. The same-`t`
+        # skip has its own suite (tree_walk_tcadence_test.jl).
         f!, u0, p, _ts, _vm = withenv("ESS_TCADENCE_DISABLE" => "1") do
             build_evaluator(_fanout_model(K, M))
         end
@@ -509,22 +508,25 @@ end
     end
 
     # ----------------------------------------------------------------
-    # Evaluate-once: the observed subtree beneath the `fn` barrier is evaluated
-    # ONCE per RHS call, no matter how many bands reference it or how many states
-    # consume the bands. The boxed-`datetime.*` allocation is the evaluation
-    # counter; it must not grow with the fan-out.
+    # Allocation-free at every fan-out. This testset ORIGINALLY used the
+    # boxed-`datetime.*` allocation as a per-call evaluation counter (`base > 0`,
+    # invariant under fan-out). That counter died by design: the registry typed
+    # scalar cores (ess-dtcore) plus branch-free calendar arithmetic made
+    # `datetime.*` allocation-free at Float64 on every tier, so `base` is now 0
+    # and byte-equality can no longer distinguish once-per-call from
+    # once-per-consumer. What survives here is the ABSOLUTE pin — the whole
+    # sza→bands→consumers RHS allocates zero bytes per call at every width,
+    # including the ReSEACT FastJX shape. The once-per-call property itself is
+    # carried by the structural witness below (one named prelude slot per
+    # observed, `n_obs_slots == K + 1`, and no inlined re-walks,
+    # `n_obs_inlined == 0`) plus the bit-exact `_reference_du` comparison.
     # ----------------------------------------------------------------
-    @testset "observed under a closed-function barrier is evaluated once per call" begin
+    @testset "fan-out RHS is allocation-free at every width" begin
         t = 43200.0
-        base = _alloc_of(1, 1, t)          # 1 band, 1 consumer  → 2 datetime evals
-        @test base > 0                     # sanity: the boxed path DOES allocate,
-                                           # so allocation is a usable counter
-        # Widen the fan-out 8×6 = 48-fold. With the barrier gone, `sza` is still
-        # evaluated exactly once, so the byte count is IDENTICAL. Before the fix
-        # it was 48× larger (one full re-walk of `sza` per band per consumer).
-        @test _alloc_of(4, 3, t) == base
-        @test _alloc_of(8, 6, t) == base
-        @test _alloc_of(18, 14, t) == base   # the ReSEACT FastJX shape
+        @test _alloc_of(1, 1, t) == 0
+        @test _alloc_of(4, 3, t) == 0
+        @test _alloc_of(8, 6, t) == 0
+        @test _alloc_of(18, 14, t) == 0   # the ReSEACT FastJX shape
     end
 
     # ----------------------------------------------------------------
