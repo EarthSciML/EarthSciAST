@@ -9,7 +9,7 @@
 # a split key is a recompute, not an error).
 #
 # Asserts, per model: sharing observable in the diag counters (`n_acc_cse_slots` /
-# `n_acc_inv_slots`) exactly where content matches; affine (ESS_AFFINE=1) ≡
+# `n_acc_inv_slots`) exactly where content matches; the default affine build ≡
 # per-cell (ESS_STENCIL_DISABLE=1) reference BIT-IDENTICALLY throughout — the
 # shared slot evaluates the SAME op on the SAME inputs, just once.
 using Test
@@ -18,8 +18,8 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _fnk_build(model, ics; affine::Bool)
-    envs = affine ? ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing) :
-                    ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")
+    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
+                    ("ESS_STENCIL_DISABLE" => "1",)
     withenv(envs...) do
         f!, u0, p, _tspan, vm, diag =
             ESM._build_evaluator_impl(model; initial_conditions=ics, form=:inplace)

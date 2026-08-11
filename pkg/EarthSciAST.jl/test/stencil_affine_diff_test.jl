@@ -1,6 +1,6 @@
 # End-to-end differential test for the affine polyhedral build (ess-affine).
 # Build the SAME model two ways and require bit-identical du:
-#   * ESS_AFFINE=1        → the affine access-kernel path (_try_affine_stencil)
+#   * default build       → the affine access-kernel path (_try_affine_stencil)
 #   * ESS_STENCIL_DISABLE=1 → the byte-identical per-cell reference path
 # Also assert the affine path actually FIRED (n_acc_kernels ≥ 1), so a silent
 # fallback can't make the comparison pass trivially.
@@ -61,9 +61,9 @@ end
 # 1-D GUARDED-SINGULARITY stencil (gordian total-vectorize, Stage 1): the body
 # guards a log AND a sqrt behind `ifelse` so that OUT-of-domain cells take the
 # else arm. The per-cell reference is LAZY (never evaluates the singular op off
-# its domain); the affine tape is EAGER but sanitizes the guarded operands, so
-# the two must be bit-identical. A neighbour term keeps it on the stencil/affine
-# path (interior + 2 boundary boxes).
+# its domain); the affine build's runners (codegen tier / interpreter) keep
+# the same lazy semantics, so the two must be bit-identical. A neighbour term
+# keeps it on the stencil/affine path (interior + 2 boundary boxes).
 function _guarded_stencil_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
     ui = _idx("u", _v("i"))
@@ -82,8 +82,8 @@ end
 
 # (du, u0, vmap, diag) for a model, under the affine path or the per-cell path.
 function _affine_build(model, ics; affine::Bool, form=:inplace, const_arrays=Dict())
-    envs = affine ? ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing) :
-                    ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")
+    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
+                    ("ESS_STENCIL_DISABLE" => "1",)
     withenv(envs...) do
         f!, u0, p, _tspan, vmap, diag =
             ESM._build_evaluator_impl(model; initial_conditions=ics, form=form,
@@ -165,16 +165,15 @@ end
         @test du_aff == du_ref              # bit-identical with per-cell const coefficient
     end
 
-    # The guard ops (`ifelse`/`and`/`or`) used to DECLINE the tape and fall to the
-    # scalar runner; the tape now compiles them as eager select/blend over a
-    # sanitized spine. This oracle pins that end-to-end: a guarded singularity on
-    # the affine tape ≡ the lazy per-cell reference, bit for bit.
+    # End-to-end guard oracle: a guarded singularity on the default affine
+    # build (codegen tier's lazy emission) ≡ the lazy per-cell reference, bit
+    # for bit.
     @testset "guarded singularity: affine tape ≡ per-cell (N=$N)" for N in (8, 32, 64)
         # sin dips negative and below 0.25, so BOTH guards exclude real cells
         ics = Dict("u[$k]" => sin(0.4k) + 0.05k for k in 1:N)
         du_aff, _, _, d = _affine_build(_guarded_stencil_model(N), ics; affine=true)
         du_ref, _, _, _ = _affine_build(_guarded_stencil_model(N), ics; affine=false)
-        @test d.n_acc_kernels >= 1          # affine tape owned the guarded equation
+        @test d.n_acc_kernels >= 1          # affine path owned the guarded equation
         @test d.n_vec_kernels == 0
         @test all(isfinite, du_aff)         # eager eval did not produce NaN from a throw
         @test du_aff == du_ref              # bit-identical to the lazy scalar reference

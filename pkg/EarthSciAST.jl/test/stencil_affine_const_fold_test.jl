@@ -17,7 +17,7 @@
 #   * unit — `_derive_lane_repl`'s decision itself, so a future "sample a few
 #     more points" regression is caught at the exact line rather than
 #     probabilistically through a model;
-#   * end-to-end — affine (ESS_AFFINE=1) ≡ per-cell (ESS_STENCIL_DISABLE=1) ≡
+#   * end-to-end — default affine build ≡ per-cell (ESS_STENCIL_DISABLE=1) ≡
 #     the analytic answer, on the 1-D corner-coinciding weight and on the
 #     regrid weight-matrix column that motivated the report.
 using Test
@@ -81,8 +81,8 @@ end
     # End-to-end: affine ≡ per-cell ≡ analytic.
     # -----------------------------------------------------------------------
     function _cf_build(model, ics, const_arrays; affine::Bool)
-        envs = affine ? ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing) :
-                        ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")
+        envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
+                        ("ESS_STENCIL_DISABLE" => "1",)
         withenv(envs...) do
             f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
                 initial_conditions=ics, const_arrays=const_arrays)

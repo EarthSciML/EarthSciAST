@@ -6,7 +6,7 @@
 # evaluation per cell. Bit-identity is automatic (the SAME computation, once), and
 # the scratch reuses the Float64/Dual dual-buffer trick so it stays zero-alloc + AD.
 #
-# Asserts, per sharing model: affine (ESS_AFFINE=1) ≡ per-cell (ESS_STENCIL_DISABLE)
+# Asserts, per sharing model: default affine build ≡ per-cell (ESS_STENCIL_DISABLE)
 # BIT-IDENTICALLY, CSE FIRED (n_acc_cse_slots ≥ 1), N-independent slot count; and a
 # no-sharing model produces ZERO CSE slots (no spurious caching).
 using Test
@@ -15,8 +15,8 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _cse_build(model, ics; affine::Bool, const_arrays=Dict())
-    envs = affine ? ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing) :
-                    ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")
+    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
+                    ("ESS_STENCIL_DISABLE" => "1",)
     withenv(envs...) do
         f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
             initial_conditions=ics, const_arrays=const_arrays)

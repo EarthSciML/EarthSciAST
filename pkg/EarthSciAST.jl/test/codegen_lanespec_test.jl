@@ -6,7 +6,7 @@
 # tabling the specs per lane (`_Interp*LaneSpec`). Before the lane-spec arms,
 # `_cg_emit_fn` declined those payloads (`:codegen_decline_fn_payload`), so
 # with the merge ON every merged kernel carrying a varying interp table
-# silently dropped from the compiled tier to the lane-tape/scalar runners.
+# silently dropped from the compiled tier to the scalar interpreter runner.
 #
 # What must hold, and is asserted here, for all three payload flavours
 # (linear / bilinear / searchsorted):

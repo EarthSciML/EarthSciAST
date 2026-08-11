@@ -266,7 +266,7 @@ end
     end
 end
 
-# The default array build (affine access kernels + lane tape) against the
+# The default array build (affine access kernels + codegen tier) against the
 # forced per-cell SCALAR reference (`ESS_STENCIL_DISABLE=1` — compiled cell
 # nodes on `rhs_list`, evaluated by `_eval_node` with no merge machinery).
 @testset "array kernels ≡ per-cell scalar reference (differential)" begin

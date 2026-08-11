@@ -1,10 +1,23 @@
 # Foundation test for the unified access-kernel IR (ess-affine): hand-build a
 # structured (affine, periodic) and an unstructured (indirect, variable-valence)
 # kernel and check the evaluator is BIT-IDENTICAL to a per-cell reference.
-# Exercises _eval_acc / _run_acc_kernel! and every access descriptor + bound kind.
+# Exercises _eval_acc / _run_acc_kernel! and every access descriptor + bound
+# kind, plus the codegen tier (the compiled runner that replaced the retired
+# Float64 lane tape) on the same hand-built kernels.
 using Test
 using EarthSciAST
 const E = EarthSciAST
+
+# Compile hand-built kernels through the codegen tier and run the generated
+# function's serial (1, 1) instance. Asserts every kernel was emitted (no
+# silent decline making the comparison trivial).
+function _akf_cg_run!(du, u, p, t, kernels::Vector{E._AccKernel})
+    cg = E._build_codegen_rhs(kernels)
+    @test cg !== nothing
+    @test all(cg.covered)
+    cg.f(du, u, p, t, cg.tabs, 1, 1)
+    return du
+end
 
 @testset "access-kernel IR foundation (ess-affine)" begin
 
@@ -55,16 +68,11 @@ const E = EarthSciAST
         for K in kernels; E._run_acc_kernel!(du0, fill(2.71828, ncell), nothing, 0.0, K); end
         @test maximum(abs, du0) == 0.0
 
-        # LANE TAPE (de-scalarized runner): every structured kernel must plan,
-        # and the planned run must be bit-identical to the scalar walk — with a
-        # deliberately tiny tile so several tile flushes cover one box.
+        # CODEGEN tier (compiled loop nests): every structured kernel must
+        # emit, and the compiled run must be bit-identical to the scalar walk.
         du_t = zeros(ncell)
-        for K in kernels
-            P = E._build_acc_plan(K; tile=8)
-            @test P !== nothing
-            E._run_acc_plan!(du_t, u, nothing, 0.0, K, P)
-        end
-        @test du_t == ref                      # bit-identical, tiled
+        _akf_cg_run!(du_t, u, nothing, 0.0, kernels)
+        @test du_t == ref                      # bit-identical, compiled
     end
 
     # ---------- STRUCTURED + reduced-rank const: D(q[i,j,k]) = Kz[k]*(qU - 2qC + qD) ----------
@@ -116,14 +124,10 @@ const E = EarthSciAST
         for K in kernels; E._run_acc_kernel!(du, u, nothing, 0.0, K); end
         @test du == ref                        # bit-identical, _AccConstBox addressing
 
-        # Lane tape over the 3-D boxes (const-box addressing through the tile's
-        # multi-index buffers), small tile → many flushes per box.
+        # Codegen tier over the 3-D boxes (const-box addressing baked into the
+        # emitted loop nest as literal strides/offsets).
         du_t = zeros(ncell)
-        for K in kernels
-            P = E._build_acc_plan(K; tile=16)
-            @test P !== nothing
-            E._run_acc_plan!(du_t, u, nothing, 0.0, K, P)
-        end
+        _akf_cg_run!(du_t, u, nothing, 0.0, kernels)
         @test du_t == ref
     end
 
@@ -172,9 +176,12 @@ const E = EarthSciAST
         E._run_acc_kernel!(du, u, nothing, 0.0, K)
         @test du == ref                        # bit-identical
 
-        # No strided formulation exists for a variable-valence indirect kernel:
-        # the lane tape must DECLINE (scalar runner keeps it), never mis-plan.
-        @test E._build_acc_plan(K) === nothing
+        # The codegen tier compiles variable-valence indirect kernels too
+        # (the emitted reduce loop reads the valence table per cell) and must
+        # match the scalar walk bit for bit.
+        du_c = zeros(Nc)
+        _akf_cg_run!(du_c, u, nothing, 0.0, E._AccKernel[K])
+        @test du_c == ref
     end
 
     # ---------- UNSTRUCTURED slot-table gather (_AK_STATE_TBL_BOX, stage 2) ----------
@@ -195,11 +202,9 @@ const E = EarthSciAST
         du = zeros(N)
         E._run_acc_kernel!(du, u, nothing, 0.0, K)
         @test du == ref                               # scalar runner, bit-identical
-        P = E._build_acc_plan(K; tile=16)             # the tape must PLAN this kind
-        @test P !== nothing
-        du2 = zeros(N)
-        E._run_acc_plan!(du2, u, nothing, 0.0, K, P)
-        @test du2 == ref                              # tape run, bit-identical
+        du2 = zeros(N)                        # codegen must EMIT this kind
+        _akf_cg_run!(du2, u, nothing, 0.0, E._AccKernel[K])
+        @test du2 == ref                              # compiled run, bit-identical
     end
 
     # ---------- END-TO-END: the BUILD emits the slot table (stage 2) ----------
@@ -237,7 +242,7 @@ const E = EarthSciAST
         dur = fill(-1.0, length(u0r)); fr!(dur, u0r, pr, 0.0)
         @test du == dur
 
-        # zero-alloc in place (the tape hosts the table gather)
+        # zero-alloc in place (the codegen tier hosts the table gather)
         f!(du, u0, p, 0.0)
         @test (@allocated f!(du, u0, p, 0.0)) == 0
 
@@ -250,13 +255,13 @@ const E = EarthSciAST
         end
     end
 
-    # ---------- GUARD VECTORIZATION (gordian total-vectorize, Stage 1) ----------
-    # The lane tape now COMPILES `ifelse`/`and`/`or` as eager select/blend, on a
-    # spine `_acc_sanitize_guards` makes total, so a throwing op under an
-    # unentered guard cannot raise. Every guarded kernel must (a) plan, (b) match
-    # the scalar LAZY reference bit for bit, (c) stay zero-alloc — while an
-    # UNguarded domain violation still raises on the tape.
-    @testset "guarded singularity: eager select ≡ lazy scalar" begin
+    # ---------- GUARDED SINGULARITIES on the codegen tier ----------
+    # The codegen tier emits `ifelse`/`and`/`or` with the interpreter's LAZY
+    # semantics (ternaries / `&&`/`||` chains), so a throwing op under an
+    # unentered guard cannot raise. Every guarded kernel must (a) emit, and
+    # (b) match the scalar lazy reference bit for bit — while an UNguarded
+    # domain violation still raises on the compiled tier.
+    @testset "guarded singularity: codegen ≡ lazy scalar" begin
         N = 64
         # alternating sign so ~half the cells are OUT of every guarded domain
         u = Float64[(-1.0)^i * (0.05 + 0.03i) for i in 1:N]
@@ -302,33 +307,32 @@ const E = EarthSciAST
             ref = zeros(N)
             E._run_acc_kernel!(ref, u, nothing, 0.0, K)     # scalar LAZY reference
             @test all(isfinite, ref)                        # reference itself is total
-            P = E._build_acc_plan(K; tile=8)
-            @test P !== nothing                             # (a) plans
-            tape = zeros(N)
-            E._run_acc_plan!(tape, u, nothing, 0.0, K, P)   # eager, sanitized
-            @test tape == ref                               # (b) bit-identical
-            E._run_acc_plan!(tape, u, nothing, 0.0, K, P)   # warm
-            @test (@allocated E._run_acc_plan!(tape, u, nothing, 0.0, K, P)) == 0  # (c)
+            cgv = zeros(N)
+            _akf_cg_run!(cgv, u, nothing, 0.0, E._AccKernel[K])   # (a) emits
+            @test cgv == ref                                # (b) bit-identical
         end
 
-        # An UNGUARDED domain violation still throws on the tape (contract intact).
+        # An UNGUARDED domain violation still throws on the compiled tier
+        # (contract intact — lazy emission does not swallow real throws).
         Kbad = mkK(E._aop(:log, E._acc(1)))
-        Pbad = E._build_acc_plan(Kbad; tile=8)
-        @test Pbad !== nothing
-        @test_throws DomainError E._run_acc_plan!(zeros(N), u, nothing, 0.0, Kbad, Pbad)
+        cgbad = E._build_codegen_rhs(E._AccKernel[Kbad])
+        @test cgbad !== nothing
+        @test all(cgbad.covered)
+        @test_throws DomainError cgbad.f(zeros(N), u, nothing, 0.0, cgbad.tabs, 1, 1)
         Kbad2 = mkK(E._aop(:sqrt, E._acc(1)))
-        @test_throws DomainError E._run_acc_plan!(zeros(N), u, nothing, 0.0, Kbad2,
-                                                  E._build_acc_plan(Kbad2; tile=8))
+        cgbad2 = E._build_codegen_rhs(E._AccKernel[Kbad2])
+        @test cgbad2 !== nothing
+        @test all(cgbad2.covered)
+        @test_throws DomainError cgbad2.f(zeros(N), u, nothing, 0.0, cgbad2.tabs, 1, 1)
     end
 
-    # ---------- BOXED CLOSED `fn` UNDER A GUARD (gordian total-vectorize, Stage 2) ----------
-    # A boxed closed fn (`datetime.*`) no longer declines the tape: it evaluates
-    # eagerly per lane through `_eval_closed_fn`. Totality is the AUTHOR CONTRACT
-    # (a closed fn is total over real inputs — never throws, returns NaN
-    # off-domain), so eager eval under a guard is safe and any off-domain value
-    # is discarded by the guard's select. Must (a) plan (not decline), (b) match
-    # the scalar reference bit for bit, on both invariant and lane-varying args.
-    @testset "boxed closed fn under guard: eager per-lane ≡ scalar" begin
+    # ---------- BOXED CLOSED `fn` UNDER A GUARD (codegen tier) ----------
+    # A boxed closed fn (`(name, nothing)` payload) compiles on the codegen
+    # tier: the emitted body calls the interpreter's own `_eval_closed_fn`,
+    # under the interpreter's lazy guard semantics. Must (a) emit (not
+    # decline), (b) match the scalar reference bit for bit, on both invariant
+    # and lane-varying args.
+    @testset "boxed closed fn under guard: codegen ≡ scalar" begin
         N = 48
         u = Float64[(-1.0)^k * (0.05 + 0.03k) for k in 1:N]     # alternating sign
         tval = 1.5e9                                            # a finite unix time
@@ -354,20 +358,18 @@ const E = EarthSciAST
                        E._alit(-2.0))
         for (name, spine) in (("invariant-arg", s_inv), ("lane-varying-arg", s_var))
             K = mkK(spine)
-            P = E._build_acc_plan(K; tile=8)
-            @test P !== nothing                         # (a) planned, no decline
             ref = zeros(N); E._run_acc_kernel!(ref, u, nothing, tval, K)
-            tape = zeros(N); E._run_acc_plan!(tape, u, nothing, tval, K, P)
-            @test all(isfinite, tape)
-            @test tape == ref                           # (b) bit-identical blend
+            cgv = zeros(N)
+            _akf_cg_run!(cgv, u, nothing, tval, E._AccKernel[K])  # (a) emitted
+            @test all(isfinite, cgv)
+            @test cgv == ref                            # (b) bit-identical
         end
 
-        # An UNguarded boxed fn also vectorizes and matches the scalar walk.
+        # An UNguarded boxed fn also compiles and matches the scalar walk.
         Kun = mkK(E._aop(:*, fn("datetime.julian_day", tnode()), E._acc(1)))
-        Pun = E._build_acc_plan(Kun; tile=8)
-        @test Pun !== nothing
         refu = zeros(N); E._run_acc_kernel!(refu, u, nothing, tval, Kun)
-        tapu = zeros(N); E._run_acc_plan!(tapu, u, nothing, tval, Kun, Pun)
-        @test tapu == refu
+        cgu = zeros(N)
+        _akf_cg_run!(cgu, u, nothing, tval, E._AccKernel[Kun])
+        @test cgu == refu
     end
 end

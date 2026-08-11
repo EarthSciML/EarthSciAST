@@ -5,7 +5,7 @@
 # invariant-tier defs into bare `_NK_CACHED` reads of the build's SCALAR
 # prelude `_CSECache` — a payload that is no kernel's scratch. The codegen
 # emitter used to decline every such kernel (`:foreign_scratch`), dropping it
-# to the tape/interpreter; it now emits the interpreter's exact read
+# to the interpreter; it now emits the interpreter's exact read
 # (`_cse_read(cache, idx, T)` — eltype-generic, Float64 `f64` buffer or the
 # Dual `alt` buffer), sound because `_make_rhs` fills every prelude tier into
 # that exact cache, at the same `T`, before the kernel section runs.
@@ -18,7 +18,7 @@
 #      (`:codegen_decline_foreign_scratch` ≥ 1 — the fixture really does mint
 #      the foreign shape, no vacuous pass).
 #   2. FLOAT64 BIT-IDENTITY — du `===` per element across the default build,
-#      the kill-switch build, and ESS_CODEGEN_DISABLE=1 (interpreter/tape
+#      the kill-switch build, and ESS_CODEGEN_DISABLE=1 (interpreter
 #      oracle), on several (u, t) probes.
 #   3. DUAL BIT-IDENTITY — the ForwardDiff state Jacobian and a direct
 #      Dual-seeded in-place call agree bit-for-bit with the interpreter

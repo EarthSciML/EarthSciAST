@@ -1,20 +1,20 @@
 # The Dual overflow codegen tier (ess-dualfp, codegen_kernel.jl).
 #
 # Kernels the PRIMARY codegen emission declines — in practice on the node
-# budget (ESS_CODEGEN_NODE_BUDGET), which bounds Float64 build latency — keep
-# the Float64-only lane tape at Float64, but under any other value type
-# (ForwardDiff `Dual` in a stiff-solver Jacobian) they used to drop to the
+# budget (ESS_CODEGEN_NODE_BUDGET), which bounds Float64 build latency — used
+# to drop, under non-Float64 value types
+# (ForwardDiff `Dual` in a stiff-solver Jacobian), to the
 # per-cell interpreter `_run_acc_kernel!`: slow and allocating on the hot AD
 # path. The dual overflow tier re-emits those residual kernels into a second
-# generated function called ONLY under non-Float64 `T`.
+# generated function called under non-Float64 `T` (and, since ess-f64ofl, at
+# Float64 too when that routing is armed).
 #
-# Pinned here, on a fixture whose kernels are TAPE-CLASS (plans built, primary
+# Pinned here, on a fixture whose kernels are all budget-declinable (primary
 # codegen declined via a forced zero budget):
 #   1. ROUTING — the build tally shows the primary decline
 #      (`:codegen_decline_budget`) AND the overflow acceptance
 #      (`:dual_codegen_kernel`); the section carries a dual function covering
-#      every residual kernel (`n_dual_emitted`, empty `dual_resid`); the
-#      fixture really is tape-class (at least one non-nothing plan); and
+#      every residual kernel (`n_dual_emitted`, empty `dual_resid`); and
 #      ESS_DUAL_CODEGEN_DISABLE=1 restores the pre-dual section exactly
 #      (no dual function, no dual tally keys).
 #   2. FLOAT64 BIT-IDENTITY — du is `===` per element (NaN/-0.0 count) across
@@ -51,8 +51,8 @@ _dfp_probe(n, k) =
 const _DFP_AX = [0.0, 1.0, 2.0, 3.0, 4.0]
 const _DFP_TBL = [10.0, 20.0, 40.0, 80.0, 160.0]
 
-# Tape-class fixture: elementwise arrayed equations (guards, unary fns, an
-# interp leaf, cross-variable reads) — every kernel gets a lane plan, and a
+# Fixture: elementwise arrayed equations (guards, unary fns, an
+# interp leaf, cross-variable reads) — a
 # zero primary budget forces every kernel off the primary codegen tier.
 function _dfp_model(N)
     ubody = _op("+",
@@ -75,14 +75,14 @@ end
 _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
                    for (j, x) in enumerate(("u", "v")), k in 1:N)
 
-@testset "dual fast path: overflow codegen tier for tape-class kernels" begin
+@testset "dual fast path: overflow codegen tier for budget-declined kernels" begin
     N = 48
     model = _dfp_model(N)
     ics = _dfp_ics(N)
 
     # A: primary codegen forced off (budget 0) — the dual overflow tier is the
-    #    ONLY compiled representation. B: same, dual tier killed (today's
-    #    routing: tape at Float64, interpreter under Dual — the oracle).
+    #    ONLY compiled representation. B: same, dual tier killed (the pre-dual
+    #    routing: per-cell interpreter under every T — the oracle).
     # C: codegen disabled wholesale (must also keep the dual tier off).
     fA, uA, pA, vmA, _, tallyA = _dfp_build(model, ics;
         ESS_CODEGEN_NODE_BUDGET="0")
@@ -107,9 +107,6 @@ _dfp_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         @test getfield(ksA, :dualf) !== nothing
         @test getfield(ksA, :n_dual_emitted) == length(getfield(ksA, :kernels))
         @test isempty(getfield(ksA, :dual_resid))
-
-        # The fixture is really tape-class: the Float64 path has lane plans.
-        @test any(P -> P !== nothing, getfield(ksA, :plans))
 
         # The kill switch really kills: pre-dual section, byte for byte.
         @test getfield(ksB, :dualf) === nothing
