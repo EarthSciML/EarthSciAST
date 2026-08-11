@@ -255,6 +255,21 @@ except ImportError:
     # scipy (a hard dep) missing only in a broken install; skip the sim tier.
     pass
 
+# Build-time public surface (Phase 3 clean consolidation): the Julia-parity
+# prepare()/observed_field() entry points and the raw-dict pushdown desugar.
+_has_prepare = False
+try:
+    from .prepare import (  # noqa: F401 — re-exported via __all__ below
+        PreparedModel,
+        observed_field,
+        prepare,
+    )
+    from .pushdown_rewrite import desugar_pushdown  # noqa: F401
+
+    _has_prepare = True
+except ImportError:
+    pass
+
 # Display and pretty-printing (Core tier requirement)
 from .display import (
     to_unicode,
@@ -526,5 +541,15 @@ if _has_simulation:
             "BuildInspection",
             "SimulationResult",
             "SimulationError",
+        ]
+    )
+
+if _has_prepare:
+    __all__.extend(
+        [
+            "prepare",
+            "PreparedModel",
+            "observed_field",
+            "desugar_pushdown",
         ]
     )
