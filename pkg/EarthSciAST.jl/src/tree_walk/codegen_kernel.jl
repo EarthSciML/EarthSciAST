@@ -38,7 +38,9 @@
 #
 # FALLBACK CONTRACT (identical to the affine/lane-tape tiers): anything the
 # emitter cannot model — an unknown node kind or descriptor, a foreign CSE
-# scratch, a >3-D box, an oversized spine — declines THAT kernel silently
+# scratch (except the build's own shared scalar-prelude cache, which since
+# ess-cgfsc is emitted as the interpreter's `_cse_read`; see the tier note
+# below), a >3-D box, an oversized spine — declines THAT kernel silently
 # (`_CodegenDecline`); the kernel keeps its existing runner (lane tape at
 # Float64, scalar walk otherwise). Declines are counted per reason in
 # `_CASCADE_TALLY` (`:codegen_kernel` / `:codegen_decline_<reason>`), the
@@ -119,6 +121,35 @@ _dual_codegen_node_budget() =
 # armed (overflow function present + feature on).
 _f64_overflow_codegen_enabled() = get(ENV, "ESS_F64_OVERFLOW_CODEGEN", "1") != "0"
 
+# ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
+# The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
+# defs into bare `_NK_CACHED` reads of the build's SCALAR prelude cache — a
+# `_CSECache` payload that is no kernel's scratch. The emitter used to decline
+# every such kernel (`:foreign_scratch`), dropping it to the tape/interpreter.
+# This tier emits the read instead, as the very call the interpreter makes
+# (`_cse_read(cache, idx, T)` — eltype-generic, so the Float64 AND the Dual
+# specialization of the generated code read the same buffer the interpreter
+# would: `f64` at Float64, the lazily-allocated `alt::Vector{T}` otherwise).
+#
+# FILL-ORDERING SOUNDNESS. Acceptance is gated on IDENTITY with the one cache
+# the build threads in (`shared_cache` below): `_make_rhs` fills every prelude
+# tier (const/time/dynamic) into that exact cache — for the SAME value type `T`
+# the kernel section is about to run at — before `kernel_section(du,u,p,t,T)`
+# is called, in the same `f!` body (acc_merge.jl). Both generated functions
+# (primary and dual/f64 overflow) are only ever invoked from inside that
+# section, so every accepted read lands on a slot filled this call. Call sites
+# that cannot pin that ordering (the materialized-observed fill sections in
+# build.jl, hand-built test sections) pass `shared_cache = nothing` and keep
+# today's decline — as does ANY payload that is not that one cache object.
+#
+# Kill switch: ESS_CG_FOREIGN_SCRATCH_DISABLE=1 restores the unconditional
+# `:foreign_scratch` decline exactly (the differential oracle).
+# Build tally: `:cg_foreign_scratch_emit` — one bump per kernel that COMPILED
+# carrying at least one shared-prelude read (primary or overflow emission; a
+# kernel that later declines for another reason is not counted).
+_cg_foreign_scratch_disabled() =
+    get(ENV, "ESS_CG_FOREIGN_SCRATCH_DISABLE", "") == "1"
+
 # Per-kernel decline: the kernel keeps the interpreter/lane-tape runner.
 # Never an error — the tier is a pure optimization.
 struct _CodegenDecline <: Exception
@@ -141,9 +172,15 @@ mutable struct _CGCtx
     nodes::Int                   # emitted-node tally (budget enforcement)
     budget::Int
     nname::Int                   # unique-name counter
+    # Shared-prelude cache reads (ess-cgfsc): the ONE `_CSECache` whose
+    # `_NK_CACHED` reads may be emitted (`nothing` ⇒ decline as before), and a
+    # per-build count of reads emitted (tally bookkeeping in the build loop).
+    shared_cache::Union{Nothing,_CSECache}
+    fscratch::Int
 end
-_CGCtx(budget::Int) = _CGCtx(Any[], IdDict{Any,Int}(), IdDict{Any,Vector{Symbol}}(),
-                             Any[], Any[], 0, budget, 0)
+_CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
+    _CGCtx(Any[], IdDict{Any,Int}(), IdDict{Any,Vector{Symbol}}(),
+           Any[], Any[], 0, budget, 0, shared_cache, 0)
 
 _cg_name(ctx::_CGCtx, base::String) = Symbol("_cg", base, ctx.nname += 1)
 
@@ -286,6 +323,17 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             return kc.cellsyms[nd.idx]
         elseif pl === cse.inv_scratch && nd.idx <= length(kc.invsyms)
             return kc.invsyms[nd.idx]
+        elseif pl === ctx.shared_cache && pl isa _CSECache &&
+               !_cg_foreign_scratch_disabled()
+            # Shared scalar-prelude slot (xcse.jl rewrite; ess-cgfsc). Emit the
+            # interpreter's exact read — `_cse_read` selects `f64` at Float64
+            # and the `alt::Vector{T}` buffer under any other `T`, both filled
+            # by `_make_rhs`'s prelude tiers (at this same `T`) before the
+            # kernel section runs; see the fill-ordering note at the tier docs
+            # above. The enclosing recipe's `convert(_cgT, …)` store matches
+            # `_fill_invariant!`'s `buf[i] = …` conversion exactly.
+            ctx.fscratch += 1
+            return :(_cse_read($(_cg_tab!(ctx, pl)), $(nd.idx), _cgT))
         end
         throw(_CodegenDecline(:foreign_scratch))
     elseif k === _NK_REDUCE
@@ -659,10 +707,11 @@ end
 # (`covered[j] == false`). Returns `nothing` when no kernel could be emitted.
 function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                             budget::Int=_codegen_node_budget(),
-                            tally::Symbol=:codegen)
+                            tally::Symbol=:codegen,
+                            shared_cache::Union{Nothing,_CSECache}=nothing)
     isempty(acc_kernels) && return nothing
     t0 = time_ns()
-    ctx = _CGCtx(budget)
+    ctx = _CGCtx(budget, shared_cache)
     covered = fill(false, length(acc_kernels))
     kloops = Tuple{Any,Int}[]         # (loop-nest expr, its emitted-node cost)
     for (j, K) in enumerate(acc_kernels)
@@ -672,11 +721,15 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         nprologue = length(ctx.prologue)
         ninvlog = length(ctx.invlog)
         nodes0 = ctx.nodes
+        fscratch0 = ctx.fscratch
         try
             lx = _cg_emit_kernel!(ctx, K)
             push!(kloops, (lx, ctx.nodes - nodes0))
             covered[j] = true
             _tally_cascade!(Symbol(tally, :_kernel))
+            # Shared-prelude read observability (ess-cgfsc): this kernel
+            # compiled carrying at least one such read.
+            ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
         catch err
             err isa _CodegenDecline || rethrow()
             resize!(ctx.prologue, nprologue)
@@ -685,6 +738,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
             end
             resize!(ctx.invlog, ninvlog)
             ctx.nodes = nodes0
+            ctx.fscratch = fscratch0
             _tally_cascade!(Symbol(tally, "_decline_", err.reason))
             _codegen_debug() &&
                 println(stderr, "[ess-codegen/$tally] kernel $j DECLINED: $(err.reason)")
@@ -843,9 +897,16 @@ end
 # exactly the pre-codegen kernel loop; `ESS_DUAL_CODEGEN_DISABLE=1` yields the
 # pre-dual routing (Duals interpret every residual kernel) with the primary
 # tier intact.
+# `shared_cache` (ess-cgfsc): the build's scalar prelude `_CSECache`, passed
+# ONLY by the `_make_rhs` call site (acc_merge.jl) — the one place where the
+# section provably runs after that cache's prelude tiers were filled in the
+# same `f!` call. Every other caller keeps the default `nothing`, which keeps
+# the `:foreign_scratch` decline for shared-prelude reads.
 function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
-                              acc_plans::AbstractVector{Union{Nothing,_AccPlan}})
-    cg = _codegen_disabled() ? nothing : _build_codegen_rhs(acc_kernels)
+                              acc_plans::AbstractVector{Union{Nothing,_AccPlan}};
+                              shared_cache::Union{Nothing,_CSECache}=nothing)
+    cg = _codegen_disabled() ? nothing :
+         _build_codegen_rhs(acc_kernels; shared_cache=shared_cache)
     if cg === nothing
         kernels = collect(_AccKernel, acc_kernels)
         plans = collect(Union{Nothing,_AccPlan}, acc_plans)
@@ -866,7 +927,7 @@ function _make_kernel_section(acc_kernels::AbstractVector{_AccKernel},
     dg = (_codegen_disabled() || _dual_codegen_disabled() || isempty(kernels)) ?
          nothing :
          _build_codegen_rhs(kernels; budget=_dual_codegen_node_budget(),
-                            tally=:dual_codegen)
+                            tally=:dual_codegen, shared_cache=shared_cache)
     if dg === nothing
         return _KernelSection(cgf, cgtabs, n_emitted, kernels, plans,
                               nothing, nothing, 0, collect(Int, 1:length(kernels)),

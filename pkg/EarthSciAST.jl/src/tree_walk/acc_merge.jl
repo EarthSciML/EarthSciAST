@@ -679,7 +679,12 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
     # (bit-identical, eltype-generic); the rest keep the tape/scalar runners
     # above. `ESS_CODEGEN_DISABLE=1` yields exactly the pre-codegen kernel loop.
-    kernel_section = _make_kernel_section(acc_kernels, acc_plans)
+    # `shared_cache = cse_cache` (ess-cgfsc): THIS call site may compile
+    # shared-prelude (`_CSECache`) reads into the generated kernels, because
+    # `f!` below fills every prelude tier into that exact cache — at the same
+    # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
+    kernel_section = _make_kernel_section(acc_kernels, acc_plans;
+                                          shared_cache=cse_cache)
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
         T = _rhs_value_type(u, p, t)
