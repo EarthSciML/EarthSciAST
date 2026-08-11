@@ -204,7 +204,8 @@
             "VOC_INV": 2,
             "XYL": 3
           },
-          "pollutant_encoding": "The FF10 col-12 string code is delivered as the integer in `pollutant_codes` by the runner ff10 reader; the is_VOC/is_NOx/is_NH3/is_SOx/is_PM25 membership observeds compare `pollutant` against these integers (STEP 0.6 pollutant->pathway map)."
+          "pollutant_encoding": "The FF10 col-12 string code is delivered as the integer in `pollutant_codes` by the runner ff10 reader; the is_VOC/is_NOx/is_NH3/is_SOx/is_PM25 membership observeds compare `pollutant` against these integers (STEP 0.6 pollutant->pathway map).",
+          "skip_header_row": true
         }
       },
       "reference": {
