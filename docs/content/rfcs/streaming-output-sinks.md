@@ -845,6 +845,31 @@ Live S3-bucket I/O is verified only offline (fsspec-memory / `object_store` Loca
 no credentials in the test environment). The `s3` **cache** store remains a spec-pinned
 stub pending a coordinated cross-language activation.
 
+**Rust output DERIVATION** (`pkg/earthsci-ast-rs/src/data_output.rs`) — the piece that feeds
+the Rust writer, and the mirror of `data_output.jl`'s §7–§9 surface. Ported: the flat→gridded
+column-major cell-key inversion (`derive_output_gridding` / `scatter` / `gather`, the restart
+direction included), `derive_output_meta` (real `index_sets` axis names, per-axis lengths,
+retained CF variable attributes, the `coordinates` registry, the record-axis name),
+`plan_dimension_coordinates` (§8 inline-`values` dimension coordinates), and
+`group_gridding_by_grid` (§9). On top of those Rust adds `derive_output_plan`, which assembles
+an `OutputPlan` — per grid: ordered dims, CF coordinates, and per-variable dims/attrs/scatter —
+implementing RFC decision 8 (output is the state **plus a caller-named subset** of observed
+fields). The plan converts mechanically into EarthSciIO's `OutputSchema`, verified end to end
+by a `write_zarr_v3` → `Provider` round trip under the `wasm` profile (`--features esio`). The
+module is `wasm32-unknown-unknown`-clean (no filesystem, no threads, no wall clock). Three
+deliberate divergences from the Julia are recorded in the module docs: scalars are genuinely
+0-spatial-dimensional (rather than carrying a synthetic `<base>_d0` singleton axis, which would
+make every scalar its own grid); grid density is validated instead of silently leaving holes;
+and per-variable `standard_name` is not retained, because neither `ModelVariable` nor the
+schema's `ModelVariable` has that property. The Sink protocol, `build_output_callback`, the
+checkpoint predicates and `zarr_restart_state` are **not** ported — they are the
+solver-integration layer, not the derivation.
+
+The Rust `EsmFile` also gained the `coordinates` field itself: the registry is in
+`esm-schema.json` and in the Julia `EsmFile`, but the Rust binding never modeled it, so a
+`parse → emit` round trip silently **dropped** the whole registry (the same class of defect as
+the `IndexSet.member_factor` omission).
+
 ### 16.13 Codec profiles (and the `wasm` profile)
 
 The writers pin **three** inner-codec profiles. Only the inner (per-chunk) compressor

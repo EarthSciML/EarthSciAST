@@ -52,6 +52,10 @@ pub mod intern;
 pub mod coupling;
 pub mod coupling_imports;
 pub mod dae;
+/// Flat→gridded simulation-output derivation (streaming-output-sinks RFC
+/// §7–§9): the Rust mirror of `EarthSciAST.jl`'s `src/data_output.jl`. Pure and
+/// wasm32-clean — it plans a dataset, it never writes one.
+pub mod data_output;
 pub mod diagnostic;
 pub mod display;
 pub mod edit;
@@ -133,6 +137,11 @@ pub use coupling_imports::{
     CouplingImportOptions, expand_coupling_imports, has_coupling_import, is_coupling_library_doc,
 };
 pub use dae::{DaeError, DiscretizeOptions, apply_dae_contract, default_dae_support, discretize};
+pub use data_output::{
+    CoordPlan, GridPlan, OutputError, OutputMeta, OutputPlan, VarGridding, VarPlan,
+    derive_output_gridding, derive_output_meta, derive_output_plan, group_gridding_by_grid,
+    parse_cell_key, plan_dimension_coordinates,
+};
 pub use display::{to_ascii, to_latex, to_unicode};
 #[cfg(not(target_arch = "wasm32"))]
 pub use expression::evaluate;
