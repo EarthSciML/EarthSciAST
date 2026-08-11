@@ -22,6 +22,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # ---- Serialization round-trips (src/serialize.jl + conformance adapter) ----
     include("round_trip_regression_test.jl")
     include("conformance_round_trip_test.jl")
+    include("conformance_pushdown_test.jl")
 
     # ---- MTK / Catalyst integration (ext/EarthSciASTMTKExt.jl,
     #      ext/EarthSciASTCatalystExt.jl) ----

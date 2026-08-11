@@ -1,0 +1,4814 @@
+{
+  "coupling": [
+    {
+      "from": "ISRM_SR.SOA",
+      "to": "ISRM.SR_SOA",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.pNO3",
+      "to": "ISRM.SR_pNO3",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.pNH4",
+      "to": "ISRM.SR_pNH4",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.pSO4",
+      "to": "ISRM.SR_pSO4",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.PrimaryPM25",
+      "to": "ISRM.SR_PrimaryPM25",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.W",
+      "to": "ISRM.W",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.S",
+      "to": "ISRM.S",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.E",
+      "to": "ISRM.E",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.N",
+      "to": "ISRM.N",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.TotalPop",
+      "to": "ISRM.TotalPop",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "ISRM_SR.MortalityRate",
+      "to": "ISRM.MortalityRate",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.lon",
+      "to": "ISRM.emis_lon",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.lat",
+      "to": "ISRM.emis_lat",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.annual",
+      "to": "ISRM.emis_annual",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.pollutant",
+      "to": "ISRM.pollutant",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.stkhgt",
+      "to": "ISRM.stkhgt",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.stkdiam",
+      "to": "ISRM.stkdiam",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.stktemp",
+      "to": "ISRM.stktemp",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    },
+    {
+      "from": "EGU_Emis.stkvel",
+      "to": "ISRM.stkvel",
+      "transform": "param_to_var",
+      "type": "variable_map"
+    }
+  ],
+  "data_loaders": {
+    "EGU_Emis": {
+      "kind": "points",
+      "metadata": {
+        "esio_format": "ff10",
+        "tags": [
+          "nei",
+          "ff10",
+          "point_sources",
+          "egu",
+          "emissions"
+        ],
+        "x_esd": {
+          "columns": {
+            "annual_tons": 13,
+            "lat": 24,
+            "lon": 23,
+            "pollutant": 12,
+            "stkdiam_ft": 18,
+            "stkhgt_ft": 17,
+            "stktemp_F": 19,
+            "stkvel_fps": 21
+          },
+          "container": "zip",
+          "crs": "EPSG:4269",
+          "format": "ff10",
+          "member_filter": "*egu*",
+          "note": "format=ff10, the zip container, the *egu* member filter, and the numbered column map are not expressible in the 0.8.0 source schema (G3); the runner selects egu members and parses the columns. Records whose pollutant maps to no pathway are skipped by the runner.",
+          "pollutant_codes": {
+            "ALD2": 16,
+            "ALDX": 17,
+            "CB05_ALD2": 18,
+            "CB05_ALDX": 19,
+            "CB05_BENZENE": 20,
+            "CB05_ETH": 21,
+            "CB05_ETHA": 22,
+            "CB05_ETOH": 23,
+            "CB05_FORM": 24,
+            "CB05_IOLE": 25,
+            "CB05_ISOP": 26,
+            "CB05_MEOH": 27,
+            "CB05_OLE": 28,
+            "CB05_PAR": 29,
+            "CB05_TERP": 30,
+            "CB05_TOL": 31,
+            "CB05_XYL": 32,
+            "DIESEL-PM25": 44,
+            "ETH": 15,
+            "ETHA": 14,
+            "ETHANOL": 33,
+            "ETOH": 13,
+            "FORM": 12,
+            "HONO": 37,
+            "IOLE": 11,
+            "ISOP": 10,
+            "MEOH": 9,
+            "NH3": 40,
+            "NHTOG": 34,
+            "NMOG": 35,
+            "NO": 38,
+            "NO2": 39,
+            "NOX": 36,
+            "NVOL": 8,
+            "OLE": 7,
+            "PAL": 45,
+            "PAR": 6,
+            "PCA": 46,
+            "PCL": 47,
+            "PEC": 48,
+            "PFE": 49,
+            "PK": 50,
+            "PM25-PRI": 42,
+            "PM2_5": 43,
+            "PMG": 51,
+            "PMN": 52,
+            "PMOTHR": 53,
+            "PNH4": 54,
+            "PNO3": 55,
+            "POC": 56,
+            "PSI": 57,
+            "PSO4": 58,
+            "PTI": 59,
+            "SO2": 41,
+            "TERP": 5,
+            "TOL": 4,
+            "VOC": 1,
+            "VOC_INV": 2,
+            "XYL": 3
+          },
+          "pollutant_encoding": "The FF10 col-12 string code is delivered as the integer in `pollutant_codes` by the runner ff10 reader; the is_VOC/is_NOx/is_NH3/is_SOx/is_PM25 membership observeds compare `pollutant` against these integers (STEP 0.6 pollutant->pathway map)."
+        }
+      },
+      "reference": {
+        "notes": "EPA 2016fd alpha point-source FF10 inventory (2016fd_inputs_point.zip)."
+      },
+      "source": {
+        "url_template": "https://gaftp.epa.gov/air/emismod/2016/alpha/2016fd/emissions/2016fd_inputs_point.zip"
+      },
+      "variables": {
+        "annual": {
+          "description": "Annual emissions (col 13).",
+          "file_variable": "ann_value",
+          "units": "kg/yr"
+        },
+        "lat": {
+          "description": "Latitude (col 24), EPSG:4269 treated as +proj=longlat.",
+          "file_variable": "lat",
+          "units": "degree"
+        },
+        "lon": {
+          "description": "Longitude (col 23), EPSG:4269 treated as +proj=longlat.",
+          "file_variable": "lon",
+          "units": "degree"
+        },
+        "pollutant": {
+          "description": "FF10 pollutant code (col 12), delivered as the `pollutant` enum integer (see x_esd).",
+          "file_variable": "poll",
+          "units": "1"
+        },
+        "stkdiam": {
+          "description": "Stack diameter (col 18), ft->m. Fidelity only; unused downstream.",
+          "file_variable": "stkdiam",
+          "unit_conversion": {
+            "args": [
+              "stkdiam",
+              0.3048
+            ],
+            "op": "*"
+          },
+          "units": "m"
+        },
+        "stkhgt": {
+          "description": "Stack height (col 17), ft->m. Collected for fidelity; NOT consumed (emisLayer hard-coded to 0).",
+          "file_variable": "stkhgt",
+          "unit_conversion": {
+            "args": [
+              "stkhgt",
+              0.3048
+            ],
+            "op": "*"
+          },
+          "units": "m"
+        },
+        "stktemp": {
+          "description": "Stack temperature (col 19), degF->K (F-32)*5/9+273.15. Fidelity only; unused downstream.",
+          "file_variable": "stktemp",
+          "unit_conversion": {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      "stktemp",
+                      32
+                    ],
+                    "op": "-"
+                  },
+                  0.5555555555555556
+                ],
+                "op": "*"
+              },
+              273.15
+            ],
+            "op": "+"
+          },
+          "units": "K"
+        },
+        "stkvel": {
+          "description": "Stack velocity (col 21), ft/s->m/s. Fidelity only; unused downstream.",
+          "file_variable": "stkvel",
+          "unit_conversion": {
+            "args": [
+              "stkvel",
+              0.3048
+            ],
+            "op": "*"
+          },
+          "units": "m/s"
+        }
+      }
+    },
+    "ISRM_SR": {
+      "kind": "static",
+      "metadata": {
+        "esio_format": "zarr",
+        "tags": [
+          "isrm",
+          "source_receptor",
+          "air_quality",
+          "zarr",
+          "health"
+        ],
+        "x_esd": {
+          "arrays": {
+            "E": {
+              "chunks": [
+                596444
+              ],
+              "dtype": "<f8",
+              "shape": [
+                596444
+              ]
+            },
+            "MortalityRate": {
+              "chunks": [
+                596444
+              ],
+              "dtype": "<f8",
+              "shape": [
+                596444
+              ]
+            },
+            "N": {
+              "chunks": [
+                596444
+              ],
+              "dtype": "<f8",
+              "shape": [
+                596444
+              ]
+            },
+            "PrimaryPM25": {
+              "chunks": [
+                1,
+                100,
+                52411
+              ],
+              "dtype": "<f4",
+              "shape": [
+                3,
+                52411,
+                52411
+              ]
+            },
+            "S": {
+              "chunks": [
+                596444
+              ],
+              "dtype": "<f8",
+              "shape": [
+                596444
+              ]
+            },
+            "SOA": {
+              "chunks": [
+                1,
+                100,
+                52411
+              ],
+              "compressor": "blosc:lz4:clevel5:shuffle1",
+              "dtype": "<f4",
+              "fill": 0,
+              "order": "C",
+              "shape": [
+                3,
+                52411,
+                52411
+              ]
+            },
+            "TotalPop": {
+              "chunks": [
+                596444
+              ],
+              "dtype": "<f8",
+              "shape": [
+                596444
+              ]
+            },
+            "W": {
+              "chunks": [
+                596444
+              ],
+              "dtype": "<f8",
+              "shape": [
+                596444
+              ]
+            },
+            "pNH4": {
+              "chunks": [
+                1,
+                100,
+                52411
+              ],
+              "dtype": "<f4",
+              "shape": [
+                3,
+                52411,
+                52411
+              ]
+            },
+            "pNO3": {
+              "chunks": [
+                1,
+                100,
+                52411
+              ],
+              "dtype": "<f4",
+              "shape": [
+                3,
+                52411,
+                52411
+              ]
+            },
+            "pSO4": {
+              "chunks": [
+                1,
+                100,
+                52411
+              ],
+              "dtype": "<f4",
+              "shape": [
+                3,
+                52411,
+                52411
+              ]
+            }
+          },
+          "consolidated": false,
+          "format": "zarr",
+          "gated_select": {
+            "_DRAFT": "Phase-2-core GATED-PROVIDER field (proposed). Replaces the runner's lazy_select ([0], ppl, :). Per-axis selection over the native SR dims sr_dim_order [emisLayer, source, receptor] = [3, 52411, 52411]; one axis is GATED BY a derived (value-invention) index set. Intended consumption: the engine DEFERS this provider's materialisation until materialize_value_invention has produced the gating set's members+extent, then delivers each `applies_to` array pre-sliced to the compact [emis_src_cells, rcv_cells] slab BEFORE the SR contraction (no 330 GB fold). Per-axis semantics: {\"fixed\":[i]} = take native index i and DROP the axis; {\"gated_by\":\"<derived index set>\"} = take that set's materialised members, in the set's canonical (sorted) member order, as the new axis (here emis_src_cells = the invented ppl); \"all\" = full axis (slice(None)).",
+            "applies_to": [
+              "SOA",
+              "pNO3",
+              "pNH4",
+              "pSO4",
+              "PrimaryPM25"
+            ],
+            "axes": [
+              {
+                "fixed": [
+                  0
+                ]
+              },
+              {
+                "gated_by": "emis_src_cells"
+              },
+              "all"
+            ]
+          },
+          "note": "`format` and the pinned .zarray params are not expressible in the 0.8.0 source schema (G1); the runner sets format at provider creation. PUSHDOWN DRAFT: the SR source-axis slice is no longer the runner-threaded `ppl` lazy_select but the gated_select above, gated by the DERIVED emis_src_cells set the value-invention producer emis_src_cells_faq materialises (G2; Phase-2-core gated-provider deferral). W/S/E/N/TotalPop/MortalityRate are read fully; the first 52411 (the [0:52411] prefix slice) are the SR receptor/source cells. NOTE: for the pushdown, W/S/E/N (full-grid cell rectangles) must also be available to value-invention as build-time const factors (the producer's rectangle filter reads index(W,c)..index(N,c) over the full source grid).",
+          "sr_dim_order": [
+            "emisLayer",
+            "source",
+            "receptor"
+          ],
+          "zarr_format": 2
+        }
+      },
+      "reference": {
+        "notes": "InMAP ISRM v1.2.1 zarr store on the inmap-model S3 bucket.",
+        "url": "https://inmap.run/blog/2022/12/15/tutorial/"
+      },
+      "source": {
+        "url_template": "s3://inmap-model/isrm_v1.2.1.zarr/"
+      },
+      "variables": {
+        "E": {
+          "description": "Cell east edge (LCC metres); length 596444, first 52411 used.",
+          "file_variable": "E",
+          "units": "m"
+        },
+        "MortalityRate": {
+          "description": "Baseline all-cause mortality per 100,000; length 596444, prefix [0:52411] used.",
+          "file_variable": "MortalityRate",
+          "units": "1"
+        },
+        "N": {
+          "description": "Cell north edge (LCC metres); length 596444, first 52411 used.",
+          "file_variable": "N",
+          "units": "m"
+        },
+        "PrimaryPM25": {
+          "description": "SR primary PM2.5 response (contracted with PM2_5 emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
+          "file_variable": "PrimaryPM25",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "S": {
+          "description": "Cell south edge (LCC metres); length 596444, first 52411 used.",
+          "file_variable": "S",
+          "units": "m"
+        },
+        "SOA": {
+          "description": "SR secondary organic aerosol response (contracted with VOC emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
+          "file_variable": "SOA",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "TotalPop": {
+          "description": "Population per cell; length 596444, prefix [0:52411] used in the deaths formula.",
+          "file_variable": "TotalPop",
+          "units": "1"
+        },
+        "W": {
+          "description": "Cell west edge (LCC metres); length 596444, first 52411 build the cell rectangles.",
+          "file_variable": "W",
+          "units": "m"
+        },
+        "pNH4": {
+          "description": "SR particulate ammonium response (contracted with NH3 emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
+          "file_variable": "pNH4",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "pNO3": {
+          "description": "SR particulate nitrate response (contracted with NOx emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
+          "file_variable": "pNO3",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "pSO4": {
+          "description": "SR particulate sulfate response (contracted with SOx emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
+          "file_variable": "pSO4",
+          "units": "ug/m^3/(kg/yr)"
+        }
+      }
+    }
+  },
+  "esm": "0.8.0",
+  "index_sets": {
+    "emis_layer": {
+      "kind": "interval",
+      "size": 3
+    },
+    "emis_records": {
+      "kind": "interval",
+      "size": 0
+    },
+    "pathways": {
+      "kind": "categorical",
+      "members": [
+        "SOA",
+        "pNO3",
+        "pNH4",
+        "pSO4",
+        "PrimaryPM25"
+      ]
+    },
+    "pop_cells": {
+      "kind": "interval",
+      "size": 596444
+    },
+    "rcv_cells": {
+      "kind": "interval",
+      "size": 52411
+    },
+    "src_cells": {
+      "kind": "interval",
+      "size": 52411
+    }
+  },
+  "metadata": {
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-07-19T00:00:00Z",
+    "description": "FULLY-AUTOMATIC clean full-domain InMAP ISRM (Phase 5 target). Full-domain SR[src_cells,rcv_cells], E as the emission->cell binning +-aggregate, X/Y as an in-model Lambert-conformal PROJECTION observed over raw emis_lon/emis_lat (the inline trig IS the lambert_conformal_forward_x/y expansion), projected at BUILD time by the general-eval coordinate path (Phase 5 Part A). NO hand-authored pushdown constructs (no derived set / producer / gated_select / member_factor) and NO caller-supplied projected coordinates. Builds with pushdown_rewrite=true: the auto-rewrite (Phase 4) generates the support set + distinct producer + member_factor + gated_select; the gated SR provider is fetched pre-sliced to the invented source cells. NO runner pre-pass. (Not full-scale-validated: Wall #2 type-instability in the observed evaluator is separate/pre-existing; L1-scale machine precision is the Phase-5 acceptance.)",
+    "license": "MIT",
+    "name": "ISRM_clean",
+    "references": [
+      {
+        "citation": "Tessum, C.W., Hill, J.D., Marshall, J.D. (2017). InMAP: A model for air pollution interventions. PLoS ONE 12(4): e0176131.",
+        "doi": "10.1371/journal.pone.0176131"
+      },
+      {
+        "citation": "InMAP ISRM tutorial (2022-12-15).",
+        "url": "https://inmap.run/blog/2022/12/15/tutorial/"
+      }
+    ],
+    "tags": [
+      "isrm",
+      "inmap",
+      "source_receptor",
+      "air_quality",
+      "pm25",
+      "health_impact",
+      "emissions",
+      "ff10",
+      "nei2016",
+      "zarr",
+      "lambert_conformal",
+      "reprojection",
+      "data_loader",
+      "variable_map",
+      "referenced-component"
+    ]
+  },
+  "metaparameters": {
+    "N_LAYER": {
+      "default": 3,
+      "description": "SR emission layers (only layer 0 is used).",
+      "type": "integer"
+    },
+    "N_POP": {
+      "default": 596444,
+      "description": "Full InMAP grid length of W/S/E/N/TotalPop/MortalityRate.",
+      "type": "integer"
+    },
+    "N_RCV": {
+      "default": 52411,
+      "description": "ISRM receptor cells (== the source grid, same ordered cell set).",
+      "type": "integer"
+    },
+    "N_REC": {
+      "default": 0,
+      "description": "EGU FF10 point-source record count (runtime-discovered; G6).",
+      "type": "integer"
+    },
+    "N_SRC": {
+      "default": 52411,
+      "description": "ISRM source cells (first-52411 coarse subset of the InMAP grid).",
+      "type": "integer"
+    }
+  },
+  "models": {
+    "ISRM": {
+      "equations": [],
+      "system_kind": "nonlinear",
+      "variables": {
+        "E": {
+          "default": 0.0,
+          "description": "Cell east edge (LCC m); from ISRM_SR.E.",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "E_NH3": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_NH3"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1,
+                    0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_NH3",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_NOx": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_NOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1,
+                    0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_NOx",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_PM25": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1,
+                    0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_PM25",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_SOx": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_SOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1,
+                    0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_SOx",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "E_VOC": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "X",
+              "Y",
+              "emis_annual",
+              "is_VOC"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "X",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "Y",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1,
+                    0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "is_VOC",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "MortalityRate": {
+          "default": 0.0,
+          "description": "Baseline mortality per 100k; from ISRM_SR.MortalityRate (prefix [0:52411]).",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "N": {
+          "default": 0.0,
+          "description": "Cell north edge (LCC m); from ISRM_SR.N.",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "S": {
+          "default": 0.0,
+          "description": "Cell south edge (LCC m); from ISRM_SR.S.",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "SR_PrimaryPM25": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the PrimaryPM25 pathway (contracted with PM2_5 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.PrimaryPM25 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_SOA": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the SOA pathway (contracted with VOC emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.SOA via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_pNH4": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the pNH4 pathway (contracted with NH3 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNH4 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_pNO3": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the pNO3 pathway (contracted with NOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNO3 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_pSO4": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the pSO4 pathway (contracted with SOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pSO4 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "TotalPM25": {
+          "description": "Total PM2.5 concentration at each receptor: fact*(conc_SOA+conc_pNO3+conc_pNH4+conc_pSO4+conc_PrimaryPM25).",
+          "expression": {
+            "args": [
+              "conc_SOA",
+              "conc_pNO3",
+              "conc_pNH4",
+              "conc_pSO4",
+              "conc_PrimaryPM25"
+            ],
+            "expr": {
+              "args": [
+                "fact",
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "conc_SOA",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_pNO3",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_pNH4",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_pSO4",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "conc_PrimaryPM25",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "+"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "TotalPop": {
+          "default": 0.0,
+          "description": "Population per cell; from ISRM_SR.TotalPop (read on the rcv range = [0:52411] prefix slice).",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "W": {
+          "default": 0.0,
+          "description": "Cell west edge (LCC m); from ISRM_SR.W (full 596444, prefix used).",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "X": {
+          "description": "Lambert-conformal-conic forward-x of the raw emission coordinate (== lambert_conformal_forward_x expanded to trig). Projected at BUILD time by the general-eval coordinate path (Phase 5 Part A) — the caller supplies only raw emis_lon/emis_lat.",
+          "expression": {
+            "args": [
+              "emis_lon",
+              "emis_lat"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "lcc_R",
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        "lat_1",
+                                        "lcc_d2r"
+                                      ],
+                                      "op": "*"
+                                    }
+                                  ],
+                                  "op": "cos"
+                                },
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_1",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_1",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    }
+                                                  ],
+                                                  "op": "cos"
+                                                },
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_2",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    }
+                                                  ],
+                                                  "op": "cos"
+                                                }
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "log"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lcc_qp",
+                                                        {
+                                                          "args": [
+                                                            {
+                                                              "args": [
+                                                                "lat_2",
+                                                                "lcc_d2r"
+                                                              ],
+                                                              "op": "*"
+                                                            },
+                                                            2
+                                                          ],
+                                                          "op": "/"
+                                                        }
+                                                      ],
+                                                      "op": "+"
+                                                    }
+                                                  ],
+                                                  "op": "tan"
+                                                },
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lcc_qp",
+                                                        {
+                                                          "args": [
+                                                            {
+                                                              "args": [
+                                                                "lat_1",
+                                                                "lcc_d2r"
+                                                              ],
+                                                              "op": "*"
+                                                            },
+                                                            2
+                                                          ],
+                                                          "op": "/"
+                                                        }
+                                                      ],
+                                                      "op": "+"
+                                                    }
+                                                  ],
+                                                  "op": "tan"
+                                                }
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "log"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "^"
+                                }
+                              ],
+                              "op": "*"
+                            },
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_1",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_2",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                },
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_2",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_1",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                }
+                              ],
+                              "op": "/"
+                            }
+                          ],
+                          "op": "/"
+                        }
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "lcc_qp",
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "emis_lat",
+                                            "r"
+                                          ],
+                                          "op": "index"
+                                        },
+                                        "lcc_d2r"
+                                      ],
+                                      "op": "*"
+                                    },
+                                    2
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "+"
+                            }
+                          ],
+                          "op": "tan"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lat_1",
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        }
+                                      ],
+                                      "op": "cos"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lat_2",
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        }
+                                      ],
+                                      "op": "cos"
+                                    }
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "log"
+                            },
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_2",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_1",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    }
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "log"
+                            }
+                          ],
+                          "op": "/"
+                        }
+                      ],
+                      "op": "^"
+                    }
+                  ],
+                  "op": "/"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lat_1",
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        }
+                                      ],
+                                      "op": "cos"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lat_2",
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        }
+                                      ],
+                                      "op": "cos"
+                                    }
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "log"
+                            },
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_2",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_1",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    }
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "log"
+                            }
+                          ],
+                          "op": "/"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    "emis_lon",
+                                    "r"
+                                  ],
+                                  "op": "index"
+                                },
+                                "lcc_d2r"
+                              ],
+                              "op": "*"
+                            },
+                            {
+                              "args": [
+                                "lon_0",
+                                "lcc_d2r"
+                              ],
+                              "op": "*"
+                            }
+                          ],
+                          "op": "-"
+                        }
+                      ],
+                      "op": "*"
+                    }
+                  ],
+                  "op": "sin"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed"
+        },
+        "Y": {
+          "description": "Lambert-conformal-conic forward-y of the raw emission coordinate (== lambert_conformal_forward_y expanded to trig). Projected at BUILD time by the general-eval coordinate path (Phase 5 Part A) — the caller supplies only raw emis_lon/emis_lat.",
+          "expression": {
+            "args": [
+              "emis_lon",
+              "emis_lat"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "lcc_R",
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        "lat_1",
+                                        "lcc_d2r"
+                                      ],
+                                      "op": "*"
+                                    }
+                                  ],
+                                  "op": "cos"
+                                },
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_1",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_1",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    }
+                                                  ],
+                                                  "op": "cos"
+                                                },
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_2",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    }
+                                                  ],
+                                                  "op": "cos"
+                                                }
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "log"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lcc_qp",
+                                                        {
+                                                          "args": [
+                                                            {
+                                                              "args": [
+                                                                "lat_2",
+                                                                "lcc_d2r"
+                                                              ],
+                                                              "op": "*"
+                                                            },
+                                                            2
+                                                          ],
+                                                          "op": "/"
+                                                        }
+                                                      ],
+                                                      "op": "+"
+                                                    }
+                                                  ],
+                                                  "op": "tan"
+                                                },
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lcc_qp",
+                                                        {
+                                                          "args": [
+                                                            {
+                                                              "args": [
+                                                                "lat_1",
+                                                                "lcc_d2r"
+                                                              ],
+                                                              "op": "*"
+                                                            },
+                                                            2
+                                                          ],
+                                                          "op": "/"
+                                                        }
+                                                      ],
+                                                      "op": "+"
+                                                    }
+                                                  ],
+                                                  "op": "tan"
+                                                }
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "log"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "^"
+                                }
+                              ],
+                              "op": "*"
+                            },
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_1",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_2",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                },
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_2",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_1",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                }
+                              ],
+                              "op": "/"
+                            }
+                          ],
+                          "op": "/"
+                        }
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "lcc_qp",
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        "lat_0",
+                                        "lcc_d2r"
+                                      ],
+                                      "op": "*"
+                                    },
+                                    2
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "+"
+                            }
+                          ],
+                          "op": "tan"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lat_1",
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        }
+                                      ],
+                                      "op": "cos"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lat_2",
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        }
+                                      ],
+                                      "op": "cos"
+                                    }
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "log"
+                            },
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_2",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lcc_qp",
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_1",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                },
+                                                2
+                                              ],
+                                              "op": "/"
+                                            }
+                                          ],
+                                          "op": "+"
+                                        }
+                                      ],
+                                      "op": "tan"
+                                    }
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "log"
+                            }
+                          ],
+                          "op": "/"
+                        }
+                      ],
+                      "op": "^"
+                    }
+                  ],
+                  "op": "/"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "lcc_R",
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "lat_1",
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        }
+                                      ],
+                                      "op": "cos"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_1",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        {
+                                                          "args": [
+                                                            "lat_1",
+                                                            "lcc_d2r"
+                                                          ],
+                                                          "op": "*"
+                                                        }
+                                                      ],
+                                                      "op": "cos"
+                                                    },
+                                                    {
+                                                      "args": [
+                                                        {
+                                                          "args": [
+                                                            "lat_2",
+                                                            "lcc_d2r"
+                                                          ],
+                                                          "op": "*"
+                                                        }
+                                                      ],
+                                                      "op": "cos"
+                                                    }
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "log"
+                                            },
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        {
+                                                          "args": [
+                                                            "lcc_qp",
+                                                            {
+                                                              "args": [
+                                                                {
+                                                                  "args": [
+                                                                    "lat_2",
+                                                                    "lcc_d2r"
+                                                                  ],
+                                                                  "op": "*"
+                                                                },
+                                                                2
+                                                              ],
+                                                              "op": "/"
+                                                            }
+                                                          ],
+                                                          "op": "+"
+                                                        }
+                                                      ],
+                                                      "op": "tan"
+                                                    },
+                                                    {
+                                                      "args": [
+                                                        {
+                                                          "args": [
+                                                            "lcc_qp",
+                                                            {
+                                                              "args": [
+                                                                {
+                                                                  "args": [
+                                                                    "lat_1",
+                                                                    "lcc_d2r"
+                                                                  ],
+                                                                  "op": "*"
+                                                                },
+                                                                2
+                                                              ],
+                                                              "op": "/"
+                                                            }
+                                                          ],
+                                                          "op": "+"
+                                                        }
+                                                      ],
+                                                      "op": "tan"
+                                                    }
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "log"
+                                            }
+                                          ],
+                                          "op": "/"
+                                        }
+                                      ],
+                                      "op": "^"
+                                    }
+                                  ],
+                                  "op": "*"
+                                },
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_1",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                }
+                                              ],
+                                              "op": "cos"
+                                            },
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lat_2",
+                                                    "lcc_d2r"
+                                                  ],
+                                                  "op": "*"
+                                                }
+                                              ],
+                                              "op": "cos"
+                                            }
+                                          ],
+                                          "op": "/"
+                                        }
+                                      ],
+                                      "op": "log"
+                                    },
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lcc_qp",
+                                                    {
+                                                      "args": [
+                                                        {
+                                                          "args": [
+                                                            "lat_2",
+                                                            "lcc_d2r"
+                                                          ],
+                                                          "op": "*"
+                                                        },
+                                                        2
+                                                      ],
+                                                      "op": "/"
+                                                    }
+                                                  ],
+                                                  "op": "+"
+                                                }
+                                              ],
+                                              "op": "tan"
+                                            },
+                                            {
+                                              "args": [
+                                                {
+                                                  "args": [
+                                                    "lcc_qp",
+                                                    {
+                                                      "args": [
+                                                        {
+                                                          "args": [
+                                                            "lat_1",
+                                                            "lcc_d2r"
+                                                          ],
+                                                          "op": "*"
+                                                        },
+                                                        2
+                                                      ],
+                                                      "op": "/"
+                                                    }
+                                                  ],
+                                                  "op": "+"
+                                                }
+                                              ],
+                                              "op": "tan"
+                                            }
+                                          ],
+                                          "op": "/"
+                                        }
+                                      ],
+                                      "op": "log"
+                                    }
+                                  ],
+                                  "op": "/"
+                                }
+                              ],
+                              "op": "/"
+                            }
+                          ],
+                          "op": "*"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    "lcc_qp",
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "emis_lat",
+                                                "r"
+                                              ],
+                                              "op": "index"
+                                            },
+                                            "lcc_d2r"
+                                          ],
+                                          "op": "*"
+                                        },
+                                        2
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "+"
+                                }
+                              ],
+                              "op": "tan"
+                            },
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_1",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_2",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                },
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_2",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_1",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                }
+                              ],
+                              "op": "/"
+                            }
+                          ],
+                          "op": "^"
+                        }
+                      ],
+                      "op": "/"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_1",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lat_2",
+                                                "lcc_d2r"
+                                              ],
+                                              "op": "*"
+                                            }
+                                          ],
+                                          "op": "cos"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                },
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_2",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        },
+                                        {
+                                          "args": [
+                                            {
+                                              "args": [
+                                                "lcc_qp",
+                                                {
+                                                  "args": [
+                                                    {
+                                                      "args": [
+                                                        "lat_1",
+                                                        "lcc_d2r"
+                                                      ],
+                                                      "op": "*"
+                                                    },
+                                                    2
+                                                  ],
+                                                  "op": "/"
+                                                }
+                                              ],
+                                              "op": "+"
+                                            }
+                                          ],
+                                          "op": "tan"
+                                        }
+                                      ],
+                                      "op": "/"
+                                    }
+                                  ],
+                                  "op": "log"
+                                }
+                              ],
+                              "op": "/"
+                            },
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        "emis_lon",
+                                        "r"
+                                      ],
+                                      "op": "index"
+                                    },
+                                    "lcc_d2r"
+                                  ],
+                                  "op": "*"
+                                },
+                                {
+                                  "args": [
+                                    "lon_0",
+                                    "lcc_d2r"
+                                  ],
+                                  "op": "*"
+                                }
+                              ],
+                              "op": "-"
+                            }
+                          ],
+                          "op": "*"
+                        }
+                      ],
+                      "op": "cos"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "-"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed"
+        },
+        "conc_PrimaryPM25": {
+          "description": "Per-receptor concentration response from the PrimaryPM25 pathway: sum_s SR_PrimaryPM25[s,rcv]*E_PM25[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "expression": {
+            "args": [
+              "SR_PrimaryPM25",
+              "E_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_PrimaryPM25",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_PM25",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "conc_SOA": {
+          "description": "Per-receptor concentration response from the SOA pathway: sum_s SR_SOA[s,rcv]*E_VOC[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "expression": {
+            "args": [
+              "SR_SOA",
+              "E_VOC"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_SOA",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_VOC",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "conc_pNH4": {
+          "description": "Per-receptor concentration response from the pNH4 pathway: sum_s SR_pNH4[s,rcv]*E_NH3[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "expression": {
+            "args": [
+              "SR_pNH4",
+              "E_NH3"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_pNH4",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_NH3",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "conc_pNO3": {
+          "description": "Per-receptor concentration response from the pNO3 pathway: sum_s SR_pNO3[s,rcv]*E_NOx[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "expression": {
+            "args": [
+              "SR_pNO3",
+              "E_NOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_pNO3",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_NOx",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "conc_pSO4": {
+          "description": "Per-receptor concentration response from the pSO4 pathway: sum_s SR_pSO4[s,rcv]*E_SOx[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "expression": {
+            "args": [
+              "SR_pSO4",
+              "E_SOx"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_pSO4",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_SOx",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "deathsK": {
+          "description": "Attributable deaths at each receptor (Krewski RR 1.06): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
+          "expression": {
+            "args": [
+              "TotalPM25",
+              "TotalPop",
+              "MortalityRate"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "rr_K"
+                                          ],
+                                          "op": "log"
+                                        },
+                                        10
+                                      ],
+                                      "op": "/"
+                                    },
+                                    {
+                                      "args": [
+                                        "TotalPM25",
+                                        "rcv"
+                                      ],
+                                      "op": "index"
+                                    }
+                                  ],
+                                  "op": "*"
+                                }
+                              ],
+                              "op": "exp"
+                            },
+                            1
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "TotalPop",
+                                "rcv"
+                              ],
+                              "op": "index"
+                            },
+                            "pop_scale"
+                          ],
+                          "op": "*"
+                        }
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "MortalityRate",
+                            "rcv"
+                          ],
+                          "op": "index"
+                        },
+                        100000
+                      ],
+                      "op": "/"
+                    }
+                  ],
+                  "op": "*"
+                },
+                "mort_scale"
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "deathsL": {
+          "description": "Attributable deaths at each receptor (Lepeule RR 1.14): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
+          "expression": {
+            "args": [
+              "TotalPM25",
+              "TotalPop",
+              "MortalityRate"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                {
+                                  "args": [
+                                    {
+                                      "args": [
+                                        {
+                                          "args": [
+                                            "rr_L"
+                                          ],
+                                          "op": "log"
+                                        },
+                                        10
+                                      ],
+                                      "op": "/"
+                                    },
+                                    {
+                                      "args": [
+                                        "TotalPM25",
+                                        "rcv"
+                                      ],
+                                      "op": "index"
+                                    }
+                                  ],
+                                  "op": "*"
+                                }
+                              ],
+                              "op": "exp"
+                            },
+                            1
+                          ],
+                          "op": "-"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "TotalPop",
+                                "rcv"
+                              ],
+                              "op": "index"
+                            },
+                            "pop_scale"
+                          ],
+                          "op": "*"
+                        }
+                      ],
+                      "op": "*"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "MortalityRate",
+                            "rcv"
+                          ],
+                          "op": "index"
+                        },
+                        100000
+                      ],
+                      "op": "/"
+                    }
+                  ],
+                  "op": "*"
+                },
+                "mort_scale"
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "emis_annual": {
+          "default": 0.0,
+          "description": "Per-record annual emissions (tons/yr); from EGU_Emis.annual.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "kg/yr"
+        },
+        "emis_lat": {
+          "default": 0.0,
+          "description": "Emission-point latitude (EPSG:4269); from EGU_Emis.lat.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "degree"
+        },
+        "emis_lon": {
+          "default": 0.0,
+          "description": "Emission-point longitude (EPSG:4269); from EGU_Emis.lon.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "degree"
+        },
+        "fact": {
+          "default": 28766.639,
+          "description": "tons/year emission-unit -> ug/m3 scaling (applied once to the summed concentration).",
+          "type": "parameter",
+          "units": "1"
+        },
+        "is_NH3": {
+          "description": "1 if the record's pollutant code is a NH3-class code (STEP 0.6 map), else 0.",
+          "expression": {
+            "args": [
+              "pollutant"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "pollutant",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    40
+                  ],
+                  "op": "=="
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "is_NOx": {
+          "description": "1 if the record's pollutant code is a NOx-class code (STEP 0.6 map), else 0.",
+          "expression": {
+            "args": [
+              "pollutant"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        36
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        37
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        38
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        39
+                      ],
+                      "op": "=="
+                    }
+                  ],
+                  "op": "or"
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "is_PM25": {
+          "description": "1 if the record's pollutant code is a PM25-class code (STEP 0.6 map), else 0.",
+          "expression": {
+            "args": [
+              "pollutant"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        42
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        43
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        44
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        45
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        46
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        47
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        48
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        49
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        50
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        51
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        52
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        53
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        54
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        55
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        56
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        57
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        58
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        59
+                      ],
+                      "op": "=="
+                    }
+                  ],
+                  "op": "or"
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "is_SOx": {
+          "description": "1 if the record's pollutant code is a SOx-class code (STEP 0.6 map), else 0.",
+          "expression": {
+            "args": [
+              "pollutant"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "pollutant",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    41
+                  ],
+                  "op": "=="
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "is_VOC": {
+          "description": "1 if the record's pollutant code is a VOC-class code (STEP 0.6 map), else 0.",
+          "expression": {
+            "args": [
+              "pollutant"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        1
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        2
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        3
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        4
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        5
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        6
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        7
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        8
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        9
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        10
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        11
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        12
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        13
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        14
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        15
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        16
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        17
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        18
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        19
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        20
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        21
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        22
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        23
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        24
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        25
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        26
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        27
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        28
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        29
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        30
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        31
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        32
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        33
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        34
+                      ],
+                      "op": "=="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "pollutant",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        35
+                      ],
+                      "op": "=="
+                    }
+                  ],
+                  "op": "or"
+                },
+                1,
+                0
+              ],
+              "op": "ifelse"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            }
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed",
+          "units": "1"
+        },
+        "lat_0": {
+          "default": 40.0,
+          "description": "LCC origin latitude (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "lat_1": {
+          "default": 33.0,
+          "description": "LCC standard parallel 1 (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "lat_2": {
+          "default": 45.0,
+          "description": "LCC standard parallel 2 (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "lcc_R": {
+          "default": 6.370997e6,
+          "description": "LCC sphere radius (NEI2016). (Named lcc_R, not R, to avoid the reserved physical-constant name R = ideal gas constant.)",
+          "type": "parameter",
+          "units": "m"
+        },
+        "lcc_d2r": {
+          "default": 0.017453292519943295,
+          "description": "degrees->radians (pi/180) for the LCC projection.",
+          "type": "parameter"
+        },
+        "lcc_qp": {
+          "default": 0.7853981633974483,
+          "description": "pi/4 quarter-turn offset for the LCC tan half-angle.",
+          "type": "parameter"
+        },
+        "lon_0": {
+          "default": -97.0,
+          "description": "LCC central meridian (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "mort_scale": {
+          "default": 1.025229357798165,
+          "description": "Mortality-rate 2005->2016 rescale.",
+          "type": "parameter",
+          "units": "1"
+        },
+        "pm_PrimaryPM25": {
+          "description": "Reported PrimaryPM25 PM2.5 component at each receptor: fact*conc_PrimaryPM25.",
+          "expression": {
+            "args": [
+              "conc_PrimaryPM25"
+            ],
+            "expr": {
+              "args": [
+                "fact",
+                {
+                  "args": [
+                    "conc_PrimaryPM25",
+                    "rcv"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "pm_SOA": {
+          "description": "Reported SOA PM2.5 component at each receptor: fact*conc_SOA.",
+          "expression": {
+            "args": [
+              "conc_SOA"
+            ],
+            "expr": {
+              "args": [
+                "fact",
+                {
+                  "args": [
+                    "conc_SOA",
+                    "rcv"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "pm_pNH4": {
+          "description": "Reported pNH4 PM2.5 component at each receptor: fact*conc_pNH4.",
+          "expression": {
+            "args": [
+              "conc_pNH4"
+            ],
+            "expr": {
+              "args": [
+                "fact",
+                {
+                  "args": [
+                    "conc_pNH4",
+                    "rcv"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "pm_pNO3": {
+          "description": "Reported pNO3 PM2.5 component at each receptor: fact*conc_pNO3.",
+          "expression": {
+            "args": [
+              "conc_pNO3"
+            ],
+            "expr": {
+              "args": [
+                "fact",
+                {
+                  "args": [
+                    "conc_pNO3",
+                    "rcv"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "pm_pSO4": {
+          "description": "Reported pSO4 PM2.5 component at each receptor: fact*conc_pSO4.",
+          "expression": {
+            "args": [
+              "conc_pSO4"
+            ],
+            "expr": {
+              "args": [
+                "fact",
+                {
+                  "args": [
+                    "conc_pSO4",
+                    "rcv"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "ug/m^3"
+        },
+        "pollutant": {
+          "default": 0.0,
+          "description": "Per-record FF10 pollutant code as the `pollutant` enum integer; from EGU_Emis.pollutant.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "pop_scale": {
+          "default": 1.0465819687408728,
+          "description": "Population 2010->2016 rescale.",
+          "type": "parameter",
+          "units": "1"
+        },
+        "rcv_cx": {
+          "description": "Receptor cell-centroid easting (W+E)/2 in LCC metres.",
+          "expression": {
+            "args": [
+              "W",
+              "E"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "W",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "E",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "+"
+                },
+                2
+              ],
+              "op": "/"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "m"
+        },
+        "rcv_cy": {
+          "description": "Receptor cell-centroid northing (S+N)/2 in LCC metres.",
+          "expression": {
+            "args": [
+              "S",
+              "N"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "S",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "N",
+                        "rcv"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "+"
+                },
+                2
+              ],
+              "op": "/"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              }
+            }
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed",
+          "units": "m"
+        },
+        "rr_K": {
+          "default": 1.06,
+          "description": "Krewski relative risk per 10 ug/m3 PM2.5.",
+          "type": "parameter",
+          "units": "1"
+        },
+        "rr_L": {
+          "default": 1.14,
+          "description": "Lepeule relative risk per 10 ug/m3 PM2.5.",
+          "type": "parameter",
+          "units": "1"
+        },
+        "src_E": {
+          "description": "source-cell rectangle E-edge (projected LCC meters), src_cells axis.",
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_N": {
+          "description": "source-cell rectangle N-edge (projected LCC meters), src_cells axis.",
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_S": {
+          "description": "source-cell rectangle S-edge (projected LCC meters), src_cells axis.",
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_W": {
+          "description": "source-cell rectangle W-edge (projected LCC meters), src_cells axis.",
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "stkdiam": {
+          "default": 0.0,
+          "description": "Stack diameter (m); from EGU_Emis.stkdiam. Fidelity only; unused.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "stkhgt": {
+          "default": 0.0,
+          "description": "Stack height (m); from EGU_Emis.stkhgt. Fidelity only; ISRM never consumes it (emisLayer hard-coded to 0).",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "stktemp": {
+          "default": 0.0,
+          "description": "Stack temperature (K); from EGU_Emis.stktemp. Fidelity only; unused.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "K"
+        },
+        "stkvel": {
+          "default": 0.0,
+          "description": "Stack velocity (m/s); from EGU_Emis.stkvel. Fidelity only; unused.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "m/s"
+        }
+      }
+    }
+  }
+}
