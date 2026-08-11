@@ -112,6 +112,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("reactant_oop_test.jl")
         include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
         include("reactant_scan_test.jl")             # traced prefix scan ≢ grid size
+        include("reactant_oop_intern_test.jl")       # one emitted read per (SSA value, window)
     else
         @info "skipping reactant_oop_test.jl (set ESM_TEST_REACTANT=1, with Reactant " *
               "in the environment, to run the XLA tracing tests)"

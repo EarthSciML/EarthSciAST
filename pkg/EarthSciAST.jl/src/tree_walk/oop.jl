@@ -117,6 +117,83 @@ const _oop_value_type = _rhs_value_type
 # own, and an equivalent detector was equally worthless there. Same answer, both worlds.)
 @inline _oop_gather(u, slots::Vector{Int}) = @inbounds u[slots]
 
+# ---- Read interning, TRACE ONLY (ess-oop-intern) -----------------------------
+#
+# The SAME window of the SAME container is read many times inside one RHS
+# evaluation: a materialized array observed lives in the flat extended state
+# tensor `ue`, and every acc-kernel descriptor that reads it emits its own read.
+# Measured on ReSEACT at 7x7x16, one chemistry RHS emitted 478 `stablehlo.slice`
+# ops over just 123 DISTINCT windows (~3.9x), and the whole module 8,093 slices
+# of which 4,928 (60.9%) were exact `(operand, window)` duplicates. XLA then
+# rediscovers that they are duplicates with `CSE<stablehlo::SliceOp>`, a PAIRWISE
+# (quadratic) pattern that a `perf` profile of a stuck CONUS compile put at ~50%
+# of all CPU. Emitting the read once removes the duplicate before it exists.
+#
+# WHY THIS IS A THIRD ARGUMENT AND NOT A GLOBAL. The memo has to die with the
+# trace that created it: an SSA value from a finished module is not usable in the
+# next one. So it is carried by `_OopForcing`, which `_make_rhs_oop`'s closure
+# constructs FRESH on every call and threads to every read site — the memo's
+# lifetime is then exactly one RHS invocation, by construction. Nothing to tear
+# down, nothing to leak on an exception, nothing shared between threads, and no
+# way for one trace's values to reach another. It is also the largest scope that
+# is SOUND: a trace of a `@trace for` body puts the RHS's ops in a nested REGION,
+# and a value defined in one region does not dominate a use in the next, so a
+# memo living longer than one invocation could emit IR that does not verify.
+#
+# WHY IT IS TRACE-ONLY. On host the containers are MUTATED IN PLACE — `_oop_store`
+# and `_oop_scatter` write and return the same array — so a read cache keyed on
+# container identity would hand back pre-write data. Under a trace the writes are
+# FUNCTIONAL: `setindex!` on a `TracedRArray` rebinds the object's MLIR value, so
+# "which SSA value is this container right now" is a complete description of its
+# CONTENTS, and that is what the extension keys on. Host therefore builds NO memo
+# (`_oop_new_memo` returns `nothing`) and `_oop_gather(u, slots, ::Nothing)` is
+# the two-argument gather verbatim — the host path is byte-identical.
+#
+# `ESS_OOP_INTERN=0` declines the memo (the extension's `_oop_new_memo` then also
+# returns `nothing`), so a traced build can be compared with the feature off.
+@inline _oop_gather(u, slots::Vector{Int}, ::Nothing) = _oop_gather(u, slots)
+@inline _oop_gather(u, slots::Vector{Int}, memo) = _oop_gather(u, slots)
+
+# The memo constructor seam. `nothing` on host and under every non-tracing
+# element type (`Dual`, `Float32`, …); the Reactant extension adds the one method
+# that returns a real memo, for a `TracedRArray` state.
+@inline _oop_new_memo(u) = nothing
+
+# Engagement witness. Trace-time only — the host path never reaches it — and a
+# COUNTER, not a cache: nothing is ever read back out of it by the walker, so it
+# carries no correctness weight. It exists so a test can assert that interning
+# actually fired rather than silently regressing to a no-op, and so a probe can
+# report the hit rate on a real model.
+const _OOP_INTERN_TALLY = Int[0, 0]      # [hits, misses]
+
+@inline function _oop_intern_tally!(hit::Bool)
+    @inbounds _OOP_INTERN_TALLY[hit ? 1 : 2] += 1
+    return nothing
+end
+
+"""
+    oop_intern_stats() -> (; hits, misses)
+
+Cumulative `(tensor, window)` read-interning counters for the out-of-place
+emitter's TRACED path (ess-oop-intern): `hits` is the number of reads served
+from a memo instead of emitting an op, `misses` the number that emitted one.
+Both are zero on host — interning is trace-only — and zero when
+`ESS_OOP_INTERN=0`. Reset with [`oop_intern_stats_reset!`](@ref).
+"""
+oop_intern_stats() = (hits = @inbounds(_OOP_INTERN_TALLY[1]),
+                      misses = @inbounds(_OOP_INTERN_TALLY[2]))
+
+"""
+    oop_intern_stats_reset!()
+
+Zero the [`oop_intern_stats`](@ref) counters.
+"""
+function oop_intern_stats_reset!()
+    @inbounds _OOP_INTERN_TALLY[1] = 0
+    @inbounds _OOP_INTERN_TALLY[2] = 0
+    return nothing
+end
+
 # One SCALAR element of a live forcing buffer (an `_NK_PARAM_GATHER` node or an
 # invariant `_AK_ARR_FIXED` descriptor). A seam for the same reason
 # `_oop_read_state` is: on host it is the indexed load it reads as; a tracing
@@ -685,10 +762,19 @@ end
 # `f(u, p, t)` still reads the exact aliased storage it always did — the
 # fallback arm in `_oop_forcing_slab` (an arr absent from `hostkeys`, e.g. a
 # hand-built test kernel) reads the host array directly, the pre-B2 behavior.
-struct _OopForcing{B}
+#
+# The third field is the per-call READ MEMO (ess-oop-intern; see the
+# `_oop_gather` seam). It rides here because this is the one per-call context
+# object the walker already threads to every read site, and because that makes
+# the memo's lifetime exactly one RHS invocation with no global state and no
+# teardown. `M === Nothing` on host and the field is zero-sized, so a host build
+# is unchanged in layout, allocation and code.
+struct _OopForcing{B,M}
     bufs::B                             # this CALL's buffer container (host or traced)
     hostkeys::Vector{Vector{Float64}}   # host buffer identities, aligned with `bufs`
+    memo::M                             # per-call (tensor, window) read memo, or `nothing`
 end
+_OopForcing(bufs, hostkeys) = _OopForcing(bufs, hostkeys, nothing)
 const _OOP_NO_FORCING = _OopForcing((;), Vector{Float64}[])
 
 @inline function _oop_forcing_slab(fb::_OopForcing, arr::Vector{Float64})
@@ -1380,7 +1466,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         return isempty(b.lanes_f) ? convert(T, b.literal) : b.lanes_f
     elseif k === _NK_STATE
         return isempty(b.slots) ? convert(T, _oop_read_state(u, b.idx)) :
-               _oop_gather(u, b.slots)
+               _oop_gather(u, b.slots, fb.memo)
     elseif k === _NK_PARAM
         return convert(T, getfield(p, b.sym))
     elseif k === _NK_TIME
@@ -1390,7 +1476,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
     elseif k === _NK_PARAM_GATHER
         buf = _oop_forcing_slab(fb, b.payload::Vector{Float64})
         return isempty(b.slots) ? convert(T, _oop_read_forcing(buf, b.idx)) :
-               _oop_gather(buf, b.slots)
+               _oop_gather(buf, b.slots, fb.memo)
     elseif k === _NK_LOOPVAR
         # Per LANE: positionally-matched loop counters normally all hold the
         # same k (the batched loop below writes every lane's ref), but two
@@ -1454,7 +1540,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
             slots[l] = g ? 1 : sg.slot_flat[off + 1]
             anyghost |= g
         end
-        gth = _oop_gather(u, slots)
+        gth = _oop_gather(u, slots, fb.memo)
         return anyghost ? ifelse.(mask, zero(T), gth) : gth
     elseif k === _NK_CONTRACTION_LOOP
         # The whole group's reduction in ONE loop of L_iter whole-lane steps:
@@ -2161,9 +2247,9 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             # appear inside a CSR reduce, where `plan` is the E-lane plan and
             # `gathers` already holds the per-entry `conn[(c-1)*width+n]` slots.
             # (`_AK_CONST_EDGE` falls through to the frozen-consts arm below.)
-            return _oop_gather(u, plan.gathers[nd.idx])
+            return _oop_gather(u, plan.gathers[nd.idx], fb.memo)
         elseif ak === _AK_STATE_TBL_BOX
-            g = _oop_gather(u, plan.gathers[nd.idx])
+            g = _oop_gather(u, plan.gathers[nd.idx], fb.memo)
             m = plan.ghost[nd.idx]
             # ghost lanes (table slot 0) select 0.0 — the in-place runners'
             # `s == 0 ? 0.0 : u[s]`, bit-identical; the gather used a safe index.
@@ -2181,7 +2267,7 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             # LIVE forcing lanes: re-gathered per call from the `buffers`
             # argument — one whole-array gather at host-frozen indices, which
             # traces as-is (the indices are constants; the buffer is an input).
-            return _oop_gather(_oop_forcing_slab(fb, a.arr), plan.forc[nd.idx])
+            return _oop_gather(_oop_forcing_slab(fb, a.arr), plan.forc[nd.idx], fb.memo)
         else
             # CONST_AFFINE / CONST_BOX / LOOP_IDX / CONST_CELL: frozen lane data.
             return plan.consts[nd.idx]
@@ -2525,7 +2611,14 @@ function _make_rhs_oop(rhs_list::AbstractVector{Tuple{Int,_Node}},
                 "the data never changes), or run the interpreted evaluator, which does " *
                 "track the refresh."))
         end
-        fb = _OopForcing(buffers, host_keys)
+        # `_oop_new_memo(u)` is `nothing` for every host element type — the field
+        # is then zero-sized and every `_oop_gather` third argument folds away.
+        # Under a Reactant trace the extension returns a fresh per-CALL
+        # `(SSA value, window)` read memo; it is built here and dropped when this
+        # call returns, which is why nothing has to be torn down. See the
+        # interning note at the `_oop_gather` seam for why ONE INVOCATION is both
+        # the correct scope and the largest sound one.
+        fb = _OopForcing(buffers, host_keys, _oop_new_memo(u))
         T = _oop_value_type(u, p, t)
 
         # Factored array observeds, filled per call into the block above the ODE

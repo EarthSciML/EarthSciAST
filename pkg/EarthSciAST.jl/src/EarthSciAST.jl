@@ -251,6 +251,9 @@ export
     # argument binding of the live forcing buffers, plus the refresh-side hook
     # that mirrors a host refresh into the compiled program's argument arrays.
     rhs_with_buffers, forcing_buffers, forcing_buffer_index, sync_forcing!,
+    # Trace-time `(tensor, window)` read-interning counters (ess-oop-intern):
+    # the engagement witness for the out-of-place emitter's traced read memo.
+    oop_intern_stats, oop_intern_stats_reset!,
     # One-call run entry (load → discretize → build_evaluator → seed → refresh →
     # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).
     # `prepare` runs the deterministic-per-document pipeline ONCE into a cached

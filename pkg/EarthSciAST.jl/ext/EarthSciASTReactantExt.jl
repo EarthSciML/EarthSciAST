@@ -76,7 +76,7 @@ using Reactant: Reactant, TracedRArray, TracedRNumber, @allowscalar
 import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
     _oop_scatter, _oop_read_forcing, _oop_prefix_copy,
     _oop_knot_count, _oop_knot_pair, _oop_knot_pair2, _oop_bilinear_corners,
-    _scan_lanes_oop, _ScanFold
+    _scan_lanes_oop, _ScanFold, _oop_new_memo, _oop_intern_tally!
 
 # ---- State reads -------------------------------------------------------------
 #
@@ -87,12 +87,142 @@ import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
 # a thing — so the scalar spine, not the lane axis, is where this method belongs.
 @inline _oop_read_state(u::TracedRArray{T,1}, i::Int) where {T} = @allowscalar u[i]
 
-# `_oop_gather` needs no method: `u[slots]` on a `TracedRArray` with a host
-# `Vector{Int}` already traces to a whole-array gather (XLA then canonicalizes a
-# contiguous run to a slice on its own). It is here as an explicit note so that the
-# absence of a method reads as a decision rather than an oversight. The same
-# applies to a forcing LANE read (`_AK_FORCING_BOX` / `_AK_ARR_TBL_BOX`): the
-# walker routes it through `_oop_gather` over the traced buffers ARGUMENT.
+# ---- Read interning: one op per (SSA value, window), per RHS call ------------
+#
+# The TWO-argument `_oop_gather` still needs no method: `u[slots]` on a
+# `TracedRArray` with a host `Vector{Int}` already traces to the right op —
+# Reactant's `getindex_linear` emits a `stablehlo.slice` when `slots` is a
+# constant-stride run and a `stablehlo.gather` otherwise. The same applies to a
+# forcing LANE read (`_AK_FORCING_BOX` / `_AK_ARR_TBL_BOX`): the walker routes it
+# through `_oop_gather` over the traced buffers ARGUMENT. What DOES need a method
+# is the three-argument form, because emitting the right op is not the same thing
+# as emitting it once.
+#
+# THE MEASUREMENT. ReSEACT at 7x7x16, raw (`optimize=false`) HLO: 8,093
+# `stablehlo.slice` ops over 3,165 distinct `(operand, window)` pairs — 4,928
+# (60.9%) exact duplicates. 7,648 of the 8,093 are 784-element window reads of the
+# emitter's flat extended state tensor `ue = [u ; zeros]`, i.e. one materialized
+# array observed's whole cell block, re-read once per acc-kernel descriptor that
+# mentions it: one chemistry RHS emits 478 slices over 123 distinct windows, and
+# one window is sliced 1,392 times across the module. XLA is left to rediscover
+# the duplication with `CSE<mlir::stablehlo::SliceOp>`, which is PAIRWISE over
+# slice ops and therefore quadratic in their count; a `perf` profile of a stuck
+# CONUS compile put ~50% of all CPU in that pattern and its
+# `OperationEquivalence::isEquivalentTo` callees. Interning at emission means the
+# duplicate is never created, so the quadratic pattern never sees it.
+#
+# WHY THE KEY IS SOUND — this is the safety-critical part, because a key
+# collision returns the WRONG DATA silently.
+#
+#   * The container half of the key is the operand's CURRENT MLIR SSA VALUE, not
+#     the Julia object. A `TracedRArray` is MUTABLE and `setindex!` rebinds its
+#     `mlir_data` in place (Reactant `Indexing.jl`), so one Julia object holds
+#     different values over its life — `objectid` would alias a pre-write read
+#     onto a post-write one, which is exactly the catastrophic case. An SSA value,
+#     by contrast, is immutable by construction: `%42` denotes one tensor of one
+#     shape with one set of contents for the whole program. Two reads of the same
+#     `(value, window)` are therefore the same tensor by definition, and
+#     `_oop_scatter` moving the container on changes the key automatically.
+#   * The window half is the slot vector ITSELF, compared by CONTENT. The memo is
+#     a `Dict`, so a hash collision is resolved by `isequal` on the full vector —
+#     the key is verified on every hit, and equal keys are equal windows because
+#     `slots` is the complete description of what a gather reads. `length(u)` is
+#     in the key too, so an entry can never be served to a differently-shaped
+#     operand even in the presence of a stale pointer.
+#   * Pointer reuse (ABA) is the one residual hazard: an SSA value's address is
+#     the address of the defining op's result storage, so a FREED op could in
+#     principle be replaced at the same address. Within one RHS invocation MLIR
+#     ops are only ever appended — erasure and RAUW happen in the pass pipeline,
+#     long after the trace has finished — so no op observed by this memo can be
+#     freed while the memo is alive. Confining the memo to one invocation is what
+#     makes that argument airtight, and `ESS_OOP_INTERN=2` re-checks the recorded
+#     value against the live one on every hit (see `_rx_intern_check`).
+#
+# WHY ONE RHS INVOCATION IS ALSO THE LARGEST SOUND SCOPE. A driver may trace the
+# RHS inside a `@trace for` body, which puts those ops in a nested MLIR REGION.
+# A value defined in one region does not dominate a use outside it (or in a later
+# one), so a memo that outlived the invocation could hand back a value the
+# verifier rejects — or, across separate `@compile`s, a value from a dead module.
+# The emitter itself opens no region inside one invocation, so every value the
+# memo holds is defined in the same block as every use of it. The prior
+# attribution's deeper variant ("hoist `ue` windows to program scope", 568 slices
+# instead of 937) is therefore DECLINED here: it is exactly the cross-region case
+# this bound excludes.
+#
+# NUMERICS. Reusing an SSA value for an identical read is a pure emission-time
+# CSE. The reused value is the result of the op the duplicate would have emitted,
+# with the same operand and the same window, so the consuming ops receive
+# bit-identical inputs; the emitted program differs from the non-interned one
+# only by the removal of ops with no other effect. This is the transformation
+# `cse_slice` performs on the same module, moved from the compiler to the emitter.
+
+# `Dict` rather than `IdDict`: content-keyed on the slot vector is the point (the
+# duplicate descriptors hold DIFFERENT `Vector{Int}` objects with equal
+# contents), and `Dict` verifies the key with `isequal` on every hit. `Base`'s
+# array hash is sub-linear, so a lookup is cheap even for an 8,232-slot window.
+struct _RxGatherMemo
+    d::Dict{Tuple{UInt,Int,Vector{Int}},Any}
+    check::Bool
+end
+_RxGatherMemo(check::Bool) = _RxGatherMemo(Dict{Tuple{UInt,Int,Vector{Int}},Any}(), check)
+
+# The operand's current SSA value, as a raw address. `get_mlir_data` returns the
+# `MLIR.IR.Value`; `.ref.ptr` is the `MlirValue` handle MLIR itself uses for
+# identity (`mlirValueEqual` compares exactly this).
+@inline _rx_value_id(u::TracedRArray) =
+    UInt(Reactant.TracedUtils.get_mlir_data(u).ref.ptr)
+
+# `ESS_OOP_INTERN`: `0` declines the memo entirely (the feature's kill switch,
+# matching how `ESS_OOP_BATCH=0` declines lane batching); `2` additionally
+# re-verifies each hit. Read once per RHS call, at trace time only.
+function _oop_new_memo(u::TracedRArray{<:Any,1})
+    mode = get(ENV, "ESS_OOP_INTERN", "1")
+    mode == "0" && return nothing
+    return _RxGatherMemo(mode == "2")
+end
+
+# The assertion mode. On a hit, re-derive the key from the LIVE operand and
+# compare it to the one recorded when the entry was made, and check that the
+# memoized result still has the window's length. It cannot catch a wrong ANSWER
+# that a sound key already excludes; what it catches is the one thing the key
+# argument above rests on — an SSA value having moved out from under an entry.
+function _rx_intern_check(u::TracedRArray, slots::Vector{Int}, key, hit)
+    k2 = (_rx_value_id(u), length(u), slots)
+    (k2[1] == key[1] && k2[2] == key[2]) ||
+        error("ESS_OOP_INTERN=2: memo key drifted for a live operand " *
+              "($(key[1]) -> $(k2[1]), len $(key[2]) -> $(k2[2]))")
+    (hit isa AbstractArray && length(hit) != length(slots)) &&
+        error("ESS_OOP_INTERN=2: memoized read has length $(length(hit)) " *
+              "for a $(length(slots))-slot window")
+    return nothing
+end
+
+# A hit returns a FRESH handle onto the memoized SSA value rather than the same
+# Julia object. No op is emitted (a `TracedRArray` is a name for a value, and
+# this is the same value), and it keeps the one property the non-interned build
+# had for free: two consumers of the same read never share a mutable wrapper, so
+# a consumer that rebound its operand's `mlir_data` could not reach the other's.
+# Nothing in this emitter does that today; the guard costs one small host
+# allocation per hit and removes the whole class.
+@inline _rx_rewrap(v::TracedRArray{T,N}) where {T,N} =
+    TracedRArray{T,N}(v.paths, v.mlir_data, v.shape)
+@inline _rx_rewrap(v) = v
+
+function _oop_gather(u::TracedRArray{<:Any,1}, slots::Vector{Int},
+                     memo::_RxGatherMemo)
+    key = (_rx_value_id(u), length(u), slots)
+    d = memo.d
+    hit = get(d, key, nothing)
+    if hit !== nothing
+        memo.check && _rx_intern_check(u, slots, key, hit)
+        _oop_intern_tally!(true)
+        return _rx_rewrap(hit)
+    end
+    v = _oop_gather(u, slots)
+    d[key] = v
+    _oop_intern_tally!(false)
+    return v
+end
 
 # The scalar read of a live forcing buffer passed as a traced argument
 # (`_NK_PARAM_GATHER` / `_AK_ARR_FIXED`). Same bounded-scalar-indexing argument
