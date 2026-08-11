@@ -2388,6 +2388,64 @@ fn observed_lhs_name(lhs: &Expr) -> Option<String> {
     }
 }
 
+/// Flattened names of the system's **algebraic** states: those whose value is
+/// fixed by a bare-LHS equation `x = …` (e.g. `NOx = NO + NO2`) rather than by
+/// a derivative `D(x, t) = …`.
+///
+/// These are not user-settable initial conditions. The integrator holds their
+/// derivative at zero and reconstructs the whole trajectory from the defining
+/// body, so an initial value supplied for one is overwritten before the first
+/// step ([`Compiled::apply_algebraic_ics`]) — which is also why
+/// [`Compiled::build_ic_vec`] does not demand a `default` for them.
+///
+/// Exposed because every host needs this distinction to build a run UI: an
+/// initial-condition editor must not offer a field whose value the solver is
+/// going to discard. Hosts previously re-derived it by walking the raw `.esm`
+/// JSON themselves, which is the same rule implemented twice — and the copy
+/// drifts, because it has to guess at things the flattening pass has already
+/// settled (namespacing, which bare-LHS targets are states rather than observed
+/// variables, and the precedence rule below).
+///
+/// Applies the same precedence as [`classify_equations`]: a variable carrying
+/// **both** a derivative and a plain equation is differential, not algebraic
+/// (esm-y3n). Unlike `classify_equations` this is total — it reports what the
+/// document says rather than validating it, so an incomplete system is
+/// described here and rejected later, at compile time, with a better message.
+pub fn algebraic_state_names(flat: &FlattenedSystem) -> Vec<String> {
+    let n = flat.state_variables.len();
+    let state_index: HashMap<&str, usize> = flat
+        .state_variables
+        .keys()
+        .enumerate()
+        .map(|(i, name)| (name.as_str(), i))
+        .collect();
+
+    let mut differential = vec![false; n];
+    let mut algebraic = vec![false; n];
+
+    for eq in &flat.equations {
+        if let Some(name) = state_lhs_name(&eq.lhs) {
+            if let Some(&i) = state_index.get(name.as_str()) {
+                differential[i] = true;
+            }
+        } else if let Some(name) = observed_lhs_name(&eq.lhs) {
+            // Only a bare LHS naming a STATE is an algebraic state. The same
+            // shape naming an observed variable is an ordinary assignment and
+            // is not a state at all.
+            if let Some(&i) = state_index.get(name.as_str()) {
+                algebraic[i] = true;
+            }
+        }
+    }
+
+    flat.state_variables
+        .keys()
+        .enumerate()
+        .filter(|(i, _)| algebraic[*i] && !differential[*i])
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
 // ============================================================================
 // Inline unit tests
 // ============================================================================
@@ -2655,6 +2713,95 @@ mod tests {
 
     /// Algebraic states whose `default` does not satisfy the constraint at
     /// t=0 must be reconciled before integration starts (esm-0kt).
+    /// Flatten a fixture and report its algebraic states, sorted for comparison.
+    fn algebraic_names_of(json: &str) -> Vec<String> {
+        let file = crate::parse::load(json).expect("parse fixture");
+        let flat = crate::flatten(&file).expect("flatten fixture");
+        let mut names = algebraic_state_names(&flat);
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_bare_lhs_state_is_algebraic_and_a_derivative_one_is_not() {
+        let names = algebraic_names_of(
+            r#"{
+            "esm": "0.4.0",
+            "metadata": {"name": "TestFixture"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "D": {"type": "state", "default": 1.0},
+                        "G": {"type": "state"},
+                        "k": {"type": "parameter", "default": 1.0}
+                    },
+                    "equations": [
+                        {
+                            "lhs": {"op": "D", "args": ["D"], "wrt": "t"},
+                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "G"]}
+                        },
+                        {"lhs": "G", "rhs": "D"}
+                    ]
+                }
+            }
+        }"#,
+        );
+        // Namespaced, as every caller needs it — the name that indexes `ic`.
+        assert_eq!(names, vec!["M.G".to_string()]);
+    }
+
+    #[test]
+    fn a_state_with_both_equations_is_differential() {
+        // esm-y3n: the derivative wins. A host that missed this rule would hide
+        // a genuinely settable initial condition from its Run UI.
+        let names = algebraic_names_of(
+            r#"{
+            "esm": "0.4.0",
+            "metadata": {"name": "TestFixture"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "x": {"type": "state", "default": 1.0},
+                        "k": {"type": "parameter", "default": 1.0}
+                    },
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "k"},
+                        {"lhs": "x", "rhs": "k"}
+                    ]
+                }
+            }
+        }"#,
+        );
+        assert!(names.is_empty(), "derivative must win, got {names:?}");
+    }
+
+    #[test]
+    fn a_bare_lhs_observed_variable_is_not_an_algebraic_state() {
+        // `obs` is an observed variable, not a state, so it must not appear —
+        // it has no slot in the state vector to hide from an IC editor.
+        let names = algebraic_names_of(
+            r#"{
+            "esm": "0.4.0",
+            "metadata": {"name": "TestFixture"},
+            "models": {
+                "M": {
+                    "variables": {
+                        "x": {"type": "state", "default": 1.0},
+                        "obs": {"type": "observed", "expression": "x"},
+                        "k": {"type": "parameter", "default": 1.0}
+                    },
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "k"},
+                        {"lhs": "obs", "rhs": "x"}
+                    ]
+                }
+            }
+        }"#,
+        );
+        assert!(names.is_empty(), "observed is not a state, got {names:?}");
+    }
+
+    #[test]
     #[test]
     fn an_algebraic_state_needs_no_default() {
         // The same shape as `algebraic_ic_reconciled_to_constraint`, except G
