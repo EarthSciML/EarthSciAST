@@ -761,6 +761,7 @@ pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
     models.insert(system_name, model.clone());
 
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         // A synthesized single-system view: it declares no templates and no
         // metaparameters of its own (the source document's survive on IT).
@@ -2058,6 +2059,7 @@ mod tests {
 
     fn empty_file() -> EsmFile {
         EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -2146,6 +2148,7 @@ mod tests {
         );
 
         let file = EsmFile {
+            coordinates: None,
             coupling_roles: None,
             models: Some(models),
             ..empty_file()
@@ -2262,6 +2265,7 @@ mod tests {
         models.insert("dst".to_string(), dst);
 
         EsmFile {
+            coordinates: None,
             models: Some(models),
             coupling: Some(vec![CouplingEntry::VariableMap {
                 from: "src.T".to_string(),

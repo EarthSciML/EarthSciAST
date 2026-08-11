@@ -177,8 +177,8 @@ pub use template_imports::{
     resolve_template_machinery,
 };
 pub use types::{
-    AffectEquation, AutoRecords, ContinuousEvent, CouplingEntry, CouplingRole, DaeInfo, DataLoader,
-    DataLoaderDeterminism, DataLoaderKind, DataLoaderMetadata, DataLoaderSource,
+    AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole, DaeInfo,
+    DataLoader, DataLoaderDeterminism, DataLoaderKind, DataLoaderMetadata, DataLoaderSource,
     DataLoaderTemporal, DataLoaderVariable, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
     EsmFile, Expr, ExpressionNode, FunctionalAffect, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, Reaction, ReactionSystem, RecordsPerFile, Species,

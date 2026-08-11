@@ -103,6 +103,7 @@ fn test_structural_validation() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -267,6 +268,7 @@ fn test_component_graph() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

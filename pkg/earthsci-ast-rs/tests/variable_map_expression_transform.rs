@@ -40,6 +40,7 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -154,6 +155,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
     );
 
     EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(vec![CouplingEntry::VariableMap {

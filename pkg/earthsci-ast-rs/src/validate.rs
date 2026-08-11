@@ -620,6 +620,7 @@ mod tests {
     #[test]
     fn test_validate_empty_file() {
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -704,6 +705,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -816,6 +818,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -870,6 +873,7 @@ mod tests {
     fn test_validation_result_structure() {
         // Test that the new ValidationResult structure works as expected
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -950,6 +954,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -1088,6 +1093,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -1264,6 +1270,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -1378,6 +1385,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -1493,6 +1501,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -1594,6 +1603,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -1668,6 +1678,7 @@ mod tests {
 
         // Create a valid EsmFile structure
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,

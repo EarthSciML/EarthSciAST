@@ -88,6 +88,7 @@ fn test_component_graph_generation() {
     reaction_systems.insert("rs1".to_string(), rs);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -168,6 +169,7 @@ fn test_component_graph_exports() {
     models.insert("simple".to_string(), model);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -428,6 +430,7 @@ fn test_component_existence() {
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

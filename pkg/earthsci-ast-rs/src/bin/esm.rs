@@ -1618,6 +1618,7 @@ fn run_extract(
 
     // Create a new ESM file with just the requested component
     let mut extracted_esm = earthsci_ast::EsmFile {
+        coordinates: None,
         coupling_roles: None,
         // The extracted component is a NEW document. Any template call
         // sites it had were already expanded at load, and metaparameters

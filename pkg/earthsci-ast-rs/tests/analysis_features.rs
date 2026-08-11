@@ -152,6 +152,7 @@ fn test_analysis_features_integration() {
     reaction_systems.insert("simple_rs".to_string(), rs);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

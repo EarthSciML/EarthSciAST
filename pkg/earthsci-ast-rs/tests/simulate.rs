@@ -47,6 +47,7 @@ fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
     let mut models = std::collections::HashMap::new();
     models.insert(model_name.to_string(), model);
     EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
