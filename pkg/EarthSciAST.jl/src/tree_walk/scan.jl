@@ -31,8 +31,8 @@
 #
 # Splitting it this way — rather than carrying an accumulator through the
 # cell loop — is deliberate. `_AccKernel`s are per-cell INDEPENDENT by
-# construction, and four runners rely on that (the scalar walk, the lane
-# tape, the Polyester-threaded plan, and the codegen'd loop nest), plus the
+# construction, and the runners rely on that (the scalar walk and the
+# codegen'd loop nest, serial or chunked), plus the
 # `:oop` emitter. A stateful kernel would have to be taught to all of them;
 # a post-pass over `du` is invisible to every one.
 #

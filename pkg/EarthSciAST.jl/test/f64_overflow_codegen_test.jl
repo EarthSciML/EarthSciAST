@@ -1,34 +1,30 @@
 # The Float64 overflow routing (ess-f64ofl, codegen_kernel.jl).
 #
 # Kernels the PRIMARY codegen emission declines on the node budget used to run
-# the Float64-only lane tape forever. The dual overflow tier (ess-dualfp)
-# already re-emits them into a second generated function for non-Float64 `T`;
+# the per-cell interpreter at Float64. The dual overflow tier (ess-dualfp)
+# re-emits them into a second generated function for non-Float64 `T`;
 # ess-f64ofl routes Float64 calls through that SAME function too — unless
-# ESS_F64_OVERFLOW_CODEGEN=0 (the kill switch, restoring the tape routing
-# byte-for-byte) or Polyester threading is active at call time (the tape's
-# cell axis is threaded, the overflow function is not; that guard is
-# `!_threads_available()` in the section and cannot be exercised here because
-# the test process runs single-threaded without Polyester).
+# ESS_F64_OVERFLOW_CODEGEN=0 (the kill switch: residual Float64 kernels run
+# the per-cell interpreter — since the lane-tape retirement, the slower but
+# bit-identical differential oracle for this routing).
 #
-# Pinned here, on the dual_fast_path_test tape-class fixture (plans built,
-# primary codegen declined via a forced zero budget):
+# Pinned here, on the dual_fast_path_test overflow-class fixture (primary
+# codegen declined via a forced zero budget):
 #   1. ROUTING — the build tally shows the primary decline
 #      (`:codegen_decline_budget`), the overflow acceptance
 #      (`:dual_codegen_kernel`), and the Float64 arming (`:f64_overflow_armed`);
 #      the section carries `f64cg == true` with the feature on and
 #      `f64cg == false` with it off; and a RUNTIME witness: with the feature
 #      on and the overflow function covering every residual kernel, emptying
-#      the section's `kernels`/`plans` vectors does not change the Float64
-#      output — proof the tape loop never runs — while the feature-off build
-#      really is tape-class (non-nothing plans present).
+#      the section's `kernels` vector does not change the Float64
+#      output — proof the interpreter loop never runs.
 #   2. FLOAT64 BIT-IDENTITY — du is `===` per element (NaN/-0.0 count) across
-#      feature-on, feature-off (tape oracle), and ESS_CODEGEN_DISABLE=1
-#      (pre-codegen interpreter/tape oracle).
+#      feature-on, feature-off (interpreter oracle), and ESS_CODEGEN_DISABLE=1
+#      (pre-codegen interpreter oracle).
 #   3. SANITY — at the default budget nothing declines, so the overflow
 #      function does not exist and the feature changes nothing at all.
 #   4. ALLOCATIONS — a warmed Float64 f! call on the overflow routing
-#      allocates 0 bytes (the tape's own zero-alloc pin, kept by the
-#      compiled path; analogous to dual_fast_path_test's Dual pin).
+#      allocates 0 bytes (analogous to dual_fast_path_test's Dual pin).
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -53,9 +49,9 @@ _fof_probe(n, k) =
 const _FOF_AX = [0.0, 1.0, 2.0, 3.0, 4.0]
 const _FOF_TBL = [10.0, 20.0, 40.0, 80.0, 160.0]
 
-# Tape-class fixture (same shape as dual_fast_path_test's): elementwise arrayed
-# equations (guards, unary fns, an interp leaf, cross-variable reads) — every
-# kernel gets a lane plan, and a zero primary budget forces every kernel off
+# Overflow-class fixture (same shape as dual_fast_path_test's): elementwise
+# arrayed equations (guards, unary fns, an interp leaf, cross-variable reads) —
+# a zero primary budget forces every kernel off
 # the primary codegen tier onto the overflow path.
 function _fof_model(N)
     ubody = _op("+",
@@ -85,7 +81,7 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
 
     # A: primary codegen forced off (budget 0), feature at its default (ON) —
     #    the overflow function serves Float64. B: same, feature killed —
-    #    today's routing (tape at Float64), the oracle. C: codegen disabled
+    #    interpreter at Float64, the oracle. C: codegen disabled
     #    wholesale (pre-codegen build; must also keep the routing off).
     fA, uA, pA, vmA, _, tallyA = _fof_build(model, ics;
         ESS_CODEGEN_NODE_BUDGET="0")
@@ -110,11 +106,11 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         @test getfield(ksA, :n_dual_emitted) == length(getfield(ksA, :kernels))
         @test isempty(getfield(ksA, :dual_resid))
 
-        # The kill switch: same section shape, routing disarmed. The build is
-        # still tape-class (non-nothing plans), which is what serves Float64.
+        # The kill switch: same section shape, routing disarmed — the
+        # residual kernels then serve Float64 through the interpreter.
         @test getfield(ksB, :f64cg) === false
         @test get(tallyB, :f64_overflow_armed, 0) == 0
-        @test any(P -> P !== nothing, getfield(ksB, :plans))
+        @test !isempty(getfield(ksB, :kernels))
 
         # ESS_CODEGEN_DISABLE=1 keeps every codegen tier off: no overflow
         # function, nothing to arm.
@@ -123,7 +119,7 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         @test get(tallyC, :f64_overflow_armed, 0) == 0
     end
 
-    @testset "Float64 bit-identity (overflow ≡ tape ≡ no codegen)" begin
+    @testset "Float64 bit-identity (overflow ≡ interpreter ≡ no codegen)" begin
         @test uA == uB && uA == uC
         for k in 1:5, t in (0.0, 0.7, 3.25)
             u = k == 1 ? copy(uA) : _fof_probe(length(uA), k)
@@ -133,18 +129,17 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         end
     end
 
-    @testset "runtime witness: the tape loop is never consulted" begin
+    @testset "runtime witness: the interpreter loop is never consulted" begin
         # The overflow function covers EVERY residual kernel (dual_resid is
         # empty), so with the feature on the Float64 call must not touch
-        # `kernels`/`plans` at all. Empty them: if the tape loop ran it would
+        # `kernels` at all. Empty it: if the interpreter loop ran it would
         # compute nothing (du stays zero) — instead the output must still be
-        # bit-identical to the tape oracle. (This mutation is why this build
-        # is a throwaway: build it fresh, poison it, compare, drop it.)
+        # bit-identical to the interpreter oracle. (This mutation is why this
+        # build is a throwaway: build it fresh, poison it, compare, drop it.)
         fW, uW, pW, _, _, _ = _fof_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
         ksW = getfield(fW, :kernel_section)
         @test isempty(getfield(ksW, :dual_resid))
         empty!(getfield(ksW, :kernels))
-        empty!(getfield(ksW, :plans))
         u = _fof_probe(length(uW), 2)
         duW = _fof_du(fW, u, pW, 0.7)
         @test _fof_bitsame(duW, _fof_du(fB, u, pB, 0.7))
@@ -169,7 +164,7 @@ _fof_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         end
         allocA = @allocated fA(du, u, pA, 0.3)
         allocB = @allocated fB(du, u, pB, 0.3)
-        @info "f64-call allocations" overflow = allocA tape = allocB
+        @info "f64-call allocations" overflow = allocA interp = allocB
         @test allocA == 0
         @test allocA <= allocB
     end

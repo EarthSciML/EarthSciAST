@@ -1,6 +1,6 @@
 # The codegen tier's threaded cell axis (codegen_kernel.jl, "Threaded cell
-# axis for the codegen tier"; partition + opt-in semantics shared with the
-# tape's axis in access_kernel.jl).
+# axis for the codegen tier"; partition + opt-in infrastructure in
+# access_kernel.jl, "Threading infrastructure").
 #
 # Pinned here:
 #   1. PARTITION — `_chunk_ordinals` tiles `[0, n)` exactly (in order, sizes
@@ -14,23 +14,22 @@
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
 #   3. DISJOINTNESS — `_cellset_outs_disjoint!` catches duplicates within an
-#      outs set AND across cell sets (contiguous ranges included, unlike the
-#      tape's per-kernel `_plan_output_disjoint`); real builds carry
-#      `outs_disjoint == true` into the section caches, and a poisoned cache
-#      yields the permanent `:cg_serial_shared_outs` verdict.
+#      outs set AND across cell sets (contiguous ranges included); real builds
+#      carry `outs_disjoint == true` into the section caches, and a poisoned
+#      cache yields the permanent `:cg_serial_shared_outs` verdict.
+#      (A shared-outs section under threading runs the serial `(1, 1)`
+#      instance — since the lane-tape retirement there is no other fallback.)
 #   4. THREADED EXECUTION (subprocess, `julia -t 4` + Polyester, mirroring the
-#      in-process env-toggle discipline of the other codegen tests — there is
-#      no in-suite precedent for a threaded run, since the tape's own threaded
-#      tier predates any threaded test): du bit-identity threaded vs the
+#      in-process env-toggle discipline of the other codegen tests):
+#      du bit-identity threaded vs the
 #      ESS_CG_THREADS_DISABLE=1 serial oracle (same build, same routing) and
 #      vs an ESS_CODEGEN_DISABLE=1 build; `:cg_threaded` in `_THREAD_TALLY`;
 #      the min-cells threshold (`:cg_serial_small` at the 512-cell default on
 #      a small section); ESS_THREADS_DISABLE=1 keeping the section unexamined;
-#      and the budget-0 OVERFLOW function threading the same way (the routing
-#      that used to defer to the tape whenever threading was active).
+#      and the budget-0 OVERFLOW function threading the same way.
 # The subprocess block is skipped (with a warning) when Polyester is not
 # available in the active environment — it is a weakdep and not a test target
-# dependency, exactly like the tape's threaded tier itself.
+# dependency.
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -39,8 +38,8 @@ const ESM = EarthSciAST
 # ---- shared fixtures ---------------------------------------------------------
 
 # Two-variable 1-D elementwise model: a contig cell set (first state block)
-# plus a base-offset rank-1 box (second block). Tape-class (lane plans exist),
-# so the budget-0 build exercises the overflow function too.
+# plus a base-offset rank-1 box (second block). Fully budget-declinable, so
+# the budget-0 build exercises the overflow function too.
 function _cgt_1d_model(N)
     ubody = _op("+",
         _op("ifelse", _op(">", _idx("u", _v("i")), _n(2.0)),
@@ -206,7 +205,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ 512)
         end
 
-        @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ tape" begin
+        @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
             ESM._reset_thread_tally!()
             fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
             fB, uB, pB, _ = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0",
@@ -223,9 +222,9 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                 du_ser = withenv("ESS_CG_THREADS_DISABLE" => "1") do
                     _cgt_du(fO, u, pO, t)
                 end
-                du_tape = _cgt_du(fB, u, pB, t)    # threaded-tape routing
+                du_int = _cgt_du(fB, u, pB, t)     # interpreter routing
                 @test _cgt_bitsame(du_thr, du_ser)
-                @test _cgt_bitsame(du_thr, du_tape)
+                @test _cgt_bitsame(du_thr, du_int)
             end
             @test getfield(ksO, :dual_tcache).state == 1
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) >= 1
@@ -271,8 +270,8 @@ else
             @test ESM._cellset_outs_disjoint!(seen, ESM._outs_cells([4, 9, 2]))
             @test !ESM._cellset_outs_disjoint!(Set{Int}(),
                                                ESM._outs_cells([4, 9, 4]))
-            # contig vs box overlap ACROSS sets (the case the tape's per-kernel
-            # check never sees): contig 1:6, then a stride-2 box hitting slot 4.
+            # contig vs box overlap ACROSS sets (the case a per-kernel check
+            # would never see): contig 1:6, then a stride-2 box hitting slot 4.
             @test !ESM._cellset_outs_disjoint!(copy(seen), ESM._contig_cells(6))
             seen2 = Set{Int}()
             @test ESM._cellset_outs_disjoint!(seen2, ESM._contig_cells(6))

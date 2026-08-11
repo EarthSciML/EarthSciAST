@@ -2,8 +2,8 @@
 #
 # `datetime.*` used to reach every evaluator tier through the boxed
 # `(fname, nothing)` payload: args in a `Vector{Any}`, dispatched by name
-# through `_eval_closed_fn` — the single residual allocation on the lane tape
-# (~480 B/call) and one opaque call per lane on the `:oop` lane path. The
+# through `_eval_closed_fn` — an allocation per call, and one opaque call per
+# lane on the `:oop` lane path. The
 # registry now DECLARES a typed scalar core per all-scalar function
 # (`_FN_TYPED_SCALAR_CORES`, registered_functions.jl), `_compile_fn_node`
 # mints the `(fname, _FnTypedCoreSpec)` payload, and every tier's `Float64`
@@ -14,9 +14,9 @@
 #     oracle — each core is by construction the same composition) and to
 #     direct `Dates`-derived values over a boundary-spanning timestamp grid;
 #   * a datetime-carrying kernel is bit-identical across the scalar
-#     interpreter, the lane tape, the codegen tier and the `:oop` host path;
-#   * the tape path through a `datetime.*` spine is ZERO-ALLOCATION (it was
-#     ~480 B/call), with the boxed twin kernel as the sensitivity control;
+#     interpreter, the codegen tier and the `:oop` host path;
+#   * the codegen path through a `datetime.*` spine is ZERO-ALLOCATION,
+#     with the boxed twin kernel as the sensitivity control;
 #   * ForwardDiff `Dual` input still takes the pre-change boxed route and
 #     matches it exactly (values + partials);
 #   * an all-scalar fn WITHOUT a declaration (the `(fname, nothing)` payload)
@@ -147,8 +147,8 @@ end
         end
     end
 
-    # ---- Lane tape: typed opcode, bit-identity, ZERO allocation -------------
-    @testset "lane tape: _TC_FN_TYPED, bit-identical, zero-alloc" begin
+    # ---- Codegen tier: typed core call, bit-identity, ZERO allocation -------
+    @testset "codegen tier: typed core, bit-identical, zero-alloc" begin
         N = 48
         u = Float64[(-1.0)^k * (0.05 + 0.03k) for k in 1:N]
         tval = Dates.datetime2unix(DateTime(2016, 2, 29, 12))   # leap noon
@@ -166,25 +166,25 @@ end
 
         Kt = mkK(spine(name -> ESM._fn_typed_core_spec(name)))
         Kb = mkK(spine(name -> nothing))
-        Pt = ESM._build_acc_plan(Kt; tile=16)
-        Pb = ESM._build_acc_plan(Kb; tile=16)
-        @test Pt !== nothing && Pb !== nothing
-        @test any(ins -> ins.code === ESM._TC_FN_TYPED, Pt.instrs)
-        @test !any(ins -> ins.code === ESM._TC_FN, Pt.instrs)
-        @test any(ins -> ins.code === ESM._TC_FN, Pb.instrs)   # boxed control
+        cgt = ESM._build_codegen_rhs(ESM._AccKernel[Kt])
+        cgb = ESM._build_codegen_rhs(ESM._AccKernel[Kb])
+        @test cgt !== nothing && all(cgt.covered)
+        @test cgb !== nothing && all(cgb.covered)
+        runcg!(du, cg) = (cg.f(du, u, nothing, tval, cg.tabs, 1, 1); du)
 
         ref = zeros(N); ESM._run_acc_kernel!(ref, u, nothing, tval, Kt)
         refb = zeros(N); ESM._run_acc_kernel!(refb, u, nothing, tval, Kb)
-        tape = zeros(N); ESM._run_acc_plan!(tape, u, nothing, tval, Kt, Pt)
-        tapeb = zeros(N); ESM._run_acc_plan!(tapeb, u, nothing, tval, Kb, Pb)
-        @test tape == ref                       # typed tape ≡ scalar walk
-        @test tape == refb == tapeb             # …≡ the boxed route, both tiers
+        cgv = runcg!(zeros(N), cgt)
+        cgvb = runcg!(zeros(N), cgb)
+        @test cgv == ref                        # typed codegen ≡ scalar walk
+        @test cgv == refb == cgvb               # …≡ the boxed route, both tiers
 
-        # THE allocation pin: warm up, then the typed plan run must allocate
-        # NOTHING; the boxed twin is the sensitivity control proving the
-        # measurement can see the old per-lane box at all.
-        a_typed = @allocated ESM._run_acc_plan!(tape, u, nothing, tval, Kt, Pt)
-        a_boxed = @allocated ESM._run_acc_plan!(tapeb, u, nothing, tval, Kb, Pb)
+        # THE allocation pin: warm up, then the typed compiled run must
+        # allocate NOTHING; the boxed twin is the sensitivity control proving
+        # the measurement can see the per-call arg box at all.
+        runcg!(cgv, cgt); runcg!(cgvb, cgb)     # warm
+        a_typed = @allocated runcg!(cgv, cgt)
+        a_boxed = @allocated runcg!(cgvb, cgb)
         @test a_typed == 0
         @test a_boxed > 0
     end
@@ -202,7 +202,7 @@ end
                                       _ao1(body, "i", 1, N))])
     end
 
-    @testset "kernel bit-identity: interpreter ≡ tape ≡ codegen ≡ :oop" begin
+    @testset "kernel bit-identity: interpreter ≡ codegen ≡ :oop" begin
         N = 24
         ics = Dict("u[$k]" => 0.2 + 0.15k for k in 1:N)
         build(; form=:inplace, env...) =
@@ -213,7 +213,7 @@ end
             (f, u0, p, copy(ESM._CASCADE_TALLY))
         end
         fref, u0, pref, _ = build(; ESS_STENCIL_DISABLE="1", ESS_CODEGEN_DISABLE="1")
-        ftape, _, ptape, _ = build(; ESS_CODEGEN_DISABLE="1")
+        fint, _, pint, _ = build(; ESS_CODEGEN_DISABLE="1")   # kernel interpreter
         fcg, _, pcg, cgtally = build()
         foop, _, poop, _ = build(; form=:oop)
         @test get(cgtally, :codegen_kernel, 0) >= 1   # codegen really fired
@@ -226,7 +226,7 @@ end
             u = k == 1 ? copy(u0) :
                 Float64[0.4 + 0.9 * sin(1.3i + 0.7k) for i in 1:N]
             dref = run!(fref, u, pref, t)
-            @test all(run!(ftape, u, ptape, t) .=== dref)
+            @test all(run!(fint, u, pint, t) .=== dref)
             @test all(run!(fcg, u, pcg, t) .=== dref)
             @test all(foop(u, poop, t) .=== dref)
             # Dates-derived expected values, composed in the spine's own
@@ -240,11 +240,12 @@ end
             end
         end
 
-        # The end-to-end RHS is now allocation-free through the datetime spine
-        # on BOTH compiled tiers (tape was ~480 B/call before ess-dtcore).
+        # The end-to-end RHS is allocation-free through the datetime spine on
+        # the interpreter AND the codegen tier (the boxed route allocated
+        # per call before ess-dtcore).
         du = zeros(N); t0 = ts[1]
-        ftape(du, u0, ptape, t0); fcg(du, u0, pcg, t0)   # warmup
-        @test (@allocated ftape(du, u0, ptape, t0)) == 0
+        fint(du, u0, pint, t0); fcg(du, u0, pcg, t0)   # warmup
+        @test (@allocated fint(du, u0, pint, t0)) == 0
         @test (@allocated fcg(du, u0, pcg, t0)) == 0
     end
 

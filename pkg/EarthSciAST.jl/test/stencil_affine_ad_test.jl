@@ -17,12 +17,12 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-# Build an evaluator under the affine path (ESS_AFFINE=1) or the byte-identical
+# Build an evaluator under the (default) affine path or the byte-identical
 # per-cell reference (ESS_STENCIL_DISABLE=1). Returns (f, u0, p, vmap, diag);
 # `f` is `f!(du,u,p,t)` for :inplace or `f(u,p,t)->du` for :oop.
 function _affine_f(model, ics; affine::Bool, form=:inplace, const_arrays=Dict())
-    envs = affine ? ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing) :
-                    ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")
+    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
+                    ("ESS_STENCIL_DISABLE" => "1",)
     withenv(envs...) do
         f, u0, p, _tspan, vmap, diag =
             ESM._build_evaluator_impl(model; initial_conditions=ics, form=form,

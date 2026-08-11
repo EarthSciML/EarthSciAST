@@ -26,8 +26,8 @@ out-of-domain input yields `NaN` (or the spec-pinned clamp), never an
 exception. This is a hard requirement, not a nicety, because the array
 evaluators evaluate a closed `fn` **eagerly for every lane** — including lanes
 whose value a per-cell guard (`ifelse`/`and`/`or`) will discard. The
-whole-array (`_oop`) and lane-tape (`_run_acc_plan!`) paths compute the `fn`
-on all cells and then blend; a guard's false lanes get a garbage-but-finite
+whole-array (`_oop`) path computes the `fn`
+on all cells and then blends; a guard's false lanes get a garbage-but-finite
 `fn` value that the select throws away. The scalar reference walk, by
 contrast, still SHORT-CIRCUITS — it never evaluates a guarded `fn` on a lane
 the guard excludes.
@@ -567,8 +567,8 @@ end
 # An ALL-SCALAR closed function (payload `(fname, nothing)` — today the nine
 # `datetime.*` entries) used to reach every evaluator tier through ONE boxed
 # door: args collected into a `Vector{Any}`, dispatched by name through
-# `_eval_closed_fn`. That box was the single residual allocation on the lane
-# tape (~480 B/call) and one opaque call per lane on the `:oop` lane path.
+# `_eval_closed_fn` — an allocation per call, and one opaque call per lane on
+# the `:oop` lane path.
 #
 # This table lets a closed function DECLARE a typed scalar core: a concrete,
 # allocation-free Julia function `(t::Float64) -> Float64` that computes
@@ -583,7 +583,7 @@ end
 # CONSUMERS. `_compile_fn_node` (tree_walk/compile.jl) consults
 # `_fn_typed_core_spec` ONCE at build time and mints the payload
 # `(fname, _FnTypedCoreSpec)` instead of `(fname, nothing)`; every tier's `:fn`
-# arm — scalar walker, access interpreter, lane tape (`_TC_FN_TYPED`), codegen,
+# arm — scalar walker, access interpreter, codegen,
 # and both `:oop` paths — `isa`-matches that concrete payload and calls
 # `_fn_typed_core_call(id, x)` at `T === Float64`. A closed function WITHOUT a
 # row keeps the boxed `(fname, nothing)` route on every tier, unchanged. A
@@ -611,8 +611,7 @@ end
 # The typed-core payload rider: `(fname, _FnTypedCoreSpec)` on the `:fn` node.
 # `id` is the 1-based row index into `_FN_TYPED_SCALAR_CORES` — an isbits
 # handle, so the payload is a pure descriptor (content-keyed by `id` in the
-# merge/CSE machinery; no per-chunk clone needed on the threaded tape, unlike
-# `_TC_FN`'s mutable arg buffer).
+# merge/CSE machinery).
 struct _FnTypedCoreSpec
     id::Int
     arity::Int
@@ -666,12 +665,11 @@ end
         "internal: typed-core id $(id) has no _FN_TYPED_SCALAR_CORES row"))
 
 # The typed unary call, shared by EVERY tier's `Float64` fast path (scalar
-# walker, access interpreter, lane tape, codegen, both `:oop` paths) — one
+# walker, access interpreter, codegen, both `:oop` paths) — one
 # callee, so the tiers cannot drift from each other OR from the boxed registry
 # (whose composition each row's `core` is). The tuple recursion below unrolls
 # into a type-stable branch ladder over the const table rows: no dynamic
-# dispatch, no arg box, zero allocation — the property the lane tape's
-# `_TC_FN_TYPED` loop is built on. `Float64(…)` re-pins the result so the
+# dispatch, no arg box, zero allocation. `Float64(…)` re-pins the result so the
 # ladder infers concretely even if a future row's `core` widens.
 @inline _fn_typed_core_call(id::Int, x::Float64)::Float64 =
     _fn_typed_core_call_r(_FN_TYPED_SCALAR_CORES, id, x)
@@ -1029,7 +1027,7 @@ end
 # class merge instead tables the SPECS per lane, exactly as it tables varying
 # state slots / consts / forcing indices (`_AccStateTblBox` / `_AccConstBox`):
 #   * `specs[lane]` is the member's ORIGINAL spec object for that lane. The
-#     scalar walker and the lane tape evaluate lane `l` by calling the SAME
+#     runners evaluate lane `l` by calling the SAME
 #     `_interp_*_core` kernel on `specs[lane]`'s own table/axis, so per-lane
 #     results are bit-identical to the unmerged kernels by construction.
 #   * `*_cols` is the knot-major transpose (`col[k][lane] == specs[lane].…[k]`)

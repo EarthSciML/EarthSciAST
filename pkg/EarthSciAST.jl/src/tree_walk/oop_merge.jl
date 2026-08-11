@@ -45,8 +45,8 @@
 # diagnostic stays truthful. When any inv recipe varies across members
 # (all-or-nothing, per class) the whole tier folds into the cell tier as
 # before — same values, lane-vectorized. Evaluation is stock
-# `_build_oop_acc_plan` + `_oop_run_acc_vec` (`:oop`) or the lane
-# tape / codegen / scalar runners (`:inplace`) — per-lane semantics
+# `_build_oop_acc_plan` + `_oop_run_acc_vec` (`:oop`) or the
+# codegen / scalar runners (`:inplace`) — per-lane semantics
 # (fold order, ghost select, interp) stay EarthSciAST's.
 #
 # BIT-IDENTITY BY CONSTRUCTION. A leaf equal across the group stays scalar;

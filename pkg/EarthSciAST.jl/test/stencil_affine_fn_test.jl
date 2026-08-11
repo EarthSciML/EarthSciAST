@@ -5,7 +5,7 @@
 # fn node is lowered with its `(fname, spec)` payload carried through, and
 # `_eval_acc_op` gained a `:fn` arm mirroring `_eval_node_op` (SAME cores, SAME
 # const tables). Build each model two ways and require BIT-IDENTITY:
-#   * ESS_AFFINE=1          → affine access-kernel path (must FIRE: n_acc ≥ 1)
+#   * default build          → affine access-kernel path (must FIRE: n_acc ≥ 1)
 #   * ESS_STENCIL_DISABLE=1 → per-cell reference
 # The const table/axis of an interp are captured in the spec payload, not as
 # children — only the scalar query args are lowered as lanes, so a query that is a
@@ -16,8 +16,8 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _affine_build_fn(model, ics; affine::Bool, const_arrays=Dict())
-    envs = affine ? ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing) :
-                    ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")
+    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
+                    ("ESS_STENCIL_DISABLE" => "1",)
     withenv(envs...) do
         f!, u0, p, _tspan, vmap, diag =
             ESM._build_evaluator_impl(model; initial_conditions=ics, form=:inplace,

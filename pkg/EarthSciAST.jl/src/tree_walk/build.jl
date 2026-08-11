@@ -2467,9 +2467,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                        _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
                        lvl_scans))
             else
-                plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in merged]
                 push!(mat_levels,
-                      (lvl_scalars, _make_kernel_section(merged, plans), lvl_scans))
+                      (lvl_scalars, _make_kernel_section(merged), lvl_scans))
             end
         end
     end
@@ -3547,7 +3546,7 @@ end
 # boundaries / makearray regions / distinct valences form their own
 # (N-independent) groups. The DEFAULT merge target is the unified access-kernel
 # IR (`_acc_from_cell_entries`, acc_merge.jl → indirect-outs `_AccKernel`s,
-# lane-tape hosted at Float64); `ESS_STENCIL_DISABLE=1` skips the merge and
+# codegen-compiled or interpreted); `ESS_STENCIL_DISABLE=1` skips the merge and
 # keeps the compiled per-cell nodes as plain scalar entries (`percell_scalar`
 # → `rhs_list`, evaluated by `_eval_node`) — the maximally independent
 # reference the acc≡per-cell differentials compare against. The

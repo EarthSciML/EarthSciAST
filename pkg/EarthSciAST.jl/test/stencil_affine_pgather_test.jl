@@ -20,8 +20,8 @@ const ESM = EarthSciAST
 # a Dict tag → (f!, u0, p, diag).
 function _pg_build_both(model, ics, buf)
     out = Dict{Symbol,Any}()
-    for (tag, envs) in ((:aff, ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing)),
-                        (:ref, ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")))
+    for (tag, envs) in ((:aff, ("ESS_STENCIL_DISABLE" => nothing,)),
+                        (:ref, ("ESS_STENCIL_DISABLE" => "1",)))
         withenv(envs...) do
             f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(model;
                 initial_conditions=ics, param_arrays=Dict("forcing" => buf))

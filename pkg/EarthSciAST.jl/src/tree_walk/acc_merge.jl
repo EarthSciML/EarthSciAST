@@ -6,11 +6,11 @@
 #
 # The PER-CELL fallback's whole-array host: group an array equation's compiled
 # per-cell `(du_slot, _Node)` entries by structural signature and merge each
-# group into ONE `_AccKernel` over an INDIRECT-OUTS cell set. The lane-tape
-# machinery then runs the kernel de-scalarized at Float64 (per-node tile loops
-# over the merged per-cell tables), the scalar `_eval_acc` walk stays the
-# eltype-generic / lazy-guard reference, and the oop vectorized form gets
-# whole-array gathers — one IR family for every array-equation tier.
+# group into ONE `_AccKernel` over an INDIRECT-OUTS cell set. The codegen tier
+# then compiles the kernel into a straight loop nest, the scalar `_eval_acc`
+# walk stays the eltype-generic / lazy-guard reference (and the runner for
+# declined kernels), and the oop vectorized form gets whole-array gathers —
+# one IR family for every array-equation tier.
 #
 # Bit-identity by construction: the merge is a structural transpose — a leaf
 # that is equal across the group stays a scalar (literal / fixed slot /
@@ -24,19 +24,13 @@
 #
 # LAZY GUARDS. `_eval_acc_op`'s `ifelse`/`and`/`or` arms short-circuit exactly
 # like the scalar walker's, so on the SCALAR reference runner a merged group
-# with a lazy guard keeps per-cell guard semantics. The lane tape no longer
-# declines these kernels (gordian total-vectorize): it evaluates the guards
-# EAGERLY as select/blend, on a spine copy `_acc_sanitize_guards` makes total,
-# so a throwing op under an unentered branch cannot raise (see access_kernel.jl).
+# with a lazy guard keeps per-cell guard semantics (the codegen tier emits the
+# same lazy semantics — ternaries and `&&`/`||` chains).
 #
-# The per-cell/invariant CSE tiers are still SKIPPED on a lazy-bearing spine —
-# but the reason is the SCALAR path alone, not the tape. `_build_acc_cse` counts
-# total occurrences (not unconditional ones), so hoisting a subtree whose
-# occurrences all sit under a guard into the UNCONDITIONAL CSE prelude would
-# evaluate what the lazy scalar walk skips. Since the same `_AccKernel` backs
-# both runners and the scalar path must stay lazy, we skip CSE here. (The tape's
-# own sanitized selects ARE total, so a tape-LOCAL CSE across selects would be
-# sound — a future optimization, out of scope for the eager-select landing.)
+# The per-cell/invariant CSE tiers are SKIPPED on a lazy-bearing spine:
+# `_build_acc_cse` counts total occurrences (not unconditional ones), so
+# hoisting a subtree whose occurrences all sit under a guard into the
+# UNCONDITIONAL CSE prelude would evaluate what the lazy scalar walk skips.
 # ========================================================================
 
 # Does this spine carry an op whose scalar evaluation is lazy?
@@ -67,8 +61,8 @@ _acc_node_has_lazy(n::_Node) =
 # test/direct_class_emission_test.jl).
 #
 # BIT-IDENTITY. Per lane the evaluated op sequence is byte-identical to the
-# split kernel's: the lane-spec arms of every runner (`_eval_acc`, the lane
-# tape's `_TC_INTERP_*_TBL`, the :oop lane evaluator, the codegen tier) select
+# split kernel's: the lane-spec arms of every runner (`_eval_acc`, the :oop
+# lane evaluator, the codegen tier) select
 # lane `l`'s OWN spec by the `_outs_cells` box addressing (s1=1, off=1, lane
 # == cell ordinal — the same shape the post-hoc merge mints) and call the SAME
 # `_interp_*_core`. Grouping coarser can only change WHICH kernel hosts a
@@ -292,8 +286,8 @@ function _struct_sig!(io::IOBuffer, n::_Node, direct::Bool)
         # CONFINED to scalar contexts and never reaches the array-equation merge.
         # Should one ever arrive, key it by object identity so DISTINCT loops can
         # never be wrongly merged into one kernel (fail-safe: no merge, not a
-        # silent miscompile). The access-plan builder then declines it
-        # (`_AccPlanDecline`) and the cell falls back to the per-cell scalar walk.
+        # silent miscompile). The codegen emitter then declines it and the
+        # cell falls back to the per-cell scalar walk.
         print(io, "CL:", objectid(n))
     else  # _NK_OP (including closed `fn`)
         print(io, "O:", n.op)
@@ -615,8 +609,7 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int,_Node}})::Vector{_AccK
         direct && _acc_spine_has_lanespec(spine) &&
             _tally_cascade!(:direct_class_kernel)
         # CSE + invariant hoisting on the merged spine — skipped on a
-        # lazy-bearing one (see the header) so the SCALAR reference stays lazy;
-        # the tape sanitizes and eager-blends the guards from this same spine.
+        # lazy-bearing one (see the header) so the SCALAR reference stays lazy.
         spine, cse = _acc_node_has_lazy(spine) ? (spine, _ACC_NO_CSE) :
                      _build_acc_cse(spine, acc)
         push!(kernels, _AccKernel(_outs_cells(slots), spine, acc,
@@ -630,8 +623,8 @@ end
 # closure; Julia specializes the generated method to the captured types.
 # Scalar/indexed-D equations evaluate through `rhs_list` (one slot each); array
 # (`arrayop`) equations evaluate through `acc_kernels` as whole-array access
-# kernels (in-place lane tapes at Float64, the eltype-generic scalar walk
-# otherwise). Accepts any AbstractVector so both the pre-allocated and the
+# kernels (codegen-compiled loop nests, the eltype-generic scalar walk for
+# declined kernels). Accepts any AbstractVector so both the pre-allocated and the
 # dynamically-grown forms produced by build_evaluator work. The whole RHS is
 # allocation-free in steady state (ess-9cc), so it can be reused across every
 # RK stage without GC pressure — pinned by the `@allocated f!(du,u,p,t) == 0`
@@ -656,12 +649,6 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
                    time_slots::AbstractVector{Int},
                    dyn_slots::AbstractVector{Int},
                    scan_folds::AbstractVector{_ScanFold}=_ScanFold[])
-    # Lane tapes for the affine access kernels (access_kernel.jl): compiled once
-    # here, run in place of the per-cell scalar walk wherever a strided
-    # formulation exists (`nothing` ⇒ that kernel keeps the scalar runner). The
-    # tape is Float64-only; every other value type (ForwardDiff `Dual`) takes
-    # the eltype-generic scalar path below, which computes the SAME values.
-    acc_plans = Union{Nothing,_AccPlan}[_build_acc_plan(K) for K in acc_kernels]
     # Build observability: with ESS_OOP_PROBE=1, record how each array kernel would
     # plan for the vectorized (traceable) `:oop` form — `:oop_vec` when it
     # vectorizes whole-array, else `:oopdecl_<reason>` — into the cascade tally, so
@@ -677,13 +664,13 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
     end
     # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
-    # (bit-identical, eltype-generic); the rest keep the tape/scalar runners
-    # above. `ESS_CODEGEN_DISABLE=1` yields exactly the pre-codegen kernel loop.
+    # (bit-identical, eltype-generic); the rest keep the per-cell scalar
+    # runner. `ESS_CODEGEN_DISABLE=1` yields exactly the interpreter kernel loop.
     # `shared_cache = cse_cache` (ess-cgfsc): THIS call site may compile
     # shared-prelude (`_CSECache`) reads into the generated kernels, because
     # `f!` below fills every prelude tier into that exact cache — at the same
     # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
-    kernel_section = _make_kernel_section(acc_kernels, acc_plans;
+    kernel_section = _make_kernel_section(acc_kernels;
                                           shared_cache=cse_cache)
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
@@ -763,9 +750,8 @@ function _make_rhs(rhs_list::AbstractVector{Tuple{Int,_Node}},
         # bound / connectivity are data, so one kernel covers every valence.
         # The kernel section (codegen_kernel.jl) runs the codegen-emitted kernels
         # through their compiled loop nests (any value type), then each residual
-        # kernel exactly as before: at Float64 a kernel with a lane tape runs
-        # de-scalarized (`_run_acc_plan!`, bit-identical + zero-alloc); everything
-        # else walks the eltype-generic scalar runner.
+        # kernel through the eltype-generic scalar runner (or, when the Float64
+        # overflow routing is armed, the compiled overflow function).
         kernel_section(du, u, p, t, T)
 
         # ---- Cumulative (prefix) reductions (ess-scan, scan.jl) ----

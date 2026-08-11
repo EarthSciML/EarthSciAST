@@ -8,7 +8,7 @@
 # so it is bit-identical to `_eval_contraction`. Only constant-bound, no-join
 # contractions unroll; variable-valence / join-gated ones stay on the per-cell path.
 #
-# Each model: affine (ESS_AFFINE=1) ≡ per-cell (ESS_STENCIL_DISABLE=1) BIT-IDENTITY,
+# Each model: default affine build ≡ per-cell (ESS_STENCIL_DISABLE=1) BIT-IDENTITY,
 # affine FIRED (n_acc ≥ 1) and OWNED the equation (n_vec == 0).
 using Test
 using EarthSciAST
@@ -16,8 +16,8 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _ct_build(model, ics; affine::Bool, const_arrays=Dict())
-    envs = affine ? ("ESS_AFFINE" => "1", "ESS_STENCIL_DISABLE" => nothing) :
-                    ("ESS_AFFINE" => nothing, "ESS_STENCIL_DISABLE" => "1")
+    envs = affine ? ("ESS_STENCIL_DISABLE" => nothing,) :
+                    ("ESS_STENCIL_DISABLE" => "1",)
     withenv(envs...) do
         f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
             initial_conditions=ics, const_arrays=const_arrays)

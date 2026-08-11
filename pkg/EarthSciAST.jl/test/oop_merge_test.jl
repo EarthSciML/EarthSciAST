@@ -194,7 +194,7 @@ end
 
     @testset "pointwise twins: fires + bit-identical (N=$N)" for N in (8, 33)
         ics = _om_ics(N)
-        # codegen-disabled pair: countable kernels + the lane-tape/scalar path
+        # codegen-disabled pair: countable kernels + the scalar interpreter path
         fm, um, pm, _, dm = _im_build(_om_twin_model(N), ics; merged=true, codegen=false)
         fu, uu, pu, _, du_ = _im_build(_om_twin_model(N), ics; merged=false, codegen=false)
         @test _im_nkernels(fm) < _im_nkernels(fu)        # the pass FIRED (IIP)

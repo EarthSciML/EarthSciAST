@@ -4,7 +4,7 @@
 # element, so NaN and -0.0 count) across several (u, t) probes, at Float64 AND
 # under ForwardDiff Dual:
 #   * default                 → the codegen tier (RuntimeGeneratedFunctions)
-#   * ESS_CODEGEN_DISABLE=1   → the pre-codegen runners (lane tape / scalar walk)
+#   * ESS_CODEGEN_DISABLE=1   → the pre-codegen runner (per-cell interpreter)
 # Every case asserts the codegen tier actually FIRED (`:codegen_kernel` in
 # `_CASCADE_TALLY`), so a silent decline cannot make the comparison pass
 # trivially. Fixtures deliberately span the descriptor/op surface: affine
@@ -296,9 +296,8 @@ end
             ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
             sp4, acc4, ESM._FixedBound(0), 0.0)
         kernels = ESM._AccKernel[K1, K2]
-        plans = Union{Nothing,ESM._AccPlan}[ESM._build_acc_plan(K) for K in kernels]
         ESM._reset_cascade_tally!()
-        section = ESM._make_kernel_section(kernels, plans)
+        section = ESM._make_kernel_section(kernels)
         tally = copy(ESM._CASCADE_TALLY)
         @test get(tally, :codegen_kernel, 0) == 1
         @test get(tally, :codegen_decline_box_rank, 0) == 1

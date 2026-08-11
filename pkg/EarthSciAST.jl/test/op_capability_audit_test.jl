@@ -1,13 +1,12 @@
 # Cross-tier op/payload capability audit.
 #
-# The tree-walk engine evaluates the same spine through up to three tiers —
-# the scalar interpreter (`_eval_acc`, access_kernel.jl), the lane tape
-# (`_plan_emit!`/`_plan_op_supported`, access_kernel.jl), and the B1 codegen
-# tier (`_cg_emit_op`/`_cg_emit_fn`, codegen_kernel.jl) — plus the hand-written
-# guard-sanitizer table and the xcse cost gate. Capability drift between them
-# is never an ERROR at runtime (the tape and codegen tiers decline and fall
+# The tree-walk engine evaluates the same spine through two tiers —
+# the scalar interpreter (`_eval_acc`, access_kernel.jl) and the B1 codegen
+# tier (`_cg_emit_op`/`_cg_emit_fn`, codegen_kernel.jl) — plus the
+# xcse cost gate. Capability drift between them
+# is never an ERROR at runtime (the codegen tier declines and falls
 # back), which is exactly why it goes unnoticed: an op or fn-payload shape
-# added to one tier but not the others silently forfeits the faster tiers.
+# added to one tier but not the other silently forfeits the faster tier.
 #
 # This file makes that drift LOUD. Every deliberate capability gap is pinned
 # in an explicit expected-decline manifest below, each entry with its reason;
@@ -36,31 +35,14 @@ const ESM = EarthSciAST
     ]
 
     # ---- Expected-decline manifests (ops) -----------------------------------
-    # op => one-line reason. EMPTY today: the lane tape admits, and the codegen
-    # dicts map, every op in all four registry tables (both consume the tables
-    # directly). If a future registry op is DELIBERATELY unsupported by a tier,
-    # list it here with the reason; an unlisted gap fails below.
-    TAPE_OP_DECLINES    = Dict{Symbol,String}()
+    # op => one-line reason. EMPTY today: the codegen
+    # dicts map every op in all four registry tables (they consume the tables
+    # directly). If a future registry op is DELIBERATELY unsupported by the
+    # tier, list it here with the reason; an unlisted gap fails below.
     CG_UNARY_DECLINES   = Dict{Symbol,String}()
     CG_BINARY_DECLINES  = Dict{Symbol,String}()
     CG_CMP_DECLINES     = Dict{Symbol,String}()
     CG_MINMAX_DECLINES  = Dict{Symbol,String}()
-
-    @testset "lane tape admits every registry ladder op (else add to TAPE_OP_DECLINES)" begin
-        for (tname, table, nargs) in ladder_tables
-            gaps = Symbol[row.sym for row in table
-                          if !ESM._plan_op_supported(row.sym, nargs) &&
-                             !haskey(TAPE_OP_DECLINES, row.sym)]
-            @testset "$tname" begin
-                @test gaps == Symbol[]
-            end
-        end
-        # Stale-entry sweep: a manifest op that IS supported (or left the
-        # registry) means the manifest lags the code — prune it.
-        stale = Symbol[op for op in keys(TAPE_OP_DECLINES)
-                       if !(op in regops)]
-        @test stale == Symbol[]
-    end
 
     @testset "codegen dicts map every registry ladder op (else add to CG_*_DECLINES)" begin
         for (tname, table, dict, manifest) in [
@@ -94,22 +76,12 @@ const ESM = EarthSciAST
         ])
     end
 
-    @testset "_ACC_GUARD_SAFE keys vs registry (else update GUARD_SAFE_UNREGISTERED)" begin
-        # op => reason it is in the guard-safe table without a registry row.
-        # Empty: every sanitizer entry is a registered op (the former :log2 /
-        # :log1p entries were dead — no registry op mints those symbols). An
-        # entry belongs here only with a reason, never silently.
-        GUARD_SAFE_UNREGISTERED = Dict{Symbol,String}()
-        @test setdiff(Set(keys(ESM._ACC_GUARD_SAFE)), regops) ==
-              Set(keys(GUARD_SAFE_UNREGISTERED))
-    end
-
-    # ---- fn-payload shape parity across the three tiers ---------------------
+    # ---- fn-payload shape parity across the tiers ---------------------------
     #
     # Acceptance of a `:fn` node's payload is expressed as an isa-ladder in
     # each tier, so it is probed BEHAVIORALLY: build a real `:fn` node around
     # a real spec object and observe accept vs. the tier's decline signal
-    # (interpreter: E_TREEWALK_UNKNOWN_CLOSED_FUNCTION; tape: _AccPlanDecline;
+    # (interpreter: E_TREEWALK_UNKNOWN_CLOSED_FUNCTION;
     # codegen: _CodegenDecline). Any other exception is a probe bug and
     # rethrows.
 
@@ -146,10 +118,9 @@ const ESM = EarthSciAST
 
     # ---- Expected-acceptance manifests (fn payloads) ------------------------
     # The interpreter is the widest tier and MUST accept every shape — it is
-    # the fallback the other tiers decline to. The tape matches it. The
+    # the fallback the codegen tier declines to. The
     # codegen tier is the interpreter minus CG_FN_PAYLOAD_GAP.
     INTERP_FN_ACCEPTS = ALL_SHAPES
-    TAPE_FN_ACCEPTS   = ALL_SHAPES
     # No known gaps: `_cg_emit_fn` covers the per-lane spec boxes too, so a
     # kernel the class merge produced stays on the compiled tier. A shape
     # added to one tier but not the others belongs here, one line per shape,
@@ -178,18 +149,6 @@ const ESM = EarthSciAST
         end
     end
 
-    function tape_accepts(payload, nargs)
-        B = ESM._AccPlanBuilder(8)
-        nd = fnnode(payload, nargs)
-        try
-            ESM._plan_emit_fn!(B, nd, K)
-            return true
-        catch err
-            err isa ESM._AccPlanDecline && return false
-            rethrow()
-        end
-    end
-
     function cg_accepts(payload, nargs)
         ctx = ESM._CGCtx(10_000)
         kc = ESM._CGKernCtx(K, :c, :n, :oln, 1, 1, 1, Symbol[], Symbol[])
@@ -208,18 +167,12 @@ const ESM = EarthSciAST
         # a DECLINE, or the acceptance comparisons below prove nothing.
         bogus = ("interp.linear", :not_a_spec)
         @test !interp_accepts(bogus, 1)
-        @test !tape_accepts(bogus, 1)
         @test !cg_accepts(bogus, 1)
     end
 
     @testset "interpreter fn-payload shapes (else update INTERP_FN_ACCEPTS/shapes)" begin
         @test Set(k for (k, pl, n) in shapes if interp_accepts(pl, n)) ==
               INTERP_FN_ACCEPTS
-    end
-
-    @testset "lane-tape fn-payload shapes (else update TAPE_FN_ACCEPTS/shapes)" begin
-        @test Set(k for (k, pl, n) in shapes if tape_accepts(pl, n)) ==
-              TAPE_FN_ACCEPTS
     end
 
     @testset "codegen fn-payload shapes (else update CG_FN_PAYLOAD_GAP/shapes)" begin

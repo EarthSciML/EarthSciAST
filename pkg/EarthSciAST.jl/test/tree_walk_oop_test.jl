@@ -342,16 +342,15 @@ end
         # flagship tracing feature only worked with ESS_STENCIL_DISABLE=1. Pin
         # the fix structurally: the default build of a stencil model produces acc
         # kernels, EVERY one of them plans vectorizable for `:oop`, and the
-        # in-place build carries a lane tape for each — so neither emitter walks
-        # cells one at a time on the default path.
+        # in-place build hosts every kernel in its kernel section — so the
+        # :oop emitter never walks cells one at a time on the default path.
         fi, _, _, _, _ = ESM.build_evaluator(_rd(64))
         fo, _, _, _, _ = ESM.build_evaluator(_rd(64); form = :oop)
         # In-place kernels are either compiled by the codegen tier (a straight
-        # loop nest, never per-cell) or residual with a lane tape each — the
-        # assertion holds with the tier on AND under ESS_CODEGEN_DISABLE=1 (B1).
+        # loop nest) or residual on the per-cell interpreter — either way the
+        # section hosts them all.
         ks = getfield(fi, :kernel_section)
         @test ks.n_emitted + length(ks.kernels) > 0
-        @test all(P -> P !== nothing, ks.plans)
         # `fo` is the `_OopRHS` wrapper (B2); the walk closure — and its captured
         # lane plans — is the explicit-buffers form behind `rhs_with_buffers`.
         oplans = getfield(ESM.rhs_with_buffers(fo), :acc_plans)
@@ -373,10 +372,10 @@ end
 
     @testset "ghost-bearing state table vectorizes (gather-then-select)" begin
         # A `_AK_STATE_TBL_BOX` whose table holds a ghost slot (0) — read as 0.0
-        # by the in-place tape — used to keep the per-cell oop fallback. It now
+        # by the in-place runners — used to keep the per-cell oop fallback. It now
         # vectorizes (gordian total-vectorize): gather at a SAFE index, then
         # select 0.0 on the ghost lanes against a host mask. Must be bit-identical
-        # to the in-place tape, evaluate WITHOUT scalar-indexing the state, and
+        # to the in-place runners, evaluate WITHOUT scalar-indexing the state, and
         # differentiate correctly (ghost lanes carry zero state-derivative).
         N = 40
         u = _seed(N)
@@ -387,9 +386,9 @@ end
         K = ESM._AccKernel(ESM._CellSet([1], UnitRange{Int}[1:N], 0), spine, acc,
                            ESM._FixedBound(0), 0.0)
 
-        # in-place tape reference (handles the ghost via _TC_GATHER_STATE_TBL)
+        # in-place interpreter reference (reads a ghost slot as 0.0)
         ref = zeros(N)
-        ESM._run_acc_plan!(ref, u, nothing, 0.0, K, ESM._build_acc_plan(K; tile=8))
+        ESM._run_acc_kernel!(ref, u, nothing, 0.0, K)
         man = [ conn[i] == 0 ? 0.0 : 3.0*u[conn[i]] for i in 1:N ]
         @test ref == man
 
