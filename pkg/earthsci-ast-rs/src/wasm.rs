@@ -357,12 +357,8 @@ pub fn simulate(
 
     let mut opts = SimulateOptions::default();
     if let Some(s) = opts_json.get("solver").and_then(|v| v.as_str()) {
-        opts.solver = match s.to_ascii_lowercase().as_str() {
-            "bdf" => SolverChoice::Bdf,
-            "sdirk" => SolverChoice::Sdirk,
-            "erk" => SolverChoice::Erk,
-            other => return Err(JsValue::from_str(&format!("Unknown solver '{other}'"))),
-        };
+        opts.solver = SolverChoice::from_name(s)
+            .ok_or_else(|| JsValue::from_str(&format!("Unknown solver '{s}'")))?;
     }
     if let Some(v) = opts_json.get("abstol").and_then(|v| v.as_f64()) {
         opts.abstol = v;
@@ -374,13 +370,7 @@ pub fn simulate(
         opts.max_steps = v as usize;
     }
     if let Some(n) = opts_json.get("outputPoints").and_then(|v| v.as_u64()) {
-        let n = (n as usize).max(2);
-        let span = t_end - t0;
-        opts.output_times = Some(
-            (0..n)
-                .map(|i| t0 + span * (i as f64) / ((n - 1) as f64))
-                .collect(),
-        );
+        opts.sample_evenly(t0, t_end, n as usize);
     }
 
     // Positional `(fraction, t, step)` rather than an options object: this fires

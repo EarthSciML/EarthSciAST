@@ -170,6 +170,34 @@ pub enum SolverChoice {
     Erk,
 }
 
+impl SolverChoice {
+    /// Parse the host-facing solver name, case-insensitively.
+    ///
+    /// Every host that lets a caller pick a solver receives it as a string —
+    /// from a JSON options object in the browser, from an HTTP request body on
+    /// a server — so the name→variant mapping belongs next to the enum rather
+    /// than being re-derived per target. A host that spells it differently, or
+    /// forgets to apply it at all, silently runs a DIFFERENT solver than the
+    /// one its caller asked for and was quoted for.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "bdf" => Some(Self::Bdf),
+            "sdirk" => Some(Self::Sdirk),
+            "erk" => Some(Self::Erk),
+            _ => None,
+        }
+    }
+
+    /// The canonical lowercase name — the inverse of [`Self::from_name`].
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bdf => "bdf",
+            Self::Sdirk => "sdirk",
+            Self::Erk => "erk",
+        }
+    }
+}
+
 /// How far along an in-flight integration is, handed to
 /// [`SimulateOptions::progress`] once per accepted step.
 ///
@@ -291,6 +319,24 @@ impl Default for SimulateOptions {
             output_times: None,
             progress: None,
         }
+    }
+}
+
+impl SimulateOptions {
+    /// Request `n` evenly spaced output samples across `[t0, t_end]`.
+    ///
+    /// Hosts almost always express "how much output do I want" as a count, not
+    /// as a time grid, so the grid construction lives here — an off-by-one in
+    /// the spacing is easy to write and impossible to notice in a plot.
+    /// `n` is clamped to at least 2, since a span needs both ends.
+    pub fn sample_evenly(&mut self, t0: f64, t_end: f64, n: usize) {
+        let n = n.max(2);
+        let span = t_end - t0;
+        self.output_times = Some(
+            (0..n)
+                .map(|i| t0 + span * (i as f64) / ((n - 1) as f64))
+                .collect(),
+        );
     }
 }
 
