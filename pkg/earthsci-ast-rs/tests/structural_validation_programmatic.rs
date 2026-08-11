@@ -56,6 +56,7 @@ fn test_undefined_variable_in_model() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -166,6 +167,7 @@ fn test_equation_count_mismatch() {
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -259,6 +261,7 @@ fn test_undefined_species_in_reaction() {
     reaction_systems.insert("test".to_string(), rs);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -377,6 +380,7 @@ fn test_valid_file_passes() {
     models.insert("valid".to_string(), model);
 
     let esm_file = EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

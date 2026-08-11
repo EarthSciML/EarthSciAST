@@ -587,6 +587,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -670,6 +671,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -756,6 +758,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,
@@ -857,6 +860,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,

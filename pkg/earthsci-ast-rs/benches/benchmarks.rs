@@ -91,6 +91,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
     }
 
     EsmFile {
+        coordinates: None,
         coupling_roles: None,
         esm: "0.1.0".to_string(),
         metadata: Metadata {

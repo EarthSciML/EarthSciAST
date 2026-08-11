@@ -2167,6 +2167,7 @@ mod tests {
 
         // Create ESM file
         let esm_file = EsmFile {
+            coordinates: None,
             expression_templates: None,
             metaparameters: None,
             coupling_roles: None,

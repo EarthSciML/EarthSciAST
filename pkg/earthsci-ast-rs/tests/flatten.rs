@@ -32,6 +32,7 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        coordinates: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -158,6 +159,7 @@ fn flatten_reactions_only_file_produces_mass_action_odes() {
     reaction_systems.insert("chem".to_string(), rs);
 
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -241,6 +243,7 @@ fn flatten_mixed_model_and_reaction_system() {
     reaction_systems.insert("chem".to_string(), rs);
 
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
@@ -289,6 +292,7 @@ fn flatten_autocatalytic_reaction_net_stoichiometry() {
     let mut reaction_systems = HashMap::new();
     reaction_systems.insert("auto".to_string(), rs);
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -350,6 +354,7 @@ fn flatten_source_and_sink_reactions() {
     let mut reaction_systems = HashMap::new();
     reaction_systems.insert("box".to_string(), rs);
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -430,6 +435,7 @@ fn flatten_conflicting_derivative_raises_error() {
     reaction_systems.insert("sys".to_string(), rs);
 
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
@@ -562,6 +568,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     }];
 
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
@@ -701,6 +708,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     }];
 
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
@@ -780,6 +788,7 @@ fn flatten_couple_includes_connector_equations() {
         description: None,
     }];
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
@@ -899,6 +908,7 @@ fn flatten_rejects_spatial_operators() {
         },
     );
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         ..empty_file()
@@ -971,6 +981,7 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
         },
     );
     let file = EsmFile {
+        coordinates: None,
         coupling_roles: None,
         models: Some(models),
         ..empty_file()
