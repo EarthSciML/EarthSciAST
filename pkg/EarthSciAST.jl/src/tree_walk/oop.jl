@@ -56,20 +56,43 @@
 #
 #     Enzyme.API.strictAliasing!(false)     # once, before any autodiff call
 #
-# Reverse mode then produces gradients matching ForwardDiff to ~1e-16. Without it,
-# Enzyme's type analysis rejects the RHS — not because of anything this file does,
-# but because the walk LOADS FIELDS FROM `_VecNode`, and that struct is heterogeneous
-# by design: one `payload::Any` slot serving ten node kinds, `fnargs::Vector{Any}` for
-# the boxed closed-function path, and `altbuf::RefValue{Any}` for `f!`'s lazy per-eltype
-# scratch. Enzyme cannot type-analyze loads out of such an object and bails on the whole
-# method — including, note, loads of the CONCRETE fields (`vals`, `slots`), so simply
-# routing around the `Any` payload does NOT help. I tried that; it does not work. Nothing
-# short of a payload-free IR will.
+# Without it, Enzyme's type analysis rejects the RHS — not because of anything this
+# file does, but because the walk LOADS the `payload::Any` variant slot out of `_Node`
+# (compile.jl), one field serving twelve node kinds. The failure is an
+# `IllegalTypeAnalysisException` naming `_oop_eval` and the `getproperty` that loads
+# it. ForwardDiff, which analyzes types the way Julia does, is unaffected.
 #
-# Which is the real fix, and it is a separate piece of work: lower the compiled IR ONCE
-# at build time into a concretely-typed tree with no `Any` anywhere. That same lowering
-# is what an XLA/Reactant backend wants regardless, so the two motivations converge.
-# ForwardDiff, which analyzes types the way Julia does, is unaffected and needs nothing.
+# Three things about that are easy to get wrong, so they were MEASURED (Enzyme
+# 0.13.199; scripts, logs and the full argument in scripts/enzyme_aliasing/):
+#
+#   * It is not an `:oop` problem. The default in-place `f!` fails identically, at
+#     `_eval_node`, from its scalar CSE-prelude/`rhs_list` tier. The wart belongs to
+#     the shared `_Node` IR.
+#   * The tree need not CONTAIN the offending kind. A 0-D model with no loop-var,
+#     gather or `fn` node still fails on the `_NK_LOOPVAR` arm: Enzyme analyzes the
+#     whole statically reachable method, so an arm this model can never execute
+#     poisons the walk anyway. That is what makes runtime cleverness a non-strategy.
+#   * It is the LOAD, not the field. A struct that still declares `payload::Any` but
+#     whose walk never loads it differentiates fine. So routing around the payload
+#     DOES help, arm by arm — the failure just moves to the next load, and the walk
+#     has many. Barriers (`@noinline`, or properly `EnzymeRules.inactive`) clear them
+#     one at a time until they reach the one wall they cannot: `_oop_fn`'s boxed
+#     `Vector{Any}` args handed to a `String`-dispatched registry, whose contents are
+#     ACTIVE. That one needs a typed calling convention, not a barrier.
+#
+# The flag itself is a wart and not a hazard: per Enzyme's own C++, it only makes type
+# analysis DECLINE to propagate facts upward through phis/selects — the flag that can
+# fabricate a type and so produce wrong derivatives is `looseTypeAnalysis!`, which is
+# a different global read by different code. It is process-global with no scoped
+# alternative, so its real cost is blast radius, not correctness.
+#
+# The durable fix is still a payload-free IR: lower the compiled IR ONCE at build time
+# into a concretely-typed tree with the variant resolved statically. That same lowering
+# is what an XLA/Reactant backend wants regardless, so the two motivations converge —
+# and half of it exists already, as codegen_kernel.jl does exactly this for the array
+# kernels of `f!`. Note what that convergence does NOT buy: with the codegen tier on,
+# Enzyme currently fails on the emitted RuntimeGeneratedFunction with an internal
+# `UndefVarError`, so the lowering is not on its own a route to Enzyme support.
 #
 # THE ONE LADDER. `_oop_op` evaluates an op over ALREADY-EVALUATED children using
 # broadcast (`.+`, `sin.`, …) throughout. Broadcasting two scalars yields a scalar,

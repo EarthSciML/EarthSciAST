@@ -24,10 +24,10 @@
 # on a state, and a ladder-coverage gate so `_oop_op` cannot drift away from the two
 # ladders it mirrors.
 #
-# Enzyme reverse mode also works on this RHS, but only with
-# `Enzyme.API.strictAliasing!(false)` — see the oop.jl header for why. Enzyme is a
-# heavy dependency and is deliberately NOT a test dep; that path is verified
-# out-of-band.
+# Enzyme reverse mode needs `Enzyme.API.strictAliasing!(false)` on this RHS — see the
+# oop.jl header for why, and scripts/enzyme_aliasing/ for the reproducers, the
+# measurements and what the flag does and does not cost. Enzyme is a heavy dependency
+# and is deliberately NOT a test dep; that path is verified out-of-band.
 
 using Test
 using EarthSciAST

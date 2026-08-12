@@ -1,0 +1,6 @@
+# repro_oop.jl relaxed, 0-D model only (relaxed_min.jl): Enzyme compile footprint
+# elapsed_wall  cpu_time  rss_kB
+      18:19 00:18:11 13140512
+      19:19 00:19:10 13140512
+      20:19 00:20:10 13140512
+      21:19 00:21:09 13140512
