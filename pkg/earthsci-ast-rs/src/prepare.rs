@@ -18,6 +18,19 @@
 //! counts rows and passes the number in — see
 //! [`PrepareProvider::extent_metaparameter`].
 //!
+//! Those arrows are also [`PreparePhase`], and a host can watch them go by:
+//! [`PrepareOptions::progress`] is the build-time counterpart of
+//! [`crate::simulate::SimulateOptions::progress`], down to sharing its
+//! [`Flow`]. It exists because a document with no ODEs never reaches the
+//! solver, so a dispatched static evaluation had no observer at all — no
+//! progress bar, no cancel button, and no way to enforce a resource cap on a
+//! run that takes a quarter of an hour. **Progress observation is
+//! binding-local**, not a conformance surface: it changes no result, produces
+//! no artifact the fixtures compare, and the Julia and Python `prepare` have no
+//! equivalent (nor a `verbose`); the cross-binding observability contract is
+//! `BuildInspection`, which carries VALUES and is pinned by CONFORMANCE_SPEC
+//! §5.8. A binding that wants this may mirror it or not, freely.
+//!
 //! `pushdown_rewrite: true` opts into the automatic projection-pushdown
 //! desugar ([`crate::pushdown_rewrite::desugar_pushdown`]) at this public
 //! entry point, exactly as in Julia/Python:
@@ -51,8 +64,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use ndarray::{ArrayD, Axis, IxDyn};
+use ndarray::{ArrayD, Axis, IxDyn, Slice};
 use serde_json::Value as JsonValue;
 
 use crate::aggregate::resolve_expr_ranges_with_extents;
@@ -63,9 +77,52 @@ use crate::pushdown_rewrite::{
 use crate::simulate_array::{Value as EvalValue, eval_expression_with_extents, run_value_invention};
 use crate::types::{Expr, IndexSet, Model, VariableType};
 
+/// What a [`PrepareOptions::progress`] observer wants [`prepare`] to do next —
+/// the SAME type a [`crate::simulate::SimulateOptions::progress`] observer
+/// returns.
+///
+/// Deliberately shared rather than mirrored: a host that already drives a solve
+/// through [`Flow::Cancel`] should not have to learn a second cancellation
+/// idiom to drive a build.
+pub use crate::simulate::Flow;
+
 /// A build-time preparation failure.
 #[derive(Debug, Clone)]
 pub struct PrepareError(pub String);
+
+impl PrepareError {
+    /// The prefix every observer-requested cancellation carries. Public so
+    /// [`PrepareError::is_cancelled`] rests on a documented contract rather
+    /// than a private convention.
+    pub const CANCELLED_PREFIX: &'static str = "cancelled by the caller during";
+
+    /// Whether this error is a [`PrepareOptions::progress`] observer's own
+    /// [`Flow::Cancel`] rather than something going wrong — the counterpart of
+    /// matching [`crate::simulate::SimulateError::Cancelled`].
+    ///
+    /// ## Why a message prefix and not a variant
+    ///
+    /// `PrepareError` is a public single-field tuple struct: an out-of-crate
+    /// [`PrepareProvider`] constructs one as `PrepareError(msg)` and reads it
+    /// back as `e.0` (the in-repo `esio_provider` bridge does both). Turning it
+    /// into an enum, or adding a second field, breaks every one of them, while
+    /// adding a field to `PrepareOptions` breaks none — so the source-compatible
+    /// route wins, and the marker lives in the message, which is also the only
+    /// place a host that merely logs the error would ever see it.
+    ///
+    /// ## A host still records WHY it cancelled
+    ///
+    /// This reports that a cancel happened, not what the observer wanted. A
+    /// dispatcher distinguishing "the user pressed stop" from "the run hit its
+    /// billing cap" must record that inside the observer, because only the
+    /// observer knows — exactly as `earthscilab`'s `dispatch::solve` already
+    /// does around `simulate`, where the two bill differently. The message
+    /// names the phase and the item, so whichever it was, the stopping point is
+    /// attributable rather than "somewhere in the last eight minutes".
+    pub fn is_cancelled(&self) -> bool {
+        self.0.starts_with(Self::CANCELLED_PREFIX)
+    }
+}
 
 impl fmt::Display for PrepareError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -165,8 +222,141 @@ pub trait PrepareProvider {
     }
 }
 
+// --------------------------------------------------------------------------- //
+// Progress observation.
+// --------------------------------------------------------------------------- //
+
+/// Which stage of the build [`prepare`] is in when it reports.
+///
+/// These are the document-independent stages of [`prepare`]'s own pipeline, in
+/// the order it runs them, and they are exactly the stages
+/// [`PrepareOptions::verbose`] already narrates — the observer did not invent a
+/// structure, it made the existing one addressable.
+///
+/// **The stages are nowhere near equal in cost.** On the InMAP ISRM document a
+/// [`PreparePhase::GatedFetch`] is tens of gigabytes over the network and
+/// [`PreparePhase::Observeds`] is a source-by-receptor contraction, while
+/// [`PreparePhase::Rewrite`] and [`PreparePhase::Load`] are milliseconds. A
+/// host that renders `index() / COUNT` as a percentage will show a bar that
+/// sprints to 60% and then sits still for ten minutes. Drive the bar from
+/// [`PrepareProgress::fraction`] *within* the reported phase and name the phase
+/// (and [`PrepareProgress::item`]) beside it instead — the same advice
+/// [`crate::simulate::Progress`] gives about a stiff solve's non-linear `t`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PreparePhase {
+    /// The projection-pushdown desugar over the raw authored document.
+    Rewrite,
+    /// The typed parse of the (possibly rewritten) document.
+    Load,
+    /// Eager materialization of the un-gated CONST providers, one unit each.
+    ConstProviders,
+    /// The producer-seeded join-free coordinate closure, one unit per observed.
+    Coordinates,
+    /// Value invention — the graph deriving its own support set.
+    ValueInvention,
+    /// Feeding the invented member ids back as each derived set's
+    /// `member_factor`, one unit per derived index set.
+    MemberFactors,
+    /// The post-value-invention pre-sliced fetch of the gated providers. One
+    /// unit per REQUEST, which is one per provider unless
+    /// [`PrepareOptions::gated_fetch_batch`] splits it further.
+    GatedFetch,
+    /// Dependency-ordered evaluation of the observed graph, one unit per
+    /// observed.
+    Observeds,
+}
+
+impl PreparePhase {
+    /// Every phase, in pipeline order.
+    pub const ALL: [PreparePhase; 8] = [
+        PreparePhase::Rewrite,
+        PreparePhase::Load,
+        PreparePhase::ConstProviders,
+        PreparePhase::Coordinates,
+        PreparePhase::ValueInvention,
+        PreparePhase::MemberFactors,
+        PreparePhase::GatedFetch,
+        PreparePhase::Observeds,
+    ];
+
+    /// How many phases there are, for a host laying out a stage list.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// 0-based position in the pipeline. See the type's note before turning
+    /// this into a percentage.
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|p| *p == self).unwrap_or(0)
+    }
+
+    /// A human-readable phase name, as it appears in a cancellation message.
+    pub fn label(self) -> &'static str {
+        match self {
+            PreparePhase::Rewrite => "the pushdown rewrite",
+            PreparePhase::Load => "the typed load",
+            PreparePhase::ConstProviders => "const provider materialization",
+            PreparePhase::Coordinates => "build-time coordinate evaluation",
+            PreparePhase::ValueInvention => "value invention",
+            PreparePhase::MemberFactors => "member-factor feedback",
+            PreparePhase::GatedFetch => "the gated fetch",
+            PreparePhase::Observeds => "observed-graph evaluation",
+        }
+    }
+}
+
+impl fmt::Display for PreparePhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// How far along an in-flight [`prepare`] is, handed to
+/// [`PrepareOptions::progress`] at every phase boundary AND at every unit of
+/// work inside the two phases that dominate a large build.
+///
+/// A report is delivered BEFORE the unit it names is done, so `item` is what
+/// `prepare` is about to spend its time on — which is the useful thing to show,
+/// and the only placement at which returning [`Flow::Cancel`] avoids the work
+/// rather than following it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrepareProgress<'a> {
+    /// The stage of the build this report comes from.
+    pub phase: PreparePhase,
+    /// Units of work already finished in this phase.
+    pub done: usize,
+    /// Units of work this phase will do, when that is knowable before it
+    /// starts. `None` for a phase that is a single indivisible step.
+    pub total: Option<usize>,
+    /// What the phase is about to work on: an observed's name, a provider key,
+    /// a derived index set. Empty when the report is a phase boundary rather
+    /// than an item.
+    pub item: &'a str,
+}
+
+impl PrepareProgress<'_> {
+    /// Fraction of THIS PHASE's work completed, clamped to `[0, 1]`.
+    ///
+    /// `0.0` when the phase has no countable work, rather than a NaN, so a host
+    /// can feed it to a bar without a guard. This is deliberately not a
+    /// whole-build fraction: see [`PreparePhase`] on why the library refuses to
+    /// invent phase weights it cannot know for a document it has not run.
+    pub fn fraction(&self) -> f64 {
+        match self.total {
+            Some(t) if t > 0 => (self.done as f64 / t as f64).clamp(0.0, 1.0),
+            _ => 0.0,
+        }
+    }
+}
+
+/// A build progress observer. See [`PrepareOptions::progress`].
+///
+/// Unconditionally `Send + Sync`, unlike [`crate::simulate::ProgressFn`], which
+/// drops the bound on `wasm32` for a `js_sys::Function` observer: the whole
+/// `prepare` module is `#[cfg(not(target_arch = "wasm32"))]`, so there is no
+/// wasm host to accommodate and no reason to make native callers pay for one.
+pub type PrepareProgressFn = Arc<dyn Fn(&PrepareProgress<'_>) -> Flow + Send + Sync>;
+
 /// Build-time options for [`prepare`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct PrepareOptions {
     /// Select one model when the document holds several.
     pub model_name: Option<String>,
@@ -179,7 +369,79 @@ pub struct PrepareOptions {
     /// Scalar parameter overrides (exact or bare names), baked into the build.
     pub parameters: HashMap<String, f64>,
     /// Per-step progress lines on stdout.
+    ///
+    /// This is the built-in observer: it prints at the same points
+    /// [`PrepareOptions::progress`] is called, and the two are independent —
+    /// setting both prints and observes.
     pub verbose: bool,
+
+    /// If `Some`, called at every phase boundary and at every unit of work
+    /// inside [`PreparePhase::GatedFetch`] and [`PreparePhase::Observeds`].
+    /// Returning [`Flow::Cancel`] abandons the build with a [`PrepareError`]
+    /// for which [`PrepareError::is_cancelled`] is true.
+    ///
+    /// **Called unthrottled, deliberately**, for the same reason
+    /// [`crate::simulate::SimulateOptions::progress`] is: `prepare` has no
+    /// portable clock to throttle against, and rate limiting therefore belongs
+    /// to the host, which does. Keep the observer cheap — a document with
+    /// hundreds of observeds reports hundreds of times in a build that may take
+    /// milliseconds.
+    ///
+    /// ## What this is for
+    ///
+    /// A dispatched static evaluation — a document with no ODEs, which
+    /// `simulate` never touches — is otherwise a black box for as long as it
+    /// runs: no progress, no cancel, and no way for a caller to enforce a
+    /// resource cap except by killing the process. A watchdog thread is not a
+    /// substitute: it stops at an arbitrary point with no attributable elapsed
+    /// time, and cannot interrupt a single long fetch at all. Going through the
+    /// observer means the stopping point is a named phase and a named item.
+    pub progress: Option<PrepareProgressFn>,
+
+    /// Split a gated provider's pre-sliced fetch into requests of at most this
+    /// many native indices along the gated axis.
+    ///
+    /// `None` (the default) issues ONE request per gated provider, exactly as
+    /// before this option existed. That is the right default and also the
+    /// reason this option exists: one request is one
+    /// [`PreparePhase::GatedFetch`] report, and on the InMAP ISRM document that
+    /// single request is 15–25 GB over the network and the longest thing the
+    /// build does. A host that wants a moving bar — or a cancel that lands in
+    /// under several minutes — sets this and gets one report per batch instead.
+    ///
+    /// The result is IDENTICAL either way: the gated axis' index list is split
+    /// into contiguous runs and the pieces are written back in order into one
+    /// pre-allocated slab, so nothing is reordered and nothing is copied twice.
+    /// The cost of a small batch is at the seams — a chunked store re-reads the
+    /// chunk straddling each boundary, so `batches - 1` extra chunk reads —
+    /// which is why the library does not pick a size on the caller's behalf.
+    pub gated_fetch_batch: Option<usize>,
+}
+
+// Hand-written because `PrepareProgressFn` is a trait object: it cannot derive
+// `Debug`, and a `PrepareOptions` that no longer prints would be a regression
+// for every existing `{:?}` on a build error path. Mirrors the same treatment
+// `SimulateOptions` needed when it grew an observer.
+impl fmt::Debug for PrepareOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrepareOptions")
+            .field("model_name", &self.model_name)
+            .field("metaparameters", &self.metaparameters)
+            .field("base_path", &self.base_path)
+            .field("pushdown_rewrite", &self.pushdown_rewrite)
+            .field("parameters", &self.parameters)
+            .field("verbose", &self.verbose)
+            .field(
+                "progress",
+                &self
+                    .progress
+                    .as_ref()
+                    .map(|_| "<observer>")
+                    .unwrap_or("None"),
+            )
+            .field("gated_fetch_batch", &self.gated_fetch_batch)
+            .finish()
+    }
 }
 
 /// The product of [`prepare`]: every build-time-evaluable observed of the
@@ -437,8 +699,15 @@ fn eval_observed(
 struct GatedFetchPlan {
     selection: Vec<AxisSel>,
     drop_axes: Vec<usize>,
+    /// Position of the gated axis in the REQUEST (`selection`), i.e. before the
+    /// fixed axes are dropped. This is the axis a batched fetch subdivides.
+    gated_pos: usize,
     gated_pos_out: usize,
     gated_extent: usize,
+    /// How many provider requests this plan will issue — filled in by the
+    /// caller, which is where the batch size and `supports_selection` are known,
+    /// so the whole phase can report a running count.
+    n_requests: usize,
 }
 
 /// Resolve a gate's per-axis `selection` from the materialised value-invention
@@ -509,9 +778,101 @@ fn gated_fetch_plan(
     Ok(GatedFetchPlan {
         selection,
         drop_axes,
+        gated_pos,
         gated_pos_out,
         gated_extent,
+        n_requests: 1,
     })
+}
+
+/// Run a gate's plan, reporting through `report` and honouring a cancel.
+///
+/// One request, unless `batch` splits the gated axis' index list into contiguous
+/// runs — in which case the pieces are assembled into ONE pre-allocated slab in
+/// request order, which is bit-identical to the single-request result because
+/// nothing is reordered and the concatenation seam is a plain copy. Assembling
+/// in place rather than via `ndarray::concatenate` matters at this size: the SR
+/// slabs are hundreds of MB, and holding every piece plus their concatenation
+/// would peak at twice the answer instead of the answer plus one batch.
+/// [`prepare`]'s internal observation sink, erased so a helper can report
+/// without knowing whether an observer is attached or what it captured.
+type ReportFn<'a> =
+    dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), PrepareError> + 'a;
+
+#[allow(clippy::too_many_arguments)]
+fn run_gated_fetch(
+    key: &str,
+    prov: &mut dyn PrepareProvider,
+    plan: &GatedFetchPlan,
+    batch: Option<usize>,
+    issued: &mut usize,
+    total_requests: usize,
+    report: &mut ReportFn<'_>,
+) -> Result<ArrayD<f64>, PrepareError> {
+    // A provider that cannot push the selection down fetches the WHOLE field in
+    // one indivisible call and is sliced engine-side; there is no seam to batch
+    // and reporting per batch would be a lie about work already done.
+    if !prov.supports_selection() {
+        report(PreparePhase::GatedFetch, *issued, Some(total_requests), key)?;
+        *issued += 1;
+        let full = prov
+            .sample()
+            .map_err(|e| err(format!("gated fetch '{key}' (whole): {}", e.0)))?;
+        return drop_fixed_axes(key, slice_whole(full, &plan.selection), &plan.drop_axes);
+    }
+
+    let AxisSel::Indices(gated_idx) = &plan.selection[plan.gated_pos] else {
+        return Err(err(format!(
+            "gated provider '{key}': the gated axis resolved to the full axis, \
+             which is not a support set"
+        )));
+    };
+    let size = batch.unwrap_or(usize::MAX).max(1);
+    let n_batches = gated_idx.len().div_ceil(size).max(1);
+
+    if n_batches == 1 {
+        report(PreparePhase::GatedFetch, *issued, Some(total_requests), key)?;
+        *issued += 1;
+        let a = prov
+            .sample_with_selection(&plan.selection)
+            .map_err(|e| err(format!("gated fetch '{key}': {}", e.0)))?;
+        return drop_fixed_axes(key, a, &plan.drop_axes);
+    }
+
+    let mut out: Option<ArrayD<f64>> = None;
+    let mut filled = 0usize;
+    for (i, run) in gated_idx.chunks(size).enumerate() {
+        // BEFORE the request: a cancel here skips the fetch rather than
+        // arriving just after it, which is the entire point of subdividing.
+        report(PreparePhase::GatedFetch, *issued, Some(total_requests), key)?;
+        *issued += 1;
+        let mut sel = plan.selection.clone();
+        sel[plan.gated_pos] = AxisSel::Indices(run.to_vec());
+        let part = prov
+            .sample_with_selection(&sel)
+            .map_err(|e| err(format!("gated fetch '{key}' (batch {i}): {}", e.0)))?;
+        let part = drop_fixed_axes(key, part, &plan.drop_axes)?;
+        let width = part.shape().get(plan.gated_pos_out).copied().unwrap_or(0);
+        if width != run.len() {
+            return Err(err(format!(
+                "gated provider '{key}': batch {i} asked for {} indices and got \
+                 {width} back",
+                run.len()
+            )));
+        }
+        let dst = out.get_or_insert_with(|| {
+            let mut shape = part.shape().to_vec();
+            shape[plan.gated_pos_out] = gated_idx.len();
+            ArrayD::zeros(IxDyn(&shape))
+        });
+        dst.slice_axis_mut(
+            Axis(plan.gated_pos_out),
+            Slice::from(filled..filled + width),
+        )
+        .assign(&part);
+        filled += width;
+    }
+    out.ok_or_else(|| err(format!("gated provider '{key}': no batches were fetched")))
 }
 
 /// Drop the (length-1) fixed axes of a fetched slab.
@@ -573,6 +934,15 @@ pub(crate) fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f6
 /// and fetched pre-sliced after value-invention. `const_arrays` are the
 /// caller-supplied build-time factor arrays (keyed by model-local or
 /// `Loader.var` names — the coupling aliasing surfaces both spellings).
+///
+/// # Watching a long build
+///
+/// A build over real data is not fast: on the InMAP ISRM the gated fetch alone
+/// is tens of gigabytes and the whole `prepare` runs for the better part of a
+/// quarter of an hour. [`PrepareOptions::progress`] observes it as it goes —
+/// per gated request and per observed, not merely per phase — and returning
+/// [`Flow::Cancel`] stops it at a named point. Pair it with
+/// [`PrepareOptions::gated_fetch_batch`] so the fetch itself is interruptible.
 pub fn prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
@@ -585,7 +955,51 @@ pub fn prepare(
         }
     };
 
+    // The observation point. Every phase boundary and every countable unit of
+    // work inside the two phases that dominate a large build goes through here,
+    // so the phase structure `verbose` narrates and the phase structure a host
+    // observes cannot drift — there is only one.
+    //
+    // Returns `Err` on `Flow::Cancel`, which unwinds `prepare` through the `?`
+    // it is already threaded on. The message names the phase and the item, so a
+    // cancel is attributable to a point in the build rather than to a wall
+    // clock the library does not have.
+    let mut report = |phase: PreparePhase,
+                      done: usize,
+                      total: Option<usize>,
+                      item: &str|
+     -> Result<(), PrepareError> {
+        let Some(cb) = &opts.progress else {
+            return Ok(());
+        };
+        let p = PrepareProgress {
+            phase,
+            done,
+            total,
+            item,
+        };
+        match cb(&p) {
+            Flow::Continue => Ok(()),
+            Flow::Cancel => Err(err(format!(
+                "{} {phase}{}",
+                PrepareError::CANCELLED_PREFIX,
+                if item.is_empty() {
+                    match total {
+                        Some(t) => format!(" ({done} of {t} done)"),
+                        None => String::new(),
+                    }
+                } else {
+                    match total {
+                        Some(t) => format!(" at '{item}' ({} of {t})", done + 1),
+                        None => format!(" at '{item}'"),
+                    }
+                }
+            ))),
+        }
+    };
+
     // ---- Phase-1 semantics: pushdown prepass BEFORE the typed parse ---------
+    report(PreparePhase::Rewrite, 0, None, "")?;
     let rewritten = if opts.pushdown_rewrite {
         desugar_pushdown(doc, opts.model_name.as_deref()).map_err(|e| err(e.0))?
     } else {
@@ -599,6 +1013,14 @@ pub fn prepare(
         HashMap::new()
     };
     let pd_coupling = pushdown_coupling_pairs(&rewritten);
+    log(&format!(
+        "  [prepare] pushdown rewrite {}",
+        if rewrite_fired {
+            "fired"
+        } else {
+            "did not fire"
+        }
+    ));
 
     // ---- extent discovery: a loader that measures its OWN record count ------
     // Must run BEFORE the typed load, because a discovered extent binds a
@@ -649,6 +1071,7 @@ pub fn prepare(
     }
 
     // ---- typed load (metaparameters closed at the loader API) ---------------
+    report(PreparePhase::Load, 0, None, "")?;
     let text = serde_json::to_string(rewritten.as_ref())
         .map_err(|e| err(format!("serialize rewritten document: {e}")))?;
     let load_opts = LoadOptions {
@@ -677,7 +1100,14 @@ pub fn prepare(
     // ---- provider injection: eager CONST materialization; gated deferral ----
     let mut arrays: HashMap<String, ArrayD<f64>> = const_arrays;
     let mut gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)> = Vec::new();
-    for (k, mut prov) in providers {
+    let n_providers = providers.len();
+    for (i, (k, mut prov)) in providers.into_iter().enumerate() {
+        report(
+            PreparePhase::ConstProviders,
+            i,
+            Some(n_providers),
+            k.as_str(),
+        )?;
         if let Some(a) = discovered.remove(&k) {
             // Already materialized by the extent-discovery pre-pass; never
             // sampled twice.
@@ -699,9 +1129,19 @@ pub fn prepare(
             let a = prov
                 .sample()
                 .map_err(|e| err(format!("materialize const provider '{k}': {}", e.0)))?;
+            log(&format!(
+                "  [prepare] const provider {k} -> {:?}",
+                a.shape()
+            ));
             arrays.insert(k, a);
         }
     }
+    report(
+        PreparePhase::ConstProviders,
+        n_providers,
+        Some(n_providers),
+        "",
+    )?;
     let mut gated_keys: Vec<String> = gated.iter().map(|(k, _, _)| k.clone()).collect();
     gated_keys.sort();
 
@@ -744,7 +1184,10 @@ pub fn prepare(
     if !seeds.is_empty() {
         let needed = producer_seed_closure(&seeds, &defs, &join_free);
         let no_extents: HashMap<String, i64> = HashMap::new();
-        for name in order.iter().filter(|n| needed.contains(*n)) {
+        let coords: Vec<&String> = order.iter().filter(|n| needed.contains(*n)).collect();
+        let n_coords = coords.len();
+        for (i, name) in coords.into_iter().enumerate() {
+            report(PreparePhase::Coordinates, i, Some(n_coords), name.as_str())?;
             match eval_observed(
                 name,
                 &defs[name],
@@ -773,9 +1216,11 @@ pub fn prepare(
                 }
             }
         }
+        report(PreparePhase::Coordinates, n_coords, Some(n_coords), "")?;
     }
 
     // ---- VALUE INVENTION: the graph derives its own support set -------------
+    report(PreparePhase::ValueInvention, 0, None, "")?;
     let vi = run_value_invention(&model, &index_sets, Some(&arrays))
         .map_err(|e| err(format!("value invention: {e}")))?;
     let mut members: HashMap<String, Vec<i64>> = HashMap::new();
@@ -794,16 +1239,21 @@ pub fn prepare(
     let extents = vi.extents.clone();
 
     // ---- Hook 1: derived-set member ids fed back as the member_factor -------
-    for (sname, is) in &index_sets {
-        if is.kind != "derived" {
-            continue;
-        }
-        let (Some(mf), Some(faq)) = (&is.member_factor, &is.from_faq) else {
-            continue;
-        };
-        let Some(mem) = members.get(faq) else {
-            continue;
-        };
+    // Collected and SORTED first, so both the observed event stream and the
+    // verbose narration are deterministic; `index_sets` is a `HashMap` and
+    // iterating it directly made the order vary run to run.
+    let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = index_sets
+        .iter()
+        .filter(|(_, is)| is.kind == "derived")
+        .filter_map(|(sname, is)| {
+            let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
+            Some((sname, mf, members.get(faq)?))
+        })
+        .collect();
+    mf_sets.sort_by(|a, b| a.0.cmp(b.0));
+    let n_mf = mf_sets.len();
+    for (i, (sname, mf, mem)) in mf_sets.into_iter().enumerate() {
+        report(PreparePhase::MemberFactors, i, Some(n_mf), mf.as_str())?;
         let v: Vec<f64> = mem.iter().map(|&m| m as f64).collect();
         log(&format!(
             "  [prepare] member_factor {mf} <- |{sname}| = {}",
@@ -813,9 +1263,15 @@ pub fn prepare(
             .map_err(|e| err(format!("member factor '{mf}': {e}")))?;
         arrays.insert(mf.clone(), arr);
     }
+    report(PreparePhase::MemberFactors, n_mf, Some(n_mf), "")?;
 
     // ---- Hook 2: gated-provider deferral → post-VI pre-sliced fetch ---------
-    for (key, mut prov, gate) in gated {
+    // Every gate is PLANNED before any of it is issued, so the phase reports one
+    // running "request i of N" across all providers rather than restarting the
+    // count at each one. Planning is pure bookkeeping over the invented members
+    // — it reads nothing and costs nothing next to the fetch it describes.
+    let mut plans: Vec<GatedFetchPlan> = Vec::with_capacity(gated.len());
+    for (key, prov, gate) in &gated {
         if gate.applies_to.len() != 1 {
             return Err(err(format!(
                 "gated provider '{key}': applies_to lists {} variables; bind one \
@@ -824,18 +1280,38 @@ pub fn prepare(
                 gate.applies_to.len()
             )));
         }
-        let plan = gated_fetch_plan(&key, &gate, &index_sets, &members, &extents)?;
-        let arr = if prov.supports_selection() {
-            let a = prov
-                .sample_with_selection(&plan.selection)
-                .map_err(|e| err(format!("gated fetch '{key}': {}", e.0)))?;
-            drop_fixed_axes(&key, a, &plan.drop_axes)?
+        let mut plan = gated_fetch_plan(key, gate, &index_sets, &members, &extents)?;
+        plan.n_requests = if prov.supports_selection() {
+            match &plan.selection[plan.gated_pos] {
+                AxisSel::Indices(idx) => idx
+                    .len()
+                    .div_ceil(opts.gated_fetch_batch.unwrap_or(usize::MAX).max(1))
+                    .max(1),
+                // Neither is a support set, so `run_gated_fetch` refuses them —
+                // but it refuses them THERE, with a message naming the provider.
+                // Counting them as one request keeps this pass a pure estimate
+                // of the progress denominator rather than a second place that
+                // decides what a gate may be.
+                AxisSel::All | AxisSel::Range { .. } => 1,
+            }
         } else {
-            let full = prov
-                .sample()
-                .map_err(|e| err(format!("gated fetch '{key}' (whole): {}", e.0)))?;
-            drop_fixed_axes(&key, slice_whole(full, &plan.selection), &plan.drop_axes)?
+            1
         };
+        plans.push(plan);
+    }
+    let total_requests: usize = plans.iter().map(|p| p.n_requests).sum();
+    let mut issued = 0usize;
+
+    for ((key, mut prov, gate), plan) in gated.into_iter().zip(plans) {
+        let arr = run_gated_fetch(
+            &key,
+            prov.as_mut(),
+            &plan,
+            opts.gated_fetch_batch,
+            &mut issued,
+            total_requests,
+            &mut report,
+        )?;
         if arr.shape().get(plan.gated_pos_out).copied() != Some(plan.gated_extent) {
             return Err(err(format!(
                 "gated provider '{key}': fetched compact axis is {:?} but the gating \
@@ -859,12 +1335,21 @@ pub fn prepare(
         ));
         arrays.insert(target, arr);
     }
+    report(
+        PreparePhase::GatedFetch,
+        total_requests,
+        Some(total_requests),
+        "",
+    )?;
 
     // ---- evaluate the whole observed graph in dependency order --------------
-    for name in &order {
-        if fields.contains_key(name) {
-            continue; // already materialized by the coordinate pre-pass
-        }
+    // Every observed that still needs evaluating, counted up front: `order`
+    // includes the coordinate pre-pass's products, and a `total` that a `continue`
+    // silently makes unreachable is a bar that never fills.
+    let pending: Vec<&String> = order.iter().filter(|n| !fields.contains_key(*n)).collect();
+    let n_pending = pending.len();
+    for (i, name) in pending.into_iter().enumerate() {
+        report(PreparePhase::Observeds, i, Some(n_pending), name.as_str())?;
         let t = std::time::Instant::now();
         let a = eval_observed(
             name,
@@ -883,6 +1368,7 @@ pub fn prepare(
         arrays.insert(name.clone(), a.clone());
         fields.insert(name.clone(), a);
     }
+    report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
 
     Ok(Prepared {
         doc: rewritten.into_owned(),
