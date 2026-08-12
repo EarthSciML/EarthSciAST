@@ -341,7 +341,7 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         # fold — so the value is bit-identical to the per-cell reference.
         return _eval_acc_contraction(nd, u, p, t, c, n, oln, midx, K, T)
     elseif k === _NK_PARAM
-        return getfield(p, nd.sym)
+        return _read_param(p, nd.sym, nd.idx)
     elseif k === _NK_TIME
         return t
     elseif k === _NK_CACHED

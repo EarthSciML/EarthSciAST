@@ -16,6 +16,7 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [weakdeps]
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
+ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 DomainSets = "5b8099bc-c8ec-5219-889f-1d9e522a28bf"
 EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
@@ -32,6 +33,7 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 
 [extensions]
 EarthSciASTCatalystExt = ["Catalyst", "ModelingToolkit", "Symbolics"]
+EarthSciASTComponentArraysExt = "ComponentArrays"
 EarthSciASTDataOutputExt = ["DiffEqCallbacks", "SciMLBase"]
 EarthSciASTDataRefreshExt = ["DiffEqCallbacks", "SciMLBase"]
 EarthSciASTEarthSciIOExt = "EarthSciIO"
@@ -44,6 +46,7 @@ EarthSciASTSimulateExt = "SciMLBase"
 
 [compat]
 BenchmarkTools = "1"
+ComponentArrays = "0.15"
 ForwardDiff = "1"
 Catalyst = "16"
 DiffEqCallbacks = "4"
@@ -88,6 +91,7 @@ JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
+ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 DomainSets = "5b8099bc-c8ec-5219-889f-1d9e522a28bf"
 Extents = "411431e0-e8b7-467b-b5e0-f676ba4f2910"
@@ -106,4 +110,4 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "BenchmarkTools", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "EarthSciIO", "Blosc", "JSON", "SHA"]
+test = ["Test", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "EarthSciIO", "Blosc", "JSON", "SHA"]

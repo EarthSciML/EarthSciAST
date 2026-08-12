@@ -76,7 +76,27 @@ using Reactant: Reactant, TracedRArray, TracedRNumber, @allowscalar
 import EarthSciAST: _oop_read_state, _oop_gather, _oop_du_zeros, _oop_store,
     _oop_scatter, _oop_read_forcing, _oop_prefix_copy,
     _oop_knot_count, _oop_knot_pair, _oop_knot_pair2, _oop_bilinear_corners,
-    _scan_lanes_oop, _ScanFold, _oop_new_memo, _oop_intern_tally!
+    _scan_lanes_oop, _ScanFold, _oop_new_memo, _oop_intern_tally!,
+    _read_param_data
+
+# ---- Parameter reads (the vector `p` ABI) ------------------------------------
+#
+# The parameter half of the same story as the state read below, and the same
+# answer. A vector `p` (`ComponentVector`, `Vector`) is unwrapped to its dense
+# data by `_param_data` — for a traced `ComponentVector` that is a `TracedRArray`,
+# and a bare `q[idx]` on one raises "Scalar indexing is disallowed" (measured;
+# indexing the ComponentVector itself is worse, an ambiguous `getindex`). Under
+# `@allowscalar` it traces to a slice + reshape and yields the `TracedRNumber` the
+# walker's `convert(T, …)` wants.
+#
+# The bound that makes `@allowscalar` a narrow assertion rather than a blanket
+# opt-out is even tighter here than for the state: this fires O(#PARAMETERS) times
+# per RHS — a fact of the DOCUMENT, not of the grid — so the emitted program size
+# is untouched by N. Reading a whole parameter vector as one operand would be the
+# alternative, and it is the wrong shape: parameters enter the RHS one scalar at a
+# time, at nodes scattered through the expression tree.
+@inline _read_param_data(d::TracedRArray{T,1}, idx::Int) where {T} =
+    @allowscalar d[idx]
 
 # ---- State reads -------------------------------------------------------------
 #

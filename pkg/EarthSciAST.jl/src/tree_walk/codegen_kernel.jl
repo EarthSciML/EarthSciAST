@@ -309,7 +309,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     elseif k === _NK_LITERAL
         return nd.literal
     elseif k === _NK_PARAM
-        return :(getfield(p, $(QuoteNode(nd.sym))))
+        return :(_read_param(p, $(QuoteNode(nd.sym)), $(nd.idx)))
     elseif k === _NK_TIME
         return :t
     elseif k === _NK_CACHED

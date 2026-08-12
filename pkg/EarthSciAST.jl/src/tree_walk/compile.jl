@@ -376,8 +376,25 @@ function _build_interp_spec(fname::AbstractString, const_args::Vector{Any})
         "fn '$(fname)' carries const args but has no interp.* spec builder"))
 end
 
-# `param_syms` is a `Set{Symbol}` so parameters can be distinguished
-# from unbound-variable errors without another pass.
+# `param_syms` tells a parameter from an unbound-variable error without another
+# pass. It comes in two shapes, and the difference is exactly whether the
+# parameter ORDER is known:
+#
+#   * `Dict{Symbol,Int}` — the evaluator build's map, `sym → position in the
+#     sorted `param_names` (and therefore in the `p` NamedTuple). Every
+#     `_NK_PARAM` node minted from it carries that position in `idx`, which is
+#     what lets a VECTOR `p` be read by index (`_read_param`).
+#   * `Set{Symbol}` — the build-time constant folders in helpers.jl, which mint
+#     their own ad-hoc parameter scope per call and evaluate it against a
+#     NamedTuple built in the same breath. There is no global order to record, so
+#     those nodes get `idx = 0` and are NamedTuple-only by construction.
+#
+# Keeping both is why the seam is `(sym, idx)` rather than `idx` alone.
+@inline _is_param(ps::AbstractDict{Symbol,Int}, sym::Symbol) = haskey(ps, sym)
+@inline _is_param(ps, sym::Symbol) = sym in ps
+@inline _param_index(ps::AbstractDict{Symbol,Int}, sym::Symbol) = get(ps, sym, 0)
+@inline _param_index(_, ::Symbol) = 0
+
 function _compile(expr::NumExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo=nothing)
     return _mknode(kind=_NK_LITERAL, literal=expr.value)
 end
@@ -394,8 +411,8 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
         return _mknode(kind=_NK_STATE, idx=idx)
     end
     sym = Symbol(name)
-    if sym in param_syms
-        return _mknode(kind=_NK_PARAM, sym=sym)
+    if _is_param(param_syms, sym)
+        return _mknode(kind=_NK_PARAM, sym=sym, idx=_param_index(param_syms, sym))
     end
     # A reserved runtime-contraction loop variable (ess-runtime-contraction):
     # `_resolve_scalar_arrayop` kept the contracted index symbolic and registered
@@ -1356,6 +1373,63 @@ end
 # to contribute to the value type.
 @inline _rhs_value_type(u, ::Nothing, t) = promote_type(eltype(u), typeof(t))
 
+# A parameter VECTOR (`Vector`, `ComponentVector`, …) is homogeneous, so its one
+# `eltype` is the whole of its contribution — no per-field `promote_type` fold. The
+# same three-way promotion as the NamedTuple method, and for the same reason: under
+# ∂/∂p only `eltype(p)` is `Dual` and `u` stays `Float64`.
+@inline _rhs_value_type(u, p::AbstractVector, t) =
+    promote_type(eltype(u), eltype(p), typeof(t))
+
+# ---- The parameter read seam ------------------------------------------------
+#
+# A CONTAINER SEAM, in the same sense (and for the same reason) as oop.jl's
+# `_oop_read_state`: the one place the walkers turn "parameter named `sym`" into a
+# value, kept as named one-liners so a different `p` container — or a tracing
+# backend that cannot scalar-index — adds a METHOD instead of forking five
+# walkers. Every `_NK_PARAM` arm in the package goes through it: `_eval_node`
+# (compile.jl), `_eval_acc` (access_kernel.jl), the codegen tier
+# (codegen_kernel.jl), and the three out-of-place walks (oop.jl).
+#
+# TWO COORDINATES, ONE NODE. A `_NK_PARAM` node carries BOTH the parameter's
+# `sym` and its `idx` — its position in the build's already-sorted `param_names`
+# (`_build_state_layout`), which is also its position in the `p` NamedTuple. A
+# NamedTuple container wants the symbol, a vector container wants the index, and
+# handing the seam both is what lets one compiled IR serve either without a
+# rebuild. (`idx == 0` marks a node compiled outside the evaluator build — the
+# build-time constant folders in helpers.jl, which only ever evaluate against a
+# NamedTuple. A vector `p` reaching such a node raises a BoundsError, which is the
+# right answer: loud, not a silently wrong parameter.)
+#
+# THE NAMEDTUPLE METHOD IS `getfield`, UNCHANGED — the production Float64 path
+# must stay instruction-for-instruction what it was (tree_walk_oop_test.jl pins
+# `:oop` against `f!` BIT FOR BIT), and an `@inline` one-liner around the same
+# `getfield` compiles to the same code.
+@inline _read_param(p::NamedTuple, sym::Symbol, ::Int) = getfield(p, sym)
+
+# The vector container. `getfield(::ComponentVector, ::Symbol)` THROWS (a
+# ComponentArray's fields are `data`/`axes`, not its components), and its integer
+# `getindex` is ambiguous under tracing — so neither the symbol nor the
+# ComponentVector itself is the thing to index. Unwrap to the dense data vector
+# (`_param_data`), then read it by index (`_read_param_data`). Both halves are
+# seams because they are overridden by DIFFERENT extensions and compose:
+# ComponentArrays supplies the unwrap, Reactant supplies the traced read.
+@inline _read_param(p::AbstractVector, ::Symbol, idx::Int) =
+    _read_param_data(_param_data(p), idx)
+
+# Unwrap a parameter container to the dense vector its values actually live in.
+# Identity for a plain `Vector`; ext/EarthSciASTComponentArraysExt.jl adds the
+# `ComponentVector` method (`getdata`).
+@inline _param_data(p::AbstractVector) = p
+
+# Read one scalar out of that dense vector. DELIBERATELY NOT `@inbounds`: a short
+# or misordered `p` is a caller error with no other detector (a NamedTuple `p`
+# catches it by name; a vector `p` has only its length), and a `BoundsError` is
+# loud where an out-of-range read is a silently wrong parameter value. The check is
+# a predictable compare-and-branch on the Float64 path and off the NamedTuple path
+# entirely. ext/EarthSciASTReactantExt.jl adds the traced method, since XLA rejects
+# a scalar index of a traced array outside `@allowscalar`.
+@inline _read_param_data(d::AbstractVector, idx::Int) = d[idx]
+
 # ---- Float32 state guard ----------------------------------------------------
 #
 # `Float32` state is refused LOUDLY at the RHS entry. The walkers are
@@ -1577,7 +1651,7 @@ end
     elseif k === _NK_STATE
         @inbounds return u[n.idx]
     elseif k === _NK_PARAM
-        return getfield(p, n.sym)
+        return _read_param(p, n.sym, n.idx)
     elseif k === _NK_PARAM_GATHER
         # Live read of a captured forcing buffer (ess-14f.3). `payload` is the
         # aliased flat `Vector{Float64}` (a `_PGatherArray.flat`) and `idx` the

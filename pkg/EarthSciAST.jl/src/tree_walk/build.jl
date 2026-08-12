@@ -2266,8 +2266,18 @@ function _build_state_layout(model::Model, cls, parts;
         end
     end
 
+    # The parameter scope handed to `_compile`, as an ORDERED map: `sym → its
+    # position in `p_syms``. `p_syms` came from the already-sorted
+    # `parts.param_names`, so this position is stable across builds of the same
+    # document and is the SAME position the value has in the `p` NamedTuple —
+    # which is the whole point. The order existed before this map; it just was
+    # not exposed, so a `_NK_PARAM` node could name a parameter but not locate
+    # one. (`param_map` below is this map keyed by NAME, the public form.)
+    param_index = Dict{Symbol,Int}(s => i for (i, s) in enumerate(p_syms))
+    param_map = Dict{String,Int}(String(s) => i for (i, s) in enumerate(p_syms))
+
     return (; all_state_names, var_map, u0, p,
-            param_sym_set=Set(p_syms), array_var_info,
+            param_sym_set=param_index, param_map, array_var_info,
             var_map_ext, array_var_info_ext, mat_dims,
             n_total=length(all_state_names) + length(mat_cell_names))
 end
@@ -2668,7 +2678,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
               # buffer cells that is, and the dependency depth the fills run in.
               n_mat_array_obs = length(mat_vars),
               n_mat_array_cells = n_total - n_states,
-              n_mat_levels = length(mat_levels))
+              n_mat_levels = length(mat_levels),
+              # Parameter NAME → position in a vector `p` — the build's own copy
+              # of what the public `param_map(p)` recomputes from the NamedTuple.
+              # Here so an internal consumer never has to re-derive the order.
+              param_map = layout.param_map)
 
     # The PUBLIC map is the ODE layout only: the factored array-observed buffer
     # slots are build-owned scratch above `length(u0)`, not integrator slots, and
@@ -3771,6 +3785,35 @@ function build_evaluator(model::Model; kwargs...)
     f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)
     return f!, u0, p, tspan_default, var_map
 end
+
+"""
+    param_map(p) -> Dict{String,Int}
+
+Parameter NAME → its position in a parameter VECTOR, the `p`-side mirror of the
+`var_map` [`build_evaluator`](@ref) returns for the state.
+
+Take it from the `p` that `build_evaluator` handed back:
+
+```julia
+f!, u0, p, tspan, var_map = build_evaluator(doc)
+pm = param_map(p)                  # "k_diff" => 1, "k_rxn" => 3, …
+θ  = ComponentVector(p)            # the same order, as an AbstractVector
+f!(du, u, θ, t)                    # …and it is accepted as `p`
+```
+
+`build_evaluator` keeps returning its 5-tuple — 391 call sites destructure it —
+so this is a FUNCTION OF `p` rather than a sixth return value. That costs nothing
+in fidelity: the order is the build's own (`param_names` is sorted, and the `p`
+NamedTuple is built from it in that order), and `keys(p)` IS that order, so this
+map and the `idx` baked into every `_NK_PARAM` node are the same numbering by
+construction rather than by agreement.
+
+A parameter-free model carries SciMLBase's `nothing` sentinel as `p` and maps to
+the empty Dict.
+"""
+param_map(p::NamedTuple) = Dict{String,Int}(String(k) => i
+                                            for (i, k) in enumerate(keys(p)))
+param_map(::Nothing) = Dict{String,Int}()
 
 """
     build_evaluator(file::EsmFile; model_name=nothing, kwargs...)
