@@ -160,15 +160,14 @@ function angle(): ParsedUnit {
  * `UnitConversionError` (unknown unit name, malformed token, misused offset
  * unit) maps to `null`; any other error is rethrown.
  *
- * The string `"degrees"` is still accepted as dimensionless because ESM treats
- * angle labels as informational; the canonical unit table does not register it
- * to avoid committing to a radian conversion factor that ESM does not promise.
+ * `"degree"` / `"degrees"` are resolved by the canonical table as long-form
+ * aliases of `deg` (esm-spec §4.8.1), i.e. as the ANGLE axis scaled by π/180 —
+ * the reading the Rust, Julia and Python tables already carry. They used to be
+ * short-circuited to dimensionless here, which both disagreed with those three
+ * bindings and left the SINGULAR spelling unresolvable, since only the plural
+ * was special-cased and neither was in the table.
  */
 export function tryParseUnit(unitStr: string): ParsedUnit | null {
-  const normalized = (unitStr ?? '').trim().toLowerCase()
-  if (normalized === 'degrees') {
-    return dimensionless()
-  }
   try {
     return parseUnitForConversion(unitStr)
   } catch (err) {
@@ -196,10 +195,6 @@ export function tryParseUnit(unitStr: string): ParsedUnit | null {
  *   unbalanced parentheses, or a misused offset unit.
  */
 export function parseUnit(unitStr: string): ParsedUnit {
-  const normalized = (unitStr ?? '').trim().toLowerCase()
-  if (normalized === 'degrees') {
-    return dimensionless()
-  }
   return parseUnitForConversion(unitStr)
 }
 

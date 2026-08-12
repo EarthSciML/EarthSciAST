@@ -16,12 +16,24 @@ import type { Expression, EsmFile } from './types.js'
 describe('Unit parsing and dimensional analysis', () => {
   describe('parseUnit', () => {
     it('should handle dimensionless units', () => {
-      expect(parseUnit('degrees')).toEqual({ dims: {}, scale: 1 })
       expect(parseUnit('dimensionless')).toEqual({ dims: {}, scale: 1 })
       expect(parseUnit('')).toEqual({ dims: {}, scale: 1 })
       expect(parseUnit('mol/mol')).toEqual({ dims: {}, scale: 1 })
       expect(parseUnit('ppb')).toEqual({ dims: {}, scale: 1e-9 })
       expect(parseUnit('ppm')).toEqual({ dims: {}, scale: 1e-6 })
+    })
+
+    // esm-spec §4.8.1 registers `degree` and `degrees` as long-form aliases of
+    // `deg`, and `deg` is the ANGLE axis scaled by π/180 — the reading the Rust,
+    // Julia and Python tables carry. This binding used to resolve the PLURAL to
+    // dimensionless and the SINGULAR not at all, so a lon/lat parameter spelled
+    // `units: "degree"` was a hard error here and valid everywhere else.
+    it('resolves both long-form spellings of the degree as the angle', () => {
+      const deg = { dims: { rad: 1 }, scale: Math.PI / 180 }
+      expect(parseUnit('deg')).toEqual(deg)
+      expect(parseUnit('degree')).toEqual(deg)
+      expect(parseUnit('degrees')).toEqual(deg)
+      expect(tryParseUnit('degree')).toEqual(deg)
     })
 
     it('should parse basic units', () => {

@@ -198,7 +198,16 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   degF: { dims: { K: 1 }, scale: 5 / 9, offset: 459.67 * (5 / 9) },
 
   // ---- Plane angle ----
+  // `deg` is the short spelling; `degree`/`degrees` are its registered long-form
+  // aliases (esm-spec §4.8.1: "`degree` `degrees` → `deg`"), and all three are
+  // the SAME quantity — the `rad` axis scaled by π/180. Registering only `deg`
+  // made `units: "degree"` an unresolvable unit, i.e. a HARD error under the
+  // §4.8.4 severity contract, on a spelling the Rust, Julia and Python tables
+  // all carry. Every lon/lat-bearing document that spells the singular was
+  // therefore rejected by this binding alone.
   deg: { dims: { rad: 1 }, scale: Math.PI / 180 },
+  degree: { dims: { rad: 1 }, scale: Math.PI / 180 },
+  degrees: { dims: { rad: 1 }, scale: Math.PI / 180 },
 
   // ---- Solid angle ----
   // The steradian, `sr = rad²` (esm-spec §4.8.1). `rad` is an axis, so a solid
