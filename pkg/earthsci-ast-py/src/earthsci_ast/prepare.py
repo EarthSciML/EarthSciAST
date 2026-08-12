@@ -55,6 +55,72 @@ from .sympy_bridge import SimulationError
 __all__ = ["PreparedModel", "prepare", "observed_field"]
 
 
+def _discover_loader_extents(
+    providers: dict[str, Any] | None,
+    pd_gates: dict[str, dict],
+    metaparameters: dict[str, int] | None,
+    t0: float,
+) -> tuple[dict[str, int], dict[str, Any]]:
+    """The extent-discovery pre-pass (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5).
+
+    A loader whose record count is only knowable once the table is read declares
+    ``extent: {"metaparameter": "N_REC"}``. This runs BEFORE metaparameters are
+    closed at the loader API, so an index set declared ``size: "N_REC"`` is sized
+    by the DATA rather than by a caller who counted rows first.
+
+    Returns ``(metaparameters, discovered)`` — the closed metaparameter map, and
+    the arrays already materialised here, keyed by provider, so the injection
+    pass below REUSES them and never samples a loader twice.
+
+    Three conditions are errors rather than a silent preference for one answer:
+    a provider that both gates on a derived set and declares an extent (a gated
+    slab's extent is the gating set's); two variables of one loader that
+    disagree on the count (named, because that IS the alignment check); and a
+    caller binding that contradicts the discovered value.
+    """
+    from .simulation_loaders import _provider_sample_field
+
+    closed: dict[str, int] = {str(k): int(v) for k, v in (metaparameters or {}).items()}
+    discovered: dict[str, Any] = {}
+    discovered_by: dict[str, tuple[int, str]] = {}
+    for k in sorted(str(x) for x in (providers or {})):
+        prov = providers[k]  # type: ignore[index]
+        mp = getattr(prov, "extent_metaparameter", None)
+        if not mp:
+            continue
+        mp = str(mp)
+        if k in pd_gates or getattr(prov, "gate_spec", None) is not None:
+            raise SimulationError(
+                f"prepare: provider '{k}' both GATES on a derived index set and "
+                f"declares the extent metaparameter '{mp}'; a gated slab's extent "
+                f"is the gating set's, not a discovered one"
+            )
+        try:
+            arr = np.asarray(_provider_sample_field(prov, t0), dtype=float)
+        except SimulationError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — re-raised with the site named
+            raise SimulationError(f"extent discovery for '{k}': {exc}") from exc
+        n = int(arr.shape[0]) if arr.ndim else 0
+        prev = discovered_by.get(mp)
+        if prev is not None and prev[0] != n:
+            raise SimulationError(
+                f"prepare: loader extent '{mp}' is {prev[0]} from provider "
+                f"'{prev[1]}' but {n} from '{k}' — the loader's variables are not "
+                f"aligned on one record axis"
+            )
+        if prev is None and mp in closed and closed[mp] != n:
+            raise SimulationError(
+                f"prepare: metaparameter '{mp}' was closed at {closed[mp]} by the "
+                f"caller but provider '{k}' discovers {n} records; drop the binding "
+                f"and let the loader declare its own extent"
+            )
+        discovered_by[mp] = (n, k)
+        closed[mp] = n
+        discovered[k] = arr
+    return closed, discovered
+
+
 @dataclass
 class PreparedModel:
     """The product of :func:`prepare`: the flattened system plus the finished
@@ -123,6 +189,8 @@ def prepare(
     doc_for_record: dict | None = None
     pd_gates: dict[str, dict] = {}
     pd_coupling: list[tuple[str, str]] = []
+    t0 = float(sample_time)
+    raw = base_path = None
 
     if pushdown_rewrite:
         raw, base_path = _raw_document(input_)
@@ -138,6 +206,15 @@ def prepare(
             pd_gates = _pushdown_provider_gates(rewritten, providers)
             pd_coupling = _pushdown_coupling_pairs(rewritten)
         doc_for_record = rewritten
+
+    # ---- extent discovery: a loader that measures its OWN record count ------
+    # BEFORE the load, because a discovered extent CLOSES a metaparameter and
+    # metaparameters are closed at the loader API. Runs unconditionally: even
+    # when the input is already typed (nothing left to size) the agreement and
+    # caller-contradiction checks are still the loader's contract.
+    metaparameters, discovered = _discover_loader_extents(providers, pd_gates, metaparameters, t0)
+
+    if pushdown_rewrite:
         file = load(rewritten, metaparameters=metaparameters, base_path=base_path)
     elif isinstance(input_, FlattenedSystem):
         file = None
@@ -156,10 +233,13 @@ def prepare(
         str(k): np.asarray(v, dtype=float) for k, v in (const_arrays or {}).items()
     }
     gated: dict[str, Any] = {}
-    t0 = float(sample_time)
     for rawk, prov in (providers or {}).items():
         k = str(rawk)
-        if k in pd_gates:
+        if k in discovered:
+            # Already materialized by the extent-discovery pre-pass; a loader
+            # that declares its own extent is never sampled twice.
+            merged[k] = discovered.pop(k)
+        elif k in pd_gates:
             # Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
             # defer — value-invention must derive the gating set's members
             # before the rows to fetch are known.
@@ -191,6 +271,7 @@ def prepare(
         loader_arrays=merged,
         gated_providers=gated,
         sample_time=t0,
+        build_only=True,
     )
 
     if inspect is not None:

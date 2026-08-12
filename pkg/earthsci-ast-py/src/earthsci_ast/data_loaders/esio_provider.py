@@ -21,7 +21,14 @@ ESS to EarthSciIO and regress those formats, so it stays caller-selected.
 from __future__ import annotations
 
 import datetime as _dt
+import sys
+import threading
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
+
+from ..pushdown_rewrite import parse_select_axes
 
 Window = tuple[_dt.datetime, _dt.datetime]
 
@@ -294,6 +301,464 @@ def to_esio_loader(field: FieldLike, target: Any = None, window: Window | None =
     )
 
 
+# --------------------------------------------------------------------------- #
+# The DECLARED loader semantics (esm-spec §8.9) this module honours:
+# ``reader_options`` (handed to the reader verbatim), a per-variable ``codes``
+# map, a loader ``record_filter``, a per-axis ``select`` and the loader's own
+# ``extent``. Everything here is read off the DOCUMENT — none of it is a
+# caller-side transform any more. Mirrors the Rust
+# ``earthsci_ast::esio_provider`` and the Julia EarthSciIO extension.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _CodeMap:
+    """A loader variable's declared string→number code map (``codes``)."""
+
+    map: dict[str, float]
+    case_insensitive: bool = False
+    #: ``"drop"`` (drop the whole RECORD), ``"error"``, or a substitute number.
+    unmapped: Any = "error"
+
+    def lookup(self, raw: Any, var: str) -> float | None:
+        """The code for one raw cell, or ``None`` when it is unmapped and the
+        declared policy is to drop the record."""
+        key = str(raw).strip()
+        if self.case_insensitive:
+            key = key.upper()
+        if key in self.map:
+            return self.map[key]
+        if self.unmapped == "drop":
+            return None
+        if self.unmapped == "error":
+            raise ValueError(
+                f"loader variable {var!r}: value {str(raw)!r} is not in its declared "
+                f'`codes` map (set codes.unmapped to "drop" or a number to accept it)'
+            )
+        return float(self.unmapped)
+
+
+@dataclass
+class _ColumnSpec:
+    """One column of a record-table loader: where it comes from and how its
+    cells become numbers."""
+
+    name: str
+    file_variable: str
+    codes: _CodeMap | None = None
+
+
+def _is_text(arr: Any) -> bool:
+    """Whether a decoded column carries text (the FF10 POLID case) rather than
+    numbers — the distinction ``codes`` exists for."""
+    a = np.asarray(arr)
+    if a.dtype.kind in ("U", "S"):
+        return True
+    return a.dtype.kind == "O" and a.size > 0 and isinstance(a.reshape(-1)[0], (str, bytes))
+
+
+def _widen(name: str, data: Any) -> np.ndarray:
+    """Widen one numeric column to float64.
+
+    A text column with NO ``codes`` map is a modelling mistake, not a silent
+    drop: a loader wired to feed a model variable from a text column should
+    fail at the boundary, never as an absent forcing much later
+    (FORMAT-08-A-007).
+    """
+    if _is_text(data):
+        raise ValueError(
+            f"loader variable {name!r} decoded as strings; a model forcing must be "
+            f"numeric (declare a `codes` map for it)"
+        )
+    return np.asarray(data, dtype=float)
+
+
+class _RecordTable:
+    """A record-table loader's decode, SHARED by its per-variable providers.
+
+    A loader that declares a ``record_filter`` or a ``codes`` map is a TABLE,
+    not a bag of independent arrays: which rows survive is a property of the
+    whole RECORD, so every column must be filtered by the same mask or the
+    columns silently misalign. That forces one decode — this object — rather
+    than one per variable, which also means the 69 MB FF10 zip is unzipped and
+    parsed once for all eight of its columns instead of eight times.
+
+    Decoded lazily on first use and then held: ``prepare`` samples the
+    providers one after another, and the second one must not re-read.
+    """
+
+    def __init__(
+        self,
+        loader_name: str,
+        loader: Any,
+        cache: Any,
+        columns: list[_ColumnSpec],
+        require_finite: list[str],
+    ) -> None:
+        self.loader_name = loader_name
+        self.loader = loader
+        self.cache = cache
+        self.columns = list(columns)
+        self.require_finite = list(require_finite)
+        self._lock = threading.Lock()
+        self._decoded: dict[str, np.ndarray] | None = None
+
+    def column(self, name: str) -> np.ndarray:
+        """The filtered column for loader variable ``name``."""
+        cols = self._materialize()
+        if name not in cols:
+            raise ValueError(
+                f"loader {self.loader_name!r} has no column {name!r} "
+                f"(declared: {sorted(cols)})"
+            )
+        return cols[name]
+
+    def _materialize(self) -> dict[str, np.ndarray]:
+        with self._lock:
+            if self._decoded is None:
+                self._decoded = self._decode()
+            return self._decoded
+
+    def _decode(self) -> dict[str, np.ndarray]:
+        import earthsciio as esio
+
+        nds = esio.Provider(self.loader, self.cache).materialize()
+
+        # Raw columns (unfiltered), plus the per-record keep mask the `codes`
+        # drops and the finite requirement build up.
+        raw: dict[str, np.ndarray] = {}
+        keep: np.ndarray | None = None
+        nrec: int | None = None
+        for spec in self.columns:
+            if spec.file_variable not in nds:
+                raise ValueError(
+                    f"loader {self.loader_name!r}: the reader returned no column "
+                    f"{spec.file_variable!r} for variable {spec.name!r}"
+                )
+            f = nds[spec.file_variable]
+            if len(f.shape) != 1:
+                raise ValueError(
+                    f"loader {self.loader_name!r} declares a record filter, but "
+                    f"variable {spec.name!r} is rank {len(f.shape)} "
+                    f"({list(f.shape)}); a record filter needs a single record axis"
+                )
+            n = int(f.shape[0])
+            if nrec is None:
+                nrec, keep = n, np.ones(n, dtype=bool)
+            elif nrec != n:
+                raise ValueError(
+                    f"loader {self.loader_name!r}: column {spec.name!r} has {n} "
+                    f"records but an earlier column has {nrec}; the reader did not "
+                    f"return one aligned table"
+                )
+            assert keep is not None  # sized with the first column
+            if spec.codes is None:
+                raw[spec.name] = _widen(spec.name, f.data)
+                continue
+            if not _is_text(f.data):
+                raise ValueError(
+                    f"loader {self.loader_name!r} variable {spec.name!r} declares "
+                    f"`codes`, but the column decoded as "
+                    f"{np.asarray(f.data).dtype}; a code map maps a TEXT column "
+                    f"to numbers"
+                )
+            values = np.empty(n, dtype=float)
+            for i, cell in enumerate(f.data):
+                code = spec.codes.lookup(cell, spec.name)
+                if code is None:
+                    keep[i] = False
+                    values[i] = np.nan
+                else:
+                    values[i] = code
+            raw[spec.name] = values
+
+        n = nrec or 0
+        if keep is None:
+            keep = np.ones(0, dtype=bool)
+        for name in self.require_finite:
+            if name not in raw:
+                raise ValueError(
+                    f"loader {self.loader_name!r}: record_filter.require_finite "
+                    f"names {name!r}, which is not one of its variables"
+                )
+            keep &= np.isfinite(raw[name])
+
+        kept = int(keep.sum())
+        out = {name: col[keep] for name, col in raw.items()}
+        if kept != n:
+            # The record count IS the loader's extent, so say what was dropped.
+            print(
+                f"  [esio] loader {self.loader_name!r}: {n} records read, {kept} "
+                f"kept by its declared record filter",
+                file=sys.stderr,
+                flush=True,
+            )
+        return out
+
+
+def _apply_axes(key: str, arr: np.ndarray, axes: list[Any]) -> np.ndarray:
+    """Apply a declared ``select`` to an already-materialized array: take each
+    axis's indices, then DROP the ``fixed`` axes (which come back length 1)."""
+    if len(axes) != arr.ndim:
+        raise ValueError(
+            f"provider {key!r}: the declared select has {len(axes)} axes but the "
+            f"array is rank {arr.ndim} ({list(arr.shape)})"
+        )
+    out = arr
+    for i, ax in enumerate(axes):
+        if ax == "all":
+            continue
+        if "gated_by" in ax:
+            raise ValueError(
+                f"provider {key!r}: axis {i} gates on {ax['gated_by']!r}, which is "
+                f"resolved by value-invention inside prepare, not by an eager sample"
+            )
+        if "fixed" in ax:
+            idx = [int(ax["fixed"])]
+        else:
+            r = ax["range"]
+            idx = list(range(r["start"], r["stop"], r["step"]))
+        dim = out.shape[i]
+        over = [g for g in idx if g >= dim]
+        if over:
+            raise ValueError(
+                f"provider {key!r}: the declared select reaches index {over[0]} on "
+                f"axis {i}, whose native length is {dim}"
+            )
+        out = np.take(out, idx, axis=i)
+    drop = {i for i, ax in enumerate(axes) if isinstance(ax, dict) and "fixed" in ax}
+    if not drop:
+        return out
+    # Fixed axes are length-1 by construction now; drop them.
+    return out.reshape(tuple(s for i, s in enumerate(out.shape) if i not in drop))
+
+
+def _to_reader_select(axes: list[Any]) -> dict[str, Any]:
+    """The reader-side spelling of a declared ``select`` carrying no ``gated_by``
+    axis — what a store-backed reader can fetch pre-sliced."""
+    out: list[Any] = []
+    for ax in axes:
+        if ax == "all":
+            out.append("all")
+        elif "fixed" in ax:
+            out.append({"indices": [int(ax["fixed"])]})
+        elif "range" in ax:
+            r = ax["range"]
+            out.append({"slice": [r["start"], r["stop"], r["step"]]})
+        else:  # unreachable: a gated axis defers, it is never pushed eagerly
+            out.append("all")
+    return {"axes": out}
+
+
+def _neutral_to_native(selection: list[Any]) -> dict[str, Any]:
+    """The engine's neutral per-axis selection (``"all"`` | 0-based index list),
+    in EarthSciIO's native ``{"axes": [...]}`` spelling."""
+    return {
+        "axes": [
+            "all" if ax == "all" else {"indices": [int(i) for i in ax]}
+            for ax in selection
+        ]
+    }
+
+
+def _single_field(key: str, nds: Any) -> np.ndarray:
+    """The single data variable of a sample (one provider per fed variable)."""
+    names = sorted(nds.variables)
+    if len(names) != 1:
+        raise ValueError(
+            f"provider {key!r} expects exactly one field per provider, got {names}; "
+            f"construct one provider per variable (providers_from_document does)"
+        )
+    return _widen(names[0], nds.variables[names[0]].data)
+
+
+class EsioDocumentProvider:
+    """One document-declared loader VARIABLE, served through EarthSciIO.
+
+    The Python peer of the Rust ``EsioProvider``: it carries the loader's
+    declared §8.9 semantics so that ``prepare`` sees a plain array, already
+    decoded (``reader_options``), coded (``codes``), filtered (``record_filter``)
+    and selected (``select``) — and can ask it for the metaparameter its own
+    delivered extent binds.
+
+    Duck-typed onto the ESS provider seam (``sample(t)`` /
+    ``sample(t, selection=…)`` / ``supports_selection`` / ``gate_spec`` /
+    ``extent_metaparameter``) rather than onto EarthSciIO's ``Provider``, so the
+    engine's gated fetch reaches THIS object and its declared select is honoured
+    exactly once.
+    """
+
+    def __init__(
+        self,
+        key: str,
+        inner: Any,
+        *,
+        table: _RecordTable | None = None,
+        column: str | None = None,
+        declared: list[Any] | None = None,
+        extent_metaparameter: str | None = None,
+    ) -> None:
+        self.key = key
+        self._inner = inner
+        self._table = table
+        self._column = column
+        #: The metaparameter this provider's delivered extent BINDS (``extent``).
+        self.extent_metaparameter = extent_metaparameter
+        self._reader_select: dict[str, Any] | None = None
+        self._drop_axes: tuple[int, ...] = ()
+        self._engine_axes: list[Any] | None = None
+        if declared is not None:
+            # Where a declared select is applied is an OPTIMIZATION, not a
+            # semantic (esm-spec §8.9.2): pushed to the reader when the reader
+            # can fetch pre-sliced and no rows are filtered first, else applied
+            # engine-side after the decode. Both deliver the same array. A
+            # `gated_by` axis always defers — it is resolved by value-invention,
+            # which has not run yet.
+            gated = any(isinstance(a, dict) and "gated_by" in a for a in declared)
+            if not gated and table is None and bool(inner.supports_selection):
+                self._reader_select = _to_reader_select(declared)
+                self._drop_axes = tuple(
+                    i for i, a in enumerate(declared)
+                    if isinstance(a, dict) and "fixed" in a
+                )
+            else:
+                self._engine_axes = list(declared)
+
+    # -- introspection ------------------------------------------------------ #
+
+    @property
+    def supports_selection(self) -> bool:
+        """Whether a per-axis selection can be pushed to the bound reader.
+
+        A record-table column never can: its rows are chosen by the loader's
+        declared filter AFTER the decode, so an index pushed to the reader would
+        address raw rows rather than the delivered ones.
+        """
+        return self._table is None and bool(self._inner.supports_selection)
+
+    @property
+    def is_const(self) -> bool:
+        return bool(getattr(self._inner, "is_const", True))
+
+    @property
+    def gate_spec(self) -> dict[str, Any] | None:
+        """A declared ``select`` carrying a ``gated_by`` axis IS a
+        provider-declared gate: ``prepare`` defers it past value-invention and
+        fetches it pre-sliced to the materialised members."""
+        axes = self._engine_axes
+        if axes is None or not any(
+            isinstance(a, dict) and "gated_by" in a for a in axes
+        ):
+            return None
+        return {"axes": list(axes), "applies_to": [self.key.rsplit(".", 1)[-1]]}
+
+    def refresh_times(self) -> list:
+        return list(self._inner.refresh_times())
+
+    # -- sampling ----------------------------------------------------------- #
+
+    def sample(self, t: float = 0.0, selection: list[Any] | None = None) -> np.ndarray:
+        """This variable's delivered array.
+
+        ``selection`` is the engine's resolved gated selection (pushdown hook 2);
+        it IS the whole selection for this fetch, so the declared select is not
+        applied a second time on top of it.
+        """
+        if selection is not None:
+            nds = self._inner.materialize(select=_neutral_to_native(selection))
+            return _single_field(self.key, nds)
+        if self._table is not None:
+            arr = self._table.column(str(self._column))
+        else:
+            arr = _single_field(self.key, self._inner.materialize(select=self._reader_select))
+        return self._apply_declared(arr)
+
+    def refresh(self, when: Any) -> np.ndarray:
+        """The DISCRETE cadence entry (delegated), under the same declared
+        select. ``providers_from_document`` builds CONST loaders today, so this
+        exists for shape rather than for a live caller."""
+        if self._table is not None:
+            raise ValueError(
+                f"provider {self.key!r} serves a filtered record table, which has "
+                f"no cadence to refresh on"
+            )
+        nds = self._inner.refresh(when, select=self._reader_select)
+        return self._apply_declared(_single_field(self.key, nds))
+
+    def _apply_declared(self, arr: np.ndarray) -> np.ndarray:
+        if self._engine_axes is not None:
+            return _apply_axes(self.key, arr, self._engine_axes)
+        if self._drop_axes:
+            # The reader already sliced; only the `fixed` axes still need dropping.
+            axes = [
+                {"fixed": 0} if i in self._drop_axes else "all" for i in range(arr.ndim)
+            ]
+            return _apply_axes(self.key, arr, axes)
+        return arr
+
+
+def _resolve_range_bounds(doc: Any, ctx: str, ax: Any) -> Any:
+    """Replace any metaparameter-NAMED ``range`` bound with its document default.
+
+    So a loader can say ``W[0:N_SRC]`` in the model's own terms instead of
+    repeating 52411 and drifting from the index set sized by the same
+    metaparameter (esm-spec §8.9.2).
+    """
+    if not isinstance(ax, dict) or not isinstance(ax.get("range"), dict):
+        return ax
+    out = dict(ax["range"])
+    mps = doc.get("metaparameters") if isinstance(doc, dict) else None
+    for bound in ("start", "stop", "step"):
+        name = out.get(bound)
+        if not isinstance(name, str):
+            continue
+        entry = mps.get(name) if isinstance(mps, dict) else None
+        default = entry.get("default") if isinstance(entry, dict) else None
+        if not isinstance(default, int) or isinstance(default, bool):
+            raise ValueError(
+                f"{ctx}.select: range.{bound} names {name!r}, which is not a "
+                f"metaparameter with an integer default"
+            )
+        out[bound] = int(default)
+    return {"range": out}
+
+
+def _parse_declared_select(doc: Any, ctx: str, node: Any) -> list[Any] | None:
+    """A ``select.axes`` declaration on a loader or one of its variables."""
+    sel = node.get("select") if isinstance(node, dict) else None
+    if sel is None:
+        return None
+    axes = sel.get("axes") if isinstance(sel, dict) else None
+    if not isinstance(axes, list):
+        raise ValueError(f'{ctx}.select needs an "axes" array')
+    resolved = [_resolve_range_bounds(doc, ctx, ax) for ax in axes]
+    return parse_select_axes(f"{ctx}.select", resolved)
+
+
+def _parse_codes(ctx: str, vd: Any) -> _CodeMap | None:
+    """A loader variable's ``codes`` map (text column → number)."""
+    codes = vd.get("codes") if isinstance(vd, dict) else None
+    if codes is None:
+        return None
+    mapping = codes.get("map") if isinstance(codes, dict) else None
+    if not isinstance(mapping, dict):
+        raise ValueError(f'{ctx}.codes needs a "map" object')
+    case_insensitive = bool(codes.get("case_insensitive", False))
+    unmapped = codes.get("unmapped", "error")
+    if unmapped not in ("drop", "error"):
+        if isinstance(unmapped, bool) or not isinstance(unmapped, (int, float)):
+            raise ValueError(
+                f'{ctx}.codes.unmapped must be "drop", "error" or a number'
+            )
+        unmapped = float(unmapped)
+    out: dict[str, float] = {}
+    for k, v in mapping.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(f"{ctx}.codes.map[{str(k)!r}] must be a number")
+        out[str(k).upper() if case_insensitive else str(k)] = float(v)
+    return _CodeMap(map=out, case_insensitive=case_insensitive, unmapped=unmapped)
+
+
 def providers_from_document(
     doc: Any,
     *,
@@ -322,6 +787,7 @@ def providers_from_document(
     local ``file://`` mirror of the canonical source).
     """
     import json
+    import os as _os
 
     import earthsciio as esio
 
@@ -335,8 +801,10 @@ def providers_from_document(
     want = None if loaders is None else {str(x) for x in loaders}
     overrides = url_overrides or {}
     out: dict[str, Any] = {}
-    for lname, ld in dls.items():
-        lname = str(lname)
+    # Deterministic construction (and therefore deterministic diagnostics) —
+    # the Rust peer sorts its provider list for the same reason.
+    for lname in sorted(map(str, dls)):
+        ld = dls[lname]
         if want is not None and lname not in want:
             continue
         if not isinstance(ld, dict):
@@ -362,16 +830,74 @@ def providers_from_document(
         variables = ld.get("variables")
         if not isinstance(variables, dict):
             continue
-        import os as _os
-
         cache = esio.Cache(root=_os.path.join(str(cache_root), lname))
-        for vname, vd in variables.items():
-            vname = str(vname)
-            fv = vd.get("file_variable", vname) if isinstance(vd, dict) else vname
-            loader = esio.DataLoader(
-                name=lname, format=str(fmt), url=url, variables=[str(fv)]
+
+        # ---- the loader's DECLARED decode semantics (esm-spec §8.9) --------
+        reader_options = ld.get("reader_options") or {}
+        if not isinstance(reader_options, dict):
+            raise ValueError(
+                f"providers_from_document: data_loaders.{lname}.reader_options "
+                f"must be an object of format-specific decode options"
             )
-            out[f"{lname}.{vname}"] = esio.Provider(loader, cache)
+        loader_select = _parse_declared_select(doc, f"data_loaders.{lname}", ld)
+        extent = ld.get("extent")
+        extent_mp = extent.get("metaparameter") if isinstance(extent, dict) else None
+        extent_mp = str(extent_mp) if isinstance(extent_mp, str) else None
+        rfilter = ld.get("record_filter")
+        require_finite = (
+            [str(v) for v in (rfilter.get("require_finite") or [])]
+            if isinstance(rfilter, dict)
+            else []
+        )
+
+        specs = [
+            _ColumnSpec(
+                name=str(vname),
+                file_variable=str(
+                    vd.get("file_variable", vname) if isinstance(vd, dict) else vname
+                ),
+                codes=_parse_codes(f"data_loaders.{lname}.variables.{vname}", vd),
+            )
+            for vname, vd in variables.items()
+        ]
+
+        def _loader(vars_: list[str], _l=lname, _f=fmt, _u=url, _o=reader_options):
+            return esio.DataLoader(
+                name=_l, format=str(_f), url=_u, variables=vars_, reader_kwargs=dict(_o)
+            )
+
+        # A record filter or a code map makes the loader a TABLE: one decode,
+        # one keep mask, columns that stay aligned.
+        table = None
+        if require_finite or any(s.codes is not None for s in specs):
+            table = _RecordTable(
+                lname,
+                _loader(sorted({s.file_variable for s in specs})),
+                cache,
+                specs,
+                require_finite,
+            )
+
+        for spec, (vname, vd) in zip(specs, variables.items()):
+            key = f"{lname}.{spec.name}"
+            declared = _parse_declared_select(
+                doc, f"data_loaders.{lname}.variables.{vname}", vd
+            )
+            if declared is None and loader_select is not None:
+                declared = list(loader_select)
+            # Resolving the reader NOW (rather than mid-solve) is also what
+            # rejects an unrecognised `reader_options` key: EarthSciIO checks
+            # the declared decode options against the bound reader at Provider
+            # construction (spec/registries.md §2.1, FORMAT-08-A-006).
+            inner = esio.Provider(_loader([spec.file_variable]), cache)
+            out[key] = EsioDocumentProvider(
+                key,
+                inner,
+                table=table,
+                column=spec.name,
+                declared=declared,
+                extent_metaparameter=extent_mp,
+            )
     return out
 
 

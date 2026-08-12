@@ -285,9 +285,12 @@ def test_pushdown_provider_gates_from_record_and_template():
     assert sorted(gates) == ["MockSR.SOA", "MockSR.pNO3"]
     g = gates["MockSR.SOA"]
     # the loader template's fixed layer survives; the STALE gated_by name is
-    # replaced by the record's generated set.
+    # replaced by the record's generated set. The template is parsed through the
+    # shared §8.9.2 selector vocabulary, so the emitted `fixed` is the spec's
+    # SCALAR index (the authored `{"fixed": [0]}` list spelling is still
+    # accepted on input, exactly as the Rust peer accepts it).
     assert g["axes"] == [
-        {"fixed": [0]},
+        {"fixed": 0},
         {"gated_by": "pd_support__src_cells"},
         "all",
     ]

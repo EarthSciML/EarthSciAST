@@ -87,7 +87,7 @@
         },
         "annual": {
           "file_variable": "ANN_VALUE",
-          "units": "t/yr",
+          "units": "kg/yr",
           "description": "Annual emissions, native FF10 units."
         },
         "lon": {
@@ -159,7 +159,7 @@
         },
         "annual": {
           "type": "parameter",
-          "units": "t/yr",
+          "units": "kg/yr",
           "default": 0.0,
           "shape": [
             "emis_records"
@@ -219,7 +219,7 @@
         },
         "E_NOx": {
           "type": "observed",
-          "units": "t/yr",
+          "units": "kg/yr",
           "expression": {
             "op": "aggregate",
             "output_idx": [],
