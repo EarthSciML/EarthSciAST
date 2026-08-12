@@ -219,8 +219,13 @@ pub use pushdown_rewrite::{
     GateAxis, ProviderGate, PushdownRewriteError, desugar_pushdown, pushdown_coupling_pairs,
     pushdown_provider_gates, pushdown_record,
 };
+// `Flow` is deliberately absent: `prepare` re-exports the SAME `Flow` the
+// solver uses, and the crate root already carries it from `simulate`.
 #[cfg(not(target_arch = "wasm32"))]
-pub use prepare::{AxisSel, PrepareError, PrepareOptions, PrepareProvider, Prepared, prepare};
+pub use prepare::{
+    AxisSel, PrepareError, PrepareOptions, PreparePhase, PrepareProgress, PrepareProgressFn,
+    PrepareProvider, Prepared, prepare,
+};
 
 pub use edit::{
     EditError, add_coupling, add_equation, add_model, add_reaction, add_reaction_system,
