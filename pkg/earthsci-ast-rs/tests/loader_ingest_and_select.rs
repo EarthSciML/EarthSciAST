@@ -17,19 +17,25 @@
 //!     every variable of the loader at the same time;
 //!   * `extent` — the surviving count binds `N_REC`, so no caller counts rows;
 //!   * `select` — `W[0:N_SRC]` is a second variable over the same on-disk
-//!     array, so no caller samples the grid twice to slice a prefix.
+//!     array, so no caller samples the grid twice to slice a prefix; and
+//!     `W` gated on `emis_cells` is a third, which DEFERS rather than reads,
+//!     so no caller fetches the whole axis to keep three rows of it.
 //!
 //! Together they are the difference between a document a general-purpose
 //! runner can run and a document only a model-aware runner can run.
 
 #![cfg(feature = "esio")]
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 
-use earthsci_ast::esio_provider::providers_from_document;
-use earthsci_ast::prepare::{PrepareOptions, PrepareProvider, prepare};
+use earthsci_ast::esio_provider::{EsioProvider, providers_from_document};
+use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareOptions, PrepareProvider, prepare};
+use earthsci_ast::pushdown_rewrite::GateAxis;
+use ndarray::ArrayD;
 use serde_json::{Value, json};
 
 // --------------------------------------------------------------------------- //
@@ -431,4 +437,242 @@ fn an_unrecognised_axis_selector_is_refused_at_construction() {
         Ok(_) => panic!("an unknown selector must not be ignored"),
     };
     assert!(e.contains("unrecognised axis selector keys"), "{e}");
+}
+
+// --------------------------------------------------------------------------- //
+// U3 — a GATED select in the loader
+//
+// `gated_by` is the one selector of the §8.9.2 vocabulary that is not
+// resolvable at read time: its axis is a derived index set whose members the
+// graph invents, so the fetch must wait for value-invention and then ask for
+// exactly those members. `CONFORMANCE_SPEC §5.5`: *"Only `gated_by` defers; the
+// other three are resolvable at read time."*
+//
+// The failure these pin is silent and expensive rather than loud: a gate that
+// does NOT defer is flattened to the full axis and read eagerly, so the answer
+// is still an array — just one built from the whole store. On the ISRM SR
+// matrix that is a 52,411-row source axis instead of 1,520 members.
+// --------------------------------------------------------------------------- //
+
+/// What the engine actually ASKED a provider for. `Whole` is the wholesale
+/// read a gate is supposed to make unnecessary.
+#[derive(Debug, Clone, PartialEq)]
+enum Fetch {
+    Whole,
+    Selection(Vec<AxisSel>),
+}
+
+/// A recording pass-through, so a test can assert on the REQUEST rather than
+/// only on the array that comes back. Delegates every decision to the real
+/// provider — it observes the fetch, it does not change it.
+struct SpyProvider {
+    inner: EsioProvider,
+    calls: Rc<RefCell<Vec<Fetch>>>,
+}
+
+impl PrepareProvider for SpyProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
+        self.calls.borrow_mut().push(Fetch::Whole);
+        self.inner.sample()
+    }
+
+    fn supports_selection(&self) -> bool {
+        PrepareProvider::supports_selection(&self.inner)
+    }
+
+    fn sample_with_selection(
+        &mut self,
+        selection: &[AxisSel],
+    ) -> Result<ArrayD<f64>, PrepareError> {
+        self.calls
+            .borrow_mut()
+            .push(Fetch::Selection(selection.to_vec()));
+        self.inner.sample_with_selection(selection)
+    }
+
+    fn is_const(&self) -> bool {
+        self.inner.is_const()
+    }
+
+    fn gate_spec(&self) -> Option<earthsci_ast::pushdown_rewrite::ProviderGate> {
+        self.inner.gate_spec()
+    }
+
+    fn extent_metaparameter(&self) -> Option<String> {
+        PrepareProvider::extent_metaparameter(&self.inner)
+    }
+}
+
+/// The document's providers, each wrapped in a [`SpyProvider`], plus the shared
+/// per-key call logs.
+#[allow(clippy::type_complexity)]
+fn spied_providers(
+    doc: &Value,
+    cache_root: &Path,
+) -> (
+    Vec<(String, Box<dyn PrepareProvider>)>,
+    HashMap<String, Rc<RefCell<Vec<Fetch>>>>,
+) {
+    let mut logs = HashMap::new();
+    let provs = providers_from_document(doc, cache_root, None, &HashMap::new())
+        .expect("providers build from the document")
+        .into_iter()
+        .map(|(k, p)| {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            logs.insert(k.clone(), calls.clone());
+            let spy: Box<dyn PrepareProvider> = Box::new(SpyProvider { inner: p, calls });
+            (k, spy)
+        })
+        .collect();
+    (provs, logs)
+}
+
+#[test]
+fn a_gated_select_is_reported_as_a_gate_not_pushed_to_the_reader() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = document(tmp.path());
+    let provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
+        .expect("providers build");
+
+    for (key, p) in &provs {
+        let gate = PrepareProvider::gate_spec(p);
+        if key == "Grid.emis_W" {
+            let gate = gate.unwrap_or_else(|| {
+                panic!(
+                    "{key} declares select.axes = [{{gated_by: emis_cells}}] on a store-backed \
+                     reader with no record filter, so it MUST defer. Reporting no gate means \
+                     the select was pushed to the reader instead, where a gated axis has no \
+                     spelling and flattens to the FULL axis — a whole-store read."
+                )
+            });
+            assert_eq!(
+                gate.axes,
+                vec![GateAxis::GatedBy("emis_cells".to_string())],
+                "the gate carries the declared axis verbatim"
+            );
+            assert_eq!(
+                gate.applies_to,
+                vec!["emis_W".to_string()],
+                "one provider per fed variable"
+            );
+        } else {
+            assert!(
+                gate.is_none(),
+                "{key} declares no gated axis, so it stays an ordinary eager read"
+            );
+        }
+    }
+
+    // The reader-resolvable neighbours are the control: `gated_by` defers, the
+    // other three selectors do not, and this fixture holds one of each on the
+    // SAME `file_variable`.
+    assert!(
+        provs.iter().any(|(k, _)| k == "Grid.src_W"),
+        "the range-selected sibling must still be built"
+    );
+}
+
+#[test]
+fn a_gated_fetch_asks_for_the_support_set_and_never_the_full_axis() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = document(tmp.path());
+    let (providers, logs) = spied_providers(&doc, &tmp.path().join("cache"));
+
+    let prep = prepare(
+        &doc,
+        HashMap::new(),
+        providers,
+        &PrepareOptions {
+            pushdown_rewrite: true,
+            ..Default::default()
+        },
+    )
+    .expect("prepare");
+
+    // The graph invented the support set from the emission records: the three
+    // surviving points at -90, -92 and -93 fall in 1-based cells 5, 3 and 2.
+    assert_eq!(
+        prep.members.get("emis_cell_set"),
+        Some(&vec![2i64, 3, 5]),
+        "the distinct member set is sorted, not insertion-ordered"
+    );
+    assert_eq!(
+        prep.gated_provider_keys,
+        vec!["Grid.emis_W".to_string()],
+        "exactly the gated loader variable was deferred"
+    );
+
+    // THE ASSERTION THIS FILE EXISTS FOR: the request names the support set's
+    // members (0-based for the reader), not the whole 10-cell axis.
+    let calls = logs["Grid.emis_W"].borrow();
+    assert_eq!(
+        *calls,
+        vec![Fetch::Selection(vec![AxisSel::Indices(vec![1, 2, 4])])],
+        "the gated fetch must be ONE pre-sliced request for the invented members; \
+         a `Whole` call (or an `AxisSel::All`) means the gate was flattened and the \
+         entire array was read"
+    );
+
+    // ... and the values that arrive are those cells' — W[1], W[2], W[4] of the
+    // 100+i store — so the compact slab is the right slab, not merely the right
+    // length.
+    assert_eq!(
+        prep.observed_field("emis_width")
+            .expect("emis_width")
+            .iter()
+            .copied()
+            .collect::<Vec<f64>>(),
+        vec![102.0, 103.0, 105.0],
+        "101, 102, 104 delivered on the derived axis, each + 1"
+    );
+}
+
+#[test]
+fn the_ungated_siblings_are_still_read_eagerly_and_whole() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = document(tmp.path());
+    let (providers, logs) = spied_providers(&doc, &tmp.path().join("cache"));
+    prepare(
+        &doc,
+        HashMap::new(),
+        providers,
+        &PrepareOptions {
+            pushdown_rewrite: true,
+            ..Default::default()
+        },
+    )
+    .expect("prepare");
+
+    // Deferral is NOT the new default: a `range` select is still resolvable at
+    // read time and still taken eagerly, so the fix cannot have been "defer
+    // everything".
+    for key in ["Grid.W", "Grid.src_W"] {
+        assert_eq!(
+            *logs[key].borrow(),
+            vec![Fetch::Whole],
+            "{key} declares no gate, so prepare samples it once, eagerly"
+        );
+    }
+}
+
+#[test]
+fn an_eager_sample_of_a_gated_variable_refuses_rather_than_reading_everything() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = document(tmp.path());
+    let mut provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
+        .expect("providers build");
+    let (_, p) = provs
+        .iter_mut()
+        .find(|(k, _)| k == "Grid.emis_W")
+        .expect("no provider Grid.emis_W");
+
+    // Sampling a gated provider out of band is a caller error, and it must SAY
+    // so. Silently returning the full axis here is the same defect one layer
+    // down: the whole store, dressed up as an answer.
+    let msg = p
+        .sample()
+        .expect_err("an eager sample cannot resolve a gate")
+        .0;
+    assert!(msg.contains("emis_cells"), "{msg}");
+    assert!(msg.contains("value-invention"), "{msg}");
 }
