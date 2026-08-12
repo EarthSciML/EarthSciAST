@@ -472,10 +472,15 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     model = get(file.models, String(mname), nothing)
     model === nothing && return nothing
     v = get(model.variables, String(variable), nothing)
-    (v !== nothing && v.type == ObservedVariable && v.shape !== nothing &&
-     !isempty(v.shape)) || return nothing
+    (v !== nothing && v.type == ObservedVariable) || return nothing
+    # A SHAPELESS observed is rank 0, not unreadable: `E_NOx = Σ_r annual[r]·…`
+    # contracts its only axis away and is a single number, which the Rust
+    # `Prepared::observed_field` returns and this refused to. One empty cell
+    # index is exactly what `evaluate_cellwise` wants for it (its compile-once
+    # fast path is already gated on `nidx >= 1`).
+    shape = v.shape === nothing ? String[] : v.shape
     exts = Int[]
-    for s in v.shape
+    for s in shape
         iset = get(file.index_sets, String(s), nothing)
         iset === nothing && return nothing
         e = if iset.kind == "interval"

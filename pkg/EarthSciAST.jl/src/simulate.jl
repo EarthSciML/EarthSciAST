@@ -100,13 +100,14 @@ const DEFAULT_SIM_ABSTOL = 1e-6
 # always produced. `base_path = pwd()` anchors its relative refs, a file input
 # anchoring them at its own directory.
 # --------------------------------------------------------------------------- #
-function _prepare_run_doc(input)
+function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}(),
+                          base_path::AbstractString = pwd())
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
-        input = load(input)
+        input = load(input; metaparameters=metaparameters)
     end
     if input isa AbstractDict
-        input = load(input; base_path=pwd())
+        input = load(input; base_path=base_path, metaparameters=metaparameters)
     end
     # Capture the verbatim document-scoped `coordinates` registry (RFC §8.3) BEFORE
     # flattening drops it (it rides on `EsmFile`, not `FlattenedSystem`); re-inject
@@ -382,6 +383,52 @@ function _doc_equation_count(doc::AbstractDict)
     return n
 end
 
+# --------------------------------------------------------------------------- #
+# Loader-discovered extents (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5) — the
+# pre-pass `prepare` runs before ANY load, because a discovered extent closes a
+# metaparameter and metaparameters are bound at the loader API.
+#
+# Returns `(metaparameters, discovered)`: the caller's bindings PLUS whatever
+# the loaders measured, and the sampled arrays themselves so the injection loop
+# reuses them instead of re-reading (the 69 MB FF10 zip is decoded once).
+# --------------------------------------------------------------------------- #
+function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::Float64)
+    out = Dict{String,Int}(String(k) => Int(v) for (k, v) in metaparameters)
+    discovered = Dict{String,Any}()
+    providers === nothing && return out, discovered
+    # `by` records which provider bound each metaparameter, so a disagreement
+    # names BOTH sides. Sorted keys keep that naming deterministic.
+    by = Dict{String,Tuple{Int,String}}()
+    for rawk in sort!(String[String(k) for k in keys(providers)])
+        prov = providers[rawk]
+        mp = provider_extent_metaparameter(prov)
+        mp === nothing && continue
+        mp = String(mp)
+        provider_is_gated(prov) && throw(SimulateError(
+            "provider '$rawk' both GATES on a derived index set and declares the " *
+            "extent metaparameter '$mp'; a gated slab's extent is the gating set's, " *
+            "not a discovered one"))
+        sample = provider_sample(prov, t0)
+        field = _sample_field(sample, rawk)
+        n = ndims(field) == 0 ? 1 : size(field, 1)
+        if haskey(by, mp)
+            prev, prevk = by[mp]
+            prev == n || throw(SimulateError(
+                "loader extent '$mp' is $prev from provider '$prevk' but $n from " *
+                "'$rawk' — the loader's variables are not aligned on one record axis"))
+        elseif haskey(out, mp) && out[mp] != n
+            throw(SimulateError(
+                "metaparameter '$mp' was closed at $(out[mp]) by the caller but " *
+                "provider '$rawk' discovers $n records; drop the binding and let the " *
+                "loader declare its own extent"))
+        end
+        by[mp] = (n, rawk)
+        out[mp] = n
+        discovered[rawk] = field
+    end
+    return out, discovered
+end
+
 """
     prepare(input; parameters=Dict(), kwargs...) -> PreparedModel
 
@@ -415,6 +462,15 @@ Keyword arguments (the BUILD-time subset of `simulate`'s keywords):
   build. A CONST provider is time-invariant by contract, so the default is
   normally fine; DISCRETE buffers seeded here are re-seeded at each run's `t0`
   anyway. (`simulate(input, tspan; …)` passes `tspan[1]`.)
+* `base_path::AbstractString = pwd()` — the directory a native `Dict` input's
+  relative `{ref}`s resolve against (a path input anchors them at its own
+  directory). It matters now that `prepare` is the load site: handing it a
+  parsed document used to be impossible when that document had refs.
+* `metaparameters::AbstractDict` — binds the document's open metaparameters at
+  the loader API (esm-spec §9.7.6 binding site 3), exactly as
+  [`load`](@ref)`(path; metaparameters=…)` does. Pass them HERE rather than
+  pre-`load`ing, so a loader that discovers its own extent can close one first
+  (below); a caller binding that CONTRADICTS a discovered extent is an error.
 * `model_name` — select one model when the document holds several.
 * `inspect::BuildInspection` — optional build-observability sink.
 * `materialize_out::DiscreteMaterializer` — optional discrete-cadence
@@ -430,6 +486,18 @@ Keyword arguments (the BUILD-time subset of `simulate`'s keywords):
   gate dict and implements no `provider_gate_spec` (which still works, as the
   fallback, for providers outside the record's coupling scope).
 
+**Loader-discovered extents** (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5). A
+provider reporting a [`provider_extent_metaparameter`](@ref) is sampled ONCE
+here, ahead of everything else, and the length of its delivered record axis
+binds that metaparameter for the load below — so `size: "N_REC"` is sized by the
+data itself. That array is REUSED when the provider is injected (never sampled
+twice); providers of one loader disagreeing on the count is an error naming
+both, and a `metaparameters` binding contradicting the discovered value is an
+error rather than a silent preference for either. Because the metaparameter must
+still be OPEN, `input` must be a path or a native `Dict` — an already-`load`ed
+`EsmFile` has closed it already, which is an error rather than a silent
+fallback.
+
 Per-RUN knobs (`alg`, `initial_conditions`, `seed_ic!`, `reltol`, `abstol`,
 `saveat`) belong to `simulate(prep, tspan; …)`.
 """
@@ -440,9 +508,33 @@ function prepare(input;
                  providers::Union{Nothing,AbstractDict} = nothing,
                  model_name::Union{Nothing,AbstractString} = nothing,
                  sample_time::Real = 0.0,
+                 metaparameters::AbstractDict = Dict{String,Int}(),
+                 base_path::AbstractString = pwd(),
                  inspect::Union{Nothing,BuildInspection} = nothing,
                  materialize_out::Union{Nothing,DiscreteMaterializer} = nothing,
                  pushdown_rewrite::Bool = false)
+    # ---- extent discovery: a loader that measures its OWN record count ------
+    # FIRST, because a discovered extent CLOSES a metaparameter and every load
+    # below binds metaparameters at the loader API (esm-spec §9.7.6 site 3). The
+    # sampled arrays are kept and reused at injection, so a 69 MB FF10 zip is
+    # decoded once, not once here and again there.
+    metaparams, discovered = _discover_loader_extents(providers, metaparameters,
+                                                      Float64(sample_time))
+    # `load` is where a metaparameter closes, so an ALREADY-loaded carrier has
+    # closed them — silently ignoring a binding (the caller's or a loader's) is
+    # exactly the failure this seam exists to prevent.
+    if !isempty(metaparams) && !(input isa AbstractString || input isa AbstractDict)
+        why = isempty(discovered) ? "" :
+              string(". ", join(sort!(collect(keys(discovered))), ", "),
+                     " DISCOVERED its own extent, which only a not-yet-loaded ",
+                     "document can be sized by")
+        throw(SimulateError(
+            "prepare: metaparameters $(sort!(collect(keys(metaparams)))) must be bound " *
+            "at the loader API, but `input` is a $(typeof(input)) whose metaparameters " *
+            "are already closed — pass the path or the native Dict to prepare (and drop " *
+            "the pre-`load`), or bind them in that `load` call instead" * why))
+    end
+
     # ---- Phase 1 (clean consolidation): pushdown prepass, BEFORE flatten ----
     # The desugar must see the AUTHORED (namespaced-not-yet-flattened) model:
     # the flattener rewrites coupling-fed references in equations but not in the
@@ -457,8 +549,9 @@ function prepare(input;
         pfile = input isa EsmFile ? input :
                 input isa AbstractString ?
                     (isfile(input) || throw(SimulateError("prepare: no such file '$input'"));
-                     load(input)) :
-                input isa AbstractDict ? load(input; base_path=pwd()) :
+                     load(input; metaparameters=metaparams)) :
+                input isa AbstractDict ? load(input; base_path=base_path,
+                                              metaparameters=metaparams) :
                 throw(SimulateError(
                     "prepare: pushdown_rewrite=true needs a path, native Dict, or " *
                     "EsmFile input — a FlattenedSystem is already past the rewrite point"))
@@ -472,7 +565,17 @@ function prepare(input;
             input = pfile                          # no re-load, no rewrite
         end
     end
-    doc = _prepare_run_doc(input)
+    # A discovered extent and a record-derived gate are mutually exclusive: a
+    # gated slab's extent belongs to the gating set, which value-invention has
+    # not materialised yet. (The provider's OWN gate is caught in the pre-pass;
+    # this catches the gate the rewrite record derives, which only exists now.)
+    for k in keys(discovered)
+        haskey(pd_gates, k) && throw(SimulateError(
+            "provider '$k' both GATES on a derived index set and declares the extent " *
+            "metaparameter '$(provider_extent_metaparameter(providers[k]))'; a gated " *
+            "slab's extent is the gating set's, not a discovered one"))
+    end
+    doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path)
 
     overrides = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in parameters)
 
@@ -496,7 +599,11 @@ function prepare(input;
         for (rawk, prov) in providers
             k = String(rawk)
             pd_gate = get(pd_gates, k, nothing)
-            if pd_gate !== nothing
+            if haskey(discovered, k)
+                # Already materialized by the extent-discovery pre-pass; never
+                # sampled twice.
+                merged_const[k] = Array{Float64}(discovered[k])
+            elseif pd_gate !== nothing
                 # Phase 1: RECORD-DERIVED gate — the rewrite's own
                 # `metadata.x_esd.pushdown.gated_select`, mapped onto this
                 # provider through the document coupling. Takes precedence over

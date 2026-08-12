@@ -601,11 +601,34 @@ function _substitute_variable_map!(equations::Vector{Equation},
     for (i, eq) in enumerate(equations)
         equations[i] = Equation(
             substitute(eq.lhs, bindings),
-            substitute(eq.rhs, bindings);
+            _rename_join_names(substitute(eq.rhs, bindings), entry.to, entry.from);
             _comment=eq._comment,
         )
     end
     return
+end
+
+# A relational `join` names its envelope factors / key columns as bare STRINGS,
+# not as `VarExpr` children — so `substitute` (which walks expressions) cannot
+# see them, and `reconstruct` preserves them verbatim. But `namespace_expr`
+# DOES namespace them (`_namespace_join`), which makes them references in the
+# same scope as everything else: a `variable_map` that deletes the consumer
+# parameter must therefore rename them too, or the join keeps pointing at a
+# variable that no longer exists.
+#
+# This is exactly what an overlap-gated value-invention producer over a
+# COUPLED rectangle buffer hits: `tgt_env = [ISRM.src_W, …]` while the
+# document's `ISRM_SR.src_W -> ISRM.src_W` map has already removed
+# `ISRM.src_W`, and materialisation dies on `join references unknown variable`.
+_rename_join_names(expr::ASTExpr, ::AbstractString, ::AbstractString) = expr
+function _rename_join_names(expr::OpExpr, to::AbstractString, from::AbstractString)
+    out = map_children(x -> _rename_join_names(x, to, from), expr)
+    (out isa OpExpr && out.join !== nothing) || return out
+    ren(n) = String(n) == String(to) ? String(from) : String(n)
+    renclause(c::_OverlapJoinSpec) = _OverlapJoinSpec(String[ren(n) for n in c.src_env],
+                                                      String[ren(n) for n in c.tgt_env], c.eps)
+    renclause(c) = Tuple{String,String}[(ren(l), ren(r)) for (l, r) in c]
+    return reconstruct(out; join=Any[renclause(c) for c in out.join])
 end
 
 # For param_to_var / conversion_factor, remove the target param from the

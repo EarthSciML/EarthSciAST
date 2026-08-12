@@ -3876,9 +3876,12 @@ end
 # bundle; `provider_gate_spec(prov)` supplies the gate when the bundle omits it.
 # A gate is `Dict("axes"=>[…], "applies_to"=>[names…])` where each native axis is
 # one of `Dict("fixed"=>[i])` (0-based native index → DROPPED length-1 axis),
-# `Dict("gated_by"=>"<derived set>")` (the set's members, 1-based, as the new
-# axis), or `"all"` (whole axis). The compact gated axis length is asserted to
-# equal the gating set's materialised extent.
+# `Dict("range"=>Dict("start"=>a,"stop"=>b,"step"=>s))` (a half-open strided
+# window, axis KEPT), `Dict("gated_by"=>"<derived set>")` (the set's members,
+# 1-based, as the new axis), or `"all"` (whole axis) — ONE vocabulary, whether
+# the author wrote it as a loader `select` (esm-spec §8.9.2) or the pushdown
+# rewrite generated it (CONFORMANCE_SPEC §5.5). The compact gated axis length is
+# asserted to equal the gating set's materialised extent.
 function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64, model)
     out = Dict{String,Any}()
     (vi === nothing) && isempty(gated) && return out
@@ -3914,6 +3917,18 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
                 fi = fx isa AbstractVector ? Int(first(fx)) : Int(fx)
                 selection[ax_i] = fi + 1          # 0-based native → 1-based neutral
                 push!(drop_axes, ax_i)
+            elseif ax isa AbstractDict && haskey(ax, "range")
+                # The half-open strided window of the SAME per-axis vocabulary a
+                # loader's `select` writes (esm-spec §8.9.2) — the axis is kept,
+                # so it neither drops nor gates. Bounds are already integers here
+                # (a metaparameter name resolves where the select is parsed).
+                r = ax["range"]
+                start = Int(get(r, "start", 0))
+                stop = Int(r["stop"])
+                step = Int(get(r, "step", 1))
+                step >= 1 || throw(RefreshError(
+                    "gated provider '$key' axis $ax_i: range.step must be >= 1, got $step"))
+                selection[ax_i] = collect((start + 1):step:stop)   # 0-based → 1-based
             elseif ax isa AbstractDict && haskey(ax, "gated_by")
                 sname = String(ax["gated_by"])
                 haskey(set_to_faq, sname) || throw(RefreshError(
@@ -3929,7 +3944,8 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
                 gated_extent = get(vi_extents, faq, length(mem))
             else
                 throw(RefreshError("gated provider '$key' axis $ax_i is malformed " *
-                    "(expected \"all\", {\"fixed\":[i]}, or {\"gated_by\":set})"))
+                    "(expected \"all\", {\"fixed\":[i]}, {\"range\":{start,stop,step}}, " *
+                    "or {\"gated_by\":set})"))
             end
         end
         gated_pos == 0 && throw(RefreshError(

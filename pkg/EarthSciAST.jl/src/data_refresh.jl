@@ -117,14 +117,44 @@ in the 0.8.0 source schema). Each entry of `axes` is one per NATIVE array axis:
 
   * `"all"`                       → the whole axis;
   * `Dict("fixed"=>[i])`          → native 0-based index `i`, DROPPED (length-1);
+  * `Dict("range"=>Dict("start"=>a, "stop"=>b, "step"=>s))`
+                                  → the half-open 0-based window `[a, b)` by
+                                    `s`, axis KEPT (`start`/`step` default 0/1);
   * `Dict("gated_by"=>"<set>")`   → the derived index set's materialised members
                                     (1-based), in the set's canonical order.
+
+This is ONE vocabulary with the loader `select` of esm-spec §8.9.2 — the
+spelling an author writes and the spelling `desugar_pushdown` generates are the
+same thing (CONFORMANCE_SPEC §5.5). Only `gated_by` defers.
 
 `applies_to` names the fetched variables to merge into `const_arrays`. Defaults
 to `nothing`; a mock or the EarthSciIO binding overrides it.
 """
 function provider_gate_spec end
 provider_gate_spec(::Any) = nothing
+
+"""
+    provider_extent_metaparameter(provider) -> Union{Nothing,String}
+
+The metaparameter this provider's own EXTENT binds (esm-spec §8.9.4), or
+`nothing` (the default) for a provider whose size the document already knows.
+
+A source whose record count is not knowable until it is read — an FF10 point
+inventory, whose surviving-row count depends on its own `codes` map and
+`record_filter` — declares `extent: {"metaparameter": "N_REC"}` on its loader.
+[`prepare`](@ref) then samples such a provider ONCE, BEFORE it closes
+metaparameters at the loader API (esm-spec §9.7.6 binding site 3), and the
+length of the delivered record axis binds that metaparameter — so an index set
+declared `size: "N_REC"` is sized by the data instead of by a caller who counted
+the rows and passed the number in.
+
+Every provider naming the same metaparameter MUST agree on the count; that
+agreement is also the alignment check across one table's columns. A caller
+binding of the same metaparameter that CONTRADICTS the discovered value is an
+error rather than a silent preference for either (CONFORMANCE_SPEC §5.5).
+"""
+function provider_extent_metaparameter end
+provider_extent_metaparameter(::Any) = nothing
 
 """
     providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict()) -> Dict{String,Any}
