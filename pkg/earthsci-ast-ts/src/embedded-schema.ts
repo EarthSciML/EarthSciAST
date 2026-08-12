@@ -2644,11 +2644,208 @@ export const schema: AnySchemaObject = {
           ],
           "description": "Optional multiplicative factor or Expression AST applied to convert source-file values to the declared units."
         },
+        "codes": {
+          "$ref": "#/$defs/DataLoaderCodes"
+        },
+        "select": {
+          "$ref": "#/$defs/DataLoaderSelect"
+        },
         "description": {
           "type": "string"
         },
         "reference": {
           "$ref": "#/$defs/Reference"
+        }
+      }
+    },
+    "DataLoaderCodes": {
+      "type": "object",
+      "description": "Maps a TEXT source column to the numbers a model can compute with — an FF10 `POLID` string (\"NOX\", \"SO2\", ...) to the pollutant enum integer the `is_NOx`/`is_SOx` membership observeds compare against. Without it a text column is a hard error at the loader boundary, because a model forcing must be numeric. This is decoding a code, not converting a unit: `unit_conversion` scales a number that is already one.",
+      "required": [
+        "map"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "map": {
+          "type": "object",
+          "description": "Source value -> number.",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "case_insensitive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Compare upper-cased on both sides. Surrounding whitespace is always trimmed, on both sides, regardless."
+        },
+        "unmapped": {
+          "oneOf": [
+            {
+              "enum": [
+                "drop",
+                "error"
+              ]
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "default": "error",
+          "description": "What a value absent from `map` does: \"error\" (the default, fail-closed) rejects the load naming the value; \"drop\" removes the whole RECORD from EVERY variable of the loader — which is why it is a record-level decision and not a per-column one; a number substitutes that code."
+        }
+      }
+    },
+    "DataLoaderSelect": {
+      "type": "object",
+      "description": "A per-axis selection of what the loader DELIVERS from an on-disk array — one entry per NATIVE array dimension, in native dims order. Declared on a loader (the default for all its variables) or on a single variable (which overrides the loader's). Two variables of one loader MAY read the same `file_variable` under different selections, which is how a full-grid field and a prefix of it are both declared instead of one being sliced by the caller. The selection is defined over the axis the loader DELIVERS, so it follows any `record_filter`: `range 0..200` on a filtered points table is the first 200 SURVIVING records. Whether a binding pushes it down to the reader (fetching only what it keeps) or applies it after the read is an optimization; the two MUST agree exactly.",
+      "required": [
+        "axes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "type": "array",
+          "description": "One selector per native array dimension, in native dims order.",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/DataLoaderSelectAxis"
+          }
+        }
+      }
+    },
+    "DataLoaderSelectAxis": {
+      "description": "One native axis of a `DataLoaderSelect`. The vocabulary is shared with the projection-pushdown gate template (CONFORMANCE_SPEC §5.5): \"all\" keeps the axis whole; `fixed` takes one index and DROPS the axis; `range` takes a half-open strided window and keeps it; `gated_by` names a `derived` index set whose value-invention members become the axis, which DEFERS the fetch until those members exist.",
+      "oneOf": [
+        {
+          "const": "all",
+          "description": "The whole axis."
+        },
+        {
+          "type": "object",
+          "description": "Take one index; the axis is DROPPED from the delivered array (it is a choice, not a dimension).",
+          "required": [
+            "fixed"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "fixed": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              ],
+              "description": "A single 0-based native index."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Take a half-open strided window `[start, stop)` and keep the axis.",
+          "required": [
+            "range"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "range": {
+              "type": "object",
+              "required": [
+                "stop"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "start": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "description": "Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its default."
+                },
+                "stop": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "description": "Exclusive last index. A string names a `metaparameters` entry and resolves to its default, so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter."
+                },
+                "step": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "description": "Stride (default 1; MUST be >= 1)."
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Gate the axis on a derived index set; the fetch is deferred past value-invention and delivered pre-sliced.",
+          "required": [
+            "gated_by"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "gated_by": {
+              "type": "string",
+              "description": "Name of a `kind: \"derived\"` index set. The axis becomes that set's materialised members in canonical (sorted) member order (CONFORMANCE_SPEC §5.5, Hook 2), so only the rows the model can reach are ever read."
+            }
+          }
+        }
+      ]
+    },
+    "DataLoaderRecordFilter": {
+      "type": "object",
+      "description": "Which records of a `points` loader are DELIVERED. The surviving mask is computed ONCE for the loader and applied to every variable, so its columns can never fall out of alignment, and the surviving count is the loader's `extent`. A record is dropped when any `require_finite` variable is non-finite at it, or when a `codes` map with `unmapped: \"drop\"` does not recognise its value.",
+      "additionalProperties": false,
+      "properties": {
+        "require_finite": {
+          "type": "array",
+          "description": "Loader variable names (not `file_variable` names) whose value must be finite for a record to survive. A point with no coordinate cannot be placed and a row with no annual total cannot be weighted; dropping it is a declaration about the source, rather than a NaN travelling into the model to surface as an empty result later.",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "DataLoaderExtent": {
+      "type": "object",
+      "description": "Binds the loader's DELIVERED record count to a metaparameter, for a source whose extent is not knowable until it is read. A binding samples such a loader BEFORE it closes metaparameters (esm-spec §9.7.6 site 4), so an index set declared `size: \"N_REC\"` is sized by the data itself and no caller counts rows and passes the number in. Every variable of the loader MUST agree on the count — that agreement is also the alignment check.",
+      "required": [
+        "metaparameter"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "metaparameter": {
+          "type": "string",
+          "description": "Name of the `metaparameters` entry it binds. Declare that entry with a `default` (conventionally 0) so the document still validates and loads standalone."
         }
       }
     },
@@ -2718,6 +2915,20 @@ export const schema: AnySchemaObject = {
           "additionalProperties": {
             "$ref": "#/$defs/DataLoaderVariable"
           }
+        },
+        "reader_options": {
+          "type": "object",
+          "description": "Format-specific DECODE options, passed through to the format reader verbatim (EarthSciIO calls them `reader_kwargs`): the zip `member_glob` and `skip_header_row` of an FF10 inventory, a GeoTIFF band naming, and so on. They say how bytes become an array, never what the array means — no remap, no unit conversion, no filtering (those are `variables`, `unit_conversion` and `record_filter`). A key the bound reader does not recognise MUST be an error, so a mis-spelled option cannot silently decode something else.",
+          "additionalProperties": true
+        },
+        "select": {
+          "$ref": "#/$defs/DataLoaderSelect"
+        },
+        "record_filter": {
+          "$ref": "#/$defs/DataLoaderRecordFilter"
+        },
+        "extent": {
+          "$ref": "#/$defs/DataLoaderExtent"
         },
         "reference": {
           "$ref": "#/$defs/Reference"

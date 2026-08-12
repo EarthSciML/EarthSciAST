@@ -809,16 +809,113 @@ pub fn desugar_pushdown<'a>(
 // RECORD-DERIVED PROVIDER GATING (the Julia Phase-1 helpers, raw-JSON side).
 // --------------------------------------------------------------------------- //
 
-/// One native axis of an engine provider gate.
+/// One native axis of a loader selection — the vocabulary shared by a data
+/// loader's declared `select.axes` (esm-spec §8.9) and by the pushdown record's
+/// gate template. JSON spellings, in the same order as the variants:
+///
+/// ```text
+/// "all"                                    every index of the axis
+/// {"fixed": 0}  /  {"fixed": [0]}          index 0, and the axis is DROPPED
+/// {"range": {"start": 0, "stop": 52411}}   a strided prefix/window (step ≥ 1)
+/// {"gated_by": "<derived index set>"}      the set's materialised members
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateAxis {
     /// Full native axis.
     All,
     /// Take native index `i` (0-based) and DROP the axis.
     Fixed(usize),
+    /// The half-open strided range `[start, stop)` by `step`, as the new axis.
+    /// Length `ceil((stop - start) / step)`; the axis is kept.
+    Range {
+        /// Inclusive first index (0-based).
+        start: usize,
+        /// Exclusive last index.
+        stop: usize,
+        /// Stride (>= 1).
+        step: usize,
+    },
     /// The named derived set's materialised members, in the set's canonical
     /// (sorted) member order, as the new compact axis.
     GatedBy(String),
+}
+
+/// Parse one JSON axis selector of the [`GateAxis`] vocabulary.
+///
+/// `ctx` names the declaring site for the error message. `gated_by_override`,
+/// when given, replaces the declared set name — the pushdown path substitutes
+/// its GENERATED set name into a loader's authored `{"gated_by": …}` slot.
+pub fn parse_select_axis(
+    ctx: &str,
+    ax: &Value,
+    gated_by_override: Option<&str>,
+) -> Result<GateAxis, PushdownRewriteError> {
+    let bad = |detail: String| PushdownRewriteError(format!("{ctx}: {detail}"));
+    if ax.as_str() == Some("all") || ax.is_null() {
+        return Ok(GateAxis::All);
+    }
+    let Some(m) = ax.as_object() else {
+        return Err(bad(format!(
+            "unrecognised axis selector {ax}; expected \"all\", {{\"fixed\": i}}, \
+             {{\"range\": {{\"start\": s, \"stop\": e}}}} or {{\"gated_by\": \"<set>\"}}"
+        )));
+    };
+    if let Some(g) = m.get("gated_by") {
+        let name = match gated_by_override {
+            Some(o) => o.to_string(),
+            None => g
+                .as_str()
+                .ok_or_else(|| bad("\"gated_by\" must name a derived index set".into()))?
+                .to_string(),
+        };
+        return Ok(GateAxis::GatedBy(name));
+    }
+    if let Some(fx) = m.get("fixed") {
+        let fi = match fx {
+            Value::Array(a) => a.first().and_then(Value::as_u64),
+            other => other.as_u64(),
+        }
+        .ok_or_else(|| bad("\"fixed\" must be a non-negative integer index".into()))?;
+        return Ok(GateAxis::Fixed(fi as usize));
+    }
+    if let Some(r) = m.get("range") {
+        let obj = r
+            .as_object()
+            .ok_or_else(|| bad("\"range\" must be an object {start, stop, step?}".into()))?;
+        let start = obj.get("start").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let stop = obj
+            .get("stop")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| bad("\"range\" needs an integer \"stop\"".into()))?
+            as usize;
+        let step = obj.get("step").and_then(Value::as_u64).unwrap_or(1) as usize;
+        if step == 0 {
+            return Err(bad("\"range.step\" must be >= 1".into()));
+        }
+        if stop < start {
+            return Err(bad(format!(
+                "\"range\" is empty: stop {stop} precedes start {start}"
+            )));
+        }
+        return Ok(GateAxis::Range { start, stop, step });
+    }
+    let mut keys: Vec<&str> = m.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    Err(bad(format!(
+        "unrecognised axis selector keys {keys:?}; expected one of fixed, range, gated_by"
+    )))
+}
+
+/// Parse a whole `axes` array of the [`GateAxis`] vocabulary (see
+/// [`parse_select_axis`]).
+pub fn parse_select_axes(
+    ctx: &str,
+    axes: &[Value],
+    gated_by_override: Option<&str>,
+) -> Result<Vec<GateAxis>, PushdownRewriteError> {
+    axes.iter()
+        .map(|ax| parse_select_axis(ctx, ax, gated_by_override))
+        .collect()
 }
 
 /// A provider-key ⇒ engine gate: per-NATIVE-axis selection plus the LOADER
@@ -890,34 +987,24 @@ fn pushdown_gate_axes(
         .and_then(|g| g.get("axes"))
         .and_then(Value::as_array);
     if let Some(tpl) = tpl {
-        let mut axes: Vec<GateAxis> = Vec::with_capacity(tpl.len());
+        let axes = parse_select_axes(
+            &format!("data_loaders.{loader} gated_select template"),
+            tpl,
+            Some(gset),
+        )?;
+        // The gated axis's position among the axes the fetch KEEPS (a `fixed`
+        // axis is dropped, so it does not shift the model's axis numbering).
         let mut nonfixed: i64 = 0;
         let mut gpos: i64 = -1;
-        for ax in tpl {
-            if let Some(m) = ax.as_object() {
-                if m.contains_key("gated_by") {
-                    axes.push(GateAxis::GatedBy(gset.to_string()));
+        for ax in &axes {
+            match ax {
+                GateAxis::Fixed(_) => {}
+                GateAxis::GatedBy(_) => {
                     gpos = nonfixed;
                     nonfixed += 1;
-                    continue;
                 }
-                if let Some(fx) = m.get("fixed") {
-                    let fi = match fx {
-                        Value::Array(a) => a.first().and_then(Value::as_i64),
-                        other => other.as_i64(),
-                    }
-                    .ok_or_else(|| {
-                        PushdownRewriteError(format!(
-                            "data_loaders.{loader} gated_select template has a non-integer \
-                             fixed axis"
-                        ))
-                    })?;
-                    axes.push(GateAxis::Fixed(fi as usize));
-                    continue;
-                }
+                _ => nonfixed += 1,
             }
-            axes.push(GateAxis::All);
-            nonfixed += 1;
         }
         if gpos != gaxis {
             return Err(PushdownRewriteError(format!(

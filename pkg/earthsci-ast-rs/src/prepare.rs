@@ -2,12 +2,21 @@
 //! the Julia `prepare`/`observed_field` (simulate.jl) and the Python
 //! `earthsci_ast.prepare` (Phase 4 of the clean consolidation).
 //!
-//! Runs everything deterministic-per-document ONCE — pushdown rewrite → typed
-//! load → provider materialization → build-time coordinate evaluation →
-//! value-invention → member-factor feedback → gated pre-sliced fetch →
-//! dependency-ordered observed-graph evaluation — and returns a [`Prepared`]
-//! whose [`Prepared::observed_field`] reads the build-time fields back. This
-//! is the entry point the isrm.esm runner drives; it never integrates.
+//! Runs everything deterministic-per-document ONCE — pushdown rewrite →
+//! loader extent discovery → typed load → provider materialization →
+//! build-time coordinate evaluation → value-invention → member-factor feedback
+//! → gated pre-sliced fetch → dependency-ordered observed-graph evaluation —
+//! and returns a [`Prepared`] whose [`Prepared::observed_field`] reads the
+//! build-time fields back. This is the entry point the isrm.esm runner drives;
+//! it never integrates.
+//!
+//! **Extent discovery** runs before the typed load because it CLOSES
+//! metaparameters: a loader whose record count is only knowable after the
+//! table is read declares `extent: {"metaparameter": "N_REC"}`, its providers
+//! are sampled once up front (never twice), and the surviving length binds the
+//! metaparameter every dependent index set is sized by. The caller no longer
+//! counts rows and passes the number in — see
+//! [`PrepareProvider::extent_metaparameter`].
 //!
 //! `pushdown_rewrite: true` opts into the automatic projection-pushdown
 //! desugar ([`crate::pushdown_rewrite::desugar_pushdown`]) at this public
@@ -78,6 +87,33 @@ pub enum AxisSel {
     All,
     /// The listed 0-based native indices, in order.
     Indices(Vec<usize>),
+    /// The half-open strided range `[start, stop)` by `step` (`step >= 1`) —
+    /// the contiguous form, kept whole rather than expanded to indices so a
+    /// store-backed reader can push a slice down instead of a 52,411-long
+    /// index list.
+    Range {
+        /// Inclusive first index (0-based).
+        start: usize,
+        /// Exclusive last index.
+        stop: usize,
+        /// Stride (>= 1).
+        step: usize,
+    },
+}
+
+impl AxisSel {
+    /// The 0-based indices this selector picks over an axis of length
+    /// `dim_len` (the engine-side fallback for a provider that cannot push a
+    /// selection down).
+    pub fn indices(&self, dim_len: usize) -> Vec<usize> {
+        match self {
+            AxisSel::All => (0..dim_len).collect(),
+            AxisSel::Indices(v) => v.clone(),
+            AxisSel::Range { start, stop, step } => {
+                (*start..(*stop).min(dim_len)).step_by(*step).collect()
+            }
+        }
+    }
 }
 
 /// The CONST data-provider contract [`prepare`] consumes: one provider feeds
@@ -111,6 +147,20 @@ pub trait PrepareProvider {
     /// A provider-declared gate (the fallback protocol mirroring Julia's
     /// `provider_gate_spec`); the record-derived gate takes precedence.
     fn gate_spec(&self) -> Option<ProviderGate> {
+        None
+    }
+
+    /// The metaparameter this provider's own extent BINDS (esm-spec §8.9): a
+    /// loader that discovers its record count at read time — an FF10 point
+    /// inventory whose surviving-row count is not knowable until the table is
+    /// decoded and filtered — declares `extent: {"metaparameter": "N_REC"}`,
+    /// and [`prepare`] closes that metaparameter with the length of this
+    /// provider's leading axis BEFORE the typed load, instead of the caller
+    /// counting rows and passing the number in.
+    ///
+    /// Every provider naming the same metaparameter must agree, which is also
+    /// the alignment check across a table's columns.
+    fn extent_metaparameter(&self) -> Option<String> {
         None
     }
 }
@@ -411,6 +461,11 @@ fn gated_fetch_plan(
                 selection.push(AxisSel::Indices(vec![*fi]));
                 drop_axes.push(ax_i);
             }
+            GateAxis::Range { start, stop, step } => selection.push(AxisSel::Range {
+                start: *start,
+                stop: *stop,
+                step: *step,
+            }),
             GateAxis::GatedBy(sname) => {
                 let faq = index_sets
                     .get(sname)
@@ -490,12 +545,15 @@ fn drop_fixed_axes(
 
 /// FALLBACK slice for a provider that cannot push a selection down: fetch
 /// whole, then take the selected indices axis by axis (identical result).
-fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f64> {
+pub(crate) fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f64> {
     let mut arr = full;
     for (i, ax) in selection.iter().enumerate() {
-        if let AxisSel::Indices(idx) = ax {
-            arr = arr.select(Axis(i), idx);
+        if matches!(ax, AxisSel::All) {
+            continue;
         }
+        let dim_len = arr.shape().get(i).copied().unwrap_or(0);
+        let idx = ax.indices(dim_len);
+        arr = arr.select(Axis(i), &idx);
     }
     arr
 }
@@ -542,12 +600,60 @@ pub fn prepare(
     };
     let pd_coupling = pushdown_coupling_pairs(&rewritten);
 
+    // ---- extent discovery: a loader that measures its OWN record count ------
+    // Must run BEFORE the typed load, because a discovered extent binds a
+    // metaparameter and metaparameters are closed at the loader API (§9.7.6
+    // site 4). A gated provider is skipped: its extent is the value-invention
+    // set's, which does not exist yet.
+    let mut providers = providers;
+    let mut discovered: HashMap<String, ArrayD<f64>> = HashMap::new();
+    let mut metaparameters = opts.metaparameters.clone();
+    let mut discovered_by: BTreeMap<String, (i64, String)> = BTreeMap::new();
+    for (key, prov) in providers.iter_mut() {
+        let Some(mp) = prov.extent_metaparameter() else {
+            continue;
+        };
+        if pd_gates.contains_key(key) || prov.gate_spec().is_some() {
+            return Err(err(format!(
+                "provider '{key}' both GATES on a derived index set and declares the \
+                 extent metaparameter '{mp}'; a gated slab's extent is the gating \
+                 set's, not a discovered one"
+            )));
+        }
+        let a = prov
+            .sample()
+            .map_err(|e| err(format!("extent discovery for '{key}': {}", e.0)))?;
+        let n = a.shape().first().copied().unwrap_or(0) as i64;
+        if let Some((prev, prev_key)) = discovered_by.get(&mp)
+            && *prev != n
+        {
+            return Err(err(format!(
+                "loader extent '{mp}' is {prev} from provider '{prev_key}' but {n} from \
+                 '{key}' — the loader's variables are not aligned on one record axis"
+            )));
+        }
+        if let Some(bound) = metaparameters.get(&mp)
+            && *bound != n
+            && !discovered_by.contains_key(&mp)
+        {
+            return Err(err(format!(
+                "metaparameter '{mp}' was closed at {bound} by the caller but provider \
+                 '{key}' discovers {n} records; drop the binding and let the loader \
+                 declare its own extent"
+            )));
+        }
+        log(&format!("  [prepare] extent {mp} <- {key} = {n}"));
+        discovered_by.insert(mp.clone(), (n, key.clone()));
+        metaparameters.insert(mp, n);
+        discovered.insert(key.clone(), a);
+    }
+
     // ---- typed load (metaparameters closed at the loader API) ---------------
     let text = serde_json::to_string(rewritten.as_ref())
         .map_err(|e| err(format!("serialize rewritten document: {e}")))?;
     let load_opts = LoadOptions {
         base_path: opts.base_path.clone(),
-        metaparameters: opts.metaparameters.clone(),
+        metaparameters,
     };
     let file = crate::parse::load_with_options(&text, &load_opts)
         .map_err(|e| err(format!("load rewritten document: {e}")))?;
@@ -572,7 +678,11 @@ pub fn prepare(
     let mut arrays: HashMap<String, ArrayD<f64>> = const_arrays;
     let mut gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)> = Vec::new();
     for (k, mut prov) in providers {
-        if let Some(gate) = pd_gates.get(&k) {
+        if let Some(a) = discovered.remove(&k) {
+            // Already materialized by the extent-discovery pre-pass; never
+            // sampled twice.
+            arrays.insert(k, a);
+        } else if let Some(gate) = pd_gates.get(&k) {
             // Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
             // defer — value-invention must derive the gating set's members
             // before the rows to fetch are known.

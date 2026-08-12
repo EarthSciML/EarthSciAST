@@ -37,18 +37,80 @@
 //! [`supports_selection`]: EsioProvider::supports_selection
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use earthsciio::format::{ArrayData, NativeField as EsioField, Selection};
+use earthsciio::format::{ArrayData, AxisSelect, NativeField as EsioField, Selection};
 use earthsciio::{Cache, DataLoader, Provider, Window};
 use indexmap::IndexMap;
-use ndarray::{ArrayD, IxDyn};
+use ndarray::{ArrayD, Axis, IxDyn};
 use time::OffsetDateTime;
 
 use crate::provider::{CadenceProvider, NativeField, ProviderError};
+use crate::pushdown_rewrite::GateAxis;
 
 fn err(msg: impl Into<String>) -> ProviderError {
     crate::error::MessageError(msg.into())
+}
+
+// --------------------------------------------------------------------------- //
+// The DECLARED loader semantics (esm-spec §8.9) this adapter honours: a
+// per-axis `select`, a string→code map on a variable, a record filter, and the
+// loader's own extent. Everything here is read off the document — none of it
+// is a caller-side transform any more.
+// --------------------------------------------------------------------------- //
+
+/// What a `codes` map does with a value it does not contain.
+#[derive(Debug, Clone, PartialEq)]
+enum Unmapped {
+    /// Drop the whole RECORD (every variable of the loader loses that row).
+    Drop,
+    /// Fail the load, naming the offending value.
+    Error,
+    /// Substitute this number.
+    Value(f64),
+}
+
+/// A loader variable's declared string→number code map (`codes`).
+#[derive(Debug, Clone)]
+struct CodeMap {
+    map: HashMap<String, f64>,
+    case_insensitive: bool,
+    unmapped: Unmapped,
+}
+
+impl CodeMap {
+    /// The code for one raw cell, or `None` when it is unmapped and the policy
+    /// is to drop the record.
+    fn lookup(&self, raw: &str, var: &str) -> Result<Option<f64>, ProviderError> {
+        let key = raw.trim();
+        let key = if self.case_insensitive {
+            key.to_uppercase()
+        } else {
+            key.to_string()
+        };
+        if let Some(v) = self.map.get(&key) {
+            return Ok(Some(*v));
+        }
+        match &self.unmapped {
+            Unmapped::Drop => Ok(None),
+            Unmapped::Value(v) => Ok(Some(*v)),
+            Unmapped::Error => Err(err(format!(
+                "loader variable '{var}': value {raw:?} is not in its declared `codes` map \
+                 (set codes.unmapped to \"drop\" or a number to accept it)"
+            ))),
+        }
+    }
+}
+
+/// One column of a record-table loader: where it comes from and how its cells
+/// become numbers.
+#[derive(Debug, Clone)]
+struct ColumnSpec {
+    /// The loader-level variable name (the key the model couples from).
+    name: String,
+    /// The on-disk column.
+    file_variable: String,
+    codes: Option<CodeMap>,
 }
 
 /// Convert one EarthSciIO native field to the ESS-side [`NativeField`].
@@ -103,6 +165,286 @@ fn to_ess_field(
     })
 }
 
+/// A record-table loader's decode, SHARED by its per-variable providers.
+///
+/// A `points` loader that declares a `record_filter` or a `codes` map is a
+/// TABLE, not a bag of independent arrays: which rows survive is a property of
+/// the whole record, so every column must be filtered by the same mask or the
+/// columns silently misalign. That forces one decode — this type — rather than
+/// one decode per variable, which also means the 69 MB FF10 zip is unzipped and
+/// parsed once for all eight of its variables instead of eight times.
+///
+/// Lazily materialized on first use and then held: the providers are sampled
+/// one after another by `prepare`, and the second one must not re-read.
+struct RecordTable {
+    loader_name: String,
+    loader: DataLoader,
+    cache: Arc<Cache>,
+    columns: Vec<ColumnSpec>,
+    /// Loader variables whose non-finite cells drop the record.
+    require_finite: Vec<String>,
+    /// name → filtered column, once decoded.
+    state: Mutex<Option<RecordColumns>>,
+}
+
+impl RecordTable {
+    /// The filtered column for loader variable `name`.
+    fn column(&self, name: &str) -> Result<ArrayD<f64>, ProviderError> {
+        let cols = self.materialize()?;
+        let v = cols.get(name).ok_or_else(|| {
+            err(format!(
+                "loader '{}' has no column '{name}' (declared: {:?})",
+                self.loader_name,
+                cols.keys().collect::<Vec<_>>()
+            ))
+        })?;
+        Ok(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.clone())
+            .expect("a 1-D shape always matches its own length"))
+    }
+
+    /// Decode + filter once; subsequent calls reuse the columns.
+    fn materialize(&self) -> Result<RecordColumns, ProviderError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| err("record table lock poisoned by an earlier decode failure"))?;
+        if let Some(cols) = state.as_ref() {
+            return Ok(cols.clone());
+        }
+        let cols = Arc::new(self.decode()?);
+        *state = Some(cols.clone());
+        Ok(cols)
+    }
+
+    fn decode(&self) -> Result<HashMap<String, Vec<f64>>, ProviderError> {
+        let mut provider = Provider::new(self.loader.clone(), self.cache.clone(), None)
+            .map_err(|e| err(format!("loader '{}': {e}", self.loader_name)))?;
+        let fields = provider
+            .materialize()
+            .map_err(|e| err(format!("loader '{}' decode failed: {e}", self.loader_name)))?;
+
+        // Raw columns (unfiltered), plus the per-record keep mask the `codes`
+        // drops and the finite requirement build up.
+        let mut raw: HashMap<String, Vec<f64>> = HashMap::with_capacity(self.columns.len());
+        let mut keep: Option<Vec<bool>> = None;
+        let mut nrec: Option<usize> = None;
+        for spec in &self.columns {
+            let f = fields.get(&spec.file_variable).ok_or_else(|| {
+                err(format!(
+                    "loader '{}': the reader returned no column '{}' for variable '{}'",
+                    self.loader_name, spec.file_variable, spec.name
+                ))
+            })?;
+            if f.shape.len() != 1 {
+                return Err(err(format!(
+                    "loader '{}' declares a record filter, but variable '{}' is rank {} \
+                     ({:?}); a record filter needs a single record axis",
+                    self.loader_name,
+                    spec.name,
+                    f.shape.len(),
+                    f.shape
+                )));
+            }
+            let n = f.shape[0];
+            match nrec {
+                None => {
+                    nrec = Some(n);
+                    keep = Some(vec![true; n]);
+                }
+                Some(m) if m != n => {
+                    return Err(err(format!(
+                        "loader '{}': column '{}' has {n} records but an earlier column has \
+                         {m}; the reader did not return one aligned table",
+                        self.loader_name, spec.name
+                    )));
+                }
+                _ => {}
+            }
+            let mask = keep.as_mut().expect("mask sized with the first column");
+            let values = match (&spec.codes, &f.data) {
+                (Some(cm), ArrayData::Str(cells)) => {
+                    let mut out = Vec::with_capacity(cells.len());
+                    for (i, cell) in cells.iter().enumerate() {
+                        match cm.lookup(cell, &spec.name)? {
+                            Some(v) => out.push(v),
+                            None => {
+                                mask[i] = false;
+                                out.push(f64::NAN);
+                            }
+                        }
+                    }
+                    out
+                }
+                (Some(_), other) => {
+                    return Err(err(format!(
+                        "loader '{}' variable '{}' declares `codes`, but the column decoded \
+                         as {:?}; a code map maps a TEXT column to numbers",
+                        self.loader_name,
+                        spec.name,
+                        other.dtype()
+                    )));
+                }
+                (None, data) => widen(&spec.name, data)?,
+            };
+            raw.insert(spec.name.clone(), values);
+        }
+
+        let n = nrec.unwrap_or(0);
+        let mut mask = keep.unwrap_or_default();
+        for name in &self.require_finite {
+            let col = raw.get(name).ok_or_else(|| {
+                err(format!(
+                    "loader '{}': record_filter.require_finite names '{name}', which is not \
+                     one of its variables",
+                    self.loader_name
+                ))
+            })?;
+            for i in 0..n {
+                if !col[i].is_finite() {
+                    mask[i] = false;
+                }
+            }
+        }
+
+        let kept = mask.iter().filter(|k| **k).count();
+        let out = raw
+            .into_iter()
+            .map(|(name, col)| {
+                let filtered: Vec<f64> = col
+                    .into_iter()
+                    .zip(mask.iter())
+                    .filter_map(|(v, k)| k.then_some(v))
+                    .collect();
+                (name, filtered)
+            })
+            .collect();
+        if kept != n {
+            // The record count IS the loader's extent, so say what was dropped.
+            eprintln!(
+                "  [esio] loader '{}': {n} records read, {kept} kept by its declared \
+                 record filter",
+                self.loader_name
+            );
+        }
+        Ok(out)
+    }
+}
+
+/// A record table's decoded columns, keyed by loader-variable name. Shared
+/// (and refcounted) so every column read after the first is free.
+type RecordColumns = Arc<HashMap<String, Vec<f64>>>;
+
+/// Widen one numeric EarthSciIO column to `f64` (a text column with no `codes`
+/// map is a modelling mistake, not a silent drop — same rule as
+/// [`to_ess_field`]).
+fn widen(name: &str, data: &ArrayData) -> Result<Vec<f64>, ProviderError> {
+    Ok(match data {
+        ArrayData::F64(v) => v.clone(),
+        ArrayData::I64(v) => v.iter().map(|&x| x as f64).collect(),
+        ArrayData::I32(v) => v.iter().map(|&x| x as f64).collect(),
+        ArrayData::Bool(v) => v.iter().map(|&x| if x { 1.0 } else { 0.0 }).collect(),
+        ArrayData::Str(_) => {
+            return Err(err(format!(
+                "loader variable '{name}' decoded as strings; a model forcing must be \
+                 numeric (declare a `codes` map for it)"
+            )));
+        }
+    })
+}
+
+/// Apply a declared `select` to an already-materialized array: take each axis's
+/// indices, then DROP the `fixed` axes (which come back length 1).
+fn apply_axes(
+    key: &str,
+    arr: ArrayD<f64>,
+    axes: &[GateAxis],
+) -> Result<ArrayD<f64>, ProviderError> {
+    if axes.len() != arr.ndim() {
+        return Err(err(format!(
+            "provider '{key}': the declared select has {} axes but the array is rank {} \
+             ({:?})",
+            axes.len(),
+            arr.ndim(),
+            arr.shape()
+        )));
+    }
+    let mut out = arr;
+    for (i, ax) in axes.iter().enumerate() {
+        let dim = out.shape()[i];
+        let idx: Vec<usize> = match ax {
+            GateAxis::All => continue,
+            GateAxis::Fixed(f) => vec![*f],
+            GateAxis::Range { start, stop, step } => (*start..*stop).step_by(*step).collect(),
+            GateAxis::GatedBy(set) => {
+                return Err(err(format!(
+                    "provider '{key}': axis {i} gates on '{set}', which is resolved by \
+                     value-invention inside prepare, not by an eager sample"
+                )));
+            }
+        };
+        if let Some(&bad) = idx.iter().find(|&&g| g >= dim) {
+            return Err(err(format!(
+                "provider '{key}': the declared select reaches index {bad} on axis {i}, \
+                 whose native length is {dim}"
+            )));
+        }
+        out = out.select(Axis(i), &idx);
+    }
+    // Fixed axes are length-1 by construction now; drop them.
+    let drop: Vec<usize> = axes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, ax)| matches!(ax, GateAxis::Fixed(_)).then_some(i))
+        .collect();
+    if drop.is_empty() {
+        return Ok(out);
+    }
+    let shape: Vec<usize> = out
+        .shape()
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !drop.contains(i))
+        .map(|(_, &s)| s)
+        .collect();
+    out.into_shape_with_order(IxDyn(&shape)).map_err(|e| {
+        err(format!(
+            "provider '{key}': reshape after fixed-axis drop: {e}"
+        ))
+    })
+}
+
+/// The reader-side spelling of a declared `select` that carries no `gated_by`
+/// axis — what a store-backed reader can fetch pre-sliced.
+fn to_reader_selection(axes: &[GateAxis]) -> Selection {
+    Selection::Orthogonal(
+        axes.iter()
+            .map(|ax| match ax {
+                GateAxis::All => AxisSelect::All,
+                GateAxis::Fixed(f) => AxisSelect::Indices(vec![*f]),
+                GateAxis::Range { start, stop, step } => AxisSelect::Range {
+                    start: *start,
+                    stop: *stop,
+                    step: *step,
+                },
+                // Unreachable: a gated axis is deferred, never pushed eagerly.
+                GateAxis::GatedBy(_) => AxisSelect::All,
+            })
+            .collect(),
+    )
+}
+
+/// Where a declared `select` is honoured. Both arms produce the same array;
+/// the reader arm just avoids fetching what it then throws away.
+enum SelectApplication {
+    /// No declared select.
+    None,
+    /// Pushed to the reader; only the `fixed` axes still need dropping.
+    Reader { drop_axes: Vec<usize> },
+    /// Applied engine-side after decode (whole-file reader, or after a record
+    /// filter).
+    Engine(Vec<GateAxis>),
+}
+
 /// Builder for [`EsioProvider`].
 pub struct EsioProviderBuilder {
     loader: DataLoader,
@@ -110,6 +452,9 @@ pub struct EsioProviderBuilder {
     window: Option<Window>,
     var_map: IndexMap<String, String>,
     select: Option<Selection>,
+    declared: Option<Vec<GateAxis>>,
+    table: Option<(Arc<RecordTable>, String)>,
+    extent_mp: Option<String>,
 }
 
 impl EsioProviderBuilder {
@@ -135,15 +480,65 @@ impl EsioProviderBuilder {
         self
     }
 
+    /// The loader's DECLARED per-axis `select` (esm-spec §8.9) for this
+    /// variable — `W[0:52411]` as a document field rather than a caller's
+    /// slice.
+    ///
+    /// Where it is applied is an optimization, not a semantic: `build` pushes
+    /// it down to the reader when the reader can fetch pre-sliced AND no rows
+    /// are filtered first, and otherwise applies it engine-side after decode.
+    /// Both produce the same array. The selection is defined over the axis the
+    /// loader DELIVERS, so for a record-table loader it follows the record
+    /// filter — `[0:200]` means the first 200 surviving records, never the
+    /// first 200 raw rows of which some are dropped.
+    pub fn declared_select(mut self, axes: Vec<GateAxis>) -> Self {
+        self.declared = Some(axes);
+        self
+    }
+
+    /// Serve this variable as a column of a shared record table (see
+    /// [`RecordTable`]).
+    fn record_column(mut self, table: Arc<RecordTable>, column: impl Into<String>) -> Self {
+        self.table = Some((table, column.into()));
+        self
+    }
+
+    /// Declare that this provider's extent binds a metaparameter (`extent`).
+    fn extent_metaparameter(mut self, name: impl Into<String>) -> Self {
+        self.extent_mp = Some(name.into());
+        self
+    }
+
     /// Construct the provider, resolving the reader now so an unknown format
     /// fails here rather than mid-solve.
     pub fn build(self) -> Result<EsioProvider, ProviderError> {
+        let table = self.table;
         let inner = Provider::new(self.loader, self.cache, self.window)
             .map_err(|e| err(format!("EarthSciIO provider construction failed: {e}")))?;
+        // A declared select goes to the reader when it can fetch pre-sliced and
+        // there is no row filtering in front of it; otherwise engine-side.
+        let (select, applied) = match self.declared {
+            None => (self.select, SelectApplication::None),
+            Some(axes) if inner.supports_selection() && table.is_none() => {
+                let drop_axes = axes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, ax)| matches!(ax, GateAxis::Fixed(_)).then_some(i))
+                    .collect();
+                (
+                    Some(to_reader_selection(&axes)),
+                    SelectApplication::Reader { drop_axes },
+                )
+            }
+            Some(axes) => (self.select, SelectApplication::Engine(axes)),
+        };
         Ok(EsioProvider {
             inner,
             var_map: self.var_map,
-            select: self.select,
+            select,
+            applied,
+            table,
+            extent_mp: self.extent_mp,
         })
     }
 }
@@ -153,6 +548,12 @@ pub struct EsioProvider {
     inner: Provider,
     var_map: IndexMap<String, String>,
     select: Option<Selection>,
+    /// Where the loader's declared `select` for THIS variable is applied.
+    applied: SelectApplication,
+    /// A record-table loader's shared decode + this variable's column name.
+    table: Option<(Arc<RecordTable>, String)>,
+    /// The metaparameter this provider's extent binds (`extent`).
+    extent_mp: Option<String>,
 }
 
 impl EsioProvider {
@@ -164,12 +565,19 @@ impl EsioProvider {
             window: None,
             var_map: IndexMap::new(),
             select: None,
+            declared: None,
+            table: None,
+            extent_mp: None,
         }
     }
 
     /// True when the bound reader can honour a pushed-down `select`.
+    ///
+    /// A record-table column never can: its rows are chosen by the loader's
+    /// declared filter AFTER the decode, so an index pushed to the reader would
+    /// address raw rows rather than the delivered ones.
     pub fn supports_selection(&self) -> bool {
-        self.inner.supports_selection()
+        self.table.is_none() && self.inner.supports_selection()
     }
 
     /// The full native shape of on-disk array `var` without reading any chunk —
@@ -211,10 +619,112 @@ impl EsioProvider {
 mod prepare_impl {
     use super::*;
     use crate::prepare::{AxisSel, PrepareError, PrepareProvider};
+    use crate::pushdown_rewrite::ProviderGate;
     use earthsciio::format::AxisSelect;
 
     fn perr(msg: impl Into<String>) -> PrepareError {
         PrepareError(msg.into())
+    }
+
+    /// A `select.axes` declaration on a loader or one of its variables.
+    ///
+    /// A `range` bound may be an integer or the NAME of a metaparameter, which
+    /// resolves to that metaparameter's document default — so a loader can say
+    /// `W[0:N_SRC]` in the model's own terms instead of repeating 52411 and
+    /// drifting from the index set sized by it.
+    fn parse_declared_select(
+        doc: &serde_json::Value,
+        ctx: &str,
+        node: &serde_json::Value,
+    ) -> Result<Option<Vec<GateAxis>>, PrepareError> {
+        let Some(sel) = node.get("select") else {
+            return Ok(None);
+        };
+        let axes = sel
+            .get("axes")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| perr(format!("{ctx}.select needs an \"axes\" array")))?;
+        let resolved: Vec<serde_json::Value> = axes
+            .iter()
+            .map(|ax| resolve_range_bounds(doc, ctx, ax))
+            .collect::<Result<_, _>>()?;
+        crate::pushdown_rewrite::parse_select_axes(&format!("{ctx}.select"), &resolved, None)
+            .map(Some)
+            .map_err(|e| perr(e.0))
+    }
+
+    /// Replace any metaparameter-named `range` bound with its document default.
+    fn resolve_range_bounds(
+        doc: &serde_json::Value,
+        ctx: &str,
+        ax: &serde_json::Value,
+    ) -> Result<serde_json::Value, PrepareError> {
+        let Some(range) = ax.get("range").and_then(serde_json::Value::as_object) else {
+            return Ok(ax.clone());
+        };
+        let mut out = range.clone();
+        for bound in ["start", "stop", "step"] {
+            let Some(name) = out.get(bound).and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let v = doc
+                .get("metaparameters")
+                .and_then(|m| m.get(name))
+                .and_then(|m| m.get("default"))
+                .and_then(serde_json::Value::as_i64)
+                .ok_or_else(|| {
+                    perr(format!(
+                        "{ctx}.select: range.{bound} names {name:?}, which is not a \
+                         metaparameter with an integer default"
+                    ))
+                })?;
+            out.insert(bound.to_string(), serde_json::Value::from(v));
+        }
+        Ok(serde_json::json!({ "range": out }))
+    }
+
+    /// A loader variable's `codes` map (string column → number).
+    fn parse_codes(ctx: &str, vd: &serde_json::Value) -> Result<Option<CodeMap>, PrepareError> {
+        let Some(codes) = vd.get("codes") else {
+            return Ok(None);
+        };
+        let map = codes
+            .get("map")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| perr(format!("{ctx}.codes needs a \"map\" object")))?;
+        let case_insensitive = codes
+            .get("case_insensitive")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let unmapped = match codes.get("unmapped") {
+            None => Unmapped::Error,
+            Some(v) if v.as_str() == Some("drop") => Unmapped::Drop,
+            Some(v) if v.as_str() == Some("error") => Unmapped::Error,
+            Some(v) => Unmapped::Value(v.as_f64().ok_or_else(|| {
+                perr(format!(
+                    "{ctx}.codes.unmapped must be \"drop\", \"error\" or a number"
+                ))
+            })?),
+        };
+        let mut out = HashMap::with_capacity(map.len());
+        for (k, v) in map {
+            let n = v
+                .as_f64()
+                .ok_or_else(|| perr(format!("{ctx}.codes.map[{k:?}] must be a number")))?;
+            out.insert(
+                if case_insensitive {
+                    k.to_uppercase()
+                } else {
+                    k.clone()
+                },
+                n,
+            );
+        }
+        Ok(Some(CodeMap {
+            map: out,
+            case_insensitive,
+            unmapped,
+        }))
     }
 
     /// The single field of a `materialize` result (the `prepare` providers
@@ -240,6 +750,11 @@ mod prepare_impl {
                 .map(|ax| match ax {
                     AxisSel::All => AxisSelect::All,
                     AxisSel::Indices(idx) => AxisSelect::Indices(idx.clone()),
+                    AxisSel::Range { start, stop, step } => AxisSelect::Range {
+                        start: *start,
+                        stop: *stop,
+                        step: *step,
+                    },
                 })
                 .collect(),
         )
@@ -270,6 +785,29 @@ mod prepare_impl {
 
         fn is_const(&self) -> bool {
             CadenceProvider::refresh_times(self).is_empty()
+        }
+
+        fn gate_spec(&self) -> Option<ProviderGate> {
+            let SelectApplication::Engine(axes) = &self.applied else {
+                return None;
+            };
+            // A declared select with a `gated_by` axis IS a provider-declared
+            // gate: prepare defers it past value-invention and fetches it
+            // pre-sliced to the materialised members.
+            axes.iter()
+                .any(|a| matches!(a, GateAxis::GatedBy(_)))
+                .then(|| ProviderGate {
+                    axes: axes.clone(),
+                    applies_to: self
+                        .var_map
+                        .values()
+                        .map(|v| v.rsplit('.').next().unwrap_or(v).to_string())
+                        .collect(),
+                })
+        }
+
+        fn extent_metaparameter(&self) -> Option<String> {
+            self.extent_mp.clone()
         }
     }
 
@@ -344,15 +882,87 @@ mod prepare_impl {
                     .build()
                     .map_err(|e| perr(format!("cache for {lname}: {e}")))?,
             );
+
+            // --- the loader's DECLARED decode semantics (esm-spec §8.9) ------
+            let reader_options = ld
+                .get("reader_options")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let loader_select = parse_declared_select(doc, &format!("data_loaders.{lname}"), ld)?;
+            let extent_mp = ld
+                .get("extent")
+                .and_then(|e| e.get("metaparameter"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let require_finite: Vec<String> = ld
+                .get("record_filter")
+                .and_then(|f| f.get("require_finite"))
+                .and_then(serde_json::Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut columns: Vec<ColumnSpec> = Vec::new();
             for (vname, vd) in variables {
                 let fv = vd
                     .get("file_variable")
-                    .and_then(|v| v.as_str())
+                    .and_then(serde_json::Value::as_str)
                     .unwrap_or(vname);
-                let key = format!("{lname}.{vname}");
-                let loader = DataLoader::new(lname.clone(), fmt, url).variables([fv.to_string()]);
-                let provider = EsioProvider::builder(loader, cache.clone())
-                    .var(fv, key.clone())
+                columns.push(ColumnSpec {
+                    name: vname.clone(),
+                    file_variable: fv.to_string(),
+                    codes: parse_codes(&format!("data_loaders.{lname}.variables.{vname}"), vd)?,
+                });
+            }
+            // A record filter or a code map makes the loader a TABLE: one
+            // decode, one keep mask, columns that stay aligned.
+            let table = if !require_finite.is_empty() || columns.iter().any(|c| c.codes.is_some()) {
+                let mut file_vars: Vec<String> =
+                    columns.iter().map(|c| c.file_variable.clone()).collect();
+                file_vars.sort();
+                file_vars.dedup();
+                Some(Arc::new(RecordTable {
+                    loader_name: lname.clone(),
+                    loader: DataLoader::new(lname.clone(), fmt, url)
+                        .variables(file_vars)
+                        .reader_options(reader_options.clone()),
+                    cache: cache.clone(),
+                    columns: columns.clone(),
+                    require_finite: require_finite.clone(),
+                    state: Mutex::new(None),
+                }))
+            } else {
+                None
+            };
+
+            for spec in &columns {
+                let key = format!("{lname}.{}", spec.name);
+                let vd = &variables[&spec.name];
+                let loader = DataLoader::new(lname.clone(), fmt, url)
+                    .variables([spec.file_variable.clone()])
+                    .reader_options(reader_options.clone());
+                let mut builder = EsioProvider::builder(loader, cache.clone())
+                    .var(spec.file_variable.clone(), key.clone());
+                let select = parse_declared_select(
+                    doc,
+                    &format!("data_loaders.{lname}.variables.{}", spec.name),
+                    vd,
+                )?
+                .or_else(|| loader_select.clone());
+                if let Some(axes) = select {
+                    builder = builder.declared_select(axes);
+                }
+                if let Some(t) = &table {
+                    builder = builder.record_column(t.clone(), spec.name.clone());
+                }
+                if let Some(mp) = &extent_mp {
+                    builder = builder.extent_metaparameter(mp.clone());
+                }
+                let provider = builder
                     .build()
                     .map_err(|e| perr(format!("provider {key}: {e}")))?;
                 out.push((key, provider));
@@ -368,13 +978,75 @@ mod prepare_impl {
 #[cfg(not(target_arch = "wasm32"))]
 pub use prepare_impl::providers_from_document;
 
+impl EsioProvider {
+    /// Honour the declared `select` on an already-materialized field set (a
+    /// no-op when the reader took it and no axis was fixed).
+    fn apply_select(
+        &self,
+        mut fields: HashMap<String, NativeField>,
+    ) -> Result<HashMap<String, NativeField>, ProviderError> {
+        match &self.applied {
+            SelectApplication::None => Ok(fields),
+            SelectApplication::Reader { drop_axes } if drop_axes.is_empty() => Ok(fields),
+            SelectApplication::Reader { drop_axes } => {
+                for (key, f) in fields.iter_mut() {
+                    let axes: Vec<GateAxis> = (0..f.array.ndim())
+                        .map(|i| {
+                            if drop_axes.contains(&i) {
+                                GateAxis::Fixed(0) // already sliced to length 1
+                            } else {
+                                GateAxis::All
+                            }
+                        })
+                        .collect();
+                    let arr = std::mem::replace(&mut f.array, ArrayD::zeros(IxDyn(&[0])));
+                    f.array = apply_axes(key, arr, &axes)?;
+                }
+                Ok(fields)
+            }
+            SelectApplication::Engine(axes) => {
+                let selects = axes.iter().any(|ax| !matches!(ax, GateAxis::All));
+                for (key, f) in fields.iter_mut() {
+                    let arr = std::mem::replace(&mut f.array, ArrayD::zeros(IxDyn(&[0])));
+                    f.array = apply_axes(key, arr, axes)?;
+                    if selects {
+                        // The native coordinates describe the FULL axes and no
+                        // longer index this array. Dropping them is the honest
+                        // answer; carrying a stale axis would silently mis-place
+                        // a downstream regrid. (A selected loader that must keep
+                        // its coordinates would need them selected too, which is
+                        // a separate feature, not a default.)
+                        f.coords.clear();
+                    }
+                }
+                Ok(fields)
+            }
+        }
+    }
+}
+
 impl CadenceProvider for EsioProvider {
     fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+        // A record-table loader serves its columns from ONE shared decode.
+        if let Some((table, column)) = &self.table {
+            let model_name = self
+                .var_map
+                .values()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| column.clone());
+            let field = NativeField {
+                array: table.column(column)?,
+                coords: IndexMap::new(),
+            };
+            return self.apply_select(HashMap::from([(model_name, field)]));
+        }
         let fields = self
             .inner
             .materialize_with_select(self.select.as_ref())
             .map_err(|e| err(format!("EarthSciIO materialize failed: {e}")))?;
-        self.convert(fields)
+        let fields = self.convert(fields)?;
+        self.apply_select(fields)
     }
 
     fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
@@ -394,7 +1066,7 @@ impl CadenceProvider for EsioProvider {
         // re-emitting an identical buffer.
         match fields {
             None => Ok(None),
-            Some(f) => self.convert(f).map(Some),
+            Some(f) => self.convert(f).and_then(|f| self.apply_select(f)).map(Some),
         }
     }
 
