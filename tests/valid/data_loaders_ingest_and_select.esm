@@ -2,7 +2,7 @@
   "esm": "0.9.0",
   "metadata": {
     "name": "DataLoaderIngestAndSelect",
-    "description": "The loader-ingest surface of esm-spec §8.9, in one document: reader_options (the zip member glob + asserted header row of an FF10 point inventory), codes (the text POLID column mapped to the pollutant enum, unrecognised values dropping the record), record_filter (a point with no coordinate and a row with no annual total are not records), extent (the surviving count binds the runtime-discovered metaparameter N_REC, which sizes the emis_records index set), and select (the store's full-grid W read whole as `W`, and its [0:N_SRC] prefix read again as `src_W` — two variables over ONE file_variable under different selections). Nothing here is model math: the point is that a document declaring these needs no caller to read the file, count the rows, map the codes and slice the prefix on its behalf. The url_templates are placeholders; the executable form of this fixture is pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs, which patches them onto real local fixtures.",
+    "description": "The loader-ingest surface of esm-spec §8.9, in one document: reader_options (the zip member glob + asserted header row of an FF10 point inventory), codes (the text POLID column mapped to the pollutant enum, unrecognised values dropping the record), record_filter (a point with no coordinate and a row with no annual total are not records), extent (the surviving count binds the runtime-discovered metaparameter N_REC, which sizes the emis_records index set), and select (the store's full-grid W read whole as `W`, its [0:N_SRC] prefix read again as `src_W`, and — a THIRD variable over the same file_variable — `emis_W` gated on the derived set `emis_cells`, which is the one selector that DEFERS: its axis does not exist until value-invention has run, so the fetch is issued after it, pre-sliced to the discovered support set rather than to the full axis). Nothing here is model math: the point is that a document declaring these needs no caller to read the file, count the rows, map the codes and slice the prefix on its behalf. The url_templates are placeholders; the executable form of this fixture is pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs, which patches them onto real local fixtures.",
     "authors": [
       "Test Suite"
     ],
@@ -14,6 +14,8 @@
       "record-filter",
       "loader-extent",
       "range-select",
+      "gated-select",
+      "value-invention",
       "conformance"
     ]
   },
@@ -46,6 +48,10 @@
     "emis_records": {
       "kind": "interval",
       "size": "N_REC"
+    },
+    "emis_cells": {
+      "kind": "derived",
+      "from_faq": "emis_cell_set"
     }
   },
   "data_loaders": {
@@ -133,6 +139,18 @@
             ]
           },
           "description": "The same on-disk array, delivered as its [0:N_SRC] prefix — the source-cell rectangles. Declared, so no caller samples W a second time to slice it."
+        },
+        "emis_W": {
+          "file_variable": "W",
+          "units": "m",
+          "select": {
+            "axes": [
+              {
+                "gated_by": "emis_cells"
+              }
+            ]
+          },
+          "description": "The same on-disk array once more, delivered on the emission-bearing cells ONLY. Unlike \"all\", \"fixed\" and \"range\", a `gated_by` axis is not resolvable at read time: `emis_cells` is a derived set whose members the graph invents from the emission records, so this fetch DEFERS past value-invention and is then issued pre-sliced to exactly those members (CONFORMANCE_SPEC §5.5). That deferral is the whole point at ISRM scale — the difference between reading a 1,520-member support set and reading a 52,411-row axis."
         }
       },
       "metadata": {
@@ -166,6 +184,15 @@
           ],
           "description": "Per-record annual emissions; from EGU_Emis.annual."
         },
+        "lon": {
+          "type": "parameter",
+          "units": "degree",
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "description": "Per-record longitude; from EGU_Emis.lon. Read by the emis_cell_set producer below, which is what makes the support set a property of the DATA rather than of the caller."
+        },
         "src_W": {
           "type": "parameter",
           "units": "m",
@@ -174,6 +201,19 @@
             "src_cells"
           ],
           "description": "Source-cell west edges; from Grid.src_W."
+        },
+        "emis_cell": {
+          "type": "state",
+          "description": "The value-invention producer's output variable (esm-spec §5.5): its equation below materializes the distinct set of emission-bearing cells, which `index_sets.emis_cells` names via from_faq. Never integrated — the materialized set replaces it before the numeric pipeline."
+        },
+        "emis_W": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "shape": [
+            "emis_cells"
+          ],
+          "description": "West edges of the emission-bearing cells; from Grid.emis_W. Its axis is the derived set, so the array that arrives is already the compact slab — it is never a full-grid read that the model then subsets."
         },
         "is_NOx": {
           "type": "observed",
@@ -288,9 +328,112 @@
             }
           },
           "description": "Reads the prefix the loader delivered; its shape is src_cells, not pop_cells."
+        },
+        "emis_width": {
+          "type": "observed",
+          "units": "m",
+          "shape": [
+            "emis_cells"
+          ],
+          "expression": {
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "emis_cells"
+              }
+            },
+            "args": [
+              "emis_W"
+            ],
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "emis_W",
+                    "c"
+                  ]
+                },
+                1.0
+              ]
+            }
+          },
+          "description": "Reads the gated slab the loader delivered; its extent is the number of emission-bearing cells the graph discovered, which no caller supplied."
         }
       },
-      "equations": []
+      "equations": [
+        {
+          "_comment": "emis_cell_set: the index-set-producing node index_sets.emis_cells names via from_faq. Each surviving emission record is mapped to the grid cell containing it (1-based: floor((lon - lon0)/dlon) + 1 over the toy 1-degree grid whose western edge is -94), and distinct:true under bool_and_or reduces those to the sorted support set. The three records at -90, -92 and -93 therefore invent cells 5, 3 and 2 — the emission-bearing subset of the 10-cell grid, and the axis Grid.emis_W is fetched on.",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "emis_cell",
+              "m"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "m"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "args": [
+              "lon"
+            ],
+            "semiring": "bool_and_or",
+            "distinct": true,
+            "id": "emis_cell_set",
+            "key": {
+              "op": "skolem",
+              "label": "cell",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "floor",
+                      "args": [
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "-",
+                              "args": [
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "lon",
+                                    "r"
+                                  ]
+                                },
+                                -94.0
+                              ]
+                            },
+                            1.0
+                          ]
+                        }
+                      ]
+                    },
+                    1
+                  ]
+                }
+              ]
+            },
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        }
+      ]
     }
   },
   "coupling": [
@@ -308,8 +451,20 @@
     },
     {
       "type": "variable_map",
+      "from": "EGU_Emis.lon",
+      "to": "Ingest.lon",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
       "from": "Grid.src_W",
       "to": "Ingest.src_W",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
+      "from": "Grid.emis_W",
+      "to": "Ingest.emis_W",
       "transform": "param_to_var"
     }
   ]

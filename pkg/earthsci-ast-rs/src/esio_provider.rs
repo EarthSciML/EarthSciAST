@@ -413,35 +413,83 @@ fn apply_axes(
     })
 }
 
-/// The reader-side spelling of a declared `select` that carries no `gated_by`
-/// axis — what a store-backed reader can fetch pre-sliced.
-fn to_reader_selection(axes: &[GateAxis]) -> Selection {
+/// One axis of a declared `select` that a reader can resolve on its own.
+///
+/// The [`GateAxis`] vocabulary minus `gated_by` — deliberately a SEPARATE type
+/// rather than a comment claiming the gated case cannot occur. `CONFORMANCE_SPEC
+/// §5.5` draws exactly this line: *"Only `gated_by` defers; the other three are
+/// resolvable at read time"*. A gate resolves to a support set that
+/// value-invention has not derived yet, so there is no honest reader spelling for
+/// it — and with no variant to fill in, there is no arm in which to quietly
+/// substitute the FULL axis and fetch the whole store.
+#[derive(Debug, Clone, PartialEq)]
+enum ReaderAxis {
+    All,
+    Fixed(usize),
+    Range {
+        start: usize,
+        stop: usize,
+        step: usize,
+    },
+}
+
+impl ReaderAxis {
+    /// The reader-resolvable form of a whole declared `select`, or `None` when
+    /// ANY axis gates on a derived set — in which case the select DEFERS
+    /// (`gate_spec` / `prepare`'s gated list) instead of reaching a reader.
+    ///
+    /// All-or-nothing on purpose: a per-axis fallback would push the resolvable
+    /// axes and silently widen the gated one to the full axis, which is the
+    /// difference between fetching a support set and fetching the store.
+    fn from_declared(axes: &[GateAxis]) -> Option<Vec<Self>> {
+        axes.iter()
+            .map(|ax| match ax {
+                GateAxis::All => Some(Self::All),
+                GateAxis::Fixed(f) => Some(Self::Fixed(*f)),
+                GateAxis::Range { start, stop, step } => Some(Self::Range {
+                    start: *start,
+                    stop: *stop,
+                    step: *step,
+                }),
+                GateAxis::GatedBy(_) => None,
+            })
+            .collect()
+    }
+}
+
+/// The reader-side spelling of a declared `select` — what a store-backed reader
+/// can fetch pre-sliced. Total over [`ReaderAxis`], which is the point.
+fn to_reader_selection(axes: &[ReaderAxis]) -> Selection {
     Selection::Orthogonal(
         axes.iter()
             .map(|ax| match ax {
-                GateAxis::All => AxisSelect::All,
-                GateAxis::Fixed(f) => AxisSelect::Indices(vec![*f]),
-                GateAxis::Range { start, stop, step } => AxisSelect::Range {
+                ReaderAxis::All => AxisSelect::All,
+                ReaderAxis::Fixed(f) => AxisSelect::Indices(vec![*f]),
+                ReaderAxis::Range { start, stop, step } => AxisSelect::Range {
                     start: *start,
                     stop: *stop,
                     step: *step,
                 },
-                // Unreachable: a gated axis is deferred, never pushed eagerly.
-                GateAxis::GatedBy(_) => AxisSelect::All,
             })
             .collect(),
     )
 }
 
-/// Where a declared `select` is honoured. Both arms produce the same array;
-/// the reader arm just avoids fetching what it then throws away.
+/// Where a declared `select` is honoured. The first two arms produce the same
+/// array; the reader arm just avoids fetching what it then throws away.
 enum SelectApplication {
     /// No declared select.
     None,
-    /// Pushed to the reader; only the `fixed` axes still need dropping.
+    /// Pushed to the reader; only the `fixed` axes still need dropping. Its
+    /// axes were all reader-resolvable ([`ReaderAxis`]), so this arm can never
+    /// stand for a gate.
     Reader { drop_axes: Vec<usize> },
-    /// Applied engine-side after decode (whole-file reader, or after a record
-    /// filter).
+    /// Honoured engine-side rather than by the reader: applied after decode
+    /// (whole-file reader, or after a record filter), or — when an axis gates
+    /// on a derived set — DEFERRED, surfaced by
+    /// [`PrepareProvider::gate_spec`](crate::prepare::PrepareProvider::gate_spec)
+    /// and fetched pre-sliced after value-invention. This is the only arm that
+    /// may carry a [`GateAxis::GatedBy`].
     Engine(Vec<GateAxis>),
 }
 
@@ -491,6 +539,12 @@ impl EsioProviderBuilder {
     /// loader DELIVERS, so for a record-table loader it follows the record
     /// filter — `[0:200]` means the first 200 surviving records, never the
     /// first 200 raw rows of which some are dropped.
+    ///
+    /// A `gated_by` axis (esm-spec §8.9.2) is the one exception, and it is NOT
+    /// an optimization: it names a derived index set whose members only exist
+    /// after value-invention, so such a select always DEFERS — never pushed,
+    /// never applied by an eager sample. `CONFORMANCE_SPEC §5.5`: *"Only
+    /// `gated_by` defers; the other three are resolvable at read time."*
     pub fn declared_select(mut self, axes: Vec<GateAxis>) -> Self {
         self.declared = Some(axes);
         self
@@ -515,22 +569,37 @@ impl EsioProviderBuilder {
         let table = self.table;
         let inner = Provider::new(self.loader, self.cache, self.window)
             .map_err(|e| err(format!("EarthSciIO provider construction failed: {e}")))?;
-        // A declared select goes to the reader when it can fetch pre-sliced and
-        // there is no row filtering in front of it; otherwise engine-side.
+        // A declared select goes to the reader when it can fetch pre-sliced,
+        // there is no row filtering in front of it, AND every axis is one the
+        // reader can resolve on its own. That last condition is what
+        // `ReaderAxis::from_declared` decides: it has no `gated_by` variant to
+        // produce, so a gated select cannot be spelled for a reader and falls
+        // through to the engine arm — where `gate_spec()` reports it and
+        // `prepare` fetches it pre-sliced to the support set once
+        // value-invention has derived the members.
         let (select, applied) = match self.declared {
             None => (self.select, SelectApplication::None),
-            Some(axes) if inner.supports_selection() && table.is_none() => {
-                let drop_axes = axes
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, ax)| matches!(ax, GateAxis::Fixed(_)).then_some(i))
-                    .collect();
-                (
-                    Some(to_reader_selection(&axes)),
-                    SelectApplication::Reader { drop_axes },
-                )
+            Some(axes) => {
+                let pushable = if inner.supports_selection() && table.is_none() {
+                    ReaderAxis::from_declared(&axes)
+                } else {
+                    None
+                };
+                match pushable {
+                    Some(reader) => {
+                        let drop_axes = reader
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, ax)| matches!(ax, ReaderAxis::Fixed(_)).then_some(i))
+                            .collect();
+                        (
+                            Some(to_reader_selection(&reader)),
+                            SelectApplication::Reader { drop_axes },
+                        )
+                    }
+                    None => (self.select, SelectApplication::Engine(axes)),
+                }
             }
-            Some(axes) => (self.select, SelectApplication::Engine(axes)),
         };
         Ok(EsioProvider {
             inner,
