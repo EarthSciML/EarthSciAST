@@ -70,14 +70,21 @@ payload more carefully at runtime" a non-strategy.
 
 ### What the flag buys, and what it now costs
 
-Not measured to completion, and that is itself the result. `repro_oop.jl relaxed` on
-the trivial 0-D model (2 states, one shared subexpression) **did not finish an Enzyme
-compile in 50 minutes** and was killed; a second, further-minimised attempt
-(`relaxed_min.jl`, the 0-D case alone) was still compiling 20+ minutes in at **13.1 GB
-RSS**, with CPU time tracking wall clock 1:1 and RSS flat — i.e. compute-bound inside
-Enzyme's type analysis, not leaking or swapping. Footprint samples:
-`measurements/oop-relaxed-footprint.txt`; the killed run:
-`measurements/oop-relaxed-timedout.txt`.
+Not measured to completion, and that is itself the result. Two attempts, both killed
+on their timeout with no gradient produced:
+
+* `repro_oop.jl relaxed` — killed at **50 minutes** (`measurements/oop-relaxed-timedout.txt`).
+* `relaxed_min.jl` — the 0-D model ALONE (2 states, one shared subexpression), nothing
+  else in the process. Killed at **55 minutes**. The sampled footprint
+  (`measurements/oop-relaxed-footprint.txt`, 37 one-minute samples) is unusually clean:
+  CPU time tracks wall clock 1:1 for the entire run, and RSS sits at **13,140,512 kB —
+  the same value to the kilobyte, every sample, for 36 straight minutes.** That is a
+  single-threaded compute loop inside Enzyme on a fully-allocated working set: not
+  swapping, not leaking, not GC-thrashing, and not making allocations that would
+  suggest forward progress.
+
+We did not instrument Enzyme to find out WHICH phase, so "type analysis" is inference
+from the flag involved, not measurement. But whatever it is doing, it does not finish.
 
 Contrast with the failure path, which takes **under a minute**. Turning the flag on
 does not trade a fast error for a slow success so much as trade a fast error for an
@@ -353,16 +360,17 @@ Reactant/XLA, which needs no flag), the ordering that maximises value per unit r
 ## 5. What we could not determine
 
 - **Whether the flag still makes `:oop` reverse mode actually work at 0.13.199.**
-  Two runs did not complete an Enzyme compile of the trivial 0-D model (one killed at
-  50 min, one 20+ min at 13.1 GB and still going) on a heavily contended shared box.
-  The failure without the flag reproduces in under a minute; the success *with* it is
-  not reproduced at all here. We therefore cannot confirm the note's "~1e-16
-  agreement" claim, and cannot distinguish "slow but finite" from "does not terminate"
-  — the machine was shared with a 23 GB, 10-hour job throughout. **Re-run this on an
-  idle machine before relying on the flag for anything.** What we *can* say is that
-  the flag has the intended effect on a small walker of the same shape
-  (`micro_variants.jl any relaxed`, exact agreement with ForwardDiff, seconds), so the
-  obstacle is scale, not semantics.
+  No. Or at least: not within an hour. Both attempts were killed on timeout (50 min
+  and 55 min) with no gradient. What we could NOT determine is whether that is "slow
+  but finite" or "does not terminate" — we have a flat 13.1 GB / 1:1-CPU plateau with
+  no progress signal either way, and no instrumentation of which Enzyme phase is
+  spinning. The box was shared with a 23 GB, 10-hour job throughout, which inflates
+  wall clock but does not explain a 36-minute constant-RSS compute loop.
+  **Re-run on an idle machine, with a longer ceiling, before relying on the flag for
+  anything.** What we *can* say is that the flag has the intended effect on a small
+  walker of the same shape (`micro_variants.jl any relaxed`: exact agreement with
+  ForwardDiff, seconds), so the obstacle is scale, not semantics — and that the
+  note's "~1e-16 agreement" figure is unverified at this version.
 - **Whether the `UndefVarError: codegen_ft` is specific to this RGF usage** or a
   general Enzyme 0.13.199 bug. The 2x2 above isolates the RGF as the trigger in our
   case; we did not minimise it to a standalone reproducer or check it against
