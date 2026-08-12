@@ -189,6 +189,38 @@ Where:
 | BEHAV-06-B-005 | `from_file` reference `path` resolves relative to the `.esm` file's directory; v1 `format` is `json` — a row-major nested array shape-validated against the field | esm-spec.md §6.6.5 convention 3 | Yes | simulation |
 | BEHAV-06-B-006 | A `coords`/`reduce` assertion on a rank≥2 (multidimensional) array OBSERVED MUST materialize the field over the full Cartesian product of its interval index sets in row-major (lexicographic) cell order paired with the value layout, so all bindings agree. Julia: FIXED (`vec()` around the `CartesianIndices` cell sweep — a rank≥2 comprehension yields a Matrix that `sort!` rejected without `dims=`); Python (`np.ndindex`) and Rust (row-major `IxDyn` enumeration) were already rank-agnostic. Gate: `tests/conformance/pde_inline_observed_rank2/` (Julia/Python/Rust agree on the golden actuals) | esm-spec.md §6.6.5 convention 1 | Yes | simulation |
 
+### BEHAV-10-A: `join` Names Under Flattening (CONFORMANCE_SPEC §5.5.6)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-10-A-001 | Flattening MUST dot-namespace the plain-string references a `join` clause carries — an `on` key column and an `overlap` clause's `src_env`/`tgt_env` envelope factors — because they resolve against the VARIABLE REGISTRY, which after flattening is the namespaced one. They are references encoded as strings, not structural metadata like `output_idx` / `ranges` keys / `int_var` | CONFORMANCE_SPEC.md §5.5.6, esm-spec.md §10.7 | Yes | behavioral |
+| BEHAV-10-A-002 | The rewrite MUST be gated on the component's DECLARED LOCAL names (own variables + subsystem keys): a name that is not a declared local — a loop symbol bound by the enclosing `ranges`, a document-scoped index set named by an `on` key column, an already-qualified cross-component reference — MUST be left unchanged | CONFORMANCE_SPEC.md §5.5.6, §5.3 | Yes | behavioral |
+| BEHAV-10-A-003 | Within one node the `join` names and the same factors carried in `args` MUST agree after flattening — a node MUST NOT spell one factor two ways | CONFORMANCE_SPEC.md §5.5.6 | Yes | behavioral |
+| BEHAV-10-A-004 | A `variable_map` whose transform REMOVES the target parameter (`param_to_var`, `conversion_factor`, absent) MUST rename `to` → `from` inside every `join` clause as well; the expression-substitution walk does not reach these names, and a join left naming the removed parameter fails materialisation with `join references unknown variable` | CONFORMANCE_SPEC.md §5.5.6, esm-spec.md §10.4 | Yes | behavioral |
+| BEHAV-10-A-005 | A flattened overlap-gated `distinct` producer MUST materialise the SAME support set as the unflattened one — the set is integer-valued and compared byte-identically (§5.5.1), so namespacing is required to be result-neutral | CONFORMANCE_SPEC.md §5.5.6, §5.5.1 | Yes | behavioral |
+
+> **Binding status (2026-08-12)**: **Julia** was already correct and is the reference
+> (`namespacing.jl::_namespace_join` for -001/-002/-003,
+> `coupling_apply.jl::_rename_join_names` for -004). **Rust** and **Python** both left
+> `join` bare while namespacing everything around it, so the same document flattened by
+> the three bindings produced join clauses that disagreed; Rust's own materializer then
+> died on the flattened form with `join references unknown variable "X"`. Fixed in
+> `earthsci-ast-rs/src/flatten.rs` (`namespace_join_names`, `rename_join_names`) and
+> `earthsci-ast-py/src/earthsci_ast/flatten.py` (`_namespace_join`, `_rename_join_names`)
+> — Python's flattener had documented the omission as unavoidable ("no index-set registry
+> to tell the two apart"); the declared-local gate of -002 removes the need for one.
+> **Go** flattens equations to STRINGS, so `join` survives only on its event trees;
+> `flatten.go::namespaceJoinNames` covers that surface (Go has no join resolver, so -004
+> and -005 do not apply). **TypeScript**'s flattener is string-emitting and discards
+> `join` entirely — no action. Gates: `earthsci-ast-rs/tests/join_namespacing.rs`,
+> `earthsci-ast-py/tests/test_join_namespacing.py` and
+> `EarthSciAST.jl/test/join_namespacing_test.jl` all flatten the shared
+> `overlap_gate_point_in_rect.esm` fixture and materialise the same `[1,2,4,9]` L1
+> golden from the FLATTENED form, and all three pin the same `join.on` gate cases
+> against the committed `tests/valid/aggregate/join_filter.esm`;
+> `earthsci-ast-go/pkg/esm/join_namespacing_test.go` pins -001/-002/-003 on Go's
+> event-tree surface. The Rust/Python cases fail on `origin/main` (4 of 5 each) and
+> the Julia ones pass unchanged, which is the divergence stated as a test.
+
 ---
 
 ## 4. FORMAT REQUIREMENTS

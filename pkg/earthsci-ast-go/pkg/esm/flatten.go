@@ -612,6 +612,93 @@ func namespaceExpressionTree(expr Expression, systemName string, varNames map[st
 		ns := systemName + "." + *out.Dim
 		out.Dim = &ns
 	}
+	// ...and `join`, which carries variable NAMES as plain strings inside
+	// untyped clause maps (CONFORMANCE_SPEC §5.5.6). mapExprChildren walks the
+	// clause slice, but a clause is a bare map with no "op" key, so asExprNode
+	// declines it and every name inside passes through unchanged.
+	if len(out.Join) > 0 {
+		out.Join = namespaceJoinNames(out.Join, systemName, varNames)
+	}
+	return out
+}
+
+// namespaceJoinNames dot-prefixes the plain-string variable references a `join`
+// clause carries: an `on` key column, and an `overlap` clause's `src_env` /
+// `tgt_env` envelope factors (CONFORMANCE_SPEC §5.5.6).
+//
+// Those are references, not opaque metadata — the engines that materialise a
+// join resolve each name against the VARIABLE REGISTRY, which after flattening
+// is the namespaced one. They are only encoded as strings rather than as child
+// expressions. The gate is `varNames`, exactly the one namespaceExpressionTree
+// applies to a bare string leaf: a key column naming a loop symbol or a
+// document-scoped index set is not a declared variable of this system and is
+// left alone. Mirrors Julia `_namespace_join`, Rust `namespace_join_names`, and
+// Python `_namespace_join`.
+//
+// Go's flattened EQUATIONS are rendered to strings (FlattenedEquation.RHS), so
+// this reaches the one surface where Go preserves a tree: event triggers,
+// conditions, and affect right-hand sides.
+func namespaceJoinNames(join []any, systemName string, varNames map[string]bool) []any {
+	ns := func(v any) any {
+		s, ok := v.(string)
+		if !ok {
+			return v
+		}
+		if head, _, found := strings.Cut(s, "."); found {
+			if varNames[head] {
+				return systemName + "." + s
+			}
+			return s
+		}
+		if varNames[s] {
+			return systemName + "." + s
+		}
+		return s
+	}
+	nsList := func(v any) any {
+		items, ok := v.([]any)
+		if !ok {
+			return v
+		}
+		out := make([]any, len(items))
+		for i, it := range items {
+			out[i] = ns(it)
+		}
+		return out
+	}
+
+	out := make([]any, len(join))
+	for i, raw := range join {
+		clause, ok := raw.(map[string]any)
+		if !ok {
+			out[i] = raw
+			continue
+		}
+		next := make(map[string]any, len(clause))
+		for k, v := range clause {
+			next[k] = v
+		}
+		if pairs, ok := clause["on"].([]any); ok {
+			renamed := make([]any, len(pairs))
+			for j, pair := range pairs {
+				renamed[j] = nsList(pair)
+			}
+			next["on"] = renamed
+		}
+		if overlap, ok := clause["overlap"].(map[string]any); ok {
+			nextOverlap := make(map[string]any, len(overlap))
+			for k, v := range overlap {
+				nextOverlap[k] = v
+			}
+			for _, side := range []string{"src_env", "tgt_env"} {
+				if _, present := overlap[side]; present {
+					nextOverlap[side] = nsList(overlap[side])
+				}
+			}
+			next["overlap"] = nextOverlap
+		}
+		out[i] = next
+	}
 	return out
 }
 

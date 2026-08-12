@@ -34,8 +34,8 @@
 
 use crate::types::{
     ContinuousEvent, CouplingEntry, DataLoader, DiscreteEvent, Domain, Equation, EsmFile, Expr,
-    ExpressionNode, IndexSet, Model, ModelVariable, RangeSpec, ReactionSystem,
-    VariableMapTransform, VariableType,
+    ExpressionNode, IndexSet, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec,
+    ReactionSystem, VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -917,6 +917,13 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // already-namespaced — would otherwise leave untouched.
     let (loader_observeds, subsys_keys) = lower_loader_subsystems(system_name, model)?;
 
+    // The component's own declared names — the gate for namespacing the
+    // plain-string references a `join` clause carries (§5.5.6). Subsystem keys
+    // join the set so a `raw.k` join column follows its `raw.k` reference.
+    // Mirrors Julia `_collect_model!`'s `local_names`.
+    let mut locals: HashSet<String> = model.variables.keys().cloned().collect();
+    locals.extend(subsys_keys.iter().cloned());
+
     let mut var_names: Vec<&String> = model.variables.keys().collect();
     var_names.sort();
     for var_name in var_names {
@@ -924,7 +931,12 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         let namespaced = format!("{system_name}.{var_name}");
         let mut cloned = var.clone();
         if let Some(expr) = cloned.expression {
-            cloned.expression = Some(namespace_expr_with_subsys(&expr, system_name, &subsys_keys));
+            cloned.expression = Some(namespace_expr_with_subsys(
+                &expr,
+                system_name,
+                &subsys_keys,
+                &locals,
+            ));
         }
         match var.var_type {
             VariableType::State => {
@@ -952,8 +964,8 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .equations
         .iter()
         .map(|eq| Equation {
-            lhs: namespace_expr_with_subsys(&eq.lhs, system_name, &subsys_keys),
-            rhs: namespace_expr_with_subsys(&eq.rhs, system_name, &subsys_keys),
+            lhs: namespace_expr_with_subsys(&eq.lhs, system_name, &subsys_keys, &locals),
+            rhs: namespace_expr_with_subsys(&eq.rhs, system_name, &subsys_keys, &locals),
         })
         .collect();
 
@@ -962,14 +974,14 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_continuous_event(e, system_name))
+        .map(|e| namespace_continuous_event(e, system_name, &locals))
         .collect();
     let discrete_events = model
         .discrete_events
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_discrete_event(e, system_name))
+        .map(|e| namespace_discrete_event(e, system_name, &locals))
         .collect();
 
     Ok(SystemBlock {
@@ -1048,12 +1060,21 @@ fn build_reaction_block(
         );
     }
 
+    // Declared local names for the §5.5.6 `join` gate: a reaction system's
+    // species and parameters. Mirrors Julia `_collect_reaction_system!`.
+    let locals: HashSet<String> = rs
+        .species
+        .keys()
+        .chain(rs.parameters.keys())
+        .cloned()
+        .collect();
+
     let lowered = crate::reactions::lower_reactions_to_equations(&rs.reactions, &rs.species)?;
     let equations = lowered
         .into_iter()
         .map(|eq| Equation {
-            lhs: namespace_expr(&eq.lhs, system_name),
-            rhs: namespace_expr(&eq.rhs, system_name),
+            lhs: namespace_expr(&eq.lhs, system_name, &locals),
+            rhs: namespace_expr(&eq.rhs, system_name, &locals),
         })
         .collect();
 
@@ -1087,8 +1108,19 @@ fn build_reaction_block(
 /// (`int_var`) are component-local — the array interpreter resolves them
 /// positionally against `loop_binds`, never against the variable registry — so
 /// they are excluded from namespacing within that node's scope (ess-14f.8).
-fn namespace_expr(expr: &Expr, system_name: &str) -> Expr {
-    namespace_expr_scoped(expr, system_name, &HashSet::new(), &HashSet::new())
+///
+/// The ONE structural field that is not merely preserved is `join`
+/// (CONFORMANCE_SPEC §5.5.6): a `join.overlap`'s `src_env`/`tgt_env` envelope
+/// factors, and a `join.on` key column, are *variable references that happen to
+/// be encoded as plain strings rather than as `Expr::Variable` children* — the
+/// value-invention materializer resolves each one against the variable registry
+/// (`vi_join_index_sym` → `ctx.variables`, `broad_phase::envelope_vectors` →
+/// `ctx.const_arrays`), which after flattening is the NAMESPACED registry. They
+/// are therefore namespaced by [`namespace_join_names`], under the same
+/// declared-local gate Julia's `_namespace_join` uses, so a name that is a loop
+/// symbol or a document-scoped index set passes through untouched.
+fn namespace_expr(expr: &Expr, system_name: &str, locals: &HashSet<String>) -> Expr {
+    namespace_expr_scoped(expr, system_name, &HashSet::new(), &HashSet::new(), locals)
 }
 
 /// [`namespace_expr`] that additionally model-namespaces bare subsystem-local
@@ -1096,8 +1128,57 @@ fn namespace_expr(expr: &Expr, system_name: &str) -> Expr {
 /// subsystem key becomes `<system>.<sub>.<rest>`. The default rule treats *any*
 /// dotted name as already-namespaced (correct for a cross-component reference,
 /// wrong for a subsystem-local one), so `subsys` is the exception set.
-fn namespace_expr_with_subsys(expr: &Expr, system_name: &str, subsys: &HashSet<String>) -> Expr {
-    namespace_expr_scoped(expr, system_name, &HashSet::new(), subsys)
+fn namespace_expr_with_subsys(
+    expr: &Expr,
+    system_name: &str,
+    subsys: &HashSet<String>,
+    locals: &HashSet<String>,
+) -> Expr {
+    namespace_expr_scoped(expr, system_name, &HashSet::new(), subsys, locals)
+}
+
+/// Dot-prefix the plain-string names carried by a node's `join` clauses
+/// (CONFORMANCE_SPEC §5.5.6). Applies the SAME rule [`namespace_expr_scoped`]
+/// applies to an `Expr::Variable`, gated on `locals` — the component's own
+/// declared variable names plus its subsystem keys:
+///
+/// * a bare name that IS a declared local variable gets the prefix;
+/// * a dotted name whose head is a local subsystem gets the prefix;
+/// * anything else — a loop symbol bound by the enclosing `ranges`, a
+///   document-scoped index set named by an `on` key column (§5.3), an
+///   already-qualified cross-component reference — is left alone.
+///
+/// Mirrors Julia `namespacing.jl::_namespace_join`. Returns `None` when nothing
+/// changed, so a join-free (or fully external) node is byte-identical.
+fn namespace_join_names(
+    join: &[JoinClause],
+    system_name: &str,
+    locals: &HashSet<String>,
+) -> Option<Vec<JoinClause>> {
+    let ns = |n: &String| -> String {
+        if let Some((head, _)) = n.split_once('.') {
+            if locals.contains(head) {
+                return format!("{system_name}.{n}");
+            }
+            n.clone()
+        } else if locals.contains(n) {
+            format!("{system_name}.{n}")
+        } else {
+            n.clone()
+        }
+    };
+    let out: Vec<JoinClause> = join
+        .iter()
+        .map(|c| JoinClause {
+            on: c.on.iter().map(|[l, r]| [ns(l), ns(r)]).collect(),
+            overlap: c.overlap.as_ref().map(|ov| OverlapClause {
+                src_env: ov.src_env.iter().map(&ns).collect(),
+                tgt_env: ov.tgt_env.iter().map(&ns).collect(),
+                eps: ov.eps,
+            }),
+        })
+        .collect();
+    (out != join).then_some(out)
 }
 
 fn namespace_expr_scoped(
@@ -1105,6 +1186,7 @@ fn namespace_expr_scoped(
     system_name: &str,
     bound: &HashSet<String>,
     subsys: &HashSet<String>,
+    locals: &HashSet<String>,
 ) -> Expr {
     match expr {
         Expr::Number(n) => Expr::Number(*n),
@@ -1151,8 +1233,9 @@ fn namespace_expr_scoped(
             // aggregate grouping `key` and template `bindings` that the previous
             // hand-rolled enumeration silently omitted (leaving their variable
             // references un-namespaced when flattening a coupled system).
-            let mut out = node
-                .map_children(&mut |c| namespace_expr_scoped(c, system_name, &child_bound, subsys));
+            let mut out = node.map_children(&mut |c| {
+                namespace_expr_scoped(c, system_name, &child_bound, subsys, locals)
+            });
 
             // `wrt` is a differentiation-variable *string*, not a child `Expr`,
             // so it is a node-local rewrite the child-walker does not (and must
@@ -1164,23 +1247,35 @@ fn namespace_expr_scoped(
                     format!("{system_name}.{w}")
                 }
             });
+            // `join` likewise carries variable references as plain strings
+            // (§5.5.6). The child-walker preserves the field verbatim; the
+            // names inside it must follow the registry they resolve against.
+            if let Some(join) = &node.join
+                && let Some(ns) = namespace_join_names(join, system_name, locals)
+            {
+                out.join = Some(ns);
+            }
             Expr::operator(out)
         }
     }
 }
 
-fn namespace_continuous_event(mut event: ContinuousEvent, system_name: &str) -> ContinuousEvent {
+fn namespace_continuous_event(
+    mut event: ContinuousEvent,
+    system_name: &str,
+    locals: &HashSet<String>,
+) -> ContinuousEvent {
     event.conditions = event
         .conditions
         .into_iter()
-        .map(|c| namespace_expr(&c, system_name))
+        .map(|c| namespace_expr(&c, system_name, locals))
         .collect();
     event.affects = event
         .affects
         .into_iter()
         .map(|mut a| {
             a.lhs = namespace_plain(&a.lhs, system_name);
-            a.rhs = namespace_expr(&a.rhs, system_name);
+            a.rhs = namespace_expr(&a.rhs, system_name, locals);
             a
         })
         .collect();
@@ -1189,7 +1284,7 @@ fn namespace_continuous_event(mut event: ContinuousEvent, system_name: &str) -> 
             neg.into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_plain(&a.lhs, system_name);
-                    a.rhs = namespace_expr(&a.rhs, system_name);
+                    a.rhs = namespace_expr(&a.rhs, system_name, locals);
                     a
                 })
                 .collect(),
@@ -1198,11 +1293,15 @@ fn namespace_continuous_event(mut event: ContinuousEvent, system_name: &str) -> 
     event
 }
 
-fn namespace_discrete_event(mut event: DiscreteEvent, system_name: &str) -> DiscreteEvent {
+fn namespace_discrete_event(
+    mut event: DiscreteEvent,
+    system_name: &str,
+    locals: &HashSet<String>,
+) -> DiscreteEvent {
     use crate::types::DiscreteEventTrigger;
     event.trigger = match event.trigger {
         DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
-            expression: namespace_expr(&expression, system_name),
+            expression: namespace_expr(&expression, system_name, locals),
         },
         other => other,
     };
@@ -1212,7 +1311,7 @@ fn namespace_discrete_event(mut event: DiscreteEvent, system_name: &str) -> Disc
                 .into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_plain(&a.lhs, system_name);
-                    a.rhs = namespace_expr(&a.rhs, system_name);
+                    a.rhs = namespace_expr(&a.rhs, system_name, locals);
                     a
                 })
                 .collect(),
@@ -1573,7 +1672,7 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
     for block in per_system.iter_mut() {
         for eq in &mut block.equations {
             eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
-            eq.rhs = crate::substitute::substitute(&eq.rhs, &subs);
+            eq.rhs = rename_join_names(&crate::substitute::substitute(&eq.rhs, &subs), to, from);
         }
         // A `variable_map` also removes the mapped parameter from the system, so
         // it must reach OBSERVED-variable expressions too — otherwise an observed
@@ -1583,7 +1682,11 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
         // evaluates to NaN. Mirrors the equation rewrite above.
         for var in block.observed_vars.values_mut() {
             if let Some(expr) = &var.expression {
-                var.expression = Some(crate::substitute::substitute(expr, &subs));
+                var.expression = Some(rename_join_names(
+                    &crate::substitute::substitute(expr, &subs),
+                    to,
+                    from,
+                ));
             }
         }
         // ...and event conditions / affect RHS (continuous + discrete), for the
@@ -1598,6 +1701,66 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
             *ev = crate::substitute::substitute_in_discrete_event(ev, &subs);
         }
     }
+}
+
+/// True iff any node in `expr` carries a non-empty `join`.
+fn contains_join(expr: &Expr) -> bool {
+    match expr {
+        Expr::Operator(node) => {
+            node.join.as_ref().is_some_and(|j| !j.is_empty()) || node.any_child(&mut contains_join)
+        }
+        _ => false,
+    }
+}
+
+/// Rename `to` → `from` in every plain-string name a `join` clause carries
+/// (CONFORMANCE_SPEC §5.5.6), the join-side companion of the `variable_map`
+/// substitution above.
+///
+/// `crate::substitute` walks expression CHILDREN, so it cannot see these names;
+/// but they are references in the same namespaced scope as everything else
+/// (that is exactly what makes them namespaceable). A `param_to_var` /
+/// `conversion_factor` map REMOVES `to` from the flattened parameter registry,
+/// so a join still naming it points at a variable that no longer exists and
+/// materialisation dies with `join references unknown variable`. Mirrors Julia
+/// `coupling_apply.jl::_rename_join_names`.
+///
+/// The exact case this exists for: an overlap-gated value-invention producer
+/// over a coupled rectangle buffer, where `tgt_env = [ISRM.src_W, …]` while an
+/// `ISRM_SR.src_W -> ISRM.src_W` map has already removed `ISRM.src_W`.
+fn rename_join_names(expr: &Expr, to: &str, from: &str) -> Expr {
+    // Scan BEFORE the rebuild: `map_children` clones, and this runs over every
+    // equation of every block for every `variable_map` entry. Almost no model
+    // carries a join, and those must stay free of an extra whole-tree copy on
+    // top of the substitution's. The scan is once per tree, not per node — the
+    // recursion below is the unguarded `rename_join_names_in`.
+    if !contains_join(expr) {
+        return expr.clone();
+    }
+    rename_join_names_in(expr, to, from)
+}
+
+fn rename_join_names_in(expr: &Expr, to: &str, from: &str) -> Expr {
+    let Expr::Operator(node) = expr else {
+        return expr.clone();
+    };
+    let mut out = node.map_children(&mut |c| rename_join_names_in(c, to, from));
+    if let Some(join) = &node.join {
+        let ren = |n: &String| -> String { if n == to { from.to_string() } else { n.clone() } };
+        out.join = Some(
+            join.iter()
+                .map(|c| JoinClause {
+                    on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
+                    overlap: c.overlap.as_ref().map(|ov| OverlapClause {
+                        src_env: ov.src_env.iter().map(&ren).collect(),
+                        tgt_env: ov.tgt_env.iter().map(&ren).collect(),
+                        eps: ov.eps,
+                    }),
+                })
+                .collect(),
+        );
+    }
+    Expr::operator(out)
 }
 
 /// Preflight (esm-spec §10.4): walk every `variable_map` coupling entry whose
@@ -2182,7 +2345,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let out = namespace_expr(&expr, "ExponentialDecay");
+        let out = namespace_expr(&expr, "ExponentialDecay", &HashSet::new());
         match out {
             Expr::Operator(node) => {
                 assert_eq!(
@@ -2416,7 +2579,7 @@ mod tests {
             reduce: Some("+".to_string()),
             ..Default::default()
         });
-        let out = namespace_expr(&aggregate, "sys");
+        let out = namespace_expr(&aggregate, "sys", &HashSet::new());
         match out {
             Expr::Operator(node) => {
                 assert_eq!(node.args[0], Expr::Variable("sys.w".to_string()));

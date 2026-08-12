@@ -892,6 +892,57 @@ aggregate's `filter`; the gate is ONLY the conservative broad phase.
 * `eps ≥ 0` (default `0.0`) inflates BOTH envelopes of a pair OUTWARD by `eps`
   (`xmin−=eps, ymin−=eps, xmax+=eps, ymax+=eps`) before the intersection test.
 
+**Join names are REFERENCES, and flattening namespaces them (normative).** Every
+name a `join` clause carries — an `on` key column, and an `overlap` clause's
+`src_env` / `tgt_env` envelope factors — is a variable reference that merely
+happens to be **encoded as a plain string** rather than as an expression child.
+It is not structural metadata. So when a component is flattened into a coupled
+system, a binding **MUST** dot-namespace those names by the same rule it applies
+to any other reference, gated on the component's **declared local names** (its
+own variables plus its subsystem keys):
+
+* a bare name that IS a declared local variable takes the `<component>.` prefix;
+* a dotted name whose head is a local subsystem key takes the prefix;
+* **anything else is left alone** — a loop symbol bound by the enclosing
+  `ranges`, a document-scoped index set named by an `on` key column (§5.3), or an
+  already-qualified cross-component reference. Index-set names are a
+  document-scoped registry and are never component-prefixed.
+
+The gate is what lets ONE rule serve both clause kinds: `on` key columns are
+polymorphic (a loop symbol, an index set, or a value-invention bin buffer) while
+`src_env` / `tgt_env` are always factor variables, and "is it declared here?"
+separates them without consulting the index-set registry.
+
+The reason this is normative rather than a matter of taste is that the engines
+resolve these names against the **variable registry**, which after flattening is
+the namespaced one — not against a positional or component-local scope. This is
+the property that distinguishes them from the loop symbols in `output_idx` /
+`ranges` keys / an `integral`'s `int_var`, which a binding MUST NOT namespace
+because the array interpreter resolves those positionally against the loop
+bindings. Concretely, a materializer looks an envelope factor up as a variable
+(to read the 1-D shape index set that names its join range) and as a const array
+(to read the envelope values); a name left bare against a namespaced registry
+resolves to nothing, and a bare name in a coupled system holding two components
+that each declare `W` would be ambiguous even if it did. Note too that the same
+factors typically appear in the node's own `args` as expression children, which
+ARE namespaced — a node must not spell one factor two ways.
+
+**A `variable_map` MUST carry join names with it (normative).** A `variable_map`
+whose transform REMOVES the target parameter from the flattened system
+(`param_to_var`, `conversion_factor`, or an absent transform) substitutes
+`from` for `to` throughout the expression tree. Because `join` names are
+references but not expression children, the ordinary substitution walk does not
+reach them, so a binding MUST additionally rename `to` → `from` inside every
+`join` clause. Otherwise the join names a variable the flattened system no longer
+declares and materialisation fails. The case this exists for is an
+overlap-gated producer over a coupled buffer: `tgt_env = ["ISRM.src_W", …]`
+where an `ISRM_SR.src_W -> ISRM.src_W` map has already removed `ISRM.src_W`.
+
+> A binding whose flattener renders equations to STRINGS rather than to trees
+> (currently TypeScript, and Go for equations) discards `join` at that boundary
+> and has nothing to namespace there; the obligation applies wherever the
+> flattened form preserves the node.
+
 **Broad-phase contract (normative).** `broad_phase_candidates(query_envs,
 cell_envs, eps)` returns **every** `(qi, cj)` whose eps-inflated 2-D envelopes
 intersect, under a **CLOSED** per-axis AABB predicate (edge-touching admitted):
