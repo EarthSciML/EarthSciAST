@@ -43,12 +43,95 @@ from typing import Any
 __all__ = [
     "desugar_pushdown",
     "PushdownRewriteError",
+    "parse_select_axis",
+    "parse_select_axes",
 ]
 
 
 class PushdownRewriteError(Exception):
     """A malformed gate/record encountered while deriving provider gates
     (mirrors the Julia ``RefreshError`` sites in pushdown_rewrite.jl)."""
+
+
+# --------------------------------------------------------------------------- #
+# The per-axis loader-selection vocabulary (esm-spec §8.9.2, CONFORMANCE_SPEC
+# §5.5). ONE parser, because the same four selectors are written in three
+# places — a loader's ``select``, a variable's ``select``, and the pushdown
+# record's gate template — and the spelling an author writes must be the
+# spelling the rewrite generates.
+# --------------------------------------------------------------------------- #
+
+
+def parse_select_axis(ctx: str, ax: Any, gated_by_override: str | None = None) -> Any:
+    """Parse one axis selector into its canonical form.
+
+    Returns ``"all"``, ``{"fixed": i}``, ``{"range": {"start", "stop", "step"}}``
+    or ``{"gated_by": name}``. ``ctx`` names the declaring site for the error
+    message; ``gated_by_override``, when given, replaces the declared set name —
+    the pushdown path substitutes its GENERATED set name into a loader's
+    authored ``{"gated_by": …}`` slot.
+
+    An unrecognised selector is an ERROR, never a silently-widened ``"all"``: a
+    mis-spelled selector that reads the whole axis surfaces much later, as an
+    array of the wrong length or a fetch of the whole store.
+    """
+
+    def bad(detail: str) -> PushdownRewriteError:
+        return PushdownRewriteError(f"{ctx}: {detail}")
+
+    if ax is None or ax == "all":
+        return "all"
+    if not isinstance(ax, dict):
+        raise bad(
+            f"unrecognised axis selector {ax!r}; expected \"all\", {{'fixed': i}}, "
+            "{'range': {'start': s, 'stop': e}} or {'gated_by': '<set>'}"
+        )
+    if "gated_by" in ax:
+        if gated_by_override is not None:
+            return {"gated_by": str(gated_by_override)}
+        name = ax["gated_by"]
+        if not isinstance(name, str):
+            raise bad('"gated_by" must name a derived index set')
+        return {"gated_by": name}
+    if "fixed" in ax:
+        fx = ax["fixed"]
+        fx = fx[0] if isinstance(fx, (list, tuple)) and fx else fx
+        if not isinstance(fx, int) or isinstance(fx, bool) or fx < 0:
+            raise bad('"fixed" must be a non-negative integer index')
+        return {"fixed": int(fx)}
+    if "range" in ax:
+        r = ax["range"]
+        if not isinstance(r, dict):
+            raise bad('"range" must be an object {start, stop, step?}')
+        bounds: dict[str, int] = {}
+        for name, dflt in (("start", 0), ("stop", None), ("step", 1)):
+            v = r.get(name, dflt)
+            if name == "stop" and v is None:
+                raise bad('"range" needs an integer "stop"')
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise bad(f'"range.{name}" must be a non-negative integer, got {v!r}')
+            bounds[name] = int(v)
+        if bounds["step"] == 0:
+            raise bad('"range.step" must be >= 1')
+        if bounds["stop"] < bounds["start"]:
+            raise bad(
+                f'"range" is empty: stop {bounds["stop"]} precedes start {bounds["start"]}'
+            )
+        return {"range": bounds}
+    raise bad(
+        f"unrecognised axis selector keys {sorted(map(str, ax))}; expected one of "
+        "fixed, range, gated_by"
+    )
+
+
+def parse_select_axes(
+    ctx: str, axes: Any, gated_by_override: str | None = None
+) -> list[Any]:
+    """Parse a whole ``axes`` array of the selector vocabulary
+    (:func:`parse_select_axis`)."""
+    if not isinstance(axes, (list, tuple)):
+        raise PushdownRewriteError(f'{ctx}: needs an "axes" array')
+    return [parse_select_axis(ctx, ax, gated_by_override) for ax in axes]
 
 
 # --------------------------------------------------------------------------- #
@@ -637,21 +720,21 @@ def _pushdown_gate_axes(
             if isinstance(gsel, dict):
                 tpl = gsel.get("axes")
     if isinstance(tpl, list):
-        axes: list[Any] = []
+        # Through the SAME parser a loader's own `select` goes through, so the
+        # authored template and a document-declared selection are one vocabulary
+        # (CONFORMANCE_SPEC §5.5) — and an unrecognised selector here is an
+        # error rather than a silently-widened whole axis.
+        axes = parse_select_axes(
+            f"data_loaders.{loader} gated_select template", tpl, gated_by_override=gset
+        )
         nonfixed = 0
         gpos = -1
-        for ax in tpl:
+        for ax in axes:
+            if isinstance(ax, dict) and "fixed" in ax:
+                continue
             if isinstance(ax, dict) and "gated_by" in ax:
-                axes.append({"gated_by": str(gset)})
                 gpos = nonfixed
-                nonfixed += 1
-            elif isinstance(ax, dict) and "fixed" in ax:
-                fx = ax["fixed"]
-                fi = int(fx[0]) if isinstance(fx, list) else int(fx)
-                axes.append({"fixed": [fi]})
-            else:
-                axes.append("all")
-                nonfixed += 1
+            nonfixed += 1
         if gpos != gaxis:
             raise PushdownRewriteError(
                 f"data_loaders.{loader} gated_select template puts the gated axis "

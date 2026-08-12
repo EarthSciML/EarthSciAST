@@ -1299,6 +1299,16 @@ def _frontdoor_join_keys_and_extents(
             continue
         _mindepth = min(k.count(".") for k in _keys)
         _best = [k for k in _keys if k.count(".") == _mindepth]
+        # Several keys naming the SAME array are not an ambiguity: a coupling
+        # `variable_map` surfaces one loader array under both its loader key and
+        # its model name (`ISRM_SR.src_W` and `ISRM.src_W` are one object, by
+        # reference — `_inject_pushdown_aliases` never copies). Before the
+        # document could declare its own `select`, only the model name existed
+        # here, so the tail resolved by uniqueness and this case never arose.
+        if len(_best) > 1 and all(
+            const_arrays[k] is const_arrays[_best[0]] for k in _best
+        ):
+            _best = _best[:1]
         if len(_best) == 1:
             const_arrays[_tail] = const_arrays[_best[0]]
 
@@ -1506,10 +1516,21 @@ def _fetch_gated_providers(
                 selection.append(mem0)
                 gated_pos = ax_i
                 gated_extent = int(vi_extents.get(faq, len(mem0)))
+            elif isinstance(ax, dict) and "range" in ax:
+                # A `range` axis alongside the gated one (esm-spec §8.9.2), sent
+                # as its explicit index list: the store-backed reader resolves a
+                # slice to exactly this list, so the delivered slab is identical
+                # either way and the fetch-whole-then-slice fallback below needs
+                # no third case.
+                r = ax["range"]
+                selection.append(
+                    list(range(int(r["start"]), int(r["stop"]), int(r.get("step", 1))))
+                )
             else:
                 raise SimulationError(
                     f"gated provider '{key}' axis {ax_i} is malformed (expected "
-                    f'"all", {{"fixed":[i]}}, or {{"gated_by":set}})'
+                    f'"all", {{"fixed":[i]}}, {{"range":{{...}}}}, or '
+                    f'{{"gated_by":set}})'
                 )
         if gated_pos < 0:
             raise SimulationError(
@@ -1865,6 +1886,7 @@ def _build_numpy_rhs(
     static_cache: dict[str, Any] | None = None,
     gated_providers: dict[str, Any] | None = None,
     sample_time: float = 0.0,
+    build_only: bool = False,
 ) -> _NumpyRhsBuild:
     """Assemble the NumPy-interpreter RHS closure + state layout for a flattened
     array/PDE system. Shared by :func:`_simulate_with_numpy` (which integrates
@@ -1920,12 +1942,19 @@ def _build_numpy_rhs(
         offset += size
     total_size = offset
 
-    if total_size == 0 and not vi_var_names:
+    if total_size == 0 and not vi_var_names and not build_only:
         # A model whose ONLY states are value-invention producers (the pushdown
         # rewrite's generated member set) is a legitimate pure build-time
         # relational model: the build proceeds with an empty state vector so
         # `prepare` can evaluate its observed graph (integrating it is
         # meaningless and `simulate` still has nothing to integrate).
+        #
+        # `build_only` extends that to a model with NO states at all — a static
+        # evaluation whose whole content is its observed graph over loaded
+        # parameters (`system_kind: "nonlinear"`, `equations: []`). `prepare`
+        # sets it, because evaluating such a graph is exactly what `prepare` is
+        # for; `simulate` leaves it false, because it really does have nothing
+        # to integrate.
         raise SimulationError("Flattened system has no state variables to integrate")
 
     # Partition equations: an observed assignment is ``name = <body>`` whose
