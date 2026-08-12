@@ -59,6 +59,7 @@ the same `_NK_LOOPVAR` payload load), reached from the scalar CSE-prelude /
 `Enzyme.set_runtime_activity(Reverse)` to get that far — without it you get an
 `EnzymeRuntimeActivityError` on the captured `Vector{Tuple{Int,_Node}}` first. The
 wart belongs to the shared `_Node` IR, not to either emitter.
+(Log: `measurements/iip-strict-nocodegen.txt`.)
 
 **(c) The runtime tree does not have to contain the offending kind.** The 0-D model
 has no loop-var node, no gather and no `fn` node at all, and still fails on the
@@ -69,10 +70,19 @@ payload more carefully at runtime" a non-strategy.
 
 ### What the flag buys, and what it now costs
 
-Not measured to completion. `repro_oop.jl relaxed` on the trivial 0-D model
-(2 states, one shared subexpression) **did not finish an Enzyme compile in 50
-minutes** on a contended shared box, and a second run was still compiling at the
-point this note was written. The note's "reverse mode then produces gradients
+Not measured to completion, and that is itself the result. `repro_oop.jl relaxed` on
+the trivial 0-D model (2 states, one shared subexpression) **did not finish an Enzyme
+compile in 50 minutes** and was killed; a second, further-minimised attempt
+(`relaxed_min.jl`, the 0-D case alone) was still compiling 20+ minutes in at **13.1 GB
+RSS**, with CPU time tracking wall clock 1:1 and RSS flat — i.e. compute-bound inside
+Enzyme's type analysis, not leaking or swapping. Footprint samples:
+`measurements/oop-relaxed-footprint.txt`; the killed run:
+`measurements/oop-relaxed-timedout.txt`.
+
+Contrast with the failure path, which takes **under a minute**. Turning the flag on
+does not trade a fast error for a slow success so much as trade a fast error for an
+unbounded wait — at least on this walker, at this Enzyme version, on a contended box.
+The note's "reverse mode then produces gradients
 matching ForwardDiff to ~1e-16" was presumably measured against an older Enzyme;
 we could not confirm it at 0.13.199. Treat "the flag makes it work" as unverified
 at current versions — *see the open item at the bottom.*
@@ -284,7 +294,8 @@ UndefVarError: `codegen_ft` not defined in `Enzyme.Compiler`
 With `ESS_CODEGEN_DISABLE=1` the same case gives the ordinary
 `IllegalTypeAnalysisException` instead, and the 0-D model (which emits no kernels, so
 no RGF) gives `IllegalTypeAnalysisException` either way. That 2x2 isolates the RGF as
-the trigger. This matches the general concern that RGFs produce runtime-generated code,
+the trigger. (Logs: `measurements/iip-strict-codegen.txt` vs
+`measurements/iip-strict-nocodegen.txt`.) This matches the general concern that RGFs produce runtime-generated code,
 which cuts against Enzyme's need for static IR — though `UndefVarError` on an internal
 name is an Enzyme bug worth reporting upstream regardless.
 
@@ -342,11 +353,16 @@ Reactant/XLA, which needs no flag), the ordering that maximises value per unit r
 ## 5. What we could not determine
 
 - **Whether the flag still makes `:oop` reverse mode actually work at 0.13.199.**
-  Two runs did not complete an Enzyme compile of the trivial 0-D model (50 min and
-  counting) on a heavily contended shared box. The failure without the flag is
-  reproduced in under a minute; the success *with* it is not reproduced at all here.
-  This should be re-run on an idle machine before anyone relies on the note's
-  "~1e-16 agreement" claim.
+  Two runs did not complete an Enzyme compile of the trivial 0-D model (one killed at
+  50 min, one 20+ min at 13.1 GB and still going) on a heavily contended shared box.
+  The failure without the flag reproduces in under a minute; the success *with* it is
+  not reproduced at all here. We therefore cannot confirm the note's "~1e-16
+  agreement" claim, and cannot distinguish "slow but finite" from "does not terminate"
+  — the machine was shared with a 23 GB, 10-hour job throughout. **Re-run this on an
+  idle machine before relying on the flag for anything.** What we *can* say is that
+  the flag has the intended effect on a small walker of the same shape
+  (`micro_variants.jl any relaxed`, exact agreement with ForwardDiff, seconds), so the
+  obstacle is scale, not semantics.
 - **Whether the `UndefVarError: codegen_ft` is specific to this RGF usage** or a
   general Enzyme 0.13.199 bug. The 2x2 above isolates the RGF as the trigger in our
   case; we did not minimise it to a standalone reproducer or check it against
