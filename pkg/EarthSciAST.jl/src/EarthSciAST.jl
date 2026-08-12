@@ -223,6 +223,7 @@ export
     build_refresh_callback, RefreshBuffers, RefreshError,
     provider_refresh_times, provider_is_const, provider_sample,
     provider_supports_selection, provider_gate_spec, provider_is_gated,
+    provider_extent_metaparameter,
     # Document-declared provider construction (Phase 1 clean consolidation;
     # implemented by the EarthSciIO extension, stub errors without it).
     providers_from_document,

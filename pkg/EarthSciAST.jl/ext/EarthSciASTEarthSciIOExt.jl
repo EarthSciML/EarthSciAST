@@ -30,6 +30,7 @@ using EarthSciAST: RefreshError, OutputError, StateSnapshot, VarGridding,
     plan_dimension_coordinates, output_var_dims, DEFAULT_TIME_DIM
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
+import EarthSciAST: provider_gate_spec, provider_extent_metaparameter
 import EarthSciAST: providers_from_document
 import EarthSciAST: build_zarr_sink, sink_output_times, sink_open!, sink_write!,
     sink_flush!, sink_close!, sink_observed_names, zarr_restart_state
@@ -126,19 +127,371 @@ end
 # a store's metadata objects are fetched once.
 # --------------------------------------------------------------------------- #
 
-# Raw `data_loaders` map from any accepted document carrier.
-_doc_loaders(doc::AbstractDict) = get(doc, "data_loaders", nothing)
-_doc_loaders(doc::AbstractString) = _doc_loaders(EarthSciAST.load(doc))
-function _doc_loaders(file)
-    # EsmFile (or anything typed that serializes): reuse the round-trip emitter.
-    return _doc_loaders(EarthSciAST.serialize_esm_file(file))
+# Raw document from any accepted carrier — a native `Dict`, a path, or an
+# `EsmFile`. `providers_from_document` needs the WHOLE document, not just its
+# `data_loaders`: a `select` range bound may name a `metaparameters` entry.
+_doc_raw(doc::AbstractDict) = doc
+_doc_raw(doc::AbstractString) = _doc_raw(EarthSciAST.load(doc))
+# EsmFile (or anything typed that serializes): reuse the round-trip emitter.
+_doc_raw(file) = _doc_raw(EarthSciAST.serialize_esm_file(file))
+
+# --------------------------------------------------------------------------- #
+# The DECLARED ingest (esm-spec §8.9). Between the bytes and a usable array sit
+# four document fields — how the format decodes (`reader_options`), how a text
+# column becomes numbers (`codes`), which records are real (`record_filter`),
+# and what the loader delivers (`select`) — plus a fifth, `extent`, by which a
+# loader tells `prepare` its own record count. NONE of them is a caller-side
+# transform any more: a runner that does not know this model can run it.
+# --------------------------------------------------------------------------- #
+
+"""A loader variable's declared string→number code map (`codes`, §8.9.1).
+`unmapped` is `:drop` (lose the whole record), `:error`, or a `Float64`."""
+struct CodeMap
+    map::Dict{String,Float64}
+    case_insensitive::Bool
+    unmapped::Union{Symbol,Float64}
+end
+
+# The code for one raw cell, or `nothing` when it is unmapped and the declared
+# policy is to drop the record. Surrounding whitespace is always trimmed.
+function _code_lookup(cm::CodeMap, raw::AbstractString, var::AbstractString)
+    key = strip(String(raw))
+    cm.case_insensitive && (key = uppercase(key))
+    haskey(cm.map, key) && return cm.map[key]
+    cm.unmapped isa Float64 && return cm.unmapped::Float64
+    cm.unmapped === :drop && return nothing
+    throw(RefreshError(
+        "loader variable '$var': value $(repr(String(raw))) is not in its declared " *
+        "`codes` map (set codes.unmapped to \"drop\" or a number to accept it)"))
+end
+
+"""One column of a record-table loader: where it comes from, how it decodes."""
+struct ColumnSpec
+    name::String              # the loader-level variable name
+    file_variable::String     # the on-disk column
+    codes::Union{Nothing,CodeMap}
+end
+
+"""
+A record-table loader's decode, SHARED by its per-variable providers.
+
+A `points` loader declaring a `record_filter` or a `codes` map is a TABLE, not a
+bag of independent arrays: which rows survive is a property of the whole
+RECORD, so every column must be filtered by the same mask or the columns
+silently misalign (esm-spec §8.9.3). That forces one decode — this type —
+rather than one per variable, which also means the 69 MB FF10 zip is unzipped
+and parsed once for all eight of its columns instead of eight times.
+
+Materialized lazily on first use and then held: `prepare` samples the providers
+one after another (single-threaded, which is why the memo needs no lock), and
+the second must not re-read.
+"""
+mutable struct RecordTable
+    loader::String
+    provider::EarthSciIO.Provider
+    columns::Vector{ColumnSpec}
+    require_finite::Vector{String}      # loader variable names
+    cache::Union{Nothing,Dict{String,Vector{Float64}}}
+end
+
+# One numeric EarthSciIO column widened to Float64. A TEXT column with no
+# `codes` map is a modelling mistake, not a silent drop: a model forcing must be
+# numeric, so it is refused at the loader boundary (§8.9.1).
+function _widen_column(name::AbstractString, data)
+    eltype(data) <: Real && return Float64[Float64(x) for x in data]
+    throw(RefreshError(
+        "loader variable '$name' decoded as strings; a model forcing must be " *
+        "numeric (declare a `codes` map for it)"))
+end
+
+"""Decode + filter once; every later column read is free."""
+function _table_columns(t::RecordTable)
+    t.cache === nothing || return t.cache
+    nds = EarthSciIO.materialize(t.provider)
+
+    # Raw columns (unfiltered), plus the per-record keep mask that the `codes`
+    # drops and the finite requirement build up together.
+    raw = Dict{String,Vector{Float64}}()
+    keep = Bool[]
+    nrec = -1
+    for spec in t.columns
+        haskey(nds.variables, spec.file_variable) || throw(RefreshError(
+            "loader '$(t.loader)': the reader returned no column " *
+            "'$(spec.file_variable)' for variable '$(spec.name)' " *
+            "(present: $(EarthSciIO.variable_names(nds)))"))
+        f = nds.variables[spec.file_variable]
+        ndims(f.data) == 1 || throw(RefreshError(
+            "loader '$(t.loader)' declares a record filter, but variable " *
+            "'$(spec.name)' is rank $(ndims(f.data)) $(size(f.data)); a record " *
+            "filter needs a single record axis"))
+        n = length(f.data)
+        if nrec < 0
+            nrec = n
+            keep = trues(n)
+        elseif nrec != n
+            throw(RefreshError(
+                "loader '$(t.loader)': column '$(spec.name)' has $n records but an " *
+                "earlier column has $nrec; the reader did not return one aligned table"))
+        end
+        raw[spec.name] = if spec.codes === nothing
+            _widen_column(spec.name, f.data)
+        elseif eltype(f.data) <: AbstractString
+            col = Vector{Float64}(undef, n)
+            for i in 1:n
+                v = _code_lookup(spec.codes, f.data[i], spec.name)
+                if v === nothing
+                    keep[i] = false
+                    col[i] = NaN
+                else
+                    col[i] = v
+                end
+            end
+            col
+        else
+            throw(RefreshError(
+                "loader '$(t.loader)' variable '$(spec.name)' declares `codes`, but " *
+                "the column decoded as $(eltype(f.data)); a code map maps a TEXT " *
+                "column to numbers"))
+        end
+    end
+    nrec < 0 && (nrec = 0)
+
+    for name in t.require_finite
+        haskey(raw, name) || throw(RefreshError(
+            "loader '$(t.loader)': record_filter.require_finite names '$name', which " *
+            "is not one of its variables"))
+        col = raw[name]
+        for i in 1:nrec
+            isfinite(col[i]) || (keep[i] = false)
+        end
+    end
+
+    kept = count(keep)
+    out = Dict{String,Vector{Float64}}(name => col[keep] for (name, col) in raw)
+    kept == nrec || println("  [esio] loader '$(t.loader)': $nrec records read, ",
+                            "$kept kept by its declared record filter")
+    t.cache = out
+    return out
+end
+
+function _table_column(t::RecordTable, name::AbstractString)
+    cols = _table_columns(t)
+    haskey(cols, name) || throw(RefreshError(
+        "loader '$(t.loader)' has no column '$name' (declared: $(sort!(collect(keys(cols)))))"))
+    return cols[name]
+end
+
+# --- `select`: the per-axis vocabulary, parsed once (§8.9.2) ----------------- #
+
+# A `range` bound may be an integer or the NAME of a metaparameter, which
+# resolves to that metaparameter's document default — so a loader can say
+# `W[0:N_SRC]` in the model's own terms instead of repeating 52411 and drifting
+# from the index set sized by the same metaparameter.
+function _resolve_bound(doc, ctx::AbstractString, what::AbstractString, v)
+    v isa Integer && return Int(v)
+    v isa AbstractString || throw(RefreshError(
+        "$ctx: range.$what must be an integer or a metaparameter name, got $(repr(v))"))
+    mps = get(doc, "metaparameters", nothing)
+    mp = mps isa AbstractDict ? get(mps, String(v), nothing) : nothing
+    d = mp isa AbstractDict ? get(mp, "default", nothing) : nothing
+    d isa Integer || throw(RefreshError(
+        "$ctx: range.$what names $(repr(String(v))), which is not a metaparameter " *
+        "with an integer default"))
+    return Int(d)
+end
+
+# One axis of a `select.axes`, normalized to the gate vocabulary EarthSciAST's
+# build already speaks ("all" / fixed / range / gated_by) — one spelling,
+# whether an author wrote it or the pushdown rewrite generated it.
+function _parse_select_axis(doc, ctx::AbstractString, i::Int, ax)
+    (ax == "all") && return "all"
+    ax isa AbstractDict || throw(RefreshError(
+        "$ctx axis $i: expected \"all\" or an object, got $(repr(ax))"))
+    ks = Set(String(k) for k in keys(ax))
+    if ks == Set(["fixed"])
+        fx = ax["fixed"]
+        return Dict{String,Any}("fixed" => Int(fx isa AbstractVector ? first(fx) : fx))
+    elseif ks == Set(["range"])
+        r = ax["range"]
+        r isa AbstractDict && haskey(r, "stop") || throw(RefreshError(
+            "$ctx axis $i: range needs a \"stop\""))
+        start = haskey(r, "start") ? _resolve_bound(doc, "$ctx axis $i", "start", r["start"]) : 0
+        stop = _resolve_bound(doc, "$ctx axis $i", "stop", r["stop"])
+        step = haskey(r, "step") ? _resolve_bound(doc, "$ctx axis $i", "step", r["step"]) : 1
+        step >= 1 || throw(RefreshError("$ctx axis $i: range.step must be >= 1, got $step"))
+        return Dict{String,Any}("range" =>
+            Dict{String,Any}("start" => start, "stop" => stop, "step" => step))
+    elseif ks == Set(["gated_by"])
+        return Dict{String,Any}("gated_by" => String(ax["gated_by"]))
+    end
+    throw(RefreshError(
+        "$ctx axis $i: unrecognised axis selector keys $(sort!(collect(ks))); one axis " *
+        "is \"all\", {\"fixed\": i}, {\"range\": {start, stop, step}} or " *
+        "{\"gated_by\": \"<derived set>\"}"))
+end
+
+function _parse_declared_select(doc, ctx::AbstractString, node)
+    sel = get(node, "select", nothing)
+    sel === nothing && return nothing
+    sel isa AbstractDict || throw(RefreshError("$ctx.select must be an object"))
+    axes = get(sel, "axes", nothing)
+    axes isa AbstractVector || throw(RefreshError("$ctx.select needs an \"axes\" array"))
+    return Any[_parse_select_axis(doc, "$ctx.select", i, ax) for (i, ax) in enumerate(axes)]
+end
+
+function _parse_codes(ctx::AbstractString, vd)
+    codes = get(vd, "codes", nothing)
+    codes === nothing && return nothing
+    codes isa AbstractDict || throw(RefreshError("$ctx.codes must be an object"))
+    m = get(codes, "map", nothing)
+    m isa AbstractDict || throw(RefreshError("$ctx.codes needs a \"map\" object"))
+    ci = Bool(get(codes, "case_insensitive", false))
+    unmapped = if !haskey(codes, "unmapped")
+        :error                                   # fail-closed default
+    else
+        u = codes["unmapped"]
+        u == "drop" ? :drop : u == "error" ? :error :
+        u isa Real ? Float64(u) :
+        throw(RefreshError("$ctx.codes.unmapped must be \"drop\", \"error\" or a number"))
+    end
+    out = Dict{String,Float64}()
+    for (k, v) in m
+        v isa Real || throw(RefreshError("$ctx.codes.map[$(repr(String(k)))] must be a number"))
+        out[ci ? uppercase(String(k)) : String(k)] = Float64(v)
+    end
+    return CodeMap(out, ci, unmapped)
+end
+
+# The declared axes as EarthSciIO's native selection. A contiguous `range` stays
+# a `slice` rather than expanding to a 52,411-long index list, so a store-backed
+# reader fetches only the intersecting chunks.
+function _declared_to_native(axes)
+    native = Any[]
+    for ax in axes
+        if ax == "all"
+            push!(native, "all")
+        elseif haskey(ax, "fixed")
+            push!(native, Dict("indices" => [ax["fixed"]]))
+        elseif haskey(ax, "range")
+            r = ax["range"]
+            push!(native, Dict("slice" => [r["start"], r["stop"], r["step"]]))
+        else
+            # Unreachable: a gated axis is deferred, never pushed eagerly.
+            push!(native, "all")
+        end
+    end
+    return Dict("axes" => native)
+end
+
+# Apply the declared axes to an ALREADY-materialized array: take each axis's
+# indices, then DROP the `fixed` axes (a fixed index is a choice, not a
+# dimension). The reader-pushed and engine-applied paths MUST agree exactly;
+# this is the second of the two.
+function _apply_declared_select(key::AbstractString, arr::AbstractArray, axes)
+    all(ax == "all" for ax in axes) && return arr
+    length(axes) == ndims(arr) || throw(RefreshError(
+        "provider '$key': the declared select has $(length(axes)) axes but the array " *
+        "is rank $(ndims(arr)) $(size(arr))"))
+    idx = Any[]
+    drop = Int[]
+    for (i, ax) in enumerate(axes)
+        dim = size(arr, i)
+        if ax == "all"
+            push!(idx, Colon())
+        elseif haskey(ax, "fixed")
+            g = ax["fixed"]
+            0 <= g < dim || throw(RefreshError(
+                "provider '$key': the declared select reaches index $g on axis $i, " *
+                "whose native length is $dim"))
+            push!(idx, (g + 1):(g + 1))
+            push!(drop, i)
+        elseif haskey(ax, "range")
+            r = ax["range"]
+            r["stop"] <= dim || throw(RefreshError(
+                "provider '$key': the declared select reaches index $(r["stop"] - 1) on " *
+                "axis $i, whose native length is $dim"))
+            push!(idx, (r["start"] + 1):r["step"]:r["stop"])
+        else
+            throw(RefreshError(
+                "provider '$key': axis $i gates on '$(ax["gated_by"])', which is " *
+                "resolved by value-invention inside prepare, not by an eager sample"))
+        end
+    end
+    out = arr[idx...]
+    isempty(drop) && return out
+    return dropdims(out; dims = Tuple(drop))
+end
+
+"""
+    DeclaredProvider
+
+One loader VARIABLE, served with the ingest its document declares (§8.9): the
+format's decode options, an optional shared [`RecordTable`], the per-axis
+`select`, and the metaparameter its extent binds. A loader with none of those
+degenerates to a bare EarthSciIO provider read whole — the pre-§8.9 behaviour.
+"""
+struct DeclaredProvider
+    key::String                                   # "<Loader>.<var>"
+    varname::String
+    inner::EarthSciIO.Provider
+    table::Union{Nothing,RecordTable}
+    column::String
+    select::Union{Nothing,Vector{Any}}
+    push_to_reader::Bool                          # where `select` is honoured
+    extent_mp::Union{Nothing,String}
+end
+
+provider_refresh_times(p::DeclaredProvider) = EarthSciIO.refresh_times(p.inner)
+
+# A record-table column never supports a pushed-down selection: its rows are
+# chosen by the loader's declared filter AFTER the decode, so an index pushed to
+# the reader would address raw rows rather than delivered ones.
+provider_supports_selection(p::DeclaredProvider) =
+    p.table === nothing && EarthSciIO.supports_selection(p.inner)
+
+provider_extent_metaparameter(p::DeclaredProvider) = p.extent_mp
+
+# A declared select carrying a `gated_by` axis IS a provider-declared gate:
+# `prepare` defers it past value-invention and fetches it pre-sliced to the
+# materialised members, through the machinery the record-derived gate uses.
+function provider_gate_spec(p::DeclaredProvider)
+    p.select === nothing && return nothing
+    any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in p.select) || return nothing
+    return Dict{String,Any}("axes" => p.select, "applies_to" => Any[p.varname])
+end
+
+function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
+    if selection !== nothing
+        # The GATED path: `prepare` resolved the members and is asking for that
+        # slab. It supersedes the declared select it was derived from.
+        return provider_sample(p.inner, t; selection = selection)
+    end
+    arr = if p.table !== nothing
+        _table_column(p.table, p.column)
+    elseif p.select !== nothing && p.push_to_reader
+        nds = EarthSciIO.refresh(p.inner, Float64(t); select = _declared_to_native(p.select))
+        vars = EarthSciIO.variable_names(nds)
+        length(vars) == 1 || throw(RefreshError(
+            "provider '$(p.key)': the reader returned $(length(vars)) variables $vars"))
+        nds[vars[1]].data
+    else
+        provider_sample(p.inner, Float64(t))
+    end
+    # Pushed to the reader, only the `fixed` axes still need dropping; applied
+    # engine-side, the whole select does. Both produce the same array.
+    p.select === nothing && return arr
+    axes = p.push_to_reader ?
+        Any[ax isa AbstractDict && haskey(ax, "fixed") ?
+            Dict{String,Any}("fixed" => 0) : "all" for ax in p.select] : p.select
+    return _apply_declared_select(p.key, arr, axes)
 end
 
 function providers_from_document(doc;
                                  cache_root::AbstractString,
                                  loaders = nothing,
                                  url_overrides::AbstractDict = Dict{String,String}())
-    dls = _doc_loaders(doc)
+    raw = _doc_raw(doc)
+    dls = get(raw, "data_loaders", nothing)
     dls isa AbstractDict || throw(RefreshError(
         "providers_from_document: the document declares no data_loaders"))
     want = loaders === nothing ? nothing : Set(String(l) for l in loaders)
@@ -166,12 +519,63 @@ function providers_from_document(doc;
         vars = get(ld, "variables", nothing)
         vars isa AbstractDict || continue
         cache = EarthSciIO.Cache(; root = joinpath(String(cache_root), lname))
-        for (vname0, vd) in vars
-            vname = String(vname0)
-            fv = vd isa AbstractDict ? get(vd, "file_variable", vname) : vname
-            out["$lname.$vname"] = EarthSciIO.const_provider(
+
+        # ---- the loader's DECLARED ingest (esm-spec §8.9) -------------------
+        # `reader_options` is the document's spelling of EarthSciIO's
+        # `reader_kwargs`; handing it over verbatim is the whole point, and an
+        # unrecognised key fails at Provider construction rather than decoding
+        # something else silently (spec/registries.md §2.1).
+        ropts = get(ld, "reader_options", nothing)
+        reader_kwargs = ropts isa AbstractDict ?
+            Dict{Symbol,Any}(Symbol(k) => v for (k, v) in ropts) : Dict{Symbol,Any}()
+        loader_select = _parse_declared_select(raw, "data_loaders.$lname", ld)
+        ext = get(ld, "extent", nothing)
+        extent_mp = ext isa AbstractDict && get(ext, "metaparameter", nothing) isa AbstractString ?
+            String(ext["metaparameter"]) : nothing
+        rf = get(ld, "record_filter", nothing)
+        require_finite = String[]
+        if rf isa AbstractDict && get(rf, "require_finite", nothing) isa AbstractVector
+            require_finite = String[String(v) for v in rf["require_finite"]]
+        end
+
+        columns = ColumnSpec[]
+        for vname0 in sort!(String[String(k) for k in keys(vars)])
+            vd = vars[vname0]
+            fv = vd isa AbstractDict ? String(get(vd, "file_variable", vname0)) : vname0
+            push!(columns, ColumnSpec(vname0, fv,
+                _parse_codes("data_loaders.$lname.variables.$vname0", vd)))
+        end
+
+        # A record filter or a code map makes the loader a TABLE: one decode,
+        # one keep mask, columns that stay aligned.
+        table = nothing
+        if !isempty(require_finite) || any(c.codes !== nothing for c in columns)
+            file_vars = sort!(unique(String[c.file_variable for c in columns]))
+            table = RecordTable(lname,
+                EarthSciIO.const_provider(cache, String(url); format = String(fmt),
+                                          variables = file_vars, source_loader = lname,
+                                          reader_kwargs = reader_kwargs),
+                columns, require_finite, nothing)
+        end
+
+        for spec in columns
+            key = "$lname.$(spec.name)"
+            vd = vars[spec.name]
+            sel = _parse_declared_select(
+                raw, "data_loaders.$lname.variables.$(spec.name)", vd)
+            sel === nothing && (sel = loader_select)
+            inner = EarthSciIO.const_provider(
                 cache, String(url); format = String(fmt),
-                variables = [String(fv)], source_loader = lname)
+                variables = [spec.file_variable], source_loader = lname,
+                reader_kwargs = reader_kwargs)
+            # A declared select goes to the reader when it can fetch pre-sliced
+            # AND no rows are filtered in front of it; otherwise engine-side.
+            # Where it is applied is an optimization, never a semantic.
+            push_down = sel !== nothing && table === nothing &&
+                        EarthSciIO.supports_selection(inner) &&
+                        !any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in sel)
+            out[key] = DeclaredProvider(key, spec.name, inner, table, spec.name,
+                                        sel, push_down, extent_mp)
         end
     end
     return out
