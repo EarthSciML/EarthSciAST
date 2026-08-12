@@ -33,7 +33,7 @@ contrast, still SHORT-CIRCUITS — it never evaluates a guarded `fn` on a lane
 the guard excludes.
 
 Consequence: a closed function that **throws** off its domain is observable
-only as a *difference between evaluator paths* (the vectorized paths raise
+only as a *difference between evaluator paths* (the array paths raise
 where the scalar path silently skipped), and that divergence is a **contract
 violation by the function author, not an evaluator bug**. The spec-defined
 `datetime.*` / `interp.*` set honors this contract (the calendar functions are
@@ -682,7 +682,7 @@ end
 
 # Validate an `interp.searchsorted` table `xs`: must be a vector, non-decreasing,
 # with no NaN entries (esm-spec §9.2.2). Factored out of the per-call kernel so
-# the vectorized array path can validate ONCE at build time instead of re-walking
+# the access-kernel array path can validate ONCE at build time instead of re-walking
 # the build-time-constant table every lane (ess-wrh).
 function _validate_searchsorted_table(name::String, xs)::Nothing
     if !(xs isa AbstractVector)
@@ -709,8 +709,8 @@ end
 # `i` with `xs[i] ≥ x`), out-of-range below → 1, above → N+1, NaN x → N+1, empty
 # table → 1. Precondition: `xs` is a validated non-decreasing NaN-free vector (see
 # `_validate_searchsorted_table`). Shared verbatim by the scalar
-# `evaluate_closed_function` path and the vectorized array kernel
-# (`_eval_vec_interp_searchsorted`), so the two are bit-identical by construction
+# `evaluate_closed_function` path and the access-kernel `:fn` arm
+# (`_eval_acc_op`, access_kernel.jl), so the two are bit-identical by construction
 # (ess-wrh).
 @inline function _interp_searchsorted_core(name::String, x::Real, xs)::Int32
     n = length(xs)
@@ -779,9 +779,9 @@ end
 # evaluation order `t[i] + w * (t[i+1] - t[i])` for endpoint exactness. `axis`
 # must be a validated strictly-increasing `Vector{Float64}` (≥ 2 entries) and
 # `len(table) == len(axis)`. `table` is read with an inline `Float64(...)` so the
-# scalar path may pass the raw const array while the vectorized path passes a
+# scalar path may pass the raw const array while the access-kernel path passes a
 # build-time-coerced `Vector{Float64}` (the coercion is then a no-op). Shared by
-# the scalar `:fn` arm and `_eval_vec_interp_linear` → bit-identical (ess-wrh).
+# the scalar `:fn` arm and `_eval_acc_op`'s `:fn` arm → bit-identical (ess-wrh).
 #
 # The query is `Real`, not `Float64`, so a ForwardDiff `Dual` flows through: the
 # out-of-place RHS (tree_walk/oop.jl) differentiates models whose rate/emission
@@ -842,8 +842,8 @@ end
 # be validated strictly-increasing `Vector{Float64}`s and `table` an `Nx × Ny`
 # nested vector (outer length Nx, each row length Ny). `table[i][j]` is read with
 # an inline `Float64(...)`, so the scalar path may pass the raw nested const array
-# while the vectorized path passes a build-time-coerced `Vector{Vector{Float64}}`
-# (no-op coercion). Shared by the scalar `:fn` arm and `_eval_vec_interp_bilinear`
+# while the access-kernel path passes a build-time-coerced `Vector{Vector{Float64}}`
+# (no-op coercion). Shared by the scalar `:fn` arm and `_eval_acc_op`'s `:fn` arm
 # → bit-identical (ess-wrh).
 @inline function _interp_bilinear_core(table, axis_x, axis_y,
                                        x::Real, y::Real)
@@ -925,16 +925,16 @@ function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
 end
 
 # ============================================================
-# Build-time-validated typed carriers for the vectorized array path (ess-wrh)
+# Build-time-validated typed carriers for the access-kernel array path (ess-wrh)
 # ============================================================
 #
-# A vectorized `arrayop` whose body contains an `interp.*` leaf evaluates that
+# An `arrayop` whose body contains an `interp.*` leaf evaluates that
 # leaf once per cell (lane). Re-validating the build-time-constant table/axis and
 # re-coercing them to `Vector{Float64}` on every lane — and boxing the scalar
 # query into the `AbstractVector{Any}` that `evaluate_closed_function` consumes —
 # is pure overhead. These specs do that work ONCE at build time: validate (reusing
 # the same checks, hence the same diagnostic codes, as the scalar path) and coerce
-# to concrete `Vector{Float64}` storage. `_eval_vec_fn` then calls the
+# to concrete `Vector{Float64}` storage. `_eval_acc_op`'s `:fn` arm then calls the
 # validation-free `_interp_*_core` kernels per lane with a typed `Float64` query —
 # no per-lane box, no per-lane validation, bit-identical to the scalar `:fn` arm
 # (same callee). The validation throw simply moves to build time (fail-fast); the

@@ -1331,7 +1331,8 @@ const _EMPTY_NAME_SET = Set{String}()
 #
 # STOP INLINING SCALAR OBSERVEDS. The author-declared name of a scalar observed
 # IS a sharing declaration — splicing its body into every reader erases the name
-# and then three passes (scalar CSE, invariant_share, vec_share) re-discover the
+# and then several passes (scalar CSE plus the access-kernel invariant/per-cell CSE
+# tiers) re-discover the
 # sharing structurally. Instead each safe scalar observed compiles ONCE as a
 # NAMED PRELUDE DEF (an ordinary `_NK_CACHED` slot in the scalar CSE prelude,
 # evaluated in dependency order before the equations — see `_cse_compile_scalar`);
@@ -3185,12 +3186,12 @@ end
 # Per-cell compiled nodes are collected and then merged into whole-array
 # kernels (ess-dhq) rather than pushed individually into `rhs_list`; the
 # per-cell build logic (ghost cells, const-array inlining, joins/filters,
-# variable-valence bounds) is unchanged. Appends to `vec_kernels` and marks
+# variable-valence bounds) is unchanged. Appends to `acc_kernels` and marks
 # `covered` for every cell it owns. Two-branch dispatch: the symbolic-stencil
 # fast path when it applies, else the per-cell fallback
 # (`_compile_arrayop_percell!`).
-# (`vec_kernels` is a `Vector{_VecKernel}`; the annotation is omitted because
-# `_VecKernel` is defined in section 4b, after this build section.)
+# (`acc_kernels` is a `Vector{_AccKernel}`; the annotation is omitted because
+# `_AccKernel` is defined in access_kernel.jl, included after this build section.)
 
 # ess-affine: unroll a CONSTANT-bound contraction (aggregate reduction) into a
 # plain ⊕-fold AST so the existing affine box processor can lower it — no runtime

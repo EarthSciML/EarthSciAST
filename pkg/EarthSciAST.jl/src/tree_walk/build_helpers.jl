@@ -442,7 +442,7 @@ end
 # (`E_TREEWALK_UNSUPPORTED_SHAPE`), so no prior-passing build exercised one.
 #
 # INVARIANT: every op here MUST have a scalar arm in `_eval_node_op` (and hence a
-# vectorized arm in `_eval_vec_op`) — the fold inlines the op into a state RHS,
+# matching arm in `_eval_acc_op`) — the fold inlines the op into a state RHS,
 # so a non-evaluable op would convert a clear build-time UNSUPPORTED_SHAPE error
 # into a runtime UNSUPPORTED_OP after folding. The set therefore holds only the
 # esm-spec §4.2 evaluable-core elementwise ops (plus the canonicalize-internal

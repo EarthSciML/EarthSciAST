@@ -42,11 +42,15 @@ const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing ru
 const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
 const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
 
-# One compiled scalar-IR node. `kind` selects which fields are live. The
-# catch-all `payload::Any` slot carries a KIND-DEPENDENT runtime payload,
-# type-asserted at its read sites (`_eval_node` / `_eval_node_op`, and the
-# vectorized lowerings `_merge_nodes` / `_lower_template`, which mirror the
-# same field on `_VecNode` — the name is shared across both IRs):
+# The ONE compiled IR node — scalar spines and access-kernel spines are both trees
+# of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
+# carries a KIND-DEPENDENT runtime payload, type-asserted at its read sites
+# (`_eval_node` / `_eval_node_op`, `_eval_acc` / `_eval_acc_op`, the out-of-place
+# walkers, and the lowerings `_acc_merge_nodes` (acc_merge.jl) / `_lower_to_access`
+# (stencil_affine.jl)). NOTE: this `Any` slot is what forces
+# `Enzyme.API.strictAliasing!(false)` for reverse-mode AD on the CPU — see
+# scripts/enzyme_aliasing/ for the measurement and what a payload-free lowering
+# would and would not buy:
 #   * `_NK_OP` with `op === :fn` — `(fname, spec)::Tuple{String,Any}`: the
 #     closed-function name plus either `nothing` (all args scalar — the boxed
 #     `datetime.*` path) or a build-time-validated typed `_Interp*Spec`
@@ -224,7 +228,7 @@ const _STATE_SLOT_TABLES = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
 # `_compile` are pure functions of the input expression OBJECT. A subexpression shared across cells — every state-independent
 # subtree is the SAME object across cells, thanks to the `_sub_preserving` /
 # `_resolve_indices` identity short-circuits — is then resolved and compiled ONCE
-# instead of once per cell. `_Node` is immutable and `_merge_nodes` never mutates
+# instead of once per cell. `_Node` is immutable and `_acc_merge_nodes` never mutates
 # its inputs, so sharing a compiled node across cells is safe.
 #
 # The memo is a plain local value created in `_build_evaluator_impl` and passed
@@ -306,7 +310,7 @@ end
 # then dispatches on the concrete spec type and calls the validation-free
 # `_interp_*_core` kernel directly with the typed `Float64` query — no per-call
 # box, no per-call axis re-validation, no `_fn_const_arg_spec` scan. The
-# vectorized `_merge_fn_node` (vectorize.jl) consumes the SAME `(fname, spec)`
+# access-kernel merge (`_acc_merge_nodes`, acc_merge.jl) consumes the SAME `(fname, spec)`
 # payload — it reuses the already-built spec rather than rebuilding it — so the
 # two ends of the protocol cannot drift. Moving validation to build time makes a
 # bad axis (non-monotonic / NaN / too-short / length-mismatch) fail fast at build
@@ -741,11 +745,11 @@ end
 # within an arm and between an arm and an unconditional occurrence.
 #
 # Guard laziness holds only on the two SCALAR walkers (`_eval_node`, `_oop_eval`).
-# The vectorized `_eval_vec` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
+# The access-kernel `_eval_acc` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
 # broadcasts over lanes, and per-lane laziness would need masked evaluation — so a
 # guarded-domain expression inside an `arrayop` is NOT protected by its guard, with
 # or without CSE. That is a known, deliberate divergence between the scalar and
-# array paths (see the `ifelse` arm of `_eval_vec` in vectorize.jl), and it is why
+# array paths (see the `ifelse` arm of `_eval_acc` in access_kernel.jl), and it is why
 # the guard rule above lives in the scalar CSE pass only.
 #
 # SCOPE — why CSE lives on the scalar tree-walk path, not the vectorized
@@ -769,7 +773,7 @@ end
 # whose canonicalized templates carry no duplicate sub-node, so vectorized-path
 # CSE would be a no-op on them. Cross-KERNEL sharing for COUPLED multi-field PDEs
 # (one array subexpression reused across several arrayop equations) is a genuine
-# future case — keyed structurally on the post-merge `_VecNode` rather than on
+# future case — keyed structurally on the post-merge kernel spine rather than on
 # `canonical_json`, with a per-call vector cache — and is tracked as a follow-up.
 #
 # WHAT THIS PASS NO LONGER CARRIES (ess-obs-slots): AUTHOR-NAMED sharing. A
@@ -1139,7 +1143,7 @@ _sat_add(a::Int, b::Int) = a > typemax(Int) - b ? typemax(Int) : a + b
 # uses a single `Dual{Tag,V,N}` for the whole Jacobian: the buffer is allocated on
 # the first Dual call and reused by every later one. Alternating between two
 # distinct Dual types would re-allocate `alt` each call — correct, just not free —
-# which is the same non-reentrancy bargain the `_VecNode` buffers already make.
+# which is the same non-reentrancy bargain the access-kernel scratch tiers already make.
 #
 # Each buffer carries its OWN const-tier validity stamp (`stamp64` / `stampalt`): the
 # `p` whose const slots that buffer currently holds, or `_CSE_INVALID`. The stamp is
@@ -1819,7 +1823,7 @@ end
 # The MECHANICAL arms of `_eval_node_op` — the unary elementwise ops
 # (`sin` … `ceil`), the comparisons, the fixed-2-ary `/`/`^`/`pow`/`atan2`,
 # and the n-ary `min`/`max` folds — are GENERATED from the op-registry tables,
-# following the pattern `_eval_vec_unary_elementwise` (vectorize.jl)
+# following the pattern `_eval_acc_op`'s unary arms (access_kernel.jl)
 # established: one `op === :name` compare chain in table (= original
 # hand-ladder arm) order, each generated arm the hand-written original's AST
 # verbatim (splicing the function SYMBOL in call position reproduces the infix
@@ -2019,7 +2023,7 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         # then calls the validation-free `_interp_*_core` kernel directly with the
         # evaluated scalar child query — no per-call box, no per-call axis
         # re-validation, no `_fn_const_arg_spec` scan (all paid ONCE at build
-        # time). Bit-identical to the vectorized `_eval_vec_interp_*` kernels:
+        # time). Bit-identical to the access-kernel `:fn` arm's interp path:
         # SAME core, SAME const arrays. Scalar query children are compiled in spec
         # order excluding the const positions (`_compile_op`): linear → c[1]=x;
         # bilinear → c[1]=x, c[2]=y; searchsorted → c[1]=x.
@@ -2096,8 +2100,9 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
     end
 end
 
-# `c` is a `Vector{_Node}` on the scalar path and a `Vector{_VecNode}` on the
-# vectorized path — only its length is read, and the error-message interpolation
+# `c` holds ALREADY-EVALUATED children, not nodes: scalars on the scalar path and a
+# mix of scalars and lane vectors on the access-kernel path, hence the untyped
+# `AbstractVector`. Only its length is read, and the error-message interpolation
 # happens solely on the throw branch, so the happy path stays allocation-free.
 @inline function _expect_arity_n(op::Symbol, c::AbstractVector, n::Int)
     length(c) == n ||
