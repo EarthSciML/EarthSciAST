@@ -36,6 +36,14 @@ BUILD-TIME products that are otherwise internal to the evaluator closure:
   reference assertions, `ic` seeding) is sound and determinism-safe — unlike
   STATE, which stays out of scope. Array-backed parameters live on
   `const_arrays`, not here (the scalar map stays homogeneous `Float64`).
+* `param_classes::Dict{String,Symbol}` — the PARTITION of the declared
+  parameters into `:numeric` (a scalar that lands in the runtime `p`),
+  `:structural` (read at BUILD time, so its value can decide the shape of the
+  problem), `:const_folded` (const data frozen into the build, never in `p`)
+  and `:forcing` (a live buffer a discrete provider rewrites, never in `p`).
+  Derived from what the build actually read, not from what the document
+  declares — see [`parameter_classes`](@ref). This is the build-level face of the same
+  partition `parameter_classes(prep)` exposes on a `PreparedModel`.
 
 Filling the record never changes the build: the returned
 `(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
@@ -70,12 +78,18 @@ mutable struct BuildInspection
     # invention — cannot have its extents read from `index_sets` alone, so
     # without these it could not be materialized at all.
     derived_extents::Dict{String,Int}
+    # The numeric / structural / const_folded / forcing partition of the
+    # declared parameters (differentiability plan §3 Phase 5). Derived from the
+    # names the build-time consumers actually READ, so it is a record of this
+    # build, not a re-reading of the document.
+    param_classes::Dict{String,Symbol}
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
                                     Dict{String,Float64}(),
                                     Dict{String,ASTExpr}(),
-                                    Dict{String,Int}())
+                                    Dict{String,Int}(),
+                                    Dict{String,Symbol}())
 
 """
     DiscreteMaterializer()
@@ -860,7 +874,20 @@ end
 # actually resolves (flattening-qualified parameters, or state elements).
 # Returns `(normalized, unknown, ambiguous)` where `ambiguous` maps a bare key
 # to the candidates that carry it, so the caller can raise the two cases apart.
-function _canonicalize_override_keys(names::AbstractSet{String}, overrides::AbstractDict)
+#
+# The value type `V` is a parameter so the SOLVE-time override path
+# (`remake_parameters`, simulate.jl) can reuse the identical key resolution
+# while keeping each value's own type — a `Dual` passed as a numeric parameter
+# override must stay a `Dual`, or differentiating through `remake(prob; p = …)`
+# would be defeated by the resolver.
+_canonicalize_override_keys(names::AbstractSet{String}, overrides::AbstractDict) =
+    _canonicalize_override_keys(Float64, names, overrides)
+
+@inline _override_value(::Type{Any}, v) = v
+@inline _override_value(::Type{V}, v) where {V} = V(v)
+
+function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
+                                     overrides::AbstractDict) where {V}
     # Bare trailing segment → the unique name carrying it. A bare segment
     # carried by two or more names is AMBIGUOUS: recorded here with its
     # candidates rather than resolved, so it is never bound to one of them.
@@ -870,7 +897,7 @@ function _canonicalize_override_keys(names::AbstractSet{String}, overrides::Abst
         b == n && continue
         push!(get!(bare_group, b, String[]), n)
     end
-    normalized = Dict{String,Float64}()
+    normalized = Dict{String,V}()
     unknown = String[]
     ambiguous = Dict{String,Vector{String}}()
     # Two passes so precedence is DETERMINISTIC when a caller supplies both
@@ -882,11 +909,11 @@ function _canonicalize_override_keys(names::AbstractSet{String}, overrides::Abst
         k in names && continue
         bare = _bare_param_name(k)
         if bare in names                      # rule 2: dotted key, bare target
-            normalized[bare] = Float64(v)
+            normalized[bare] = _override_value(V, v)
         elseif haskey(bare_group, k)
             cands = bare_group[k]
             if length(cands) == 1             # rule 3: unique bare alias
-                normalized[cands[1]] = Float64(v)
+                normalized[cands[1]] = _override_value(V, v)
             else                              # rule 4: ambiguous local name
                 ambiguous[k] = cands
             end
@@ -896,7 +923,7 @@ function _canonicalize_override_keys(names::AbstractSet{String}, overrides::Abst
     end
     for (rawk, v) in overrides
         k = String(rawk)
-        k in names && (normalized[k] = Float64(v))   # rule 1: exact hit
+        k in names && (normalized[k] = _override_value(V, v))   # rule 1: exact hit
     end
     return normalized, unknown, ambiguous
 end
@@ -921,6 +948,128 @@ function _resolve_param_scope(model::Model, param_names::Vector{String},
              Float64(model.variables[name].default))
     end
     return param_scope
+end
+
+# ---- Build-time parameter READS: the structural/numeric discriminator -------
+#
+# A parameter is STRUCTURAL iff its value is consumed at BUILD time — where it
+# can decide the SHAPE of the problem (a value-invention index-set extent, i.e.
+# `length(u)`; a setup-geometry array's dimensions; a binning quantization; the
+# u0 an `ic()` fold produces). The declared `"type": "parameter"` says nothing
+# about this: every parameter is declared the same way. WHERE THE VALUE IS
+# CONSUMED is the discriminator, so this records consumption rather than
+# analysing the document a second time — if a name is read at build, it is
+# structural, by construction.
+#
+# The recording is a dynamically scoped sink installed around each build-time
+# consumer (`_fold_ic_equations`, `_fold_field_ics!`, `_materialize_geometry_setup`,
+# `_derive_binning_coords`, `materialize_value_invention`) and read by the three
+# places a NAME is actually resolved to a build-time VALUE:
+#
+#   * `_compile(::VarExpr, …)` (compile.jl) — the general build-time cell
+#     pipeline. Both name arms record: `evaluate_expr` binds the parameter scope
+#     as pseudo-STATE (`var_map`), while `_eval_cellwise` /
+#     `_try_field_ic_fastpath` bind it as `param_syms`.
+#   * `_geo_compile(::VarExpr, …)` (geometry_compile.jl) — the setup-time
+#     geometry compiler, which folds a scalar `env` entry to a literal.
+#   * `_vi_param` (value_invention.jl) — the relational engine's own evaluator.
+#
+# Recording at the RESOLUTION site (not at the dict) is what makes it precise:
+# every one of those consumers materializes the WHOLE parameter scope into a
+# NamedTuple/vector before compiling, so a read-recording Dict would report
+# every parameter as structural. Only the compiler knows which names the
+# expression actually mentions.
+#
+# The sink is `nothing` outside those scopes — in particular during the ODE RHS
+# compile, where a parameter read is a RUNTIME read of `p` and therefore
+# NUMERIC, the exact opposite conclusion.
+const _PARAM_READS = Ref{Union{Nothing,Set{String}}}(nothing)
+
+@inline function _record_param_read(name)
+    s = _PARAM_READS[]
+    s === nothing || push!(s, String(name))
+    return nothing
+end
+
+# Run `f` with build-time name resolutions recorded into `sink`. Save/restore
+# (not clear-on-exit) so a nested build cannot clobber an outer one's sink,
+# mirroring `_LANE_INTERN_POOL`.
+function _with_param_reads(f, sink::Union{Nothing,Set{String}})
+    sink === nothing && return f()
+    prev = _PARAM_READS[]
+    _PARAM_READS[] = sink
+    try
+        return f()
+    finally
+        _PARAM_READS[] = prev
+    end
+end
+
+# ---- Stage: the parameter partition (esm differentiability plan §3 Phase 5) ----
+# Every DECLARED parameter (and the discrete variables that lower like one) gets
+# exactly one class:
+#
+#   `:numeric`      — a scalar that lands in the runtime `p`. Differentiable,
+#                     and overridable at solve time by swapping `p`.
+#   `:structural`   — read at BUILD time (see `_PARAM_READS`). Its value can
+#                     change the shape of the problem, so changing it is a
+#                     rebuild, not a `p` swap. Per NAME, not per use: a name
+#                     read once at build is structural even if the RHS also
+#                     reads it at runtime.
+#   `:const_folded` — supplied as CONST DATA (a const provider / caller
+#                     `const_arrays` entry), frozen into the
+#                     build and inlined into the RHS. It never reaches `p`, so a
+#                     derivative w.r.t. it is an unconditional zero that a
+#                     finite-difference check on the declared default CONFIRMS —
+#                     a wrong gradient and a wrong check agreeing silently. Named
+#                     and refused explicitly for exactly that reason.
+#   `:forcing`      — the live-buffer sibling of `:const_folded`: an array
+#                     parameter bound to a `param_arrays` buffer a discrete
+#                     provider rewrites in place at each refresh. Also never in
+#                     `p`; changing it means changing the buffer, not `p`.
+function _classify_parameters(model::Model, param_names::Vector{String},
+                              reads::Set{String}, const_arrays::AbstractDict,
+                              param_arrays::AbstractDict)
+    classes = Dict{String,Symbol}()
+    in_p = Set{String}(param_names)
+    for (name, v) in model.variables
+        (v.type == ParameterVariable || v.type == DiscreteVariable) || continue
+        classes[name] = if name in reads
+            :structural
+        elseif name in in_p
+            :numeric
+        elseif haskey(param_arrays, name)
+            :forcing
+        else
+            :const_folded
+        end
+    end
+    # A `p` slot with no declared variable behind it cannot happen (param_names
+    # comes from `model.variables`), but never leave a slot unclassified: the
+    # solve-time override path refuses anything it cannot name a class for.
+    for name in param_names
+        haskey(classes, name) || (classes[name] = name in reads ? :structural : :numeric)
+    end
+    # The INJECTED data channels. A document's `"type": "parameter"` field may
+    # stop being a parameter variable by the time the evaluator is built: a
+    # coupling `variable_map` rewires the consumer's declared field onto the
+    # LOADER's variable, which flattening emits as an observed (measured on
+    # reseact.esm: `NEIRegrid.F_NO` is gone, and the emission field the regrid
+    # actually folds is `NEI2016Emis.NEI2016.NO`). The surviving name is still
+    # something a caller may try to override — and it is exactly the case a
+    # gradient lies about, since the value was frozen into the build. So class
+    # every caller-supplied array by its REGISTRY, keeping only names the model
+    # actually carries (a synthetic build key like `__stgfw_…` is not a
+    # user-facing parameter). A declared parameter keeps the class it already
+    # has: `:structural` outranks "it is also const data".
+    for (regname, cls) in ((const_arrays, :const_folded), (param_arrays, :forcing))
+        for (rawk, _) in regname
+            k = String(rawk)
+            (haskey(classes, k) || !haskey(model.variables, k)) && continue
+            classes[k] = cls
+        end
+    end
+    return classes
 end
 
 # ---- Stage: fold `ic(var) = <initial value>` equations (esm-spec v0.8.0) ----
@@ -1990,7 +2139,11 @@ function _build_partition_and_materialize(model::Model, cls;
         index_sets::AbstractDict, const_arrays::AbstractDict,
         param_arrays::AbstractDict, parameter_overrides::AbstractDict,
         registered_functions::AbstractDict, vi_vars, vi_extents::AbstractDict,
-        vi_maps, has_value_invention::Bool)
+        vi_maps, has_value_invention::Bool,
+        # Build-time parameter-read sink (see `_PARAM_READS`): the two consumers
+        # below (`_materialize_geometry_setup`, `_fold_ic_equations`) record the
+        # names they resolve, which is what makes a parameter STRUCTURAL.
+        param_reads::Union{Nothing,Set{String}}=nothing)
     # ---- Partition variables ----
     param_names, observed_names, state_var_names = _partition_variables(model;
         vi_vars=vi_vars, geom_setup_vars=cls.geom_setup_vars,
@@ -2023,11 +2176,13 @@ function _build_partition_and_materialize(model::Model, cls;
     # resolved, so the polygon_area FAQ's `clip_ring` range lowers to `[1, maxn]`.
     geom_setup_arrays = Dict{String,AbstractArray{Float64}}()
     if !isempty(cls.geom_setup_vars)
-        geom_setup_arrays = _materialize_geometry_setup(cls.geom_setup_vars,
-            cls.geom_defs, model, const_arrays, index_sets, derived_extents;
-            vi_maps=vi_maps.maps, param_overrides=parameter_overrides,
-            const_obs_arrays=cls.const_obs_arrays,
-            registered_functions=registered_functions)
+        geom_setup_arrays = _with_param_reads(param_reads) do
+            _materialize_geometry_setup(cls.geom_setup_vars,
+                cls.geom_defs, model, const_arrays, index_sets, derived_extents;
+                vi_maps=vi_maps.maps, param_overrides=parameter_overrides,
+                const_obs_arrays=cls.const_obs_arrays,
+                registered_functions=registered_functions)
+        end
     end
     # Value-invention derived index sets (skolem/distinct/rank) materialized via
     # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
@@ -2140,8 +2295,9 @@ function _build_partition_and_materialize(model::Model, cls;
     # ---- Fold `ic(var) = <initial value>` equations into u0 (esm-spec v0.8.0) ----
     # (see `_fold_ic_equations`; scoped-reference / array targets are deferred in
     # `field_ics` and folded per cell by `_fold_field_ics!` once cells are known)
-    equations, eq_ics, field_ics =
+    equations, eq_ics, field_ics = _with_param_reads(param_reads) do
         _fold_ic_equations(equations, model, param_scope, registered_functions)
+    end
 
     return (; param_names, observed_names, state_var_names, param_scope,
             geom_rings, geom_setup_arrays, derived_extents,
@@ -2155,7 +2311,10 @@ end
 # `parts.eq_ics`), and seed u0 and the scalar-parameter NamedTuple.
 function _build_state_layout(model::Model, cls, parts;
         initial_conditions::AbstractDict, index_sets::AbstractDict,
-        registered_functions::AbstractDict, const_arrays::AbstractDict, vi_vars)
+        registered_functions::AbstractDict, const_arrays::AbstractDict, vi_vars,
+        # Build-time parameter-read sink (see `_PARAM_READS`): the field-ic fold
+        # below is the fourth build-time consumer of the parameter scope.
+        param_reads::Union{Nothing,Set{String}}=nothing)
     # ---- Discover array cells from equations and initial conditions ----
     # Array variable detection: a variable is treated as an array if it has
     # an explicit non-empty shape, OR if it appears inside index(var, k...)
@@ -2197,8 +2356,10 @@ function _build_state_layout(model::Model, cls, parts;
     end
 
     # ---- Fold scoped-reference / array `ic` equations into u0 (spec §11.4.1) ----
-    _fold_field_ics!(parts.eq_ics, parts.field_ics, array_cells, parts.param_scope,
-                     registered_functions, const_arrays)
+    _with_param_reads(param_reads) do
+        _fold_field_ics!(parts.eq_ics, parts.field_ics, array_cells, parts.param_scope,
+                         registered_functions, const_arrays)
+    end
 
     # ---- Build flat state vector: scalars first, then array cells ----
     array_cell_names = _enumerate_array_cell_names(array_cells, array_var_info)
@@ -2767,6 +2928,21 @@ function _build_evaluator_impl_inner(model::Model;
                          # nothing (every existing caller), such fields stay inlined —
                          # the pre-cut behavior, byte-identical.
                          materialize_out::Union{Nothing,DiscreteMaterializer}=nothing,
+                         # Internal: the build-time parameter-READ set (see
+                         # `_PARAM_READS`). The AbstractDict front-door records
+                         # the two consumers that run BEFORE this entry
+                         # (`_derive_binning_coords`, `materialize_value_invention`)
+                         # and hands the same sink down, so the classification
+                         # covers every build-time consumer. A direct typed call
+                         # starts a fresh one.
+                         _param_reads::Union{Nothing,Set{String}}=nothing,
+                         # Internal: sink for the parameter PARTITION (name →
+                         # `:numeric` / `:structural` / `:const_folded` /
+                         # `:forcing`; see `_classify_parameters`). `prepare`
+                         # passes one and carries it on the `PreparedModel`, so
+                         # `parameter_classes(prep)` needs no sixth return value
+                         # — the same reasoning as `param_map`.
+                         _param_classes::Union{Nothing,AbstractDict}=nothing,
                          # Which RHS to emit from the compiled IR (tree_walk/oop.jl):
                          # `:inplace` → the zero-alloc Float64 `f!(du, u, p, t)`;
                          # `:oop` → the eltype-generic `f(u, p, t) → du` that
@@ -2858,6 +3034,10 @@ function _build_evaluator_impl_inner(model::Model;
         has_value_invention=_has_value_invention, materialize_out=materialize_out,
         form=form)
 
+    # The build-time parameter-read sink: continued from the front door (which
+    # already recorded binning-coordinate derivation + value invention) or fresh.
+    param_reads = _param_reads === nothing ? Set{String}() : _param_reads
+
     # ---- Phase 2: ODE partition + setup materialization + equation rewrites ----
     parts = _build_partition_and_materialize(model, cls;
         template_sites=_template_sites,
@@ -2865,13 +3045,31 @@ function _build_evaluator_impl_inner(model::Model;
         param_arrays=param_arrays, parameter_overrides=parameter_overrides,
         registered_functions=registered_functions, vi_vars=_vi_vars,
         vi_extents=_vi_extents, vi_maps=_vi_maps,
-        has_value_invention=_has_value_invention)
+        has_value_invention=_has_value_invention, param_reads=param_reads)
 
     # ---- Phase 3: array-cell discovery + flat state layout + u0/p ----
     layout = _build_state_layout(model, cls, parts;
         initial_conditions=initial_conditions, index_sets=index_sets,
         registered_functions=registered_functions, const_arrays=const_arrays,
-        vi_vars=_vi_vars)
+        vi_vars=_vi_vars, param_reads=param_reads)
+
+    # ---- The parameter partition (differentiability plan §3 Phase 5) ----
+    # Every build-time consumer has now run, so the read set is complete.
+    # Published to whichever sinks the caller supplied; never changes the build.
+    if _param_classes !== nothing || inspect !== nothing
+        classes = _classify_parameters(model, parts.param_names, param_reads,
+                                       const_arrays, param_arrays)
+        if _param_classes !== nothing
+            for (k, v) in classes
+                _param_classes[k] = v
+            end
+        end
+        if inspect !== nothing
+            for (k, v) in classes
+                inspect.param_classes[k] = v
+            end
+        end
+    end
 
     # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
     return _build_compile_evaluator(model, cls, parts, layout;
@@ -3816,6 +4014,49 @@ param_map(p::NamedTuple) = Dict{String,Int}(String(k) => i
 param_map(::Nothing) = Dict{String,Int}()
 
 """
+    parameter_classes(x) -> Dict{String,Symbol}
+
+Parameter NAME → what KIND of parameter it is in the build that produced `x`
+(a [`BuildInspection`](@ref) or a `PreparedModel`). Four classes:
+
+| class | where its value is consumed | overridable at solve time? |
+|---|---|---|
+| `:numeric` | the runtime `p` vector | **yes** — swap `p` (`remake`), differentiable |
+| `:structural` | BUILD time (setup geometry, value-invention extents, binning coordinates, `ic()` folds) | no — re-`prepare` |
+| `:const_folded` | frozen into the build's const arrays and inlined into the RHS | no — re-`prepare` with new data |
+| `:forcing` | a live buffer a discrete provider rewrites in place | no — write the buffer |
+
+The partition is **derived, not declared**: every one of these is spelled
+`"type": "parameter"` in the document, so the discriminator is where the value is
+CONSUMED. The build records the names its build-time consumers resolve (see the
+`_PARAM_READS` seam) and anything they touched is `:structural` — by
+construction, not by a second static reading of the document.
+
+`:structural` is per NAME, not per use: a name read once at build stays
+structural even when the RHS also reads it at runtime, because the value baked
+into the build and the value in `p` would then disagree.
+
+`:const_folded` deserves its own name rather than being folded into
+`:structural`: differentiating w.r.t. one returns an unconditional ZERO, and a
+finite-difference check on its declared default CONFIRMS that zero (perturbing
+the default changes nothing either) — a wrong gradient and a wrong check
+agreeing silently. It is refused explicitly, with its own message.
+
+Like [`param_map`](@ref) this is a function of an artifact rather than an extra
+`build_evaluator` return value: the 5-tuple has hundreds of destructuring call
+sites. Pass `inspect = BuildInspection()` to `build_evaluator` / `prepare`, or
+read it off the `PreparedModel` that `prepare` returns.
+
+```julia
+prep = prepare("model.esm")
+cls  = parameter_classes(prep)
+θ    = [n for (n, c) in cls if c === :numeric]     # what a gradient may target
+simulate(prep, tspan; alg = Tsit5(), parameters = Dict(θ[1] => 2.0))
+```
+"""
+parameter_classes(insp::BuildInspection) = insp.param_classes
+
+"""
     build_evaluator(file::EsmFile; model_name=nothing, kwargs...)
 
 Delegate to the typed entry point after selecting the model.
@@ -4114,6 +4355,14 @@ function build_evaluator(esm::AbstractDict;
     # observed exists.
     _params = get(kwd, :parameter_overrides, Dict{String,Float64}())
     _ca = Dict{String,Any}(String(k) => v for (k, v) in get(kwd, :const_arrays, Dict{String,Any}()))
+    # The build-time parameter-read sink (see `_PARAM_READS`) is created HERE,
+    # not in the impl: two of the build-time consumers — the binning-coordinate
+    # derivation and value invention (whose `_vi_param` reads decide an index-set
+    # EXTENT, i.e. `length(u)`) — run at this front door, before the impl entry.
+    # The same set is threaded down so the classification sees all of them.
+    _preads = get(kwd, :_param_reads, nothing)
+    _preads === nothing && (_preads = Set{String}())
+    kwd[:_param_reads] = _preads
     if model !== nothing
         # The coordinate buffers a value-invention skolem GATHERS from (`src_lon`,
         # `tgt_lon`): a build-time-constant one is derived here so a
@@ -4125,8 +4374,10 @@ function build_evaluator(esm::AbstractDict;
         # expansion — ops outside the setup-time geometry vocabulary) is projected
         # HERE, before value-invention, and its `X`/`Y` fed into `const_arrays`.
         _regfns = get(kwd, :registered_functions, Dict{String,Function}())
-        _derived = _derive_binning_coords(model, file.index_sets, _ca, _params,
-                                          _vi_targets, _regfns)
+        _derived = _with_param_reads(_preads) do
+            _derive_binning_coords(model, file.index_sets, _ca, _params,
+                                   _vi_targets, _regfns)
+        end
         if !isempty(_derived)
             merge!(_ca, _derived)
             kwd[:const_arrays] = _ca
@@ -4134,7 +4385,9 @@ function build_evaluator(esm::AbstractDict;
     end
 
     _vi = model === nothing ? nothing :
-          materialize_value_invention(model, file.index_sets, _ca, _params)
+          _with_param_reads(_preads) do
+              materialize_value_invention(model, file.index_sets, _ca, _params)
+          end
 
     # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----
     # A `kind:"derived"` index set may name a `member_factor` — a model parameter

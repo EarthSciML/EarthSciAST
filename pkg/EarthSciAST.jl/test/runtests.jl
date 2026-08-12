@@ -105,6 +105,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_iip_generic_test.jl")
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
     include("parameter_vector_abi_test.jl")          # `p::AbstractVector`/ComponentVector ≡ NamedTuple, bit for bit
+    include("parameter_classes_test.jl")             # numeric/structural/const-folded/forcing partition + the narrowed solve-time refusal
     # XLA tracing of the out-of-place RHS (ext/EarthSciASTReactantExt.jl). OPT-IN:
     # Reactant bundles an XLA runtime; it is in the test target so `Pkg.test()`
     # resolves it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default

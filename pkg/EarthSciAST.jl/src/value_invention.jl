@@ -272,6 +272,11 @@ end
 
 # Resolve a scalar parameter value (dx/dy/atol …) from overrides-or-default.
 function _vi_param(ctx::_ViCtx, name::AbstractString)
+    # The sharpest structural read there is: a scalar parameter consumed HERE
+    # decides an invented index set's EXTENT, i.e. `length(u)`. Record it (see
+    # `_PARAM_READS`, build.jl) before resolving — override or default, either
+    # way the value is baked into the materialized extent.
+    _PARAM_READS[] === nothing || _record_param_read(name)
     haskey(ctx.params, name) && return ctx.params[name]
     v = get(ctx.variables, name, nothing)
     if v !== nothing && v.default !== nothing

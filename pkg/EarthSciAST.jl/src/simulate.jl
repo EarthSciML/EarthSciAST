@@ -334,10 +334,12 @@ forcing buffers are re-seeded from their providers at each run's `t0` (with the
 [`DiscreteMaterializer`](@ref) caches recomputed) whenever a previous run may
 have refreshed them or the start time changed.
 
-Parameter overrides are baked in at `prepare` time — they participate in
-build-time constant folding (setup geometry, value-invention extents, binning
-coordinates, `ic()` folds) — so `simulate(prep, …; parameters = …)` throws;
-call `prepare` again to change them.
+Parameter overrides split by CLASS (see [`parameter_classes`](@ref)):
+`:numeric` ones may be passed to `simulate(prep, …; parameters = …)` and are
+applied by swapping `p` at solve time (cheap, and AD-transparent — the SciML
+`remake` shape). `:structural`, `:const_folded` and `:forcing` ones still throw:
+their values were consumed at BUILD time (or never reach `p` at all), so call
+`prepare` again to change them.
 """
 struct PreparedModel
     f!::Function                          # compiled tree-walk RHS (in-place)
@@ -358,6 +360,11 @@ struct PreparedModel
     # PUBLIC prepare surface instead of re-running the document pipeline.
     run_doc::Dict{String,Any}
     run_file::Base.RefValue{Any}          # lazy coerce_esm_file(run_doc) memo
+    # The parameter PARTITION this build produced (see `parameter_classes`):
+    # name → `:numeric` / `:structural` / `:const_folded` / `:forcing`. Derived
+    # from what the build-time consumers actually READ, which is what decides
+    # whether an override can ride `p` at solve time or needs a re-`prepare`.
+    param_classes::Dict{String,Symbol}
 end
 
 function Base.show(io::IO, prep::PreparedModel)
@@ -447,10 +454,13 @@ mutating `input` after `prepare` returns does not affect the prepared model
 Keyword arguments (the BUILD-time subset of `simulate`'s keywords):
 * `parameters::AbstractDict` — parameter overrides (→ `build_evaluator`'s
   `parameter_overrides`). Baked into the build (they feed build-time constant
-  folding), which is why they belong here and not on the per-run call. Keys may
-  be spelled LOCALLY (`pert_amp`, the form esm-spec §6.6 pins for a test's
-  `parameter_overrides`) or with the flattener's namespacing (`Chem.pert_amp`);
-  both resolve to the same parameter.
+  folding), which is why EVERY class of parameter can be set here — including
+  the `:structural` ones a per-run override must refuse (see
+  [`parameter_classes`](@ref)). A purely `:numeric` change need not come back
+  through `prepare`: pass it to `simulate(prep, tspan; parameters = …)`, which
+  swaps `p` instead of rebuilding. Keys may be spelled LOCALLY (`pert_amp`, the
+  form esm-spec §6.6 pins for a test's `parameter_overrides`) or with the
+  flattener's namespacing (`Chem.pert_amp`); both resolve to the same parameter.
 * `const_arrays`, `param_arrays` — forwarded to `build_evaluator` (the regridder
   source polygons and the live forcing buffers).
 * `providers::AbstractDict` — `<Loader>.<var> => data Provider`. CONST providers
@@ -647,6 +657,12 @@ function prepare(input;
     # on every continuous step. Empty (no discrete-materialize var) ⇒ no effect. A
     # caller-supplied `materialize_out` is reused (and thus inspectable), else fresh.
     dm = materialize_out === nothing ? DiscreteMaterializer() : materialize_out
+    # The parameter partition sink (differentiability plan §3 Phase 5): the build
+    # fills it with name → `:numeric` / `:structural` / `:const_folded` /
+    # `:forcing`, derived from which names its BUILD-TIME consumers read. It is
+    # what lets `simulate(prep, …; parameters = …)` accept the numeric half
+    # instead of refusing every override.
+    param_classes = Dict{String,Symbol}()
     f!, u0, p, _tspan, var_map = build_evaluator(doc;
         model_name = model_name,
         parameter_overrides = overrides,
@@ -654,6 +670,7 @@ function prepare(input;
         param_arrays = merged_param,
         inspect = inspect,
         materialize_out = dm,
+        _param_classes = param_classes,
         # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
         # The front door fetches these pre-sliced right after value-invention.
         _gated_providers = gated_providers,
@@ -662,7 +679,8 @@ function prepare(input;
     return PreparedModel(f!, u0, p, var_map, merged_param, discrete_providers, dm,
                          Float64(sample_time), _doc_equation_count(doc),
                          Ref(Float64(sample_time)), Ref(false),
-                         derive_output_meta(doc), doc, Ref{Any}(nothing))
+                         derive_output_meta(doc), doc, Ref{Any}(nothing),
+                         param_classes)
 end
 
 """
@@ -726,6 +744,118 @@ function _reseed_discrete!(prep::PreparedModel, t0::Float64)
 end
 
 """
+    parameter_classes(prep::PreparedModel) -> Dict{String,Symbol}
+
+The parameter partition of the build behind `prep` — `:numeric`, `:structural`,
+`:const_folded`, `:forcing`. See the [`parameter_classes`](@ref) docstring on the
+[`BuildInspection`](@ref) method for what each class means and how it is derived.
+"""
+parameter_classes(prep::PreparedModel) = prep.param_classes
+
+# A readable name list for an error: a real model carries dozens of parameters
+# and dumping all of them buries the diagnostic that matters.
+function _elide_names(ns::AbstractVector{String}, n::Int = 12)
+    length(ns) <= n && return join(ns, ", ")
+    return join(ns[1:n], ", ") * ", … ($(length(ns)) total; see parameter_classes(prep))"
+end
+
+# One override's refusal message, naming the parameter AND its class AND why the
+# class cannot ride `p`. Each class fails for a different reason, and saying
+# which is the whole point of the partition: "parameters bake at prepare() time"
+# was true of all of them and useful about none.
+function _param_class_refusal(name::AbstractString, cls::Symbol)
+    what = cls === :structural ?
+        "STRUCTURAL: its value is read at BUILD time (setup geometry, " *
+        "value-invention index-set extents, binning coordinates, ic() folds), " *
+        "where it can decide the SHAPE of the problem — length(u0), the compiled " *
+        "kernels. A value swapped into `p` at solve time would contradict the one " *
+        "already baked into the build" :
+      cls === :const_folded ?
+        "CONST-FOLDED DATA: it is supplied as const data (a const provider / a " *
+        "`const_arrays` entry), frozen into the build and inlined into the RHS, so " *
+        "it never reaches the runtime `p` at all. An override here would be silently " *
+        "ignored — and so is a derivative: ∂/∂(this) is an unconditional zero that a " *
+        "finite-difference check on its declared default would CONFIRM" :
+      cls === :forcing ?
+        "LIVE FORCING DATA: it is bound to a forcing buffer that a discrete provider " *
+        "rewrites in place at each refresh, so it never reaches the runtime `p`. " *
+        "Change the provider or write the buffer" :
+        "not a solve-time parameter of this build ($(cls))"
+    fix = cls === :forcing ?
+        "supply a different provider / write `prep.param_buffers[\"$name\"]`" :
+        "call prepare(input; parameters = Dict(\"$name\" => …)) again — a " *
+        "structural change is an explicit re-prepare, never something hidden " *
+        "inside a `p` swap"
+    return "simulate(prep::PreparedModel, …; parameters): '$name' is $what. " *
+           "To change it, $fix."
+end
+
+"""
+    remake_parameters(prep::PreparedModel, overrides) -> p
+
+The parameter carrier `prep.p` with the `:numeric` `overrides` applied — the
+value to hand to SciML's `remake(prob; p = …)`, and what
+`simulate(prep, tspan; parameters = …)` builds internally.
+
+```julia
+prob = ODEProblem(prep.f!, copy(prep.u0), tspan, prep.p)
+prob2 = remake(prob; p = remake_parameters(prep, Dict("Emis.scale" => 2.0)))
+```
+
+This is deliberately a `p` SWAP and nothing more: `remake` exists precisely so a
+sensitivity analysis can vary `p` without rebuilding `f`, and overloading it to
+re-run [`prepare`](@ref) would make gradients impossible by construction. So it
+is cheap (a `NamedTuple` merge, no build), and AD-transparent — each override
+keeps its own type, so a `ForwardDiff.Dual` handed in here stays a `Dual` in `p`
+and `∂(solution)/∂(parameter)` flows through the same compiled RHS.
+
+Only `:numeric` parameters can be swapped. A `:structural`, `:const_folded` or
+`:forcing` override throws a [`SimulateError`](@ref) naming the parameter and its
+class — changing one of those is an explicit re-`prepare`, because it changes the
+build, not just a number the build reads. Keys may be spelled locally
+(`"scale"`) or namespaced (`"NEIRegrid.scale"`), exactly as `prepare`'s
+`parameters` are; an unknown or ambiguous key throws rather than being dropped.
+"""
+function remake_parameters(prep::PreparedModel, overrides::AbstractDict)
+    isempty(overrides) && return prep.p
+    classes = prep.param_classes
+    pm = param_map(prep.p)
+    names = Set{String}(keys(classes))
+    union!(names, keys(pm))
+    normalized, unknown, ambiguous =
+        _canonicalize_override_keys(Any, names, overrides)
+    isempty(unknown) || throw(SimulateError(
+        "simulate/remake_parameters: no parameter named " *
+        join(("'" * k * "'" for k in sort(unknown)), ", ") *
+        " in the prepared model (keys may be local or namespaced; a name the " *
+        "flattener's coupling rewired onto a loader variable is spelled by its " *
+        "SURVIVING name). Known: " * _elide_names(sort(collect(names)))))
+    isempty(ambiguous) || throw(SimulateError(
+        "simulate/remake_parameters: ambiguous parameter key(s) " *
+        join(("'" * k * "' (matches " * join(sort(v), ", ") * ")"
+              for (k, v) in sort(collect(ambiguous), by = first)), "; ") *
+        "; spell the namespaced name."))
+    syms = Symbol[]
+    vals = Any[]
+    for name in sort(collect(keys(normalized)))
+        cls = get(classes, name, haskey(pm, name) ? :numeric : :unclassified)
+        cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls)))
+        # A `:numeric` parameter is by definition a slot of `p`; if it somehow is
+        # not, refuse rather than silently drop the override.
+        haskey(pm, name) || throw(SimulateError(
+            "simulate/remake_parameters: '$name' classifies :numeric but is not a " *
+            "slot of the prepared `p` — refusing to apply an override that would " *
+            "have no effect (this is a build bug; please report it)."))
+        push!(syms, Symbol(name))
+        push!(vals, normalized[name])
+    end
+    # `merge` keeps the FIRST tuple's key order, which is the build's own
+    # parameter order (`param_map`) and the order every `_NK_PARAM` node's `idx`
+    # was minted against. Values keep their own types (a `Dual` stays a `Dual`).
+    return merge(prep.p, NamedTuple{Tuple(syms)}(Tuple(vals)))
+end
+
+"""
     simulate(prep::PreparedModel, tspan; alg, kwargs...) -> SimulationResult
 
 Integrate an already-[`prepare`](@ref)d model over `tspan = (t0, t1)` — the
@@ -750,9 +880,16 @@ Streaming output (streaming-output-sinks RFC §16):
 * `pre_write` — a `() -> nothing` hook run at each output boundary BEFORE the
   snapshot, to freshen caller-named observed caches. Defaults to a no-op.
 
-`parameters` is NOT accepted here (non-empty throws [`SimulateError`](@ref)):
-overrides are baked into the evaluator at `prepare` time because they feed
-build-time constant folding. Call `prepare(input; parameters = …)` instead.
+`parameters` accepts the `:numeric` half of the parameter partition (see
+[`parameter_classes`](@ref)): those are scalars that live in the runtime `p`, so
+an override is applied by swapping `p` for this run — cheap, and AD-transparent
+(the SciML `remake` shape; see [`remake_parameters`](@ref)). The result is
+identical to passing the same value to `prepare(input; parameters = …)`.
+
+A `:structural`, `:const_folded` or `:forcing` override still throws a
+[`SimulateError`](@ref) naming the parameter and its class: those values were
+consumed at BUILD time (or never reach `p` at all), so honouring them here would
+mean rebuilding — call `prepare` again.
 """
 function simulate(prep::PreparedModel, tspan;
                   alg = nothing,
@@ -768,11 +905,11 @@ function simulate(prep::PreparedModel, tspan;
                   checkpoint_predicates = (),
                   checkpoint_sinks = nothing,
                   terminate_on_checkpoint::Bool = true)
-    isempty(parameters) || throw(SimulateError(
-        "simulate(prep::PreparedModel, …): parameter overrides are baked into the " *
-        "evaluator at prepare() time (they feed build-time constant folding: setup " *
-        "geometry, value-invention extents, binning coordinates, ic() folds). " *
-        "Call prepare(input; parameters = …) to change them."))
+    # Solve-time parameter overrides: the `:numeric` half rides `p` (validated +
+    # merged here, never a rebuild), the rest is refused BY CLASS with a message
+    # that says which class and why. `p_run === prep.p` when nothing is overridden,
+    # so the no-override path is byte-identical to before.
+    p_run = remake_parameters(prep, parameters)
     t0 = Float64(tspan[1])
     _reseed_discrete!(prep, t0)
 
@@ -839,7 +976,7 @@ function simulate(prep::PreparedModel, tspan;
     all_sinks = _distinct_sinks(sinks, ck_sinks)
     isempty(all_sinks) || foreach(sink_open!, all_sinks)
     try
-        return _simulate_solve(prep.f!, u0, (t0, Float64(tspan[2])), prep.p, alg, prep.var_map;
+        return _simulate_solve(prep.f!, u0, (t0, Float64(tspan[2])), p_run, alg, prep.var_map;
                                callback = callback, tstops = tstops, save_everystep = save_everystep,
                                reltol = reltol, abstol = abstol, saveat = saveat)
     finally

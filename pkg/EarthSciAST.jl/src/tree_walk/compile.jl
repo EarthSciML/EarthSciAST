@@ -408,10 +408,16 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
     end
     idx = get(var_map, name, 0)
     if idx != 0
+        # Inside a build-time evaluation scope (`_with_param_reads`) this arm IS
+        # a parameter read: `evaluate_expr` binds the resolved parameter scope as
+        # pseudo-state. Outside one it is an ordinary state slot and the sink is
+        # `nothing`, so this is a load + branch. See `_PARAM_READS` (build.jl).
+        _PARAM_READS[] === nothing || _record_param_read(name)
         return _mknode(kind=_NK_STATE, idx=idx)
     end
     sym = Symbol(name)
     if _is_param(param_syms, sym)
+        _PARAM_READS[] === nothing || _record_param_read(name)
         return _mknode(kind=_NK_PARAM, sym=sym, idx=_param_index(param_syms, sym))
     end
     # A reserved runtime-contraction loop variable (ess-runtime-contraction):

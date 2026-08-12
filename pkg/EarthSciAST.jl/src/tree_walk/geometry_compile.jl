@@ -143,7 +143,15 @@ function _geo_compile(expr, g::_GeoCompileCtx)::_Node
         s = get(g.scope, expr.name, 0)
         s != 0 && return _mknode(kind=_NK_STATE, idx=s)   # loop index (Float64 in u)
         v = get(g.ctx.env, expr.name, nothing)
-        v isa Real && return _mknode(kind=_NK_LITERAL, literal=Float64(v))
+        # A scalar `env` entry folded to a literal is the setup-time geometry's
+        # read of a model parameter (`atol`, `dx`, a projection constant) — the
+        # value is baked into the materialized array, so the name is STRUCTURAL.
+        # See `_PARAM_READS` (build.jl); the sink is `nothing` outside a
+        # build-time evaluation scope.
+        if v isa Real
+            _PARAM_READS[] === nothing || _record_param_read(expr.name)
+            return _mknode(kind=_NK_LITERAL, literal=Float64(v))
+        end
         v === nothing && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
             "unbound name '$(expr.name)' in setup-time geometry"))
         # Array-valued names are legal only in SOURCE position (an `index`

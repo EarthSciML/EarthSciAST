@@ -215,6 +215,14 @@ export
     # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
     # is a function of `p` and not a sixth `build_evaluator` return value.
     param_map,
+    # The parameter PARTITION (differentiability plan §3 Phase 5): which
+    # parameters are `:numeric` (in the runtime `p` — differentiable, and
+    # overridable at solve time), which are `:structural` (read at build time,
+    # so changing one is a re-`prepare`), and which never reach `p` at all
+    # (`:const_folded` / `:forcing`). `remake_parameters` is the `p`-swap that
+    # applies the numeric half — the SciML `remake` shape, deliberately NOT a
+    # rebuild.
+    parameter_classes, remake_parameters,
     DiscreteMaterializer,
     # Discrete-cadence loader refresh (ess-14f.4, JL-J1; callback ctor in the
     # DiffEqCallbacks/SciMLBase extension). The Provider protocol has concrete
