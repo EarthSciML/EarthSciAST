@@ -803,7 +803,7 @@ function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)
     elseif k === _NK_STATE
         return convert(T, _oop_read_state(u, n.idx))
     elseif k === _NK_PARAM
-        return convert(T, getfield(p, n.sym))
+        return convert(T, _read_param(p, n.sym, n.idx))
     elseif k === _NK_TIME
         return convert(T, t)
     elseif k === _NK_PARAM_GATHER
@@ -1311,8 +1311,11 @@ function _oop_batch_lower(nodes::Vector{_Node})::Union{Nothing,_OopBatchNode}
         all(nd -> nd.idx == n1.idx, nodes) && return _mkbatch(kind=k, idx=n1.idx)
         return _mkbatch(kind=k, slots=Int[nd.idx for nd in nodes])
     elseif k === _NK_PARAM
+        # `idx` rides along with `sym` (the read seam wants both). It is not part
+        # of the congruence test because it is a FUNCTION of `sym` — one build's
+        # parameter order — so equal syms already imply equal indices.
         all(nd -> nd.sym === n1.sym, nodes) || return nothing
-        return _mkbatch(kind=k, sym=n1.sym)
+        return _mkbatch(kind=k, sym=n1.sym, idx=n1.idx)
     elseif k === _NK_TIME
         return _mkbatch(kind=k)
     elseif k === _NK_CACHED
@@ -1468,7 +1471,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         return isempty(b.slots) ? convert(T, _oop_read_state(u, b.idx)) :
                _oop_gather(u, b.slots, fb.memo)
     elseif k === _NK_PARAM
-        return convert(T, getfield(p, b.sym))
+        return convert(T, _read_param(p, b.sym, b.idx))
     elseif k === _NK_TIME
         return convert(T, t)
     elseif k === _NK_CACHED
@@ -2275,7 +2278,7 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
     elseif k === _NK_LITERAL
         return convert(T, nd.literal)
     elseif k === _NK_PARAM
-        return convert(T, getfield(p, nd.sym))
+        return convert(T, _read_param(p, nd.sym, nd.idx))
     elseif k === _NK_TIME
         return convert(T, t)
     elseif k === _NK_CACHED

@@ -211,6 +211,10 @@ export
     broad_phase_candidates, build_spatial_index,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
     build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
+    # Parameter-vector ABI: name → position in a `p` that is an AbstractVector
+    # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
+    # is a function of `p` and not a sixth `build_evaluator` return value.
+    param_map,
     DiscreteMaterializer,
     # Discrete-cadence loader refresh (ess-14f.4, JL-J1; callback ctor in the
     # DiffEqCallbacks/SciMLBase extension). The Provider protocol has concrete
