@@ -103,6 +103,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_oop_test.jl")
     include("oop_merge_test.jl")                     # :oop kernel-CLASS merge ≡ unmerged
     include("tree_walk_iip_generic_test.jl")
+    include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
     # XLA tracing of the out-of-place RHS (ext/EarthSciASTReactantExt.jl). OPT-IN:
     # Reactant bundles an XLA runtime; it is in the test target so `Pkg.test()`
     # resolves it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default
