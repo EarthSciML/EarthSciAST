@@ -250,6 +250,11 @@ Where:
 | FORMAT-08-A-003 | variables field MUST be present and non-empty | esm-spec.md §8.5 | Yes | format |
 | FORMAT-08-A-004 | each variable MUST have file_variable and units | esm-spec.md §8.5 | Yes | format |
 | FORMAT-08-A-005 | if spatial is present, crs and grid_type MUST be present | esm-spec.md §8.4 | Yes | format |
+| FORMAT-08-A-006 | a `reader_options` key the bound reader does not recognise MUST be an error, never ignored | esm-spec.md §8.9.1 | Yes | behavioral |
+| FORMAT-08-A-007 | a text column with no `codes` map MUST be rejected at the loader boundary (a forcing is numeric) | esm-spec.md §8.9.1 | Yes | behavioral |
+| FORMAT-08-A-008 | `record_filter` / `codes.unmapped:"drop"` MUST drop the RECORD from every variable of the loader (columns stay aligned) | esm-spec.md §8.9.3 | Yes | behavioral |
+| FORMAT-08-A-009 | `select` is over the DELIVERED axis (it follows `record_filter`), and pushing it to the reader vs applying it after MUST agree | esm-spec.md §8.9.2 | Yes | behavioral |
+| FORMAT-08-A-010 | `extent.metaparameter` MUST be closed from the loader's delivered record count before metaparameters are closed; disagreeing variables, and a contradicting caller binding, MUST error | esm-spec.md §8.9.4 | Yes | behavioral |
 
 ### FORMAT-09-A: Operator Fields
 | ID | Requirement | Spec Reference | Testable | Test Category |

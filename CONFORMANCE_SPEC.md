@@ -931,6 +931,25 @@ is specified here for Python/Go/TS; the current Rust slice implements the
 overlap-gate broad phase + candidate-driven producer (the support-set derivation)
 and leaves the const-tier gated-provider fetch to the loader integration.
 
+`gated_by` is ONE member of the per-axis loader-selection vocabulary a data
+loader may declare directly (esm-spec §8.9.2): `"all"`, `{"fixed": i}` (take one
+index, drop the axis), `{"range": {...}}` (a half-open strided window, axis
+kept), `{"gated_by": "<set>"}` (deferred + member-sliced, above). A binding MUST
+accept the same vocabulary wherever a selection is written — a loader's `select`,
+a variable's `select`, and the pushdown record's gate template — so the spelling
+an author writes and the spelling the rewrite generates are one thing. Only
+`gated_by` defers; the other three are resolvable at read time, and whether they
+are pushed down to the reader or applied after the read MUST NOT change the
+delivered array.
+
+**Loader-discovered extents.** A loader declaring `extent: {"metaparameter": M}`
+(esm-spec §8.9.4) is materialised BEFORE metaparameters are closed, and the
+length of its delivered record axis binds `M`. Bindings MUST (a) sample such a
+loader exactly once, reusing that array rather than re-reading it when the
+provider is later injected, (b) reject a loader whose variables disagree on the
+count, naming both, and (c) reject a caller binding of `M` that contradicts the
+discovered value rather than silently preferring either.
+
 ### 5.6 Closed Semiring Registry (normative)
 
 > This is the normative form of RFC `semiring-faq-unified-ir` §5.1 / §5.2 / §5.6.

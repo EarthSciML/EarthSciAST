@@ -2157,6 +2157,10 @@ Authentication, credential management, and per-variable temporal availability co
 | `variables` | ✓ | Map of schema-level variable name → variable descriptor (see §8.5). At least one entry required. |
 | `temporal` | | Temporal coverage and record layout (see §8.3). |
 | `determinism` | | Reproducibility contract for binary formats — endian / float format / integer width. A binding that cannot honor the declared layout MUST reject the file at load rather than reinterpret bytes. |
+| `reader_options` | | Format-specific **decode** options handed to the format reader (see §8.9). |
+| `select` | | Per-axis selection of what the loader delivers, default for every variable (see §8.9.2). |
+| `record_filter` | | Which records of a `points` loader survive (see §8.9.3). |
+| `extent` | | Binds the delivered record count to a metaparameter (see §8.9.4). |
 | `reference` | | Data source citation. |
 | `metadata` | | Free-form metadata. The `tags` array is conventional for scientific role. |
 
@@ -2207,11 +2211,15 @@ variables:
     file_variable: string        # required; name in the source file
     units: string                # required; units as exposed to the schema
     unit_conversion: number | Expression   # optional
+    codes: DataLoaderCodes       # optional; text column -> numbers (§8.9.1)
+    select: DataLoaderSelect     # optional; per-axis selection (§8.9.2)
     description: string
     reference: Reference
 ```
 
 `file_variable` lets the schema-level variable name differ from the on-disk name. `unit_conversion` is either a plain multiplicative factor or a full `Expression` AST (§4); the runtime applies it when producing values in the declared `units`.
+
+Two variables of one loader MAY name the **same** `file_variable` under different `select`s — that is how a full-grid field and a prefix of it are both declared, rather than one of them being sliced by the caller after the fact.
 
 ### 8.6 Regridding — a coupling expression
 
@@ -2470,6 +2478,111 @@ closure — on every manifold.
   }
 }
 ```
+
+### 8.9 Ingest: `reader_options`, `select`, `codes`, `record_filter`, `extent`
+
+A loader is pure I/O, but "pure I/O" still has to be **complete**: if the
+document cannot say how its bytes decode, which rows are real, and how many
+there are, then a caller supplies that imperatively and the document is not
+self-sufficient — a general-purpose runner cannot run the model, only a runner
+that knows this model can. The five fields below close that gap. All of them
+describe the source; none of them is model math.
+
+The **order** is fixed, because two of them can move rows:
+
+```
+   bytes ──[reader_options]──▶ native columns ──[codes]──▶ numbers
+        ──[record_filter]──▶ surviving records ──[select]──▶ delivered array
+                                     │
+                                     └────────────────────▶ extent → metaparameter
+```
+
+#### 8.9.1 `reader_options` and `codes` — decoding
+
+`reader_options` is a free-form object handed to the **format reader** verbatim
+(EarthSciIO calls the same thing `reader_kwargs`): the zip `member_glob` and
+`skip_header_row` of an FF10 point inventory, a GeoTIFF band naming. It says how
+bytes become an array and nothing about what the array means. A key the bound
+reader does not recognise **MUST** be an error, not an ignored key — a
+mis-spelled option that silently decodes something else is discovered much later,
+as wrong numbers.
+
+`codes` maps a **text** column to numbers on one variable:
+
+```
+codes:
+  map: {VOC: 1, NOX: 36, SO2: 41, ...}   # required
+  case_insensitive: bool                  # default false; whitespace always trimmed
+  unmapped: "drop" | "error" | number     # default "error"
+```
+
+A model forcing must be numeric, so without `codes` a text column is a hard
+error at the loader boundary rather than a silent drop. `unmapped: "drop"`
+removes the whole **record** — from every variable of the loader — which is why
+it composes with `record_filter` rather than being a per-column concern.
+
+#### 8.9.2 `select` — what the loader delivers
+
+```
+select:
+  axes: [ "all"
+        | {fixed: i}                       # take index i, DROP the axis
+        | {range: {start?, stop, step?}}   # half-open [start, stop) by step
+        | {gated_by: "<derived index set>"} ]
+```
+
+One entry per **native** array dimension, in native dims order. Declared on the
+loader (the default for its variables) or on a variable (overriding it).
+
+- `range` bounds may be integers **or** the name of a `metaparameters` entry,
+  resolving to its default — so a prefix is declared in the model's own terms
+  (`W[0:N_SRC]`), not as a literal that can drift from the index set sized by the
+  same metaparameter.
+- `gated_by` defers the whole fetch until value-invention has materialised that
+  derived set, then delivers only its members in canonical order
+  (CONFORMANCE_SPEC §5.5, Hook 2). It is the same per-axis vocabulary the
+  projection-pushdown record uses, which is the point: one spelling, whether the
+  author wrote the gate or the pushdown rewrite generated it.
+
+The selection is over the axis the loader **delivers**, so it follows
+`record_filter`: `range 0..200` on a filtered table is the first 200 *surviving*
+records. Whether a binding pushes the selection down to the reader (fetching only
+what it keeps) or applies it after the read is an optimization — the two **MUST**
+agree exactly.
+
+#### 8.9.3 `record_filter` — which records are real
+
+```
+record_filter:
+  require_finite: [<loader variable names>]
+```
+
+A record is dropped when any `require_finite` variable is non-finite at it, or
+when a `codes` map with `unmapped: "drop"` does not recognise its value. The
+surviving mask is computed **once for the loader** and applied to every variable,
+so its columns cannot fall out of alignment — the reason this is a loader-level
+field and not a per-variable one. A point with no coordinate cannot be placed and
+a row with no annual total cannot be weighted; saying so here is a statement
+about the source, where a NaN travelling into the model to surface as an empty
+result later is not.
+
+#### 8.9.4 `extent` — a loader that discovers its own size
+
+```
+extent:
+  metaparameter: "N_REC"
+```
+
+For a source whose size is not knowable until it is read. A binding samples such
+a loader **before** it closes metaparameters (§9.7.6 site 4), so an index set
+declared `size: "N_REC"` is sized by the data itself. Declare the metaparameter
+with a `default` (conventionally 0) so the document still validates and loads
+standalone. Every variable of the loader must agree on the count; that agreement
+is also the alignment check, and disagreement is an error naming both variables.
+
+Without `extent` the count has to reach the engine some other way, and the only
+other way is a caller that reads the file first and passes a number in — which is
+the model-shaped runner code this field exists to delete.
 
 ## 9. Closed Function Registry
 

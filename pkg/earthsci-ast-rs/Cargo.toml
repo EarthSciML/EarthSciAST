@@ -129,6 +129,9 @@ s2bindings = { git = "https://github.com/EarthSciML/s2bindings.rs", tag = "v0.1.
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.4"
 tempfile = "3.10"
+# Writes the FF10 zip fixture the loader-ingest test decodes (the same pure-Rust
+# `zip` crate EarthSciIO's reader uses; test-only, never a library dependency).
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # The wasm test harness — drives `tests/wasm_suite.rs` under node/headless-browser
 # via `wasm-pack test`.
