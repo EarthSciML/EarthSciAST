@@ -31,8 +31,7 @@
 # `ESS_TCADENCE_DISABLE=1` at build time demotes every time slot to DYNAMIC,
 # restoring the refill-every-call behavior bit-for-bit.
 #
-# Since the lane-invariant sharing pass (invariant_share.jl) landed, lane-invariant
-# kernel subtrees are prelude defs too — so the tier pays off on the ARRAY path as
+# Lane-invariant kernel subtrees are prelude defs too (the `_AccCSE` invariant tier) — so the tier pays off on the ARRAY path as
 # well, not just on scalar equations.
 #
 # `const` IN CADENCE IS NOT `const` IN VALUE — DO NOT FOLD AT BUILD TIME

@@ -495,7 +495,7 @@ end
 
 # Merge one structurally-identical group of per-cell nodes into an access
 # spine, appending per-cell tables to `acc` (the kernel's descriptor table).
-# Mirrors `_merge_nodes` (vectorize.jl) case for case:
+# Mirrors the deleted overlay's `_merge_nodes` case for case:
 #   LITERAL   all-equal → spine literal; varying → CONST_BOX ordinal table
 #   STATE     all-equal → STATE_FIXED (invariant tier hoists it); varying →
 #             STATE_TBL_BOX ordinal slot table (never 0 here — a per-cell ghost

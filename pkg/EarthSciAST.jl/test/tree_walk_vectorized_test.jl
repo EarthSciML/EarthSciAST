@@ -7,7 +7,7 @@
 #
 # Property under test (the "no scalarization" hard requirement): for the same
 # equation at different grid sizes, the number of compiled array kernels and the
-# total number of `_VecNode`s are EQUAL — only the embedded slot/value vectors
+# total number of spine nodes are EQUAL — only the embedded slot/value vectors
 # grow with N. Contrast the previous behaviour, where the compiled RHS held one
 # scalar `_Node` per cell (an O(N) node list).
 
@@ -379,7 +379,7 @@ end
 
     # -- (a) FAIL LOUD at the merge seam ------------------------------------
     # `_struct_sig!` now separates these, so `_vectorize_cell_entries` can no longer
-    # hand `_merge_nodes` such a group. Construct it directly (white-box) to pin the
+    # hand `_acc_merge_nodes` such a group. Construct it directly (white-box) to pin the
     # guard itself: it is the backstop for a hash collision, or for a future grouping
     # change that stops keying the spec.
     _amerge(nodes, len) = ESM._acc_merge_nodes(nodes, len, ESM._AccDesc[])

@@ -68,7 +68,7 @@ end
 # arrayop `D(u[i]) = interp.<op>(<const table/axis>, …, u[i])` — the const table &
 # axis ride on the fn payload (lowered to a typed `_Interp*Spec` at build time);
 # the per-cell query `u[i]` merges to a GATHER. These exercise the de-boxed
-# whole-array `_eval_vec_interp_*` kernels: the only Float64 arrays are the
+# whole-array interp path (`_eval_acc_op`'s `:fn` arm): the only Float64 arrays are the
 # preallocated buffers, so a steady-state `f!` call must allocate 0 bytes even
 # though the RHS contains a table lookup. This coverage gap is exactly why the
 # per-lane `Float64`→`Any` box went unnoticed before ess-wrh.

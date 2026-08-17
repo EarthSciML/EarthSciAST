@@ -1,11 +1,12 @@
 # The IN-PLACE RHS `f!(du, u, p, t)` under a non-Float64 value type
-# (src/tree_walk/vectorize.jl `_vbuf` / `_make_rhs`, src/tree_walk/compile.jl
+# (src/tree_walk/acc_merge.jl `_make_rhs`, src/tree_walk/access_kernel.jl `_AccCSE`,
+# src/tree_walk/compile.jl
 # `_rhs_value_type` / `_CSECache`).
 #
 # `f!` is the production evaluator: type-stable, zero-allocation, called every
 # Runge–Kutta stage. It used to be Float64-ONLY, not because it mutates — ForwardDiff
 # is perfectly happy with in-place functions — but because its scratch was
-# eltype-hardwired at BUILD time: a `Vector{Float64}` per `_VecNode` and one for the
+# eltype-hardwired at BUILD time: a `Vector{Float64}` per access-kernel CSE tier and one for the
 # CSE prelude. A `Dual` cannot be stored in either, so a Jacobian through `f!` threw.
 #
 # It is now generic in `T = _rhs_value_type(u, p, t)` while keeping BOTH properties
@@ -66,7 +67,7 @@ function _gi_doc(name, vars, eqs; index_sets = nothing)
 end
 
 # ---- The model battery -------------------------------------------------------
-# Chosen so every `_VecNode` kind that OWNS a buffer is walked at a Dual value type:
+# Chosen so every access-kernel kind that OWNS a buffer is walked at a Dual value type:
 # GATHER + ghost CONSTVEC (the stencil), INVARIANT (the hoisted `exp(-Ea/T)`), FN (an
 # interp table), STATE/PARAM/TIME/LITERAL, plus the scalar `_Node` path with a live
 # CSE prelude (`_NK_CACHED` — the other eltype-hardwired buffer).

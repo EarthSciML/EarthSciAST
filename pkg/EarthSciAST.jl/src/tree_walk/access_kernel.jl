@@ -59,7 +59,7 @@ const _NK_SUBCALL = UInt8(22)  # template-body sub-kernel (payload = _AccKernel)
 # ---- Access descriptors: how one leaf resolves to a value at (cell c, nbr n) ----
 #
 # ONE CONCRETE TAGGED STRUCT, not an abstract-type hierarchy — the same design as
-# `_VecNode` (vectorize.jl), and for the same reason. A per-kernel descriptor
+# the deleted `_VecNode` overlay used, and for the same reason. A per-kernel descriptor
 # TABLE is a `Vector{_AccDesc}`; if the element type were an abstract `_Access`,
 # every `_fetch(table[i], …)` would be a DYNAMIC DISPATCH on the boxed subtype,
 # which infers as `Any`, boxes each gathered value, and allocates O(#access-nodes
@@ -72,7 +72,7 @@ const _NK_SUBCALL = UInt8(22)  # template-body sub-kernel (payload = _AccKernel)
 # The named constructors below preserve the old per-descriptor call sites verbatim
 # (`_AccStateAffine(Δ)`, `_AccConstBox(arr, s1, s2, s3, off)`, …); only the storage
 # and `_fetch` changed. Fields are shared across kinds (an `Int` slot serves
-# `delta`/`idx`/… as the kind dictates), the way `_VecNode` shares `payload`/`idx`.
+# `delta`/`idx`/… as the kind dictates), the way `_Node` shares `payload`/`idx`.
 const _AK_STATE_AFFINE       = UInt8(1)   # u[oln + delta]              (Cartesian stencil workhorse)
 const _AK_CONST_AFFINE       = UInt8(2)   # arr[oln + delta]            (const, full-grid layout)
 const _AK_CONST_BOX          = UInt8(3)   # arr[off + Σ(midx_d-1)·s_d]  (const on its own reduced-rank grid)
@@ -214,7 +214,7 @@ struct _VarBound   <: _Bound; valence::Vector{Int}; end   # per-cell edge count 
 # of arbitrary output slots — cell ordinal c ∈ 1:length(outs) writes `du[outs[c]]`,
 # `midx == (c, 1, 1)`, and the box-addressed descriptors (CONST_BOX /
 # STATE_TBL_BOX / ARR_TBL_BOX with s1=1, off=1) index their per-cell tables by
-# that ordinal. `outs` is the same O(#cells) data the `_VecKernel` out_slots
+# that ordinal. `outs` is the same O(#cells) data the deleted `_VecKernel` out_slots
 # vector always carried — no new memory class.
 struct _CellSet
     strides::Vector{Int}
@@ -417,7 +417,7 @@ end
 # The MECHANICAL arms of `_eval_acc_op` — unary elementwise, comparisons,
 # fixed-2-ary `/`/`^`/`pow`/`atan2`, and the n-ary `min`/`max` folds — are
 # GENERATED from the same registry tables that grow the other three ladders
-# (`_eval_node_op` / `_eval_vec_op` / `_oop_op`), so a mechanical op added to
+# (`_eval_node_op` / `_eval_acc_op` / `_oop_op`), so a mechanical op added to
 # `_OP_TABLE` reaches the access spine automatically. Probe protocol as
 # everywhere: `nothing` ⇒ not in the table ⇒ the ladder falls through.
 # DELIBERATELY NO ARITY GUARDS on the unary/comparison/binary arms — the

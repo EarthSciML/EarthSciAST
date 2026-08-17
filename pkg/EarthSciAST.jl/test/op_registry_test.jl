@@ -229,7 +229,7 @@ const ESM = EarthSciAST
 
     @testset "_UNARY_ELEMENTWISE_OPS: the mechanical unary ladder arms, in order" begin
         # Exactly the ops with a repetitive one-liner arm in `_eval_node_op` /
-        # `_eval_vec_op`, in arm order. `atan` (1-or-2-ary), `neg`, and `not`
+        # `_eval_acc_op`, in arm order. `atan` (1-or-2-ary), `neg`, and `not`
         # are deliberately absent (non-mechanical arms).
         expected = [
             ("sin", sin), ("cos", cos), ("tan", tan),

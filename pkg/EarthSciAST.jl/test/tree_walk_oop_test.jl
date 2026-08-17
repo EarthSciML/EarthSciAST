@@ -24,10 +24,10 @@
 # on a state, and a ladder-coverage gate so `_oop_op` cannot drift away from the two
 # ladders it mirrors.
 #
-# Enzyme reverse mode also works on this RHS, but only with
-# `Enzyme.API.strictAliasing!(false)` — see the oop.jl header for why. Enzyme is a
-# heavy dependency and is deliberately NOT a test dep; that path is verified
-# out-of-band.
+# Enzyme reverse mode needs `Enzyme.API.strictAliasing!(false)` on this RHS — see the
+# oop.jl header for why, and scripts/enzyme_aliasing/ for the reproducers, the
+# measurements and what the flag does and does not cost. Enzyme is a heavy dependency
+# and is deliberately NOT a test dep; that path is verified out-of-band.
 
 using Test
 using EarthSciAST
@@ -61,7 +61,7 @@ _state(; kw...) = Dict{String,Any}("type" => "state",
 _param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
 
 # ---- The model battery -------------------------------------------------------
-# Chosen to cover every `_VecNode` kind the emitter can meet: GATHER + boundary
+# Chosen to cover every access-kernel node/descriptor kind the emitter can meet: GATHER + boundary
 # CONSTVEC (stencil), INVARIANT (a hoisted `exp(-Ea/T)`), REDUCE (a contraction),
 # FN (an interp table), STATE/PARAM/TIME/LITERAL, plus the scalar `_Node` path with a
 # live CSE prelude.
@@ -285,7 +285,7 @@ end
     # ---- Anti-drift ----------------------------------------------------------
 
     @testset "the shared ladder covers every op the scalar ladder does" begin
-        # `_oop_op` is a THIRD op ladder beside `_eval_node_op` and `_eval_vec_op`.
+        # `_oop_op` is a THIRD op ladder beside `_eval_node_op` and `_eval_acc_op`.
         # Pin it to the scalar one by differential test: same op, same args, same
         # value — bit for bit. A registry op added without an `_oop_op` arm fails here
         # rather than at some user's first `form = :oop` build.

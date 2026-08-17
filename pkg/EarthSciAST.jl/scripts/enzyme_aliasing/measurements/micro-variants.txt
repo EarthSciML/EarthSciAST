@@ -1,0 +1,51 @@
+### micro_variants.jl any
+variant=any  value=3.7899999999999996  fd=[4.4, 2.5, 2.0]
+RESULT any: FAIL Enzyme.Compiler.IllegalTypeAnalysisException
+IllegalTypeAnalysisException: Enzyme compilation failed due to illegal type analysis.
+ This usually indicates the use of a Union type, which is not fully supported with Enzyme.API.strictAliasing set to true [the default].
+ Ideally, remove the union (which will also make your code faster), or try setting Enzyme.API.strictAliasing!(false) before any autodiff call.
+ To toggle more information for debugging (needed for bug reports), set Enzyme.Compiler.VERBOSE_ERRORS[] = true (default false)
+Failure within method:
+
+eval_any(::NodeAny, ::Vector{Float64}, ::Type{Float64})
+     @ Main /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/scripts/enzyme_aliasing/micro_variants.jl:49
+
+Hint: catch this exception as `err` and call `code_typed(err)` to inspect the erroneous code.
+If you have Cthulhu.jl loaded you can also use `code_typed(err; interactive = true)` to interactively introspect the code.
+
+
+### micro_variants.jl anyunused
+variant=anyunused  value=3.7899999999999996  fd=[4.4, 2.5, 2.0]
+RESULT anyunused: OK   enzyme=[4.4, 2.5, 2.0]  maxdiff=0.0
+
+### micro_variants.jl barrier
+variant=barrier  value=3.7899999999999996  fd=[4.4, 2.5, 2.0]
+RESULT barrier: OK   enzyme=[4.4, 2.5, 2.0]  maxdiff=0.0
+
+### micro_variants.jl inactive
+variant=inactive  value=3.7899999999999996  fd=[4.4, 2.5, 2.0]
+RESULT inactive: OK   enzyme=[4.4, 2.5, 2.0]  maxdiff=0.0
+
+### micro_variants.jl union
+variant=union  value=3.7899999999999996  fd=[4.4, 2.5, 2.0]
+RESULT union: FAIL Enzyme.Compiler.IllegalTypeAnalysisException
+IllegalTypeAnalysisException: Enzyme compilation failed due to illegal type analysis.
+ This usually indicates the use of a Union type, which is not fully supported with Enzyme.API.strictAliasing set to true [the default].
+ Ideally, remove the union (which will also make your code faster), or try setting Enzyme.API.strictAliasing!(false) before any autodiff call.
+ To toggle more information for debugging (needed for bug reports), set Enzyme.Compiler.VERBOSE_ERRORS[] = true (default false)
+Failure within method:
+
+eval_union(::NodeUnion, ::Vector{Float64}, ::Type{Float64})
+     @ Main /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/scripts/enzyme_aliasing/micro_variants.jl:159
+
+Hint: catch this exception as `err` and call `code_typed(err)` to inspect the erroneous code.
+If you have Cthulhu.jl loaded you can also use `code_typed(err; interactive = true)` to interactively introspect the code.
+
+
+### micro_variants.jl concrete
+variant=concrete  value=3.7899999999999996  fd=[4.4, 2.5, 2.0]
+RESULT concrete: OK   enzyme=[4.4, 2.5, 2.0]  maxdiff=0.0
+
+### micro_variants.jl any relaxed
+variant=any  value=3.7899999999999996  fd=[4.4, 2.5, 2.0]
+RESULT any: OK   enzyme=[4.4, 2.5, 2.0]  maxdiff=0.0

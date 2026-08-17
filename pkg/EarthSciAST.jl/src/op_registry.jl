@@ -3,7 +3,7 @@
 # sync with…" comments). The registry is pure data: a load-time table with no
 # dependency on the AST types, consulted ONCE at include time to derive the
 # per-pass const sets. Nothing on any hot path dispatches through it — the
-# scalar/vectorized evaluator ladders (`_eval_node_op` / `_eval_vec_op`) keep
+# scalar/access-kernel evaluator ladders (`_eval_node_op` / `_eval_acc_op`) keep
 # their if/elseif form, and the derived Sets keep their original names, files,
 # and element types, so runtime behavior (set membership, dispatch, error
 # codes) is bit-identical to the hand-maintained originals. Memberships are
@@ -161,7 +161,7 @@ must be deliberate and is pinned by test/op_registry_test.jl (update the
 literal there in the same commit, citing the spec section that motivates the
 change). Row order is meaningful only for the derived ordered table
 `_UNARY_ELEMENTWISE_OPS`, which preserves it — the elementary rows below are
-listed in the `_eval_node_op` / `_eval_vec_op` ladder-arm order.
+listed in the `_eval_node_op` / `_eval_acc_op` ladder-arm order.
 """
 const _OP_TABLE = _OpSpec[
     # ── Arithmetic (esm-spec §4.2; `neg`/`pow` are the canonicalize-internal
@@ -220,7 +220,7 @@ const _OP_TABLE = _OpSpec[
     _op("Pre";    arity=1:1, category=:control, stencil=true, known=true,
         builtin=true),
 
-    # ── Elementary functions, in `_eval_node_op` / `_eval_vec_op` ladder-arm
+    # ── Elementary functions, in `_eval_node_op` / `_eval_acc_op` ladder-arm
     #    order (the derived `_UNARY_ELEMENTWISE_OPS` table preserves this
     #    order). `atan` is 1-or-2-ary (NOT mechanical-unary); `atan2` is the
     #    explicit 2-ary spelling. ──
@@ -534,11 +534,11 @@ end
     _UNARY_ELEMENTWISE_OPS
 
 Ordered table of the MECHANICAL unary elementwise ops — exactly the ops whose
-scalar/vectorized evaluator arms are the repetitive one-liners
+scalar/access-kernel evaluator arms are the repetitive one-liners
 (`op === :sin → sin(x)` / `@. b = sin(c1)`): the `:elementary` registry rows
 with fixed arity `1:1` and a recorded scalar function. Each entry is
 `(name::String, sym::Symbol, fn::Function)`; order is the registry row order,
-which matches the current `_eval_node_op` / `_eval_vec_op` arm order.
+which matches the current `_eval_node_op` / `_eval_acc_op` arm order.
 
 `atan` (1-or-2-ary), the arithmetic `neg` (`-x`), and the truth-valued `not`
 are deliberately NOT here — their arms are not mechanical applications of a
@@ -557,7 +557,7 @@ const _UNARY_ELEMENTWISE_OPS = Tuple(
 # the alias rows (`pow` calls `^`, `atan2` calls `atan`). Splicing `fnsym` as a
 # call reproduces the hand-written arm's AST verbatim (`a < b` IS
 # `(<)(a, b)`), so the generated methods compile to the same branches, and `@.`
-# / broadcast fusion in the vectorized/oop consumers is unchanged. `fn` is kept
+# / broadcast fusion in the access-kernel/oop consumers is unchanged. `fn` is kept
 # so load-time guards can assert `fnsym` still resolves to it in module scope.
 _ladder_row(s::_OpSpec) =
     (name = s.name, sym = Symbol(s.name),
@@ -571,7 +571,7 @@ rows, in registry (= hand-ladder) order: `<`, `<=`, `>`, `>=`, `==`, `!=`.
 Every evaluator ladder applies the Base predicate and maps its `Bool` through
 `1.0`/`0.0` (spec comparison semantics); the per-ladder arm shape (scalar
 ternary, `@.` blend, broadcast blend) lives with each generator. Consumers:
-`_eval_node_comparison` (compile.jl), `_eval_vec_comparison` (vectorize.jl),
+`_eval_node_comparison` (compile.jl), `_eval_acc_comparison` (access_kernel.jl),
 `_oop_comparison` (oop.jl), `_eval_acc_comparison` (access_kernel.jl).
 """
 const _COMPARISON_ELEMENTWISE_OPS = Tuple(
@@ -586,7 +586,7 @@ function — `/`, `^`, `pow` (the canonicalize-internal `^` alias), `atan2` (the
 explicit 2-ary `atan` spelling). NOTE the `^`/`pow` arms are mechanical only
 because the literal-exponent protection lives in the LEAVES, not the arm: a
 literal/const exponent stays `Float64` at every value type (see the `^` notes
-at `_eval_node`'s and `_eval_vec`'s literal kinds), so the generated
+at `_eval_node`'s and `_eval_acc`'s literal kinds), so the generated
 `x ^ y` lands on `Dual^Float64` — the power rule — exactly as the hand arms
 did. Same four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
 """
@@ -601,7 +601,7 @@ const _BINARY_ELEMENTWISE_OPS = Tuple(
 Ordered table of the MECHANICAL n-ary fold arms with a ≥2-arity guard: the
 elementary rows with arity `2:typemax` — `min`, `max` (esm-spec §4.2). The
 n-ary `+`/`*` are deliberately NOT here: their 1-ary form is a pass-through
-(and, on the vectorized ladder, returns the CHILD's buffer — a property
+(and, on the access-kernel ladder, returns the CHILD's buffer — a property
 `_vk_hoistable` depends on), so those arms are semantic, not mechanical. Same
 four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
 """
@@ -613,7 +613,7 @@ const _NARY_MINMAX_OPS = Tuple(
 # name must resolve, in THIS module's scope, to the registry's recorded
 # function — so a future shadowing of e.g. `min` or `==` cannot silently desync
 # the generated ladders from their `_OP_TABLE` rows. (`_UNARY_ELEMENTWISE_OPS`
-# gets the equivalent check in vectorize.jl, next to its first consumer.)
+# gets the equivalent check in access_kernel.jl, next to its first consumer.)
 for _t in (_COMPARISON_ELEMENTWISE_OPS, _BINARY_ELEMENTWISE_OPS, _NARY_MINMAX_OPS)
     for _row in _t
         getfield(@__MODULE__, _row.fnsym) === _row.fn ||

@@ -10,8 +10,9 @@ evaluator: `@compile`ing `f` runs the SAME tree walk, on the SAME compiled IR, w
 `TracedRNumber`/`TracedRArray` in place of `Float64`/`Vector{Float64}` — the walk
 executes once, at TRACE time, and what XLA gets is the flat op graph it left behind.
 That is the whole reason the emitter is eltype-generic and buffer-free; `f!` cannot
-be traced at all, because it captures a concrete `Vector{Float64}` scratch buffer per
-`_VecNode` and XLA has nothing to do with a host buffer.
+be traced at all, because it captures concrete `Vector{Float64}` scratch buffers (the
+CSE prelude and the access kernels' `_AccCSE` tiers) and XLA has nothing to do with a
+host buffer.
 
 WHY THESE FIVE AND NOTHING ELSE. Everything in between — `_oop_op`'s broadcast ladder,
 CSE, the semiring folds, the invariant hoist — is already legal StableHLO: broadcasting

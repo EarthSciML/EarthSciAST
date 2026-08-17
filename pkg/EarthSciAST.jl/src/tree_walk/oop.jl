@@ -2,8 +2,8 @@
 # tree_walk/oop.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 4d: the OUT-OF-PLACE RHS emitter — a second
-# emitter over the SAME compiled IR (`_Node` + `_VecNode`/`_VecKernel`)
-# that `_make_rhs` lowers to `f!(du, u, p, t)`.
+# emitter over the SAME compiled IR (`_Node` spines, scalar and inside
+# `_AccKernel`s) that `_make_rhs` lowers to `f!(du, u, p, t)`.
 # ========================================================================
 
 # ============================================================
@@ -12,7 +12,7 @@
 #
 # WHY A SECOND EMITTER — and what it is NOT for.
 # ----------------------------------------------
-# It is NOT the AD path. `f!` (vectorize.jl) is eltype-generic in its own right: it
+# It is NOT the AD path. `f!` (`_make_rhs`, acc_merge.jl) is eltype-generic in its own right: it
 # is zero-alloc AND bit-identical at Float64, and it differentiates under ForwardDiff
 # over the state or the parameters. Differentiate with `f!`. Solve with `f!`. If you
 # are reaching for this file to get a derivative on the CPU, you are in the wrong file.
@@ -22,8 +22,9 @@
 # SIGNATURE, which is incidental, but two properties `f!` cannot have without ceasing
 # to be `f!`:
 #
-#   1. NO CAPTURED HOST BUFFERS. `f!` writes into a preallocated `Vector{Float64}` per
-#      `_VecNode` (`n.buf`), created at build time. A traced value cannot be written
+#   1. NO CAPTURED HOST BUFFERS. `f!` writes into preallocated `Vector{Float64}` scratch
+#      created at build time — the CSE prelude's `_cse_buf` and each `_AccKernel`'s
+#      `_AccCSE` tiers. A traced value cannot be written
 #      into concrete host memory. Nor does `f!`'s eltype-generic alt-buffer rescue it:
 #      under tracing the value type is `TracedRNumber{Float64}`, so the lazy buffer
 #      would be a HOST `Vector{TracedRNumber}` — a Julia array of traced scalars, which
@@ -56,26 +57,49 @@
 #
 #     Enzyme.API.strictAliasing!(false)     # once, before any autodiff call
 #
-# Reverse mode then produces gradients matching ForwardDiff to ~1e-16. Without it,
-# Enzyme's type analysis rejects the RHS — not because of anything this file does,
-# but because the walk LOADS FIELDS FROM `_VecNode`, and that struct is heterogeneous
-# by design: one `payload::Any` slot serving ten node kinds, `fnargs::Vector{Any}` for
-# the boxed closed-function path, and `altbuf::RefValue{Any}` for `f!`'s lazy per-eltype
-# scratch. Enzyme cannot type-analyze loads out of such an object and bails on the whole
-# method — including, note, loads of the CONCRETE fields (`vals`, `slots`), so simply
-# routing around the `Any` payload does NOT help. I tried that; it does not work. Nothing
-# short of a payload-free IR will.
+# Without it, Enzyme's type analysis rejects the RHS — not because of anything this
+# file does, but because the walk LOADS the `payload::Any` variant slot out of `_Node`
+# (compile.jl), one field serving twelve node kinds. The failure is an
+# `IllegalTypeAnalysisException` naming `_oop_eval` and the `getproperty` that loads
+# it. ForwardDiff, which analyzes types the way Julia does, is unaffected.
 #
-# Which is the real fix, and it is a separate piece of work: lower the compiled IR ONCE
-# at build time into a concretely-typed tree with no `Any` anywhere. That same lowering
-# is what an XLA/Reactant backend wants regardless, so the two motivations converge.
-# ForwardDiff, which analyzes types the way Julia does, is unaffected and needs nothing.
+# Three things about that are easy to get wrong, so they were MEASURED (Enzyme
+# 0.13.199; scripts, logs and the full argument in scripts/enzyme_aliasing/):
+#
+#   * It is not an `:oop` problem. The default in-place `f!` fails identically, at
+#     `_eval_node`, from its scalar CSE-prelude/`rhs_list` tier. The wart belongs to
+#     the shared `_Node` IR.
+#   * The tree need not CONTAIN the offending kind. A 0-D model with no loop-var,
+#     gather or `fn` node still fails on the `_NK_LOOPVAR` arm: Enzyme analyzes the
+#     whole statically reachable method, so an arm this model can never execute
+#     poisons the walk anyway. That is what makes runtime cleverness a non-strategy.
+#   * It is the LOAD, not the field. A struct that still declares `payload::Any` but
+#     whose walk never loads it differentiates fine. So routing around the payload
+#     DOES help, arm by arm — the failure just moves to the next load, and the walk
+#     has many. Barriers (`@noinline`, or properly `EnzymeRules.inactive`) clear them
+#     one at a time until they reach the one wall they cannot: `_oop_fn`'s boxed
+#     `Vector{Any}` args handed to a `String`-dispatched registry, whose contents are
+#     ACTIVE. That one needs a typed calling convention, not a barrier.
+#
+# The flag itself is a wart and not a hazard: per Enzyme's own C++, it only makes type
+# analysis DECLINE to propagate facts upward through phis/selects — the flag that can
+# fabricate a type and so produce wrong derivatives is `looseTypeAnalysis!`, which is
+# a different global read by different code. It is process-global with no scoped
+# alternative, so its real cost is blast radius, not correctness.
+#
+# The durable fix is still a payload-free IR: lower the compiled IR ONCE at build time
+# into a concretely-typed tree with the variant resolved statically. That same lowering
+# is what an XLA/Reactant backend wants regardless, so the two motivations converge —
+# and half of it exists already, as codegen_kernel.jl does exactly this for the array
+# kernels of `f!`. Note what that convergence does NOT buy: with the codegen tier on,
+# Enzyme currently fails on the emitted RuntimeGeneratedFunction with an internal
+# `UndefVarError`, so the lowering is not on its own a route to Enzyme support.
 #
 # THE ONE LADDER. `_oop_op` evaluates an op over ALREADY-EVALUATED children using
 # broadcast (`.+`, `sin.`, …) throughout. Broadcasting two scalars yields a scalar,
-# so the SAME ladder serves the scalar walker (`_Node`, children all `T`) and the
-# array walker (`_VecNode`, children a mix of `T` and `Vector{T}`) — no third arm
-# set to drift out of sync with `_eval_node_op` and `_eval_vec_op`. The op-coverage
+# so the SAME ladder serves the scalar walker (children all `T`) and the
+# access-kernel lane walker (children a mix of `T` and `Vector{T}`) — no third arm
+# set to drift out of sync with `_eval_node_op` and `_eval_acc_op`. The op-coverage
 # test asserts this ladder accepts every op those two accept.
 #
 # PERFORMANCE SHAPE (measured, 1-D reaction–diffusion, Float64). This form costs about
@@ -264,9 +288,8 @@ end
 # ---- The shared op ladder ---------------------------------------------------
 #
 # The mechanical unary arms (`sin` … `ceil`), GENERATED from the op-registry table
-# exactly as `_eval_vec_unary_elementwise` (vectorize.jl) is, so a unary op added
-# to the registry reaches every ladder (scalar / vectorized / oop / access-kernel)
-# at once. `nothing` ⇒ not a mechanical unary op ⇒ the caller's ladder falls
+# exactly as `_eval_acc_op`'s matching arms (access_kernel.jl) are, so a unary op added
+# to the registry reaches every ladder (scalar / oop / access-kernel) at once. `nothing` ⇒ not a mechanical unary op ⇒ the caller's ladder falls
 # through. The comparison / binary / min-max probes below follow the same
 # protocol from their own registry tables.
 let arms = :(return nothing)
@@ -306,7 +329,7 @@ end
 # The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
 # `_BINARY_ELEMENTWISE_OPS`. NB the `^` arm here is only the FALLBACK for a
 # malformed arity: a well-formed 2-ary `^`/`pow` is intercepted upstream by
-# `_oop_pow` / `_oop_eval_vec`'s literal-exponent arm and never reaches the
+# `_oop_pow` / `_oop_eval_acck`'s literal-exponent arm and never reaches the
 # shared ladder (see `_oop_pow` for why).
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
@@ -344,8 +367,8 @@ let arms = :(return nothing)
 end
 
 # Apply `op` to already-evaluated children. Every arm broadcasts, so `c` may hold
-# scalars (the `_Node` walker), arrays (the `_VecNode` walker), or a mix — and the
-# fold ORDER matches `_eval_node_op` / `_eval_vec_op` arm for arm, which is what
+# scalars (the scalar walker), arrays (the access-kernel lane walker), or a mix — and the
+# fold ORDER matches `_eval_node_op` / `_eval_acc_op` arm for arm, which is what
 # keeps a Float64 run of this emitter bit-identical to `f!`.
 function _oop_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
     if op === :+
@@ -379,7 +402,7 @@ function _oop_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
     elseif (cmp = _oop_comparison(op, c, T)) !== nothing
         return cmp
 
-    # Logical — folded (not short-circuited), matching `_eval_vec_op`; every child
+    # Logical — folded (not short-circuited), matching `_eval_acc_op`; every child
     # is evaluated either way, so the values agree with the scalar arm too.
     elseif op === :and
         r = one(T)
@@ -981,8 +1004,8 @@ function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForci
     # `DomainError` on `ifelse(a >= 0, sqrt(a), 0)` at `a = -1`, a model `f!` runs
     # fine. So they short-circuit here, ahead of the child loop, exactly the way `fn`
     # and `^` already return early. (`_oop_op` keeps its folded arms: it is SHARED
-    # with `_oop_eval_vec`'s `_VK_OP` arm, where evaluation is over lanes and eager
-    # by construction — the same scalar/array divergence `_eval_vec` has.)
+    # with `_oop_eval_acck`'s op arm, where evaluation is over lanes and eager
+    # by construction — the same scalar/array divergence `_eval_acc` has.)
     ch = n.children
     if n.op === :ifelse
         _expect_arity_n(n.op, ch, 3)
@@ -1124,7 +1147,7 @@ end
 # codebase: `ifelse`/`and`/`or` evaluate EAGERLY over lanes (the `_oop_op`
 # folded arms, value-identical to the lazy scalar arms) rather than
 # short-circuiting, so a guard that exists to dodge a DomainError does not
-# dodge it here — exactly the `_eval_vec` / `_oop_run_acc_vec` contract. Under
+# dodge it here — exactly the `_eval_acc` / `_oop_run_acc_vec` contract. Under
 # a trace the lazy arms could not run anyway (branching on a traced Bool
 # throws), so for the traced consumer this path is strictly more capable.
 #
@@ -2231,7 +2254,7 @@ end
 const _OOP_NO_SUB = _OopSubRT(_AccKernel[], _OopAccPlan[], Vector{Any}[], Vector{Any}[])
 
 # The lane walker: value-returning, whole-array, routed through the same seams
-# as the `_VecNode` walker — a lane-varying node yields a length-L vector, a
+# as the in-place access-kernel runner — a lane-varying node yields a length-L vector, a
 # lane-invariant one a bare scalar, and broadcast makes them interchangeable.
 # `cellvals`/`invvals` are this call's CSE tier results (the out-of-place
 # expression of the scratch buffers) for kernel `K`, filled in slot order by the

@@ -24,7 +24,7 @@
 #   4. Lower the sentinel spine to an access spine with `_lower_to_access` (below)
 #      and emit one `_AccKernel` with the box's `_CellSet`.
 #
-# `_lower_to_access` is the analog of `_lower_template` (stencil.jl): same tree
+# `_lower_to_access` is the analog of the deleted `_lower_template` (stencil.jl): same tree
 # shape, but each `_NK_STATE(idx=-k)` lane leaf becomes either a literal (ghost /
 # invariant-folded lane) or an `_NK_ACCESS` into a per-kernel descriptor table,
 # and each invariant fixed-slot leaf (`_NK_STATE idx≥0`, `_NK_PARAM_GATHER`)
@@ -891,7 +891,7 @@ function _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_arg
 end
 
 # Compile a no-contraction array equation via the affine polyhedral build.
-# Same inputs as `_try_symbolic_stencil`; returns `Vector{_AccKernel}` or nothing.
+# Same inputs the deleted `_try_symbolic_stencil` took; returns `Vector{_AccKernel}` or nothing.
 function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              range_iters, lhs_body::OpExpr,
                              resolved_obs::Dict{String,ASTExpr},

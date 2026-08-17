@@ -1,0 +1,64 @@
+┌ Info: mode=strict codegen_disabled=1
+└   v = v"0.13.199"
+
+========================================================================
+0-D with CSE prelude (f!)
+========================================================================
+value            = 0.15111358727476987
+ForwardDiff grad = [0.43175310649934256, 0.7555679363738492]
+REVERSE FAILED: Enzyme.Compiler.IllegalTypeAnalysisException
+IllegalTypeAnalysisException: Enzyme compilation failed due to illegal type analysis.
+ This usually indicates the use of a Union type, which is not fully supported with Enzyme.API.strictAliasing set to true [the default].
+ Ideally, remove the union (which will also make your code faster), or try setting Enzyme.API.strictAliasing!(false) before any autodiff call.
+ To toggle more information for debugging (needed for bug reports), set Enzyme.Compiler.VERBOSE_ERRORS[] = true (default false)
+Failure within method:
+
+(::EarthSciAST.var"#f!#_make_rhs##0"{Vector{Tuple{Int64, EarthSciAST._Node}}, Vector{EarthSciAST._Node}, EarthSciAST._CSECache, Vector{Int64}, Vector{Int64}, Vector{Int64}, Vector{EarthSciAST._ScanFold}, EarthSciAST._KernelSection{Nothing, Nothing, Nothing, Nothing}})(::Vector{Float64}, ::Vector{Float64}, ::@NamedTuple{Ea::Float64, T::Float64, k::Float64}, ::Float64)
+     @ EarthSciAST /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/acc_merge.jl:675
+
+Hint: catch this exception as `err` and call `code_typed(err)` to inspect the erroneous code.
+If you have Cthulhu.jl loaded you can also use `code_typed(err; interactive = true)` to interactively introspect the code.
+
+Caused by:
+Stacktrace:
+ [1] getproperty
+   @ ./Base_compiler.jl:54
+ [2] _eval_node
+   @ /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/compile.jl:1704
+ [3] f!
+   @ /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/acc_merge.jl:744
+ [4] f!
+   @ /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/acc_merge.jl:0
+
+
+========================================================================
+reaction-diffusion N=16 (f!)
+========================================================================
+value            = 0.056752952052945095
+ForwardDiff grad = [-0.00431930840533303, 0.05030685787462608, 0.027971276126993953, -0.011797539212662508, -0.019322007193651902, -0.05248284175182523, -0.06774302544278282, -0.030608585004774386, -0.01596931811823072, 0.0051985859272533925, 0.04779251311997311, 0.026785494966113557, -0.012213110489857036, -0.019665284044220008, -0.04306048358389737, -0.038761131387065606]
+REVERSE FAILED: Enzyme.Compiler.IllegalTypeAnalysisException
+IllegalTypeAnalysisException: Enzyme compilation failed due to illegal type analysis.
+ This usually indicates the use of a Union type, which is not fully supported with Enzyme.API.strictAliasing set to true [the default].
+ Ideally, remove the union (which will also make your code faster), or try setting Enzyme.API.strictAliasing!(false) before any autodiff call.
+ To toggle more information for debugging (needed for bug reports), set Enzyme.Compiler.VERBOSE_ERRORS[] = true (default false)
+Failure within method:
+
+(::EarthSciAST.var"#f!#_make_rhs##0"{Vector{Tuple{Int64, EarthSciAST._Node}}, Vector{EarthSciAST._Node}, EarthSciAST._CSECache, Vector{Int64}, Vector{Int64}, Vector{Int64}, Vector{EarthSciAST._ScanFold}, EarthSciAST._KernelSection{Nothing, Nothing, Nothing, Nothing}})(::Vector{Float64}, ::Vector{Float64}, ::@NamedTuple{Ea::Float64, T::Float64, k_diff::Float64, k_rxn::Float64}, ::Float64)
+     @ EarthSciAST /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/acc_merge.jl:675
+
+Hint: catch this exception as `err` and call `code_typed(err)` to inspect the erroneous code.
+If you have Cthulhu.jl loaded you can also use `code_typed(err; interactive = true)` to interactively introspect the code.
+
+Caused by:
+Stacktrace:
+ [1] getproperty
+   @ ./Base_compiler.jl:54
+ [2] _eval_node
+   @ /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/compile.jl:1704
+ [3] f!
+   @ /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/acc_merge.jl:744
+ [4] f!
+   @ /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/agent-a1a75719e2bc1d84e/pkg/EarthSciAST.jl/src/tree_walk/acc_merge.jl:0
+
+
+SUMMARY (in-place, mode=strict): 0-D => fail ; RD => fail
