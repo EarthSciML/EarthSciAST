@@ -363,11 +363,78 @@ def _expr_to_string(expr: Expr) -> str:
     return str(expr)
 
 
+def _namespace_join(
+    join: list[dict[str, Any]],
+    binders: set[str],
+    prefix: str,
+    locals_: set[str],
+) -> list[dict[str, Any]]:
+    """Prefix the plain-string references a ``join`` clause carries.
+
+    CONFORMANCE_SPEC §5.5.6. A ``join`` names its references as STRINGS rather
+    than as child expressions — an ``on`` key column, and an ``overlap``
+    clause's ``src_env`` / ``tgt_env`` envelope factors — so ``map_children``
+    never sees them. That is an encoding choice, not a scoping one: the
+    value-invention materializer resolves each against the variable registry
+    (``value_invention._vi_join_index_sym`` -> ``ctx.variables``,
+    ``broad_phase.envelope_vectors`` -> ``ctx.const_arrays``), which after
+    flattening is the NAMESPACED registry.
+
+    The gate is ``locals_`` — the component's own declared variable names plus
+    its subsystem keys — applying exactly the rule a bare ``Expr`` string gets.
+    This is what lets the pass tell a model-local buffer (``rg_src_bin``) from a
+    document-scoped index set (``sourceType``) or a loop symbol (``src``)
+    without an index-set registry: neither of the latter is a declared local
+    variable, so both pass through untouched. Mirrors Julia
+    ``namespacing.jl::_namespace_join`` and Rust
+    ``flatten.rs::namespace_join_names``.
+
+    ``binders`` are the loop symbols THIS node binds (``output_idx`` entries and
+    ``ranges`` keys) and they win over ``locals_``: an index symbol is local to
+    the enclosing ``aggregate`` and shadows any coincident variable name
+    (esm-spec §4.3.1), and an ``on`` key column is resolved against this node's
+    own ranges (``value_invention._vi_join_index_sym``,
+    ``numpy_interpreter._join_sym_for_key``) — so prefixing a shadowed symbol
+    makes it resolve to nothing. Without this the gate mis-fires on the legal
+    case of a model that declares a variable named like one of its loop symbols.
+    """
+
+    def ns(name: Any) -> Any:
+        if not isinstance(name, str):
+            return name
+        if name in binders:
+            return name
+        if "." in name:
+            return f"{prefix}.{name}" if name.split(".", 1)[0] in locals_ else name
+        return f"{prefix}.{name}" if name in locals_ else name
+
+    out: list[dict[str, Any]] = []
+    for clause in join:
+        if not isinstance(clause, dict):
+            out.append(clause)
+            continue
+        new = dict(clause)
+        if isinstance(clause.get("on"), list):
+            new["on"] = [
+                [ns(c) for c in pair] if isinstance(pair, list) else pair for pair in clause["on"]
+            ]
+        ov = clause.get("overlap")
+        if isinstance(ov, dict):
+            new_ov = dict(ov)
+            for side in ("src_env", "tgt_env"):
+                if isinstance(ov.get(side), list):
+                    new_ov[side] = [ns(f) for f in ov[side]]
+            new["overlap"] = new_ov
+        out.append(new)
+    return out
+
+
 def _namespace_expr(
     expr: Expr,
     prefix: str,
     leave_alone: set[str] | None = None,
     subsystem_keys: set[str] | None = None,
+    locals_: set[str] | None = None,
 ) -> Expr:
     """Recursively prefix every variable reference in ``expr`` with ``prefix.``.
 
@@ -415,23 +482,34 @@ def _namespace_expr(
         # cannot be resolved after flatten (RFC §5.3). Range symbols stay local
         # via ``local_leave``.
         #
-        # ``join.on`` key columns are LEFT UNCHANGED here: a key may name a
-        # DOCUMENT-scoped index set (e.g. a categorical equi-join on
-        # ``sourceType``) that must NOT be model-prefixed, and this namespacing
-        # pass has no index-set registry to tell the two apart. A key that names
-        # a model-local value-invention buffer (``rg_src_bin``) is instead
-        # reconciled bare-vs-namespaced at join-resolution time
-        # (numpy_interpreter._resolve_join_key_column), which has the buffer set.
+        # ``join`` carries its references as plain STRINGS (``on`` key columns,
+        # an ``overlap``'s ``src_env`` / ``tgt_env``), so ``map_children`` never
+        # visits them — but they resolve against the same registry every other
+        # reference does, and after flattening that registry is namespaced
+        # (§5.5.6). ``_namespace_join`` applies the same rule under the
+        # declared-local gate, which is what distinguishes a model-local
+        # value-invention buffer (``rg_src_bin``) from a document-scoped index
+        # set (``sourceType``) or a loop symbol without needing an index-set
+        # registry. This pass used to leave ``join`` alone for exactly that
+        # reason; the gate removes the need to.
         #
         # ``map_children`` rebuilds via ``replace`` so closed-function metadata
         # (``name``, ``value``, ``handler_id``, ``table``, ``output``) is
         # preserved automatically. Hand-listing fields silently drops any new
         # ExprNode attribute and cost the SymPy bridge ``fn``-op support
         # before this fix (esm-6ka).
-        return map_children(
+        out = map_children(
             expr,
-            lambda c: _namespace_expr(c, prefix, local_leave, subsystem_keys),
+            lambda c: _namespace_expr(c, prefix, local_leave, subsystem_keys, locals_),
         )
+        if locals_ and getattr(expr, "join", None):
+            # THIS node's own loop symbols, not ``local_leave`` (which also holds
+            # enclosing nodes'). A join column resolves against this node's
+            # ``ranges``, so its own binders are the exact shadowing set — and a
+            # node-local set is what lets every binding implement one rule.
+            binders = set(expr.output_idx or ()) | set((expr.ranges or {}).keys())
+            out = replace(out, join=_namespace_join(expr.join, binders, prefix, locals_))
+        return out
     return expr
 
 
@@ -655,6 +733,7 @@ def _namespace_equations(
     prefix: str,
     leave_alone: set[str],
     subsystem_keys: set[str] | None = None,
+    locals_: set[str] | None = None,
 ) -> None:
     """Namespace both sides of each equation and append it to ``component``.
 
@@ -666,10 +745,18 @@ def _namespace_equations(
         component.equations.append(
             FlattenedEquation(
                 lhs=_namespace_expr(
-                    eq.lhs, prefix, leave_alone=leave_alone, subsystem_keys=subsystem_keys
+                    eq.lhs,
+                    prefix,
+                    leave_alone=leave_alone,
+                    subsystem_keys=subsystem_keys,
+                    locals_=locals_,
                 ),
                 rhs=_namespace_expr(
-                    eq.rhs, prefix, leave_alone=leave_alone, subsystem_keys=subsystem_keys
+                    eq.rhs,
+                    prefix,
+                    leave_alone=leave_alone,
+                    subsystem_keys=subsystem_keys,
+                    locals_=locals_,
                 ),
                 source_system=prefix,
             )
@@ -706,6 +793,11 @@ def _collect_model(name: str, model: Model, prefix: str | None = None) -> _Compo
     # subsystem-LOCAL and must be qualified with the model prefix to match the
     # lowered LoaderField / subsystem name (see _namespace_expr).
     sub_keys = set(model.subsystems.keys())
+    # The component's own declared names — the gate for namespacing the
+    # plain-string references a ``join`` clause carries (§5.5.6). Mirrors Julia
+    # ``_collect_model!``'s ``local_names`` and Rust ``build_model_block``'s
+    # ``locals``.
+    locals_ = set(model.variables.keys()) | sub_keys
     # Observed variables that carry an explicit `expression` define an
     # algebraic relation `name = expression`. Emit them as namespaced
     # equations so simulate() and codegen can inline them. Without this
@@ -716,7 +808,11 @@ def _collect_model(name: str, model: Model, prefix: str | None = None) -> _Compo
             continue
         namespaced = f"{full_prefix}.{var_name}"
         ns_rhs = _namespace_expr(
-            var.expression, full_prefix, leave_alone=leave_alone, subsystem_keys=sub_keys
+            var.expression,
+            full_prefix,
+            leave_alone=leave_alone,
+            subsystem_keys=sub_keys,
+            locals_=locals_,
         )
         component.equations.append(
             FlattenedEquation(
@@ -726,7 +822,12 @@ def _collect_model(name: str, model: Model, prefix: str | None = None) -> _Compo
             )
         )
     _namespace_equations(
-        model.equations, component, full_prefix, leave_alone, subsystem_keys=sub_keys
+        model.equations,
+        component,
+        full_prefix,
+        leave_alone,
+        subsystem_keys=sub_keys,
+        locals_=locals_,
     )
 
     for sub_name, sub_model in model.subsystems.items():
@@ -835,10 +936,18 @@ def _collect_reaction_system(
             source_system=full_prefix,
         )
 
-    if derived is not None:
-        _namespace_equations(derived.equations, component, full_prefix, leave_alone)
+    # Declared local names for the §5.5.6 `join` gate: a reaction system's
+    # species and parameters (mirrors Julia `_collect_reaction_system!`).
+    rs_locals = {sp.name for sp in rs.species} | {p.name for p in rs.parameters}
 
-    _namespace_equations(rs.constraint_equations, component, full_prefix, leave_alone)
+    if derived is not None:
+        _namespace_equations(
+            derived.equations, component, full_prefix, leave_alone, locals_=rs_locals
+        )
+
+    _namespace_equations(
+        rs.constraint_equations, component, full_prefix, leave_alone, locals_=rs_locals
+    )
 
     for sub_name, sub_rs in rs.subsystems.items():
         sub_prefix = f"{full_prefix}.{sub_name}"
@@ -1008,6 +1117,71 @@ def _apply_couple(
         )
 
 
+def _contains_join(expr: Expr) -> bool:
+    """True iff any node in ``expr`` carries a non-empty ``join``."""
+    if not isinstance(expr, ExprNode):
+        return False
+    if getattr(expr, "join", None):
+        return True
+    return any_child(expr, _contains_join)
+
+
+def _rename_join_names(expr: Expr, to_var: str, from_var: str) -> Expr:
+    """Rename ``to_var`` -> ``from_var`` in every plain-string ``join`` name.
+
+    The join-side companion of the ``variable_map`` substitution
+    (CONFORMANCE_SPEC §5.5.6). ``substitute`` walks expression CHILDREN, so it
+    cannot see an ``on`` key column or an ``overlap``'s ``src_env`` /
+    ``tgt_env`` — but those are references in the same namespaced scope as
+    everything else. A ``param_to_var`` / ``conversion_factor`` map REMOVES
+    ``to_var`` from the flattened parameter list, so a join still naming it
+    points at a variable the system no longer declares and materialisation dies
+    with ``join references unknown variable``. Mirrors Julia
+    ``coupling_apply.jl::_rename_join_names`` and Rust
+    ``flatten.rs::rename_join_names``.
+    """
+    # Scan BEFORE the rebuild: ``map_children`` copies, and this runs over every
+    # equation of every component for every ``variable_map`` entry. Almost no
+    # model carries a join, and those must not pay a whole-tree copy on top of
+    # the substitution's. The scan is once per tree, not per node — the
+    # recursion below is the unguarded ``_rename_join_names_in``.
+    if not isinstance(expr, ExprNode) or not _contains_join(expr):
+        return expr
+    return _rename_join_names_in(expr, to_var, from_var)
+
+
+def _rename_join_names_in(expr: Expr, to_var: str, from_var: str) -> Expr:
+    """The unguarded recursion behind :func:`_rename_join_names`."""
+    if not isinstance(expr, ExprNode):
+        return expr
+
+    def ren(name: Any) -> Any:
+        return from_var if name == to_var else name
+
+    out = map_children(expr, lambda c: _rename_join_names_in(c, to_var, from_var))
+    if not getattr(expr, "join", None):
+        return out
+    clauses: list[dict[str, Any]] = []
+    for clause in expr.join:
+        if not isinstance(clause, dict):
+            clauses.append(clause)
+            continue
+        new = dict(clause)
+        if isinstance(clause.get("on"), list):
+            new["on"] = [
+                [ren(c) for c in pair] if isinstance(pair, list) else pair for pair in clause["on"]
+            ]
+        ov = clause.get("overlap")
+        if isinstance(ov, dict):
+            new_ov = dict(ov)
+            for side in ("src_env", "tgt_env"):
+                if isinstance(ov.get(side), list):
+                    new_ov[side] = [ren(f) for f in ov[side]]
+            new["overlap"] = new_ov
+        clauses.append(new)
+    return replace(out, join=clauses)
+
+
 def _apply_variable_map(
     components: OrderedDict[str, _ComponentSystem],
     entry: VariableMapCoupling,
@@ -1050,7 +1224,9 @@ def _apply_variable_map(
             new_eqs.append(
                 FlattenedEquation(
                     lhs=substitute(eq.lhs, bindings),
-                    rhs=substitute(eq.rhs, bindings),
+                    rhs=_rename_join_names(
+                        substitute(eq.rhs, bindings), entry.to_var, entry.from_var
+                    ),
                     source_system=eq.source_system,
                 )
             )

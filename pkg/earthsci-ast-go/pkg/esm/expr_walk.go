@@ -258,8 +258,18 @@ type exprRefChild struct {
 //     LOAD-TIME index/metaparameter expressions ({"from": "faces"}, [2, N-1]),
 //     resolved against the index-set and metaparameter namespaces at load, not
 //     against the runtime variable namespace.
-//   - "join"    — {"on": [[…]]} clauses whose operands are key symbols bound by the
-//     enclosing aggregate, never free references (§9.7.6).
+//   - "join"    — a clause is an untyped map, not an Expression, so the keystone
+//     never yields an ExprNode for it and there is nothing here to descend into.
+//     The reason is STRUCTURAL, not that the names are non-references: an `on` key
+//     column and an `overlap`'s `src_env`/`tgt_env` ARE variable references
+//     encoded as plain strings, which is exactly why flattening namespaces them
+//     (namespaceJoinNames; CONFORMANCE_SPEC §5.5.6). They stay out of reference
+//     integrity because an `on` column is POLYMORPHIC — a loop symbol, a
+//     document-scoped index set, or a declared local buffer — and only the last
+//     lives in the variable namespace, so resolving every join string as a free
+//     variable reference would manufacture errors on good documents. Diagnosing a
+//     genuinely bad envelope factor needs the declared-local gate and the
+//     const-array registry, not this walk.
 //   - "regions" — makearray region bounds: load-time extents, same rule as ranges.
 //
 // This list is the sole justification for a field appearing in the keystone but

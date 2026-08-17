@@ -397,8 +397,18 @@ func buildUnitRegistry() map[string]Unit {
 
 	// Plane angle. "degrees" is the long-form alias the corpus uses for lon/lat
 	// coordinates and terrain aspect.
+	//
+	// The SINGULAR is registered too, and its absence was a bug rather than a
+	// stylistic gap: esm-spec registers `degree`/`degrees` alike as rad × π/180,
+	// six variables in `isrm.esm` spell it `degree`, and Rust (`units.rs`) and
+	// Julia (`units.jl`) both carry the pair. TypeScript was missing it as well —
+	// that is what stopped the app opening `isrm.esm` at all — making this the
+	// third binding with the same hole. It survived cross-binding testing because
+	// the conformance fixture pins only the plural, on a bare parameter with no
+	// expression to discriminate its dimension.
 	r["deg"] = Unit{Dim: r["rad"].Dim, Scale: math.Pi / 180}
 	r["degrees"] = r["deg"]
+	r["degree"] = r["deg"]
 
 	// Solid angle — the steradian, sr = rad^2 (esm-spec §4.8.1). rad is the
 	// dimAngle axis, so a solid angle is that axis SQUARED, not a ninth axis

@@ -545,6 +545,16 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      renaming map to free variable references inside the component's carried
      `expression_templates` bodies and inside surviving `apply_expression_template`
      references' `bindings` (template `params` shadow, exactly as in esm-spec §9.6.1).
+   - Apply it to the plain-string references a relational `join` carries as well — an `on`
+     key column, and an `overlap` clause's `src_env` / `tgt_env` envelope factors. These are
+     references encoded as strings rather than as expression children, and they resolve
+     against the same (now namespaced) variable registry; the rewrite is gated on the
+     component's declared local names, so a loop symbol or a document-scoped index set named
+     by an `on` column is left alone. Normative statement and rationale:
+     **CONFORMANCE_SPEC §5.5.6**. Loop-index symbols (`output_idx`, `ranges` keys, an
+     `integral`'s `int_var`) are resolved positionally and are NOT namespaced — and a join
+     name that is one of the clause-bearing node's OWN binders stays a loop symbol even when
+     a local variable of that name is declared, a shadowing esm-spec §4.3.1 permits.
 
    **Between steps 2 and 3 — Expand coupling imports (esm-spec §10.10).** Before applying coupling
    rules, replace each `coupling_import` entry in the coupling sequence with the concrete edges its
