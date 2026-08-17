@@ -1142,21 +1142,33 @@ fn namespace_expr_with_subsys(
 /// applies to an `Expr::Variable`, gated on `locals` — the component's own
 /// declared variable names plus its subsystem keys:
 ///
-/// * a bare name that IS a declared local variable gets the prefix;
+/// * a name this node BINDS as a loop symbol (an `output_idx` entry or a
+///   `ranges` key) is left alone — **even when a local variable of the same
+///   name is declared**. Index symbols are local to the enclosing `aggregate`
+///   and shadow any coincident variable name (esm-spec §4.3.1: "a given string
+///   can be a variable reference in most contexts but serves as an index symbol
+///   inside `aggregate.output_idx`, `aggregate.expr`, and `aggregate.ranges`
+///   keys"), and an `on` key column is resolved against THIS node's ranges
+///   ([`crate::value_invention`]'s `vi_join_index_sym`, the interpreter's
+///   `join_sym_for_key`) — so prefixing a shadowed symbol makes it resolve to
+///   nothing. This check comes FIRST for that reason;
+/// * otherwise a bare name that IS a declared local variable gets the prefix;
 /// * a dotted name whose head is a local subsystem gets the prefix;
-/// * anything else — a loop symbol bound by the enclosing `ranges`, a
-///   document-scoped index set named by an `on` key column (§5.3), an
-///   already-qualified cross-component reference — is left alone.
+/// * anything else — a document-scoped index set named by an `on` key column
+///   (§5.3), an already-qualified cross-component reference — is left alone.
 ///
 /// Mirrors Julia `namespacing.jl::_namespace_join`. Returns `None` when nothing
 /// changed, so a join-free (or fully external) node is byte-identical.
 fn namespace_join_names(
     join: &[JoinClause],
+    binders: &HashSet<&str>,
     system_name: &str,
     locals: &HashSet<String>,
 ) -> Option<Vec<JoinClause>> {
     let ns = |n: &String| -> String {
-        if let Some((head, _)) = n.split_once('.') {
+        if binders.contains(n.as_str()) {
+            n.clone()
+        } else if let Some((head, _)) = n.split_once('.') {
             if locals.contains(head) {
                 return format!("{system_name}.{n}");
             }
@@ -1250,10 +1262,23 @@ fn namespace_expr_scoped(
             // `join` likewise carries variable references as plain strings
             // (§5.5.6). The child-walker preserves the field verbatim; the
             // names inside it must follow the registry they resolve against.
-            if let Some(join) = &node.join
-                && let Some(ns) = namespace_join_names(join, system_name, locals)
-            {
-                out.join = Some(ns);
+            //
+            // The binder set is THIS node's own loop symbols, not `child_bound`
+            // (which also holds enclosing nodes'). A join column is resolved
+            // against this node's `ranges`, so its own binders are the exact
+            // shadowing set — and keeping the set node-local is what lets every
+            // binding implement the identical rule without threading a scope.
+            if let Some(join) = &node.join {
+                let mut binders: HashSet<&str> = HashSet::new();
+                if let Some(output_idx) = &node.output_idx {
+                    binders.extend(output_idx.iter().map(String::as_str));
+                }
+                if let Some(ranges) = &node.ranges {
+                    binders.extend(ranges.keys().map(String::as_str));
+                }
+                if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
+                    out.join = Some(ns);
+                }
             }
             Expr::operator(out)
         }

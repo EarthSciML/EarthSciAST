@@ -131,6 +131,35 @@ end
         @test clause.tgt_env[1] == "EDGE.src_W"
     end
 
+    @testset "a SHADOWED loop symbol stays a loop symbol" begin
+        # esm-spec §4.3.1 lets one string be a variable reference in most
+        # contexts and an index symbol inside an aggregate's `output_idx` /
+        # `expr` / `ranges` keys, so a model may legally declare a variable named
+        # `src` while an aggregate binds `src` as a range. Inside the node the
+        # string denotes the LOOP SYMBOL, and an `on` key column is resolved
+        # against this node's own ranges — so prefixing it makes the column
+        # resolve to nothing. The declared-local gate alone gets this wrong
+        # (`src` IS a declared local); the node's own binder set must win.
+        d = JSON3.read(read(JOIN_FILTER_FIXTURE, String), Dict{String, Any})
+        d["models"]["EmissionsAggregate"]["variables"]["src"] =
+            Dict("type" => "parameter")
+        node = producer(ESS.flatten(ESS.load(d)))
+        @test node.join[1] == [("src", "sourceType"), ("fuel", "fuelType")]
+    end
+
+    @testset "a SHADOWED output_idx entry stays a binder" begin
+        # The other binder position. `output_idx` also admits literal singleton
+        # dimensions (Int 1), which the binder scan must skip, not trip over.
+        d = JSON3.read(read(JOIN_FILTER_FIXTURE, String), Dict{String, Any})
+        m = d["models"]["EmissionsAggregate"]
+        m["variables"]["o"] = Dict("type" => "parameter")
+        m["equations"][1]["rhs"]["output_idx"] = Any["o", 1]
+        m["equations"][1]["rhs"]["join"] = Any[Dict("on" => Any[
+            Any["o", "sourceType"], Any["src", "sourceType"]])]
+        node = producer(ESS.flatten(ESS.load(d)))
+        @test node.join[1] == [("o", "sourceType"), ("src", "sourceType")]
+    end
+
 end
 
 end # module

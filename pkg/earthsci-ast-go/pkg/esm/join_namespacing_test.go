@@ -118,3 +118,48 @@ func TestNamespaceJoin_UnknownClauseShapeIsPreserved(t *testing.T) {
 		t.Errorf("unrecognised clause = %#v, want it preserved", got)
 	}
 }
+
+// A LOOP SYMBOL SHADOWED by a same-named declared variable stays a loop symbol.
+// esm-spec §4.3.1 lets one string be a variable reference in most contexts and
+// an index symbol inside an aggregate's `output_idx` / `expr` / `ranges` keys, so
+// a system may legally declare a variable named `src` while an aggregate binds
+// `src` as a range. Inside the node the string denotes the LOOP SYMBOL, and an
+// `on` key column is resolved against this node's own ranges — so prefixing it
+// makes it resolve to nothing. The binder set must therefore win over the
+// declared-variable gate.
+func TestNamespaceJoin_ShadowedLoopSymbolStaysALoopSymbol(t *testing.T) {
+	// `src` is BOTH a declared variable and a `ranges` key of the node.
+	varNames := map[string]bool{"src": true, "src_bin": true, "tgt_bin": true, "W": true, "X": true}
+	expr := aggregateWithJoin([]any{
+		map[string]any{"on": []any{
+			[]any{"src", "sourceType"},
+			[]any{"src_bin", "tgt_bin"},
+		}},
+	})
+
+	on := joinOf(t, namespaceExpressionTree(expr, "M", varNames))[0].(map[string]any)["on"]
+	want := []any{
+		[]any{"src", "sourceType"},
+		[]any{"M.src_bin", "M.tgt_bin"},
+	}
+	if !reflect.DeepEqual(on, want) {
+		t.Errorf("on = %#v, want %#v (a shadowed loop symbol must not be prefixed)", on, want)
+	}
+}
+
+// ...and the same for an `output_idx` entry, the other binder position.
+func TestNamespaceJoin_ShadowedOutputIndexStaysABinder(t *testing.T) {
+	expr := aggregateWithJoin([]any{
+		map[string]any{"on": []any{[]any{"o", "sourceType"}}},
+	}).(map[string]any)
+	// `o` is an output index AND (below) a declared variable. The literal
+	// singleton dimension beside it is what the binder scan must skip rather than
+	// choke on — output_idx admits Int 1 entries (esm-spec §4.3.1).
+	expr["output_idx"] = []any{"o", 1}
+
+	varNames := map[string]bool{"o": true}
+	on := joinOf(t, namespaceExpressionTree(expr, "M", varNames))[0].(map[string]any)["on"]
+	if got, want := on, []any{[]any{"o", "sourceType"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("on = %#v, want %#v (an output_idx binder must not be prefixed)", got, want)
+	}
+}

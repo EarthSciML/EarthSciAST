@@ -901,17 +901,34 @@ system, a binding **MUST** dot-namespace those names by the same rule it applies
 to any other reference, gated on the component's **declared local names** (its
 own variables plus its subsystem keys):
 
-* a bare name that IS a declared local variable takes the `<component>.` prefix;
+* a name the node **BINDS** as a loop symbol — an `output_idx` entry or a
+  `ranges` key of *that* node — is left alone, and this test comes **FIRST**;
+* otherwise a bare name that IS a declared local variable takes the
+  `<component>.` prefix;
 * a dotted name whose head is a local subsystem key takes the prefix;
-* **anything else is left alone** — a loop symbol bound by the enclosing
-  `ranges`, a document-scoped index set named by an `on` key column (§5.3), or an
-  already-qualified cross-component reference. Index-set names are a
-  document-scoped registry and are never component-prefixed.
+* **anything else is left alone** — a document-scoped index set named by an `on`
+  key column (§5.3), or an already-qualified cross-component reference. Index-set
+  names are a document-scoped registry and are never component-prefixed.
 
 The gate is what lets ONE rule serve both clause kinds: `on` key columns are
 polymorphic (a loop symbol, an index set, or a value-invention bin buffer) while
 `src_env` / `tgt_env` are always factor variables, and "is it declared here?"
 separates them without consulting the index-set registry.
+
+**Binders shadow declarations, and the ordering is normative.** The two tests can
+both match, because esm-spec §4.3.1 explicitly permits one string to be a
+variable reference in most contexts and an index symbol inside an `aggregate`'s
+`output_idx` / `expr` / `ranges` keys — so a component may legally declare a
+variable named `src` while one of its aggregates binds `src` as a range. Inside
+that node the string denotes the **loop symbol**, and an `on` key column is
+resolved against **that node's own ranges** (the materializer's
+`vi_join_index_sym`, the interpreter's `join_sym_for_key`). Prefixing a shadowed
+symbol therefore makes the column resolve to nothing — the declared-local gate
+alone silently breaks a legal document. The binder set is **node-local**: the
+loop symbols of the node carrying the clause, not those of any enclosing node.
+That is both sufficient (a join column never names an enclosing node's symbol —
+it is resolved against its own node's ranges) and the reason every binding can
+implement the identical rule without threading a lexical scope through the pass.
 
 The reason this is normative rather than a matter of taste is that the engines
 resolve these names against the **variable registry**, which after flattening is

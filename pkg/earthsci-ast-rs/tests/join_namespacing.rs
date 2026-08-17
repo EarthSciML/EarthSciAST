@@ -286,3 +286,60 @@ fn variable_map_removal_renames_join_envelope_names() {
         );
     }
 }
+
+/// A LOOP SYMBOL SHADOWED by a same-named declared variable stays a loop symbol.
+///
+/// esm-spec §4.3.1 lets one string be a variable reference in most contexts and
+/// an index symbol inside an `aggregate`'s `output_idx` / `expr` / `ranges` keys,
+/// so a model may legally declare a variable named `src` while an aggregate
+/// binds `src` as a range. Inside the node the string denotes the LOOP SYMBOL,
+/// and an `on` key column is resolved against THIS node's ranges — so prefixing
+/// it makes the column resolve to nothing. The declared-local gate alone gets
+/// this wrong: `src` is a declared local, so it would be prefixed. The node's
+/// own binder set must win.
+#[test]
+fn shadowed_loop_symbol_stays_a_loop_symbol() {
+    let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
+    let mut doc: Value = serde_json::from_str(fixture).expect("json");
+    // `src` is now BOTH a declared parameter and a `ranges` key of the producer.
+    doc["models"]["EmissionsAggregate"]["variables"]["src"] =
+        serde_json::json!({ "type": "parameter" });
+
+    let file = earthsci_ast::parse::load(&doc.to_string()).expect("parse");
+    let flat = flatten(&file).expect("flatten");
+    let node = flattened_producer(&flat.equations);
+    assert_eq!(
+        &node.join.as_ref().expect("join")[0].on,
+        &vec![
+            ["src".to_string(), "sourceType".to_string()],
+            ["fuel".to_string(), "fuelType".to_string()],
+        ],
+        "a loop symbol shadowed by a declared variable must not be namespaced"
+    );
+}
+
+/// The other binder position: an `output_idx` entry shadowed by a declared
+/// variable. `output_idx` also admits literal singleton dimensions, which the
+/// binder scan must skip rather than trip over.
+#[test]
+fn shadowed_output_index_stays_a_binder() {
+    let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
+    let mut doc: Value = serde_json::from_str(fixture).expect("json");
+    doc["models"]["EmissionsAggregate"]["variables"]["o"] =
+        serde_json::json!({ "type": "parameter" });
+    let rhs = &mut doc["models"]["EmissionsAggregate"]["equations"][0]["rhs"];
+    rhs["output_idx"] = serde_json::json!(["o", 1]);
+    rhs["join"] = serde_json::json!([{ "on": [["o", "sourceType"], ["src", "sourceType"]] }]);
+
+    let file = earthsci_ast::parse::load(&doc.to_string()).expect("parse");
+    let flat = flatten(&file).expect("flatten");
+    let node = flattened_producer(&flat.equations);
+    assert_eq!(
+        &node.join.as_ref().expect("join")[0].on,
+        &vec![
+            ["o".to_string(), "sourceType".to_string()],
+            ["src".to_string(), "sourceType".to_string()],
+        ],
+        "an output_idx binder shadowed by a declared variable must not be namespaced"
+    );
+}

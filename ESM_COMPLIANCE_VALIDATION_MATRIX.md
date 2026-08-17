@@ -197,6 +197,7 @@ Where:
 | BEHAV-10-A-003 | Within one node the `join` names and the same factors carried in `args` MUST agree after flattening — a node MUST NOT spell one factor two ways | CONFORMANCE_SPEC.md §5.5.6 | Yes | behavioral |
 | BEHAV-10-A-004 | A `variable_map` whose transform REMOVES the target parameter (`param_to_var`, `conversion_factor`, absent) MUST rename `to` → `from` inside every `join` clause as well; the expression-substitution walk does not reach these names, and a join left naming the removed parameter fails materialisation with `join references unknown variable` | CONFORMANCE_SPEC.md §5.5.6, esm-spec.md §10.4 | Yes | behavioral |
 | BEHAV-10-A-005 | A flattened overlap-gated `distinct` producer MUST materialise the SAME support set as the unflattened one — the set is integer-valued and compared byte-identically (§5.5.1), so namespacing is required to be result-neutral | CONFORMANCE_SPEC.md §5.5.6, §5.5.1 | Yes | behavioral |
+| BEHAV-10-A-006 | The NODE-LOCAL BINDER test MUST precede the declared-local test: a join name that is an `output_idx` entry or a `ranges` key of the node carrying the clause MUST be left unchanged **even when a local variable of the same name is declared**. esm-spec §4.3.1 permits that shadowing, and an `on` column resolves against the node's own ranges, so prefixing a shadowed symbol makes it resolve to nothing. The binder set is the clause-bearing node's own symbols, not an enclosing node's | CONFORMANCE_SPEC.md §5.5.6, esm-spec.md §4.3.1 | Yes | behavioral |
 
 > **Binding status (2026-08-12)**: **Julia** was already correct and is the reference
 > (`namespacing.jl::_namespace_join` for -001/-002/-003,
@@ -220,6 +221,28 @@ Where:
 > `earthsci-ast-go/pkg/esm/join_namespacing_test.go` pins -001/-002/-003 on Go's
 > event-tree surface. The Rust/Python cases fail on `origin/main` (4 of 5 each) and
 > the Julia ones pass unchanged, which is the divergence stated as a test.
+>
+> **-006 (2026-08-17)**: the declared-local gate of -002, applied alone, mis-fires on a
+> component that declares a variable named like one of its own loop symbols — a spelling
+> esm-spec §4.3.1 explicitly permits. Verified: flattening `join_filter.esm` with an added
+> `src` parameter rewrote `join.on [["src","sourceType"], …]` to
+> `[["EmissionsAggregate.src","sourceType"], …]`, and
+> `numpy_interpreter._join_sym_for_key("EmissionsAggregate.src")` then raises "neither a
+> declared range symbol nor an index set bound by a range of this aggregate". Fixed in ALL
+> FOUR bindings by testing the node's own binders (`output_idx` entries + `ranges` keys)
+> before the declared-local gate — `namespace_join_names` (Rust), `_namespace_join`
+> (Python, Julia), `namespaceJoinNames` (Go). Two cases per binding (a shadowed `ranges`
+> key, a shadowed `output_idx` entry with a literal singleton dimension beside it); all
+> four pairs fail with the binder test removed.
+>
+> **Adjacent, NOT fixed here** — Julia's `namespace_expr` tracks no bound-symbol scope at
+> all, so on the same shadowed document it rewrites the loop symbol inside the node's
+> `expr` as well (`index(base_rate, src)` → `index(base_rate, EmissionsAggregate.src)`),
+> where Rust (`child_bound`) and Python (`local_leave`) leave it alone. That is a SECOND
+> cross-binding divergence, pre-existing and independent of `join`; closing it means
+> threading a scope through Julia's identity-memoized recursion, whose memo is documented
+> as sound only because "prefix and local_names are traversal-constant". Left as its own
+> change.
 
 ---
 

@@ -207,3 +207,49 @@ def test_variable_map_removal_renames_join_envelope_names():
     assert overlap["tgt_env"][0] == "EDGE.src_W", (
         "the join must follow the variable_map, not the removed parameter"
     )
+
+
+def test_shadowed_loop_symbol_stays_a_loop_symbol():
+    """A LOOP SYMBOL shadowed by a same-named declared variable stays a loop symbol.
+
+    esm-spec §4.3.1 lets one string be a variable reference in most contexts and
+    an index symbol inside an aggregate's ``output_idx`` / ``expr`` / ``ranges``
+    keys, so a model may legally declare a variable named ``src`` while an
+    aggregate binds ``src`` as a range. Inside the node the string denotes the
+    LOOP SYMBOL, and an ``on`` key column is resolved against this node's own
+    ranges (``numpy_interpreter._join_sym_for_key``), so prefixing it makes the
+    column resolve to nothing. The node's binder set must therefore win over the
+    declared-local gate.
+    """
+    from earthsci_ast.numpy_interpreter import _join_sym_for_key
+
+    with open(JOIN_FILTER_FIXTURE) as fh:
+        doc = json.load(fh)
+    # `src` is now BOTH a declared parameter and a `ranges` key of the producer.
+    doc["models"]["EmissionsAggregate"]["variables"]["src"] = {"type": "parameter"}
+
+    node = producer(flatten_doc(doc))
+    assert node.join[0]["on"] == [["src", "sourceType"], ["fuel", "fuelType"]], (
+        "a loop symbol shadowed by a declared variable must not be namespaced"
+    )
+    # ...and it still resolves, which is the reason the rule exists.
+    sym_to_set = {s: (v or {}).get("from") for s, v in node.ranges.items()}
+    assert _join_sym_for_key("src", node.ranges, sym_to_set) == "src"
+
+
+def test_shadowed_output_index_stays_a_binder():
+    """The other binder position: an ``output_idx`` entry shadowed by a declared
+    variable. The literal singleton dimensions ``output_idx`` admits must be
+    skipped by the binder scan rather than crash it."""
+    with open(JOIN_FILTER_FIXTURE) as fh:
+        doc = json.load(fh)
+    m = doc["models"]["EmissionsAggregate"]
+    m["variables"]["o"] = {"type": "parameter"}
+    rhs = m["equations"][0]["rhs"]
+    rhs["output_idx"] = ["o", 1]
+    rhs["join"] = [{"on": [["o", "sourceType"], ["src", "sourceType"]]}]
+
+    node = producer(flatten_doc(doc))
+    assert node.join[0]["on"] == [["o", "sourceType"], ["src", "sourceType"]], (
+        "an output_idx binder shadowed by a declared variable must not be namespaced"
+    )

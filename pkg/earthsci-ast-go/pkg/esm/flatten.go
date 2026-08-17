@@ -617,7 +617,21 @@ func namespaceExpressionTree(expr Expression, systemName string, varNames map[st
 	// clause slice, but a clause is a bare map with no "op" key, so asExprNode
 	// declines it and every name inside passes through unchanged.
 	if len(out.Join) > 0 {
-		out.Join = namespaceJoinNames(out.Join, systemName, varNames)
+		// The binder set is THIS node's own loop symbols. A join column resolves
+		// against this node's `ranges`, so its own binders are the exact
+		// shadowing set — and a node-local set is what lets every binding
+		// implement one rule. OutputIdx may hold literal singleton dimensions
+		// alongside symbols; only the strings are binders.
+		binders := make(map[string]bool, len(out.OutputIdx)+len(out.Ranges))
+		for _, s := range out.OutputIdx {
+			if name, ok := s.(string); ok {
+				binders[name] = true
+			}
+		}
+		for name := range out.Ranges {
+			binders[name] = true
+		}
+		out.Join = namespaceJoinNames(out.Join, binders, systemName, varNames)
 	}
 	return out
 }
@@ -630,19 +644,28 @@ func namespaceExpressionTree(expr Expression, systemName string, varNames map[st
 // join resolve each name against the VARIABLE REGISTRY, which after flattening
 // is the namespaced one. They are only encoded as strings rather than as child
 // expressions. The gate is `varNames`, exactly the one namespaceExpressionTree
-// applies to a bare string leaf: a key column naming a loop symbol or a
-// document-scoped index set is not a declared variable of this system and is
-// left alone. Mirrors Julia `_namespace_join`, Rust `namespace_join_names`, and
-// Python `_namespace_join`.
+// applies to a bare string leaf: a key column naming a document-scoped index set
+// is not a declared variable of this system and is left alone. Mirrors Julia
+// `_namespace_join`, Rust `namespace_join_names`, and Python `_namespace_join`.
+//
+// `binders` — the loop symbols the node binds (`output_idx` entries, `ranges`
+// keys) — WINS over `varNames`. An index symbol is local to the enclosing
+// `aggregate` and shadows any coincident variable name (esm-spec §4.3.1), and an
+// `on` key column is resolved against this node's own ranges, so prefixing a
+// shadowed symbol makes it resolve to nothing. Without this the gate mis-fires
+// on the legal case of a system declaring a variable named like a loop symbol.
 //
 // Go's flattened EQUATIONS are rendered to strings (FlattenedEquation.RHS), so
 // this reaches the one surface where Go preserves a tree: event triggers,
 // conditions, and affect right-hand sides.
-func namespaceJoinNames(join []any, systemName string, varNames map[string]bool) []any {
+func namespaceJoinNames(join []any, binders map[string]bool, systemName string, varNames map[string]bool) []any {
 	ns := func(v any) any {
 		s, ok := v.(string)
 		if !ok {
 			return v
+		}
+		if binders[s] {
+			return s
 		}
 		if head, _, found := strings.Cut(s, "."); found {
 			if varNames[head] {

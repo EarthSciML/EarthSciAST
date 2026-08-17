@@ -365,6 +365,7 @@ def _expr_to_string(expr: Expr) -> str:
 
 def _namespace_join(
     join: list[dict[str, Any]],
+    binders: set[str],
     prefix: str,
     locals_: set[str],
 ) -> list[dict[str, Any]]:
@@ -387,10 +388,21 @@ def _namespace_join(
     variable, so both pass through untouched. Mirrors Julia
     ``namespacing.jl::_namespace_join`` and Rust
     ``flatten.rs::namespace_join_names``.
+
+    ``binders`` are the loop symbols THIS node binds (``output_idx`` entries and
+    ``ranges`` keys) and they win over ``locals_``: an index symbol is local to
+    the enclosing ``aggregate`` and shadows any coincident variable name
+    (esm-spec §4.3.1), and an ``on`` key column is resolved against this node's
+    own ranges (``value_invention._vi_join_index_sym``,
+    ``numpy_interpreter._join_sym_for_key``) — so prefixing a shadowed symbol
+    makes it resolve to nothing. Without this the gate mis-fires on the legal
+    case of a model that declares a variable named like one of its loop symbols.
     """
 
     def ns(name: Any) -> Any:
         if not isinstance(name, str):
+            return name
+        if name in binders:
             return name
         if "." in name:
             return f"{prefix}.{name}" if name.split(".", 1)[0] in locals_ else name
@@ -491,7 +503,12 @@ def _namespace_expr(
             lambda c: _namespace_expr(c, prefix, local_leave, subsystem_keys, locals_),
         )
         if locals_ and getattr(expr, "join", None):
-            out = replace(out, join=_namespace_join(expr.join, prefix, locals_))
+            # THIS node's own loop symbols, not ``local_leave`` (which also holds
+            # enclosing nodes'). A join column resolves against this node's
+            # ``ranges``, so its own binders are the exact shadowing set — and a
+            # node-local set is what lets every binding implement one rule.
+            binders = set(expr.output_idx or ()) | set((expr.ranges or {}).keys())
+            out = replace(out, join=_namespace_join(expr.join, binders, prefix, locals_))
         return out
     return expr
 

@@ -70,11 +70,24 @@ _namespace_expr(e::VarExpr, prefix::String, local_names::Set{String},
 # the value-invention front-door key their maps by the namespaced LHS). A column
 # naming a range symbol / index-set member is not a local variable and passes
 # through unchanged — the SAME rule `namespace_expr` applies to a `VarExpr`.
-function _namespace_join(join, prefix::String, local_names::Set{String})
+#
+# `binders` are the loop symbols THIS node binds (`output_idx` entries and
+# `ranges` keys) and they WIN over `local_names`: an index symbol is local to the
+# enclosing `aggregate` and shadows any coincident variable name (esm-spec
+# §4.3.1 — "a given string can be a variable reference in most contexts but
+# serves as an index symbol inside `aggregate.output_idx`, `aggregate.expr`, and
+# `aggregate.ranges` keys"), and an `on` key column is resolved against this
+# node's own ranges (`_vi_join_index_sym`, `_join_sym_for_key`) — so prefixing a
+# shadowed symbol makes it resolve to nothing. Without this the gate mis-fires on
+# the legal case of a component declaring a variable named like a loop symbol.
+function _namespace_join(join, binders::Set{String}, prefix::String,
+                         local_names::Set{String})
     join === nothing && return nothing
     nsname(n) = begin
         s = String(n)
-        if occursin('.', s)
+        if s in binders
+            s
+        elseif occursin('.', s)
             String(split(s, '.')[1]) in local_names ? "$(prefix).$(s)" : s
         elseif s in local_names
             "$(prefix).$(s)"
@@ -125,7 +138,19 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # byte-identical to before (and skip the reconstruct copy). Index-set
     # identifier fields (`id`, `ranges[*].from`) are document-scoped (v0.8.0)
     # and never prefixed.
-    nj = _namespace_join(expr.join, prefix, local_names)
+    # The binder set is THIS node's own loop symbols. A join column is resolved
+    # against this node's `ranges`, so its own binders are the exact shadowing
+    # set — and a node-local set is what lets every binding implement one rule.
+    # `output_idx` may hold literal singleton dimensions (Int 1) alongside
+    # symbols; only the Strings are binders.
+    binders = Set{String}()
+    if expr.output_idx !== nothing
+        for s in expr.output_idx
+            s isa AbstractString && push!(binders, String(s))
+        end
+    end
+    expr.ranges === nothing || union!(binders, keys(expr.ranges))
+    nj = _namespace_join(expr.join, binders, prefix, local_names)
     res = nj === expr.join ? result : reconstruct(result; join=nj)
     memo[expr] = res
     return res

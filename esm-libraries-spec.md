@@ -552,7 +552,9 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      component's declared local names, so a loop symbol or a document-scoped index set named
      by an `on` column is left alone. Normative statement and rationale:
      **CONFORMANCE_SPEC §5.5.6**. Loop-index symbols (`output_idx`, `ranges` keys, an
-     `integral`'s `int_var`) are resolved positionally and are NOT namespaced.
+     `integral`'s `int_var`) are resolved positionally and are NOT namespaced — and a join
+     name that is one of the clause-bearing node's OWN binders stays a loop symbol even when
+     a local variable of that name is declared, a shadowing esm-spec §4.3.1 permits.
 
    **Between steps 2 and 3 — Expand coupling imports (esm-spec §10.10).** Before applying coupling
    rules, replace each `coupling_import` entry in the coupling sequence with the concrete edges its
