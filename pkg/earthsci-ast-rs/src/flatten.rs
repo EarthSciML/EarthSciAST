@@ -1101,7 +1101,7 @@ fn build_reaction_block(
 /// Array nodes (`arrayop`/`aggregate`/`makearray`/`integral`/…) carry their
 /// body in out-of-band fields (`expr`, `filter`, `lower`, `upper`, `values`,
 /// `axes`) plus structural metadata (`output_idx`, `ranges`, `reduce`,
-/// `semiring`, `join`, `shape`, …). Every such field is preserved and the
+/// `semiring`, `shape`, …). Every such field is preserved and the
 /// expression-bearing ones are recursively namespaced, so a discretized
 /// `arrayop` survives coupling. Loop-index symbols introduced by an enclosing
 /// `arrayop`/`aggregate` (`output_idx` + `ranges` keys) or `integral`
