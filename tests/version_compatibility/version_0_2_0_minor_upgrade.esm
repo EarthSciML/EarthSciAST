@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Version_0_2_0_MinorUpgrade",
     "description": "Test file with version 0.2.0 - should warn for forward compatibility but still load",

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CEDS_NOx_example",
     "description": "Covers EarthSciData.jl/src/ceds.jl CEDSFileSet. Files are per species, chunked across year ranges, with 8 anthropogenic sectors summed into emiss_sector. relpath/filename format: {species}-em-anthro_input4MIPs_emissions_CMIP_{version}_gn_{y1}01-{y2}12.nc. Default mirror: https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work. Monthly frequency. Lon/lat 0.5 deg global. CEDS v2017-05-18 anthropogenic NOx emissions on a 0.5-degree global lat-lon grid.",

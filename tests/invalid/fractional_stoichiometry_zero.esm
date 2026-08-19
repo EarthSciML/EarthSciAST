@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "FractionalStoichiometryZeroTest",
     "description": "Fractional stoichiometry equal to zero — v0.2.x schema rejects via exclusiveMinimum (gt-1e96).",

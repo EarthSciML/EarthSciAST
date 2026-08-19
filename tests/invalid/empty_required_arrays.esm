@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EmptyRequiredArraysTest",
     "description": "Test file with empty required arrays",
@@ -10,7 +10,7 @@
     "TestModel": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.0
         }

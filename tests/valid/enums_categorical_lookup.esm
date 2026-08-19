@@ -1,9 +1,11 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "WeselyCategoricalLookup",
     "description": "End-to-end demonstration of the v0.3.0 enums + index categorical-lookup pattern (esm-spec.md §9.3, §4.5). A Wesely-style canopy resistance r_c is read from a 4 (season) × 11 (land-use class) const table, indexed by enum-resolved integers. Replaces the v0.2.0 pattern that would have used a `call` op into a registered `wesely_r_c` handler.",
-    "authors": ["EarthSciML"],
+    "authors": [
+      "EarthSciML"
+    ],
     "created": "2026-04-25T00:00:00Z",
     "tags": [
       "enums",
@@ -44,29 +46,12 @@
     "DryDep": {
       "variables": {
         "r_c": {
-          "type": "observed",
+          "type": "unknown",
           "units": "s/m",
-          "description": "Canopy resistance for the (summer × deciduous_forest) site, looked up from the Wesely Table-2-style coefficient array.",
-          "expression": {
-            "op": "index",
-            "args": [
-              {
-                "op": "const",
-                "args": [],
-                "value": [
-                  [200.0, 150.0, 100.0, 100.0, 120.0, 250.0, 180.0, 90.0, 9999.0, 9999.0, 9999.0],
-                  [200.0, 150.0, 100.0, 100.0, 120.0, 250.0, 180.0, 90.0, 9999.0, 9999.0, 9999.0],
-                  [200.0, 100.0,  60.0,  60.0,  80.0, 200.0, 140.0, 80.0, 9999.0, 9999.0, 9999.0],
-                  [200.0, 150.0, 100.0, 100.0, 120.0, 250.0, 180.0, 90.0, 9999.0, 9999.0, 9999.0]
-                ]
-              },
-              { "op": "enum", "args": ["season", "summer"] },
-              { "op": "enum", "args": ["land_use_class", "deciduous_forest"] }
-            ]
-          }
+          "description": "Canopy resistance for the (summer × deciduous_forest) site, looked up from the Wesely Table-2-style coefficient array."
         },
         "vd_O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Effective deposition velocity, vd = 1 / r_c, integrated trivially as a state to give the round-trip path real semantics."
@@ -75,8 +60,100 @@
       "equations": [
         {
           "_comment": "Trivial deposition velocity from canopy resistance.",
-          "lhs": { "op": "D", "args": ["vd_O3"], "wrt": "t" },
-          "rhs": { "op": "/", "args": [1.0, "r_c"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "vd_O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "/",
+            "args": [
+              1.0,
+              "r_c"
+            ]
+          }
+        },
+        {
+          "lhs": "r_c",
+          "rhs": {
+            "op": "index",
+            "args": [
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    200.0,
+                    150.0,
+                    100.0,
+                    100.0,
+                    120.0,
+                    250.0,
+                    180.0,
+                    90.0,
+                    9999.0,
+                    9999.0,
+                    9999.0
+                  ],
+                  [
+                    200.0,
+                    150.0,
+                    100.0,
+                    100.0,
+                    120.0,
+                    250.0,
+                    180.0,
+                    90.0,
+                    9999.0,
+                    9999.0,
+                    9999.0
+                  ],
+                  [
+                    200.0,
+                    100.0,
+                    60.0,
+                    60.0,
+                    80.0,
+                    200.0,
+                    140.0,
+                    80.0,
+                    9999.0,
+                    9999.0,
+                    9999.0
+                  ],
+                  [
+                    200.0,
+                    150.0,
+                    100.0,
+                    100.0,
+                    120.0,
+                    250.0,
+                    180.0,
+                    90.0,
+                    9999.0,
+                    9999.0,
+                    9999.0
+                  ]
+                ]
+              },
+              {
+                "op": "enum",
+                "args": [
+                  "season",
+                  "summer"
+                ]
+              },
+              {
+                "op": "enum",
+                "args": [
+                  "land_use_class",
+                  "deciduous_forest"
+                ]
+              }
+            ]
+          }
         }
       ]
     }

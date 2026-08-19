@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "OrnsteinUhlenbeck",
     "description": "Minimal SDE: Ornstein–Uhlenbeck process driven by a single Wiener noise source. Exercises the brownian variable type and its promotion of the enclosing model to an SDE system.",
@@ -11,7 +11,7 @@
     "OU": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "OU state variable"

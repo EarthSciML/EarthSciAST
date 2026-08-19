@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Complete Error Coverage Test",
     "description": "Comprehensive test case covering all 11 required error codes from ESM Libraries Specification Section 3.4",
@@ -14,19 +14,19 @@
       "type": "ode",
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg",
           "description": "State variable x",
           "default": 1.0
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg",
           "description": "State variable y",
           "default": 0.0
         },
         "observed_without_expr": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg",
           "description": "Observed variable missing expression"
         }

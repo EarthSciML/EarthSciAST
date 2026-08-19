@@ -8,7 +8,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0 }
+        "x": { "type": "unknown", "units": "m", "default": 0.0 }
       },
       "equations": [
         {

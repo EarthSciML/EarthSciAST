@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DeepNestingScopedReferences",
     "description": "Test fixture for deeply nested scoped references (5+ levels) to validate parser robustness with arbitrary nesting depth",
@@ -66,7 +66,7 @@
         "AtmosphereComponent": {
           "variables": {
             "total_column_ozone": {
-              "type": "state",
+              "type": "unknown",
               "units": "DU",
               "default": 300.0,
               "description": "Total column ozone"
@@ -110,7 +110,7 @@
                         "PhotolysisRateCalculation": {
                           "variables": {
                             "J_NO2": {
-                              "type": "state",
+                              "type": "unknown",
                               "units": "1/s",
                               "default": 0.001,
                               "description": "NO2 photolysis rate"
@@ -197,7 +197,7 @@
     "OceanClimateSystem": {
       "variables": {
         "global_ocean_heat_content": {
-          "type": "state",
+          "type": "unknown",
           "units": "J",
           "default": 1e+24,
           "description": "Global ocean heat content"
@@ -254,7 +254,7 @@
         "SurfaceOceanLayer": {
           "variables": {
             "mixed_layer_temperature": {
-              "type": "state",
+              "type": "unknown",
               "units": "K",
               "default": 288.0,
               "description": "Mixed layer temperature"
@@ -265,7 +265,7 @@
             "MicrobialLoop": {
               "variables": {
                 "bacterial_production": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mg/m^3/day",
                   "default": 50.0,
                   "description": "Bacterial production, as CARBON mass flux (milligrams of carbon per cubic metre per day). The species is named here, not in the unit string: esm-spec §4.8.1 — a unit string carries dimensions only. `d` is not a registry symbol; the day is `day`."
@@ -276,7 +276,7 @@
                 "NitrogenCycle": {
                   "variables": {
                     "nitrate_concentration": {
-                      "type": "state",
+                      "type": "unknown",
                       "units": "umol/L",
                       "default": 10.0,
                       "description": "Nitrate concentration"
@@ -304,7 +304,7 @@
                               "description": "Oxygen threshold for denitrification"
                             },
                             "enzyme_activity": {
-                              "type": "state",
+                              "type": "unknown",
                               "units": "umol/(min*mg)",
                               "default": 0.5,
                               "description": "Nitrate reductase activity. The enzyme unit `U` is not a registry symbol; it is spelled out as its definition — one micromole of substrate turned over per minute, per milligram of protein (esm-spec §4.8.1)."

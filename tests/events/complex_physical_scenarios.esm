@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ComplexPhysicalScenarios",
     "description": "Complex event scenarios: bouncing ball, reactor control, epidemic models, and ecosystem dynamics",
@@ -12,13 +12,13 @@
     "AdvancedBouncingBall": {
       "variables": {
         "height": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 2.0,
           "description": "Ball height"
         },
         "velocity": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Ball velocity"
@@ -48,33 +48,8 @@
           "description": "Number of bounces"
         },
         "total_energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  0.5,
-                  {
-                    "op": "^",
-                    "args": [
-                      "velocity",
-                      2
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  "g",
-                  "height"
-                ]
-              }
-            ]
-          },
           "description": "Total mechanical energy"
         },
         "energy_loss_rate": {
@@ -145,6 +120,34 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "total_energy",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "^",
+                    "args": [
+                      "velocity",
+                      2
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "g",
+                  "height"
+                ]
+              }
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -312,13 +315,13 @@
     "ChemicalReactorController": {
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 298.15,
           "description": "Reactor temperature"
         },
         "concentration": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/L",
           "default": 1.0,
           "description": "Reactant concentration"
@@ -348,32 +351,8 @@
           "description": "Safety system state (0=normal, 1=warning, 2=emergency)"
         },
         "reaction_rate": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/(L*s)",
-          "expression": {
-            "op": "*",
-            "args": [
-              0.001,
-              "concentration",
-              {
-                "op": "exp",
-                "args": [
-                  {
-                    "op": "/",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          5000.0
-                        ]
-                      },
-                      "temperature"
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Arrhenius reaction rate"
         }
       },
@@ -466,6 +445,33 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "reaction_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.001,
+              "concentration",
+              {
+                "op": "exp",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          5000.0
+                        ]
+                      },
+                      "temperature"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -625,19 +631,19 @@
     "EpidemicModel": {
       "variables": {
         "susceptible": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 9990.0,
           "description": "Susceptible population"
         },
         "infected": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 10.0,
           "description": "Infected population"
         },
         "recovered": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Recovered population"
@@ -661,16 +667,8 @@
           "description": "Intervention intensity (0-3)"
         },
         "total_population": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "expression": {
-            "op": "+",
-            "args": [
-              "susceptible",
-              "infected",
-              "recovered"
-            ]
-          },
           "description": "Total population (conservation check)"
         }
       },
@@ -764,6 +762,17 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "total_population",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "susceptible",
+              "infected",
+              "recovered"
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -963,19 +972,19 @@
     "EcosystemDisturbance": {
       "variables": {
         "prey_population": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1000.0,
           "description": "Prey population"
         },
         "predator_population": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 50.0,
           "description": "Predator population"
         },
         "vegetation_cover": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.8,
           "description": "Vegetation cover fraction"

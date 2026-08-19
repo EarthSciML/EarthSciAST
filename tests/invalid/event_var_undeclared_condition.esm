@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventVarUndeclaredCondition",
     "description": "Continuous event with undefined variable in condition"
@@ -7,8 +7,8 @@
   "models": {
     "BallModel": {
       "variables": {
-        "height": { "type": "state", "units": "m", "default": 10.0 },
-        "velocity": { "type": "state", "units": "m/s", "default": 0.0 },
+        "height": { "type": "unknown", "units": "m", "default": 10.0 },
+        "velocity": { "type": "unknown", "units": "m/s", "default": 0.0 },
         "g": { "type": "parameter", "units": "m/s^2", "default": 9.81 }
       },
       "equations": [

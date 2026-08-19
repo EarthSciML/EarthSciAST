@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "LegacySpatialBlockRejected",
     "description": "Test case: a data loader still carrying the legacy 'spatial' block (the former DataLoaderSpatial). The loader's spatial/native-grid description was removed from DataLoader in RFC pure-io-data-loaders 4.1; the native grid is now expressed as a GDD Grid under 'grid' and the loader performs no reprojection or regridding. DataLoader.additionalProperties:false rejects the stale 'spatial' block. Parallel negative to interpolation_method_invalid.esm (the 'regridding' rejection).",
@@ -22,7 +22,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 1.0 }
+        "x": { "type": "unknown", "units": "1", "default": 1.0 }
       },
       "equations": [
         {

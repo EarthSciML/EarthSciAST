@@ -1,5 +1,5 @@
 {
-  "esm": "0.7.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "loader_consumer_injection",
     "description": "Two-component loader->consumer fixture (RFC pure-io-data-loaders). Model 'Met' mounts two data loaders as subsystems: 'pl' (temporal grid -> discrete cadence) exposing wind 'u', and 'sfc' (static -> const cadence) exposing roughness 'z0'. They flatten to observed arrays Met.pl.u and Met.sfc.z0. Model 'Plume' consumes element 2 of each via coupling edges, integrating D(c) = u[2] + z0[2] - c. Run through simulate() with a deterministic loader_provider so the trajectory is analytic and network-free; the discrete loader refreshes via terminal-event segmentation, the static loader is read once."
@@ -28,7 +28,7 @@
     },
     "Plume": {
       "variables": {
-        "c": {"type": "state", "default": 0.0, "description": "tracer concentration"},
+        "c": {"type": "unknown", "default": 0.0, "description": "tracer concentration"},
         "wind": {"type": "parameter", "default": 0.0, "description": "wind forcing (coupled from Met.pl.u)"},
         "rough": {"type": "parameter", "default": 0.0, "description": "roughness forcing (coupled from Met.sfc.z0)"}
       },

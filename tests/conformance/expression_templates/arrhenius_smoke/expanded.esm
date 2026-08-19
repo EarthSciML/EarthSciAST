@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "expression_templates_arrhenius_smoke",
     "description": "Single Arrhenius expression_template applied across three reactions with different scalar bindings (esm-spec §9.6, esm-giy).",

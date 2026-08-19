@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": { "name": "ragged_rowsum", "description": "MPAS-style connectivity rule over a ragged keyed-factor index set (esm-spec 9.7.7 rebind motivation): nz_of_row is a per-row CSR set whose offsets/values factors bind by NAME (row_count / row_cols), and the weighted_rowsum rule contracts over it through a free weight factor row_w. The three factor names are the library's wiring contract; a consumer either exposes them as bare-name arrays or rebinds them at the import edge (rebind), which is what lets two instances of the connectivity coexist" },
   "metaparameters": {
     "NROWS": { "type": "integer", "default": 3, "description": "row count" },

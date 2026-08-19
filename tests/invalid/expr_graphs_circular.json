@@ -257,7 +257,7 @@
         "models": {
           "ValidODE": {
             "variables": {
-              "x": { "type": "state", "units": "dimensionless", "default": 1.0 },
+              "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 },
               "k": { "type": "parameter", "units": "1/s", "default": -1.0 }
             },
             "equations": [

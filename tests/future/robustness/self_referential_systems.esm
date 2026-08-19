@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SelfReferentialSystems",
     "description": "Test handling of variables that reference themselves in complex ways",

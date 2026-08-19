@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "template_import_rename_lib",
     "description": "Two-template library backing the esm-spec 9.7.7 rename/rebind invalid fixtures: two zero-parameter templates (area, perim) so a per-edge rename can collide, a metaparameter-sized index set, and a free weight name w in area so a rebind has a free name to address. Also a FIRST-CLASS standalone document (esm-spec 9.7.1): a top-level `expression_templates` registry satisfies the schema's top-level anyOf on its own, so a model-less library file is ADMITTED, not merely tolerated. Per 9.6.4 rule 5 the registry and `metaparameters` survive parse -> emit verbatim and this file MUST round-trip to ITSELF."

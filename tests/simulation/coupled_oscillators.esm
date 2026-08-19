@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CoupledOscillatorsTest",
     "description": "Coupled harmonic oscillators with energy conservation verification",
@@ -20,25 +20,25 @@
       },
       "variables": {
         "x1": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Position of oscillator 1"
         },
         "v1": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity of oscillator 1"
         },
         "x2": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": -0.5,
           "description": "Position of oscillator 2"
         },
         "v2": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity of oscillator 2"
@@ -62,21 +62,8 @@
           "description": "Coupling spring constant"
         },
         "coupling_force": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1/s^2",
-          "expression": {
-            "op": "*",
-            "args": [
-              "kc",
-              {
-                "op": "-",
-                "args": [
-                  "x2",
-                  "x1"
-                ]
-              }
-            ]
-          },
           "description": "Coupling force (mass-scaled): kc*(x2-x1)"
         }
       },
@@ -190,6 +177,22 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "coupling_force",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "kc",
+              {
+                "op": "-",
+                "args": [
+                  "x2",
+                  "x1"
+                ]
+              }
+            ]
+          }
         }
       ],
       "tolerance": {

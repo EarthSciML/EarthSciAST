@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DataLoaderUndefinedReference",
     "description": "Test case: coupling references undefined data loader variable",
@@ -61,7 +61,7 @@
     "TestModel": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0
         },

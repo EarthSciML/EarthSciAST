@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "description": "GENERATED (scripts/generate-template-import-goldens.jl): a 33-template body-reference chain c_01 -> ... -> c_33; the longest chain exceeds MAX_TEMPLATE_EXPANSION_DEPTH = 32 templates (template_body_expansion_too_deep, esm-spec 9.7.3).",
     "name": "body_chain_too_deep"
@@ -320,7 +320,7 @@
       "variables": {
         "x": {
           "default": 0.0,
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         }
       }

@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CoupleExamples",
     "description": "Test fixtures for couple coupling type with connector equations\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -18,13 +18,13 @@
       },
       "variables": {
         "velocity": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 1.0,
           "description": "Flow velocity"
         },
         "pressure": {
-          "type": "state",
+          "type": "unknown",
           "units": "Pa",
           "default": 101325.0,
           "description": "Fluid pressure"
@@ -96,7 +96,7 @@
       },
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 300.0,
           "description": "Temperature"

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "integral_operator_pide",
     "description": "Round-trip fixture for the integral operator (v0.6.0 schema) in a PIDE context. Demonstrates the partial/cumulative form (upper = integration variable) and the whole-domain form (constant bounds), following the auxiliary-variable PIDE idiom from MethodOfLines.jl."
@@ -8,7 +8,7 @@
     "pide_partial": {
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         },
@@ -19,17 +19,8 @@
           "description": "Lower bound of the cumulative integral: the left edge of the x domain. Previously referenced by cumuSum.lower but DECLARED NOWHERE -- a free variable hiding in an observed expression, exactly the false-negative class esm-spec 4.9.5 exists to surface."
         },
         "cumuSum": {
-          "type": "observed",
-          "units": "1",
-          "expression": {
-            "op": "integral",
-            "args": [
-              "u"
-            ],
-            "var": "x",
-            "lower": "xmin",
-            "upper": "x"
-          }
+          "type": "unknown",
+          "units": "1"
         }
       },
       "equations": [
@@ -67,28 +58,31 @@
               1
             ]
           }
+        },
+        {
+          "lhs": "cumuSum",
+          "rhs": {
+            "op": "integral",
+            "args": [
+              "u"
+            ],
+            "var": "x",
+            "lower": "xmin",
+            "upper": "x"
+          }
         }
       ]
     },
     "whole_domain_integral_model": {
       "variables": {
         "f": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0
         },
         "f_total": {
-          "type": "observed",
-          "units": "1",
-          "expression": {
-            "op": "integral",
-            "args": [
-              "f"
-            ],
-            "var": "x",
-            "lower": 0,
-            "upper": 1
-          }
+          "type": "unknown",
+          "units": "1"
         }
       },
       "equations": [
@@ -105,6 +99,18 @@
             "args": [
               "f"
             ]
+          }
+        },
+        {
+          "lhs": "f_total",
+          "rhs": {
+            "op": "integral",
+            "args": [
+              "f"
+            ],
+            "var": "x",
+            "lower": 0,
+            "upper": 1
           }
         }
       ]

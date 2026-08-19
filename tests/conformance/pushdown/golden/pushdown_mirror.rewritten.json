@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -182,11 +182,10 @@
             },
             "semiring": "bool_and_or"
           }
-        }
-      ],
-      "variables": {
-        "E_PM25": {
-          "expression": {
+        },
+        {
+          "lhs": "E_PM25",
+          "rhs": {
             "args": [
               "pd_cell__src_cells__src_W",
               "pd_cell__src_cells__src_S",
@@ -326,22 +325,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "pd_support__src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "SR_PM25": {
-          "default": 0.0,
-          "shape": [
-            "pd_support__src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "conc_PM25": {
-          "expression": {
+        {
+          "lhs": "conc_PM25",
+          "rhs": {
             "args": [
               "SR_PM25",
               "E_PM25"
@@ -379,21 +367,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "emis_annual": {
-          "default": 0.0,
-          "shape": [
-            "emis_records"
-          ],
-          "type": "parameter"
-        },
-        "in_grid": {
-          "expression": {
+        {
+          "lhs": "in_grid",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -520,14 +498,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed"
+          }
         },
-        "pd_cell__src_cells__src_E": {
-          "expression": {
+        {
+          "lhs": "pd_cell__src_cells__src_E",
+          "rhs": {
             "args": [
               "src_E",
               "pd_member_factor__src_cells"
@@ -554,14 +529,11 @@
                 "from": "pd_support__src_cells"
               }
             }
-          },
-          "shape": [
-            "pd_support__src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "pd_cell__src_cells__src_N": {
-          "expression": {
+        {
+          "lhs": "pd_cell__src_cells__src_N",
+          "rhs": {
             "args": [
               "src_N",
               "pd_member_factor__src_cells"
@@ -588,14 +560,11 @@
                 "from": "pd_support__src_cells"
               }
             }
-          },
-          "shape": [
-            "pd_support__src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "pd_cell__src_cells__src_S": {
-          "expression": {
+        {
+          "lhs": "pd_cell__src_cells__src_S",
+          "rhs": {
             "args": [
               "src_S",
               "pd_member_factor__src_cells"
@@ -622,14 +591,11 @@
                 "from": "pd_support__src_cells"
               }
             }
-          },
-          "shape": [
-            "pd_support__src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "pd_cell__src_cells__src_W": {
-          "expression": {
+        {
+          "lhs": "pd_cell__src_cells__src_W",
+          "rhs": {
             "args": [
               "src_W",
               "pd_member_factor__src_cells"
@@ -656,27 +622,11 @@
                 "from": "pd_support__src_cells"
               }
             }
-          },
-          "shape": [
-            "pd_support__src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "pd_member_factor__src_cells": {
-          "default": 0.0,
-          "shape": [
-            "pd_support__src_cells"
-          ],
-          "type": "parameter"
-        },
-        "pd_members__src_cells": {
-          "shape": [
-            "pd_support__src_cells"
-          ],
-          "type": "state"
-        },
-        "plume_top": {
-          "expression": {
+        {
+          "lhs": "plume_top",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -815,11 +765,85 @@
               }
             },
             "reduce": "+"
-          },
+          }
+        }
+      ],
+      "variables": {
+        "E_PM25": {
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "unknown"
+        },
+        "SR_PM25": {
+          "default": 0.0,
+          "shape": [
+            "pd_support__src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "conc_PM25": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "emis_annual": {
+          "default": 0.0,
           "shape": [
             "emis_records"
           ],
-          "type": "observed"
+          "type": "parameter"
+        },
+        "in_grid": {
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown"
+        },
+        "pd_cell__src_cells__src_E": {
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "unknown"
+        },
+        "pd_cell__src_cells__src_N": {
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "unknown"
+        },
+        "pd_cell__src_cells__src_S": {
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "unknown"
+        },
+        "pd_cell__src_cells__src_W": {
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "unknown"
+        },
+        "pd_member_factor__src_cells": {
+          "default": 0.0,
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "parameter"
+        },
+        "pd_members__src_cells": {
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "unknown"
+        },
+        "plume_top": {
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown"
         },
         "px": {
           "default": 0.0,

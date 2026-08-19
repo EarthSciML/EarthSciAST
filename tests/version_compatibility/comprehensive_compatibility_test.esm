@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ComprehensiveCompatibilityTest",
     "description": "Comprehensive test using all major ESM format features for version compatibility validation",

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SubsystemRefURLTest",
     "description": "Test subsystem inclusion by URL reference. Demonstrates that subsystems can be loaded from remote HTTP/HTTPS URLs. In practice, the URL would point to a hosted ESM file.",
@@ -10,7 +10,7 @@
     "ClimateModel": {
       "variables": {
         "global_temp": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.0,
           "description": "Global mean temperature"

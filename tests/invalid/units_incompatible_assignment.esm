@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsIncompatibleAssignment",
     "description": "Invalid file demonstrating unit mismatch in equation assignment",
@@ -10,7 +10,7 @@
   "models": {
     "BadUnitsModel": {
       "variables": {
-        "velocity": { "type": "state", "units": "m/s", "default": 0.0, "description": "Velocity" },
+        "velocity": { "type": "unknown", "units": "m/s", "default": 0.0, "description": "Velocity" },
         "mass": { "type": "parameter", "units": "kg", "default": 10.0, "description": "Mass" }
       },
       "equations": [

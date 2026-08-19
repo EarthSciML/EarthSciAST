@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsInvalidDerivative",
     "description": "Invalid file demonstrating derivative equation LHS (dx/dt = m/s) incompatible with RHS (kg)",
@@ -10,7 +10,7 @@
   "models": {
     "BadUnitsModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0, "description": "Position" },
+        "x": { "type": "unknown", "units": "m", "default": 0.0, "description": "Position" },
         "t": { "type": "parameter", "units": "s", "default": 1.0, "description": "Time (independent variable placeholder)" },
         "mass": { "type": "parameter", "units": "kg", "default": 5.0, "description": "Mass value (wrongly assigned to dx/dt)" }
       },

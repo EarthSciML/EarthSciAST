@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "wildfire_rothermel_inline",
     "description": "The substituted form of assembly_import.esm: identical models, but the five Rothermel variable_map edges authored INLINE. flatten(this) must deep-equal flatten(assembly_import.esm) (esm-spec 10.10.3 / RFC 11 equivalence)."
@@ -22,7 +22,7 @@
         "delta": { "type": "parameter", "units": "m", "default": 0.0 },
         "Mx": { "type": "parameter", "units": "1", "default": 0.0 },
         "h": { "type": "parameter", "units": "J/kg", "default": 0.0 },
-        "r": { "type": "state", "units": "m/s", "default": 0.0 }
+        "r": { "type": "unknown", "units": "m/s", "default": 0.0 }
       },
       "equations": [
         { "lhs": { "op": "D", "args": ["r"], "wrt": "t" }, "rhs": { "op": "-", "args": ["r"] } }

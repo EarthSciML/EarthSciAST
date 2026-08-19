@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsPropagation",
     "description": "Test fixtures for unit propagation through mathematical operations",
@@ -21,13 +21,13 @@
       },
       "variables": {
         "mass": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg",
           "default": 1.0,
           "description": "Mass"
         },
         "volume": {
-          "type": "state",
+          "type": "unknown",
           "units": "m^3",
           "default": 0.001,
           "description": "Volume"
@@ -57,136 +57,34 @@
           "description": "Pressure"
         },
         "density": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg/m^3",
-          "description": "Density from mass/volume",
-          "expression": {
-            "op": "/",
-            "args": [
-              "mass",
-              "volume"
-            ]
-          }
+          "description": "Density from mass/volume"
         },
         "velocity": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m/s",
-          "description": "Velocity from length/time",
-          "expression": {
-            "op": "/",
-            "args": [
-              "length",
-              "time"
-            ]
-          }
+          "description": "Velocity from length/time"
         },
         "acceleration": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m/s^2",
-          "description": "Acceleration from velocity/time",
-          "expression": {
-            "op": "/",
-            "args": [
-              {
-                "op": "/",
-                "args": [
-                  "length",
-                  "time"
-                ]
-              },
-              "time"
-            ]
-          }
+          "description": "Acceleration from velocity/time"
         },
         "force": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg*m/s^2",
-          "description": "Force from mass*acceleration",
-          "expression": {
-            "op": "*",
-            "args": [
-              "mass",
-              {
-                "op": "/",
-                "args": [
-                  {
-                    "op": "/",
-                    "args": [
-                      "length",
-                      "time"
-                    ]
-                  },
-                  "time"
-                ]
-              }
-            ]
-          }
+          "description": "Force from mass*acceleration"
         },
         "energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg*m^2/s^2",
-          "description": "Energy from force*length",
-          "expression": {
-            "op": "*",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "mass",
-                  {
-                    "op": "/",
-                    "args": [
-                      {
-                        "op": "/",
-                        "args": [
-                          "length",
-                          "time"
-                        ]
-                      },
-                      "time"
-                    ]
-                  }
-                ]
-              },
-              "length"
-            ]
-          }
+          "description": "Energy from force*length"
         },
         "power": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg*m^2/s^3",
-          "description": "Power from energy/time",
-          "expression": {
-            "op": "/",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      "mass",
-                      {
-                        "op": "/",
-                        "args": [
-                          {
-                            "op": "/",
-                            "args": [
-                              "length",
-                              "time"
-                            ]
-                          },
-                          "time"
-                        ]
-                      }
-                    ]
-                  },
-                  "length"
-                ]
-              },
-              "time"
-            ]
-          }
+          "description": "Power from energy/time"
         }
       },
       "equations": [
@@ -239,9 +137,131 @@
               }
             ]
           }
+        },
+        {
+          "lhs": "density",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "mass",
+              "volume"
+            ]
+          }
+        },
+        {
+          "lhs": "velocity",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "length",
+              "time"
+            ]
+          }
+        },
+        {
+          "lhs": "acceleration",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  "length",
+                  "time"
+                ]
+              },
+              "time"
+            ]
+          }
+        },
+        {
+          "lhs": "force",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "mass",
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      "length",
+                      "time"
+                    ]
+                  },
+                  "time"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "energy",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "mass",
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "/",
+                        "args": [
+                          "length",
+                          "time"
+                        ]
+                      },
+                      "time"
+                    ]
+                  }
+                ]
+              },
+              "length"
+            ]
+          }
+        },
+        {
+          "lhs": "power",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "mass",
+                      {
+                        "op": "/",
+                        "args": [
+                          {
+                            "op": "/",
+                            "args": [
+                              "length",
+                              "time"
+                            ]
+                          },
+                          "time"
+                        ]
+                      }
+                    ]
+                  },
+                  "length"
+                ]
+              },
+              "time"
+            ]
+          }
         }
       ],
-      "tolerance": { "rel": 1e-10 },
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "observed_at_initial_state",
@@ -254,14 +274,41 @@
             "time": 2.0,
             "length": 4.0
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "density",      "time": 0.0, "expected": 4.0 },
-            { "variable": "velocity",     "time": 0.0, "expected": 2.0 },
-            { "variable": "acceleration", "time": 0.0, "expected": 1.0 },
-            { "variable": "force",        "time": 0.0, "expected": 2.0 },
-            { "variable": "energy",       "time": 0.0, "expected": 8.0 },
-            { "variable": "power",        "time": 0.0, "expected": 4.0 }
+            {
+              "variable": "density",
+              "time": 0.0,
+              "expected": 4.0
+            },
+            {
+              "variable": "velocity",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "acceleration",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "force",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "energy",
+              "time": 0.0,
+              "expected": 8.0
+            },
+            {
+              "variable": "power",
+              "time": 0.0,
+              "expected": 4.0
+            }
           ]
         }
       ]
@@ -296,10 +343,20 @@
           "description": "Pressure"
         },
         "V": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m^3",
-          "description": "Volume from ideal gas law",
-          "expression": {
+          "description": "Volume from ideal gas law"
+        },
+        "entropy": {
+          "type": "unknown",
+          "units": "J/K",
+          "description": "Entropy calculation"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "V",
+          "rhs": {
             "op": "/",
             "args": [
               {
@@ -319,11 +376,9 @@
             ]
           }
         },
-        "entropy": {
-          "type": "observed",
-          "units": "J/K",
-          "description": "Entropy calculation",
-          "expression": {
+        {
+          "lhs": "entropy",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -354,9 +409,10 @@
             ]
           }
         }
+      ],
+      "tolerance": {
+        "rel": 1e-10
       },
-      "equations": [],
-      "tolerance": { "rel": 1e-10 },
       "tests": [
         {
           "id": "ideal_gas_volume_clean",
@@ -367,9 +423,16 @@
             "T": 100.0,
             "P": 10.0
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "V", "time": 0.0, "expected": 20.0 }
+            {
+              "variable": "V",
+              "time": 0.0,
+              "expected": 20.0
+            }
           ]
         }
       ]
@@ -410,10 +473,25 @@
           "description": "Characteristic length"
         },
         "mass_flow": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg/s",
-          "description": "Mass flow rate",
-          "expression": {
+          "description": "Mass flow rate"
+        },
+        "reynolds": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Reynolds number (dimensionless)"
+        },
+        "pressure_drop": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Dynamic pressure drop (Bernoulli): 0.5 * rho * v^2. Dimensionally (kg/m^3) * (m/s)^2 = kg/(m*s^2) = Pa."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "mass_flow",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -427,11 +505,9 @@
             ]
           }
         },
-        "reynolds": {
-          "type": "observed",
-          "units": "1",
-          "description": "Reynolds number (dimensionless)",
-          "expression": {
+        {
+          "lhs": "reynolds",
+          "rhs": {
             "op": "/",
             "args": [
               {
@@ -451,11 +527,9 @@
             ]
           }
         },
-        "pressure_drop": {
-          "type": "observed",
-          "units": "Pa",
-          "description": "Dynamic pressure drop (Bernoulli): 0.5 * rho * v^2. Dimensionally (kg/m^3) * (m/s)^2 = kg/(m*s^2) = Pa.",
-          "expression": {
+        {
+          "lhs": "pressure_drop",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -475,9 +549,10 @@
             ]
           }
         }
+      ],
+      "tolerance": {
+        "rel": 1e-10
       },
-      "equations": [],
-      "tolerance": { "rel": 1e-10 },
       "tests": [
         {
           "id": "fluid_dynamics_default",
@@ -489,11 +564,26 @@
             "mu": 0.001,
             "L": 1.0
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "mass_flow",     "time": 0.0, "expected": 20.0 },
-            { "variable": "reynolds",      "time": 0.0, "expected": 2000000.0 },
-            { "variable": "pressure_drop", "time": 0.0, "expected": 2000.0 }
+            {
+              "variable": "mass_flow",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "reynolds",
+              "time": 0.0,
+              "expected": 2000000.0
+            },
+            {
+              "variable": "pressure_drop",
+              "time": 0.0,
+              "expected": 2000.0
+            }
           ]
         }
       ]

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnicodeNormalizationAttack",
     "description": "Test Unicode normalization vulnerabilities with visually similar but different codepoints",
@@ -8,16 +8,16 @@
   "models": {
     "UnicodeModel": {
       "variables": {
-        "normal_var": { "type": "state", "units": "m", "default": 1.0 },
-        "nоrmal_var": { "type": "state", "units": "m", "default": 2.0 },
+        "normal_var": { "type": "unknown", "units": "m", "default": 1.0 },
+        "nоrmal_var": { "type": "unknown", "units": "m", "default": 2.0 },
         "А": { "type": "parameter", "units": "1", "default": 3.0 },
         "A": { "type": "parameter", "units": "1", "default": 4.0 },
-        "café": { "type": "state", "units": "mol", "default": 5.0 },
-        "cafe\u0301": { "type": "state", "units": "mol", "default": 6.0 },
+        "café": { "type": "unknown", "units": "mol", "default": 5.0 },
+        "cafe\u0301": { "type": "unknown", "units": "mol", "default": 6.0 },
         "ℌ𝒆𝓁𝓁𝑜": { "type": "parameter", "units": "1", "default": 7.0 },
         "Hello": { "type": "parameter", "units": "1", "default": 8.0 },
-        "tеst": { "type": "state", "units": "kg", "default": 9.0 },
-        "test": { "type": "state", "units": "kg", "default": 10.0 }
+        "tеst": { "type": "unknown", "units": "kg", "default": 9.0 },
+        "test": { "type": "unknown", "units": "kg", "default": 10.0 }
       },
       "equations": [
         {

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ExpressionEvaluationStress",
     "description": "Stress test for expression evaluation with deeply nested mathematical operations, recursive functions, and complex operator precedence",

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "OperatorComposeResolutionFixtures",
     "description": "Test fixtures for operator_compose coupling resolution algorithm (Section 4.7.1)",
@@ -12,19 +12,19 @@
     "ChemistrySystem": {
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "description": "Ozone mixing ratio"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-10,
           "description": "NO mixing ratio"
         },
         "NO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 2e-10,
           "description": "NO2 mixing ratio"
@@ -166,13 +166,13 @@
     "DiffusionSystem": {
       "variables": {
         "ozone_conc": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "description": "Ozone concentration"
         },
         "nitrogen_oxide": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-10,
           "description": "NO concentration"
@@ -274,7 +274,7 @@
     "DepositionSystem": {
       "variables": {
         "surface_flux": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^2/s",
           "default": 0.0,
           "description": "Surface flux"

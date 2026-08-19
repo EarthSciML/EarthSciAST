@@ -531,7 +531,7 @@
       }
     }
   },
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "emis_layer": {
       "kind": "interval",
@@ -629,20 +629,10 @@
   },
   "models": {
     "ISRM": {
-      "equations": [],
-      "system_kind": "nonlinear",
-      "variables": {
-        "E": {
-          "default": 0.0,
-          "description": "Cell east edge (LCC m); from ISRM_SR.E.",
-          "shape": [
-            "pop_cells"
-          ],
-          "type": "parameter",
-          "units": "m"
-        },
-        "E_NH3": {
-          "expression": {
+      "equations": [
+        {
+          "lhs": "E_NH3",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -778,14 +768,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_NOx": {
-          "expression": {
+        {
+          "lhs": "E_NOx",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -921,14 +908,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_PM25": {
-          "expression": {
+        {
+          "lhs": "E_PM25",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -1064,14 +1048,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_SOx": {
-          "expression": {
+        {
+          "lhs": "E_SOx",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -1207,14 +1188,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_VOC": {
-          "expression": {
+        {
+          "lhs": "E_VOC",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -1350,92 +1328,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "MortalityRate": {
-          "default": 0.0,
-          "description": "Baseline mortality per 100k; from ISRM_SR.MortalityRate (prefix [0:52411]).",
-          "shape": [
-            "pop_cells"
-          ],
-          "type": "parameter",
-          "units": "1"
-        },
-        "N": {
-          "default": 0.0,
-          "description": "Cell north edge (LCC m); from ISRM_SR.N.",
-          "shape": [
-            "pop_cells"
-          ],
-          "type": "parameter",
-          "units": "m"
-        },
-        "S": {
-          "default": 0.0,
-          "description": "Cell south edge (LCC m); from ISRM_SR.S.",
-          "shape": [
-            "pop_cells"
-          ],
-          "type": "parameter",
-          "units": "m"
-        },
-        "SR_PrimaryPM25": {
-          "default": 0.0,
-          "description": "Source-receptor matrix for the PrimaryPM25 pathway (contracted with PM2_5 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.PrimaryPM25 via param_to_var (G2).",
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "SR_SOA": {
-          "default": 0.0,
-          "description": "Source-receptor matrix for the SOA pathway (contracted with VOC emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.SOA via param_to_var (G2).",
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "SR_pNH4": {
-          "default": 0.0,
-          "description": "Source-receptor matrix for the pNH4 pathway (contracted with NH3 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNH4 via param_to_var (G2).",
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "SR_pNO3": {
-          "default": 0.0,
-          "description": "Source-receptor matrix for the pNO3 pathway (contracted with NOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNO3 via param_to_var (G2).",
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "SR_pSO4": {
-          "default": 0.0,
-          "description": "Source-receptor matrix for the pSO4 pathway (contracted with SOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pSO4 via param_to_var (G2).",
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "TotalPM25": {
-          "description": "Total PM2.5 concentration at each receptor: fact*(conc_SOA+conc_pNO3+conc_pNH4+conc_pSO4+conc_PrimaryPM25).",
-          "expression": {
+        {
+          "lhs": "TotalPM25",
+          "rhs": {
             "args": [
               "conc_SOA",
               "conc_pNO3",
@@ -1498,34 +1395,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "TotalPop": {
-          "default": 0.0,
-          "description": "Population per cell; from ISRM_SR.TotalPop (read on the rcv range = [0:52411] prefix slice).",
-          "shape": [
-            "pop_cells"
-          ],
-          "type": "parameter",
-          "units": "1"
-        },
-        "W": {
-          "default": 0.0,
-          "description": "Cell west edge (LCC m); from ISRM_SR.W (full 596444, prefix used).",
-          "shape": [
-            "pop_cells"
-          ],
-          "type": "parameter",
-          "units": "m"
-        },
-        "X": {
-          "description": "Lambert-conformal-conic forward-x of the raw emission coordinate (== lambert_conformal_forward_x expanded to trig). Projected at BUILD time by the general-eval coordinate path (Phase 5 Part A) — the caller supplies only raw emis_lon/emis_lat.",
-          "expression": {
+        {
+          "lhs": "X",
+          "rhs": {
             "args": [
               "emis_lon",
               "emis_lat"
@@ -2064,15 +1938,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed"
+          }
         },
-        "Y": {
-          "description": "Lambert-conformal-conic forward-y of the raw emission coordinate (== lambert_conformal_forward_y expanded to trig). Projected at BUILD time by the general-eval coordinate path (Phase 5 Part A) — the caller supplies only raw emis_lon/emis_lat.",
-          "expression": {
+        {
+          "lhs": "Y",
+          "rhs": {
             "args": [
               "emis_lon",
               "emis_lat"
@@ -2998,15 +2868,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed"
+          }
         },
-        "conc_PrimaryPM25": {
-          "description": "Per-receptor concentration response from the PrimaryPM25 pathway: sum_s SR_PrimaryPM25[s,rcv]*E_PM25[s] (pre-fact; emisLayer 0 already sliced out of SR).",
-          "expression": {
+        {
+          "lhs": "conc_PrimaryPM25",
+          "rhs": {
             "args": [
               "SR_PrimaryPM25",
               "E_PM25"
@@ -3044,16 +2910,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "conc_SOA": {
-          "description": "Per-receptor concentration response from the SOA pathway: sum_s SR_SOA[s,rcv]*E_VOC[s] (pre-fact; emisLayer 0 already sliced out of SR).",
-          "expression": {
+        {
+          "lhs": "conc_SOA",
+          "rhs": {
             "args": [
               "SR_SOA",
               "E_VOC"
@@ -3091,16 +2952,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "conc_pNH4": {
-          "description": "Per-receptor concentration response from the pNH4 pathway: sum_s SR_pNH4[s,rcv]*E_NH3[s] (pre-fact; emisLayer 0 already sliced out of SR).",
-          "expression": {
+        {
+          "lhs": "conc_pNH4",
+          "rhs": {
             "args": [
               "SR_pNH4",
               "E_NH3"
@@ -3138,16 +2994,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "conc_pNO3": {
-          "description": "Per-receptor concentration response from the pNO3 pathway: sum_s SR_pNO3[s,rcv]*E_NOx[s] (pre-fact; emisLayer 0 already sliced out of SR).",
-          "expression": {
+        {
+          "lhs": "conc_pNO3",
+          "rhs": {
             "args": [
               "SR_pNO3",
               "E_NOx"
@@ -3185,16 +3036,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "conc_pSO4": {
-          "description": "Per-receptor concentration response from the pSO4 pathway: sum_s SR_pSO4[s,rcv]*E_SOx[s] (pre-fact; emisLayer 0 already sliced out of SR).",
-          "expression": {
+        {
+          "lhs": "conc_pSO4",
+          "rhs": {
             "args": [
               "SR_pSO4",
               "E_SOx"
@@ -3232,16 +3078,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "deathsK": {
-          "description": "Attributable deaths at each receptor (Krewski RR 1.06): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
-          "expression": {
+        {
+          "lhs": "deathsK",
+          "rhs": {
             "args": [
               "TotalPM25",
               "TotalPop",
@@ -3333,16 +3174,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "deathsL": {
-          "description": "Attributable deaths at each receptor (Lepeule RR 1.14): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
-          "expression": {
+        {
+          "lhs": "deathsL",
+          "rhs": {
             "args": [
               "TotalPM25",
               "TotalPop",
@@ -3434,49 +3270,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "emis_annual": {
-          "default": 0.0,
-          "description": "Per-record annual emissions (tons/yr); from EGU_Emis.annual.",
-          "shape": [
-            "emis_records"
-          ],
-          "type": "parameter",
-          "units": "kg/yr"
-        },
-        "emis_lat": {
-          "default": 0.0,
-          "description": "Emission-point latitude (EPSG:4269); from EGU_Emis.lat.",
-          "shape": [
-            "emis_records"
-          ],
-          "type": "parameter",
-          "units": "degree"
-        },
-        "emis_lon": {
-          "default": 0.0,
-          "description": "Emission-point longitude (EPSG:4269); from EGU_Emis.lon.",
-          "shape": [
-            "emis_records"
-          ],
-          "type": "parameter",
-          "units": "degree"
-        },
-        "fact": {
-          "default": 28766.639,
-          "description": "tons/year emission-unit -> ug/m3 scaling (applied once to the summed concentration).",
-          "type": "parameter",
-          "units": "1"
-        },
-        "is_NH3": {
-          "description": "1 if the record's pollutant code is a NH3-class code (STEP 0.6 map), else 0.",
-          "expression": {
+        {
+          "lhs": "is_NH3",
+          "rhs": {
             "args": [
               "pollutant"
             ],
@@ -3509,16 +3307,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "is_NOx": {
-          "description": "1 if the record's pollutant code is a NOx-class code (STEP 0.6 map), else 0.",
-          "expression": {
+        {
+          "lhs": "is_NOx",
+          "rhs": {
             "args": [
               "pollutant"
             ],
@@ -3595,16 +3388,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "is_PM25": {
-          "description": "1 if the record's pollutant code is a PM25-class code (STEP 0.6 map), else 0.",
-          "expression": {
+        {
+          "lhs": "is_PM25",
+          "rhs": {
             "args": [
               "pollutant"
             ],
@@ -3863,16 +3651,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "is_SOx": {
-          "description": "1 if the record's pollutant code is a SOx-class code (STEP 0.6 map), else 0.",
-          "expression": {
+        {
+          "lhs": "is_SOx",
+          "rhs": {
             "args": [
               "pollutant"
             ],
@@ -3905,16 +3688,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "is_VOC": {
-          "description": "1 if the record's pollutant code is a VOC-class code (STEP 0.6 map), else 0.",
-          "expression": {
+        {
+          "lhs": "is_VOC",
+          "rhs": {
             "args": [
               "pollutant"
             ],
@@ -4394,62 +4172,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "lat_0": {
-          "default": 40.0,
-          "description": "LCC origin latitude (NEI2016).",
-          "type": "parameter",
-          "units": "degree"
-        },
-        "lat_1": {
-          "default": 33.0,
-          "description": "LCC standard parallel 1 (NEI2016).",
-          "type": "parameter",
-          "units": "degree"
-        },
-        "lat_2": {
-          "default": 45.0,
-          "description": "LCC standard parallel 2 (NEI2016).",
-          "type": "parameter",
-          "units": "degree"
-        },
-        "lcc_R": {
-          "default": 6.370997e6,
-          "description": "LCC sphere radius (NEI2016). (Named lcc_R, not R, to avoid the reserved physical-constant name R = ideal gas constant.)",
-          "type": "parameter",
-          "units": "m"
-        },
-        "lcc_d2r": {
-          "default": 0.017453292519943295,
-          "description": "degrees->radians (pi/180) for the LCC projection.",
-          "type": "parameter"
-        },
-        "lcc_qp": {
-          "default": 0.7853981633974483,
-          "description": "pi/4 quarter-turn offset for the LCC tan half-angle.",
-          "type": "parameter"
-        },
-        "lon_0": {
-          "default": -97.0,
-          "description": "LCC central meridian (NEI2016).",
-          "type": "parameter",
-          "units": "degree"
-        },
-        "mort_scale": {
-          "default": 1.025229357798165,
-          "description": "Mortality-rate 2005->2016 rescale.",
-          "type": "parameter",
-          "units": "1"
-        },
-        "pm_PrimaryPM25": {
-          "description": "Reported PrimaryPM25 PM2.5 component at each receptor: fact*conc_PrimaryPM25.",
-          "expression": {
+        {
+          "lhs": "pm_PrimaryPM25",
+          "rhs": {
             "args": [
               "conc_PrimaryPM25"
             ],
@@ -4475,16 +4202,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "pm_SOA": {
-          "description": "Reported SOA PM2.5 component at each receptor: fact*conc_SOA.",
-          "expression": {
+        {
+          "lhs": "pm_SOA",
+          "rhs": {
             "args": [
               "conc_SOA"
             ],
@@ -4510,16 +4232,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "pm_pNH4": {
-          "description": "Reported pNH4 PM2.5 component at each receptor: fact*conc_pNH4.",
-          "expression": {
+        {
+          "lhs": "pm_pNH4",
+          "rhs": {
             "args": [
               "conc_pNH4"
             ],
@@ -4545,16 +4262,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "pm_pNO3": {
-          "description": "Reported pNO3 PM2.5 component at each receptor: fact*conc_pNO3.",
-          "expression": {
+        {
+          "lhs": "pm_pNO3",
+          "rhs": {
             "args": [
               "conc_pNO3"
             ],
@@ -4580,16 +4292,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "pm_pSO4": {
-          "description": "Reported pSO4 PM2.5 component at each receptor: fact*conc_pSO4.",
-          "expression": {
+        {
+          "lhs": "pm_pSO4",
+          "rhs": {
             "args": [
               "conc_pSO4"
             ],
@@ -4615,31 +4322,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "ug/m^3"
+          }
         },
-        "pollutant": {
-          "default": 0.0,
-          "description": "Per-record FF10 pollutant code as the `pollutant` enum integer; from EGU_Emis.pollutant.",
-          "shape": [
-            "emis_records"
-          ],
-          "type": "parameter",
-          "units": "1"
-        },
-        "pop_scale": {
-          "default": 1.0465819687408728,
-          "description": "Population 2010->2016 rescale.",
-          "type": "parameter",
-          "units": "1"
-        },
-        "rcv_cx": {
-          "description": "Receptor cell-centroid easting (W+E)/2 in LCC metres.",
-          "expression": {
+        {
+          "lhs": "rcv_cx",
+          "rhs": {
             "args": [
               "W",
               "E"
@@ -4678,16 +4365,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed",
-          "units": "m"
+          }
         },
-        "rcv_cy": {
-          "description": "Receptor cell-centroid northing (S+N)/2 in LCC metres.",
-          "expression": {
+        {
+          "lhs": "rcv_cy",
+          "rhs": {
             "args": [
               "S",
               "N"
@@ -4726,11 +4408,411 @@
                 "from": "rcv_cells"
               }
             }
-          },
+          }
+        }
+      ],
+      "system_kind": "nonlinear",
+      "variables": {
+        "E": {
+          "default": 0.0,
+          "description": "Cell east edge (LCC m); from ISRM_SR.E.",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "E_NH3": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_NOx": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_PM25": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_SOx": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_VOC": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "MortalityRate": {
+          "default": 0.0,
+          "description": "Baseline mortality per 100k; from ISRM_SR.MortalityRate (prefix [0:52411]).",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "N": {
+          "default": 0.0,
+          "description": "Cell north edge (LCC m); from ISRM_SR.N.",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "S": {
+          "default": 0.0,
+          "description": "Cell south edge (LCC m); from ISRM_SR.S.",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "SR_PrimaryPM25": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the PrimaryPM25 pathway (contracted with PM2_5 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.PrimaryPM25 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_SOA": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the SOA pathway (contracted with VOC emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.SOA via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_pNH4": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the pNH4 pathway (contracted with NH3 emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNH4 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_pNO3": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the pNO3 pathway (contracted with NOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pNO3 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "SR_pSO4": {
+          "default": 0.0,
+          "description": "Source-receptor matrix for the pSO4 pathway (contracted with SOx emissions), already emisLayer-0- and ppl-sliced by the runner's lazy zarr select ([0], ppl, :). Rows are the compact emission-bearing source cells (emis_src_cells), columns the 52411 receptors (rcv_cells). Wired from ISRM_SR.pSO4 via param_to_var (G2).",
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter",
+          "units": "ug/m^3/(kg/yr)"
+        },
+        "TotalPM25": {
+          "description": "Total PM2.5 concentration at each receptor: fact*(conc_SOA+conc_pNO3+conc_pNH4+conc_pSO4+conc_PrimaryPM25).",
           "shape": [
             "rcv_cells"
           ],
-          "type": "observed",
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "TotalPop": {
+          "default": 0.0,
+          "description": "Population per cell; from ISRM_SR.TotalPop (read on the rcv range = [0:52411] prefix slice).",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "W": {
+          "default": 0.0,
+          "description": "Cell west edge (LCC m); from ISRM_SR.W (full 596444, prefix used).",
+          "shape": [
+            "pop_cells"
+          ],
+          "type": "parameter",
+          "units": "m"
+        },
+        "X": {
+          "description": "Lambert-conformal-conic forward-x of the raw emission coordinate (== lambert_conformal_forward_x expanded to trig). Projected at BUILD time by the general-eval coordinate path (Phase 5 Part A) — the caller supplies only raw emis_lon/emis_lat.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown"
+        },
+        "Y": {
+          "description": "Lambert-conformal-conic forward-y of the raw emission coordinate (== lambert_conformal_forward_y expanded to trig). Projected at BUILD time by the general-eval coordinate path (Phase 5 Part A) — the caller supplies only raw emis_lon/emis_lat.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown"
+        },
+        "conc_PrimaryPM25": {
+          "description": "Per-receptor concentration response from the PrimaryPM25 pathway: sum_s SR_PrimaryPM25[s,rcv]*E_PM25[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "conc_SOA": {
+          "description": "Per-receptor concentration response from the SOA pathway: sum_s SR_SOA[s,rcv]*E_VOC[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "conc_pNH4": {
+          "description": "Per-receptor concentration response from the pNH4 pathway: sum_s SR_pNH4[s,rcv]*E_NH3[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "conc_pNO3": {
+          "description": "Per-receptor concentration response from the pNO3 pathway: sum_s SR_pNO3[s,rcv]*E_NOx[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "conc_pSO4": {
+          "description": "Per-receptor concentration response from the pSO4 pathway: sum_s SR_pSO4[s,rcv]*E_SOx[s] (pre-fact; emisLayer 0 already sliced out of SR).",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "deathsK": {
+          "description": "Attributable deaths at each receptor (Krewski RR 1.06): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "deathsL": {
+          "description": "Attributable deaths at each receptor (Lepeule RR 1.14): (exp(log(rr)/10*TotalPM25)-1)*TotalPop*pop_scale*MortalityRate/100000*mort_scale. TotalPop/MortalityRate indexed on the rcv range = the [0:52411] prefix slice.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "emis_annual": {
+          "default": 0.0,
+          "description": "Per-record annual emissions (tons/yr); from EGU_Emis.annual.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "kg/yr"
+        },
+        "emis_lat": {
+          "default": 0.0,
+          "description": "Emission-point latitude (EPSG:4269); from EGU_Emis.lat.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "degree"
+        },
+        "emis_lon": {
+          "default": 0.0,
+          "description": "Emission-point longitude (EPSG:4269); from EGU_Emis.lon.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "degree"
+        },
+        "fact": {
+          "default": 28766.639,
+          "description": "tons/year emission-unit -> ug/m3 scaling (applied once to the summed concentration).",
+          "type": "parameter",
+          "units": "1"
+        },
+        "is_NH3": {
+          "description": "1 if the record's pollutant code is a NH3-class code (STEP 0.6 map), else 0.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "is_NOx": {
+          "description": "1 if the record's pollutant code is a NOx-class code (STEP 0.6 map), else 0.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "is_PM25": {
+          "description": "1 if the record's pollutant code is a PM25-class code (STEP 0.6 map), else 0.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "is_SOx": {
+          "description": "1 if the record's pollutant code is a SOx-class code (STEP 0.6 map), else 0.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "is_VOC": {
+          "description": "1 if the record's pollutant code is a VOC-class code (STEP 0.6 map), else 0.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "lat_0": {
+          "default": 40.0,
+          "description": "LCC origin latitude (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "lat_1": {
+          "default": 33.0,
+          "description": "LCC standard parallel 1 (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "lat_2": {
+          "default": 45.0,
+          "description": "LCC standard parallel 2 (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "lcc_R": {
+          "default": 6370997.0,
+          "description": "LCC sphere radius (NEI2016). (Named lcc_R, not R, to avoid the reserved physical-constant name R = ideal gas constant.)",
+          "type": "parameter",
+          "units": "m"
+        },
+        "lcc_d2r": {
+          "default": 0.017453292519943295,
+          "description": "degrees->radians (pi/180) for the LCC projection.",
+          "type": "parameter"
+        },
+        "lcc_qp": {
+          "default": 0.7853981633974483,
+          "description": "pi/4 quarter-turn offset for the LCC tan half-angle.",
+          "type": "parameter"
+        },
+        "lon_0": {
+          "default": -97.0,
+          "description": "LCC central meridian (NEI2016).",
+          "type": "parameter",
+          "units": "degree"
+        },
+        "mort_scale": {
+          "default": 1.025229357798165,
+          "description": "Mortality-rate 2005->2016 rescale.",
+          "type": "parameter",
+          "units": "1"
+        },
+        "pm_PrimaryPM25": {
+          "description": "Reported PrimaryPM25 PM2.5 component at each receptor: fact*conc_PrimaryPM25.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "pm_SOA": {
+          "description": "Reported SOA PM2.5 component at each receptor: fact*conc_SOA.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "pm_pNH4": {
+          "description": "Reported pNH4 PM2.5 component at each receptor: fact*conc_pNH4.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "pm_pNO3": {
+          "description": "Reported pNO3 PM2.5 component at each receptor: fact*conc_pNO3.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "pm_pSO4": {
+          "description": "Reported pSO4 PM2.5 component at each receptor: fact*conc_pSO4.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "ug/m^3"
+        },
+        "pollutant": {
+          "default": 0.0,
+          "description": "Per-record FF10 pollutant code as the `pollutant` enum integer; from EGU_Emis.pollutant.",
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter",
+          "units": "1"
+        },
+        "pop_scale": {
+          "default": 1.0465819687408728,
+          "description": "Population 2010->2016 rescale.",
+          "type": "parameter",
+          "units": "1"
+        },
+        "rcv_cx": {
+          "description": "Receptor cell-centroid easting (W+E)/2 in LCC metres.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
+          "units": "m"
+        },
+        "rcv_cy": {
+          "description": "Receptor cell-centroid northing (S+N)/2 in LCC metres.",
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown",
           "units": "m"
         },
         "rr_K": {

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MathematicalCorrectnessTests",
     "description": "Test mathematical correctness of ESM operations: mass conservation, ODE derivation, and numerical accuracy",
@@ -391,13 +391,13 @@
       },
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Position"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity"
@@ -409,46 +409,8 @@
           "description": "Angular frequency"
         },
         "energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  0.5,
-                  {
-                    "op": "^",
-                    "args": [
-                      "v",
-                      2
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  0.5,
-                  {
-                    "op": "^",
-                    "args": [
-                      "omega",
-                      2
-                    ]
-                  },
-                  {
-                    "op": "^",
-                    "args": [
-                      "x",
-                      2
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Total energy (should be conserved)"
         }
       },
@@ -507,6 +469,47 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "energy",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "^",
+                    "args": [
+                      "v",
+                      2
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "^",
+                    "args": [
+                      "omega",
+                      2
+                    ]
+                  },
+                  {
+                    "op": "^",
+                    "args": [
+                      "x",
+                      2
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       "tolerance": {
@@ -596,13 +599,13 @@
       },
       "variables": {
         "y_fast": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Fast variable"
         },
         "y_slow": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Slow variable"

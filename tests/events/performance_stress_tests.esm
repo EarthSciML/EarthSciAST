@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "PerformanceStressTests",
     "description": "Performance benchmarking and stress testing for event systems with large numbers of events",
@@ -12,19 +12,19 @@
     "HighFrequencyEventSystem": {
       "variables": {
         "oscillator_1": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Fast oscillator 1"
         },
         "oscillator_2": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.5,
           "description": "Fast oscillator 2"
         },
         "oscillator_3": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": -0.5,
           "description": "Fast oscillator 3"
@@ -48,16 +48,8 @@
           "description": "Event counter 3"
         },
         "total_events": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "expression": {
-            "op": "+",
-            "args": [
-              "event_counter_1",
-              "event_counter_2",
-              "event_counter_3"
-            ]
-          },
           "description": "Total events detected"
         }
       },
@@ -169,6 +161,17 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "total_events",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "event_counter_1",
+              "event_counter_2",
+              "event_counter_3"
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -604,7 +607,7 @@
     "MassiveDiscreteEventSystem": {
       "variables": {
         "accumulator": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Value accumulator"
@@ -1214,13 +1217,13 @@
     "EventErrorHandlingSystem": {
       "variables": {
         "normal_state": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Normal state variable"
         },
         "error_prone_state": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.1,
           "description": "State that may cause errors"

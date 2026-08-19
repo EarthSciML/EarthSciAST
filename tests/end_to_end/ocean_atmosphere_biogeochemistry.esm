@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "OceanAtmosphereBiogeochemistry",
     "description": "End-to-end test for coupled ocean-atmosphere biogeochemical cycles with CO2, O2, and marine ecosystem interactions\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -29,13 +29,13 @@
       },
       "variables": {
         "CO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.00042,
           "description": "Atmospheric CO2 mixing ratio"
         },
         "O2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.2095,
           "description": "Atmospheric O2 mixing ratio"
@@ -59,9 +59,8 @@
           "description": "Surface wind speed for gas exchange"
         },
         "total_carbon": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/mol",
-          "expression": "CO2",
           "description": "Total atmospheric carbon (simplified)"
         }
       },
@@ -83,6 +82,10 @@
             ]
           },
           "rhs": 0.2095
+        },
+        {
+          "lhs": "total_carbon",
+          "rhs": "CO2"
         }
       ]
     },
@@ -92,19 +95,19 @@
       },
       "variables": {
         "DIC": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 2100.0,
           "description": "Dissolved inorganic carbon"
         },
         "ALK": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 2300.0,
           "description": "Total alkalinity"
         },
         "O2_dissolved": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 250.0,
           "description": "Dissolved oxygen"
@@ -140,86 +143,18 @@
           "description": "Henry's law constant for O2"
         },
         "pCO2_ocean": {
-          "type": "observed",
+          "type": "unknown",
           "units": "atm",
-          "expression": {
-            "op": "/",
-            "args": [
-              "DIC",
-              "CO2_solubility"
-            ]
-          },
           "description": "Ocean surface pCO2. Henry's law: DIC[mol/m^3] / CO2_solubility[mol/m^3/atm] = atm. The mixed_layer_depth factor previously in the denominator was DIMENSIONALLY WRONG -- it made the result atm/m -- and physically spurious: solubility already carries the per-volume normalisation."
         },
         "pH": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "expression": {
-            "op": "-",
-            "args": [
-              8.1,
-              {
-                "op": "*",
-                "args": [
-                  0.0002,
-                  {
-                    "op": "-",
-                    "args": [
-                      "DIC",
-                      2100
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Ocean pH (simplified relationship)"
         },
         "omega_aragonite": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "expression": {
-            "op": "*",
-            "args": [
-              {
-                "op": "/",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      "ALK",
-                      1.2
-                    ]
-                  },
-                  {
-                    "op": "+",
-                    "args": [
-                      "DIC",
-                      50
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "exp",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      0.01,
-                      {
-                        "op": "-",
-                        "args": [
-                          "temperature_ocean",
-                          298.15
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Aragonite saturation state"
         }
       },
@@ -292,6 +227,83 @@
             ]
           },
           "rhs": 250.0
+        },
+        {
+          "lhs": "pCO2_ocean",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "DIC",
+              "CO2_solubility"
+            ]
+          }
+        },
+        {
+          "lhs": "pH",
+          "rhs": {
+            "op": "-",
+            "args": [
+              8.1,
+              {
+                "op": "*",
+                "args": [
+                  0.0002,
+                  {
+                    "op": "-",
+                    "args": [
+                      "DIC",
+                      2100
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "omega_aragonite",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "ALK",
+                      1.2
+                    ]
+                  },
+                  {
+                    "op": "+",
+                    "args": [
+                      "DIC",
+                      50
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "exp",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      0.01,
+                      {
+                        "op": "-",
+                        "args": [
+                          "temperature_ocean",
+                          298.15
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     },
@@ -301,25 +313,25 @@
       },
       "variables": {
         "nutrients": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 15.0,
           "description": "Dissolved nutrients (as nitrogen)"
         },
         "phytoplankton": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 2.0,
           "description": "Phytoplankton biomass (as nitrogen)"
         },
         "zooplankton": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 1.0,
           "description": "Zooplankton biomass (as nitrogen)"
         },
         "detritus": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 0.5,
           "description": "Detrital matter (as nitrogen)"
@@ -373,54 +385,13 @@
           "description": "Redfield C:N ratio"
         },
         "primary_production": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/m^3/day",
-          "expression": {
-            "op": "*",
-            "args": [
-              "max_growth_rate",
-              {
-                "op": "/",
-                "args": [
-                  "light",
-                  {
-                    "op": "+",
-                    "args": [
-                      "light",
-                      "half_saturation_light"
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "/",
-                "args": [
-                  "nutrients",
-                  {
-                    "op": "+",
-                    "args": [
-                      "nutrients",
-                      "half_saturation_nutrients"
-                    ]
-                  }
-                ]
-              },
-              "phytoplankton"
-            ]
-          },
           "description": "Primary production rate"
         },
         "grazing": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/m^3/day",
-          "expression": {
-            "op": "*",
-            "args": [
-              "grazing_rate",
-              "phytoplankton",
-              "zooplankton"
-            ]
-          },
           "description": "Grazing rate"
         }
       },
@@ -684,6 +655,53 @@
             ]
           },
           "rhs": 0.5
+        },
+        {
+          "lhs": "primary_production",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "max_growth_rate",
+              {
+                "op": "/",
+                "args": [
+                  "light",
+                  {
+                    "op": "+",
+                    "args": [
+                      "light",
+                      "half_saturation_light"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "/",
+                "args": [
+                  "nutrients",
+                  {
+                    "op": "+",
+                    "args": [
+                      "nutrients",
+                      "half_saturation_nutrients"
+                    ]
+                  }
+                ]
+              },
+              "phytoplankton"
+            ]
+          }
+        },
+        {
+          "lhs": "grazing",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "grazing_rate",
+              "phytoplankton",
+              "zooplankton"
+            ]
+          }
         }
       ]
     },

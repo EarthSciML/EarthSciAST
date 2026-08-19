@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ERA5_PressureLevels_Fixture",
     "description": "EarthSciData.jl ERA5 pressure-level loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/era5.jl — struct ERA5PressureLevelFileSet (lines 56-200+) and the ERA5_VARIABLES mapping (lines 16-33). Data can be pulled via the Copernicus Climate Data Store API or from pre-downloaded monthly files (file:// mirror). The CDS API request parameters (area box, variable list, pressure levels) are derived from the simulation domain at runtime and are not schema-expressible; this fixture captures the pre-downloaded monthly-file layout with {date:%Y} and {date:%m} substitutions.",
@@ -93,7 +93,7 @@
     "fixture_stub": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

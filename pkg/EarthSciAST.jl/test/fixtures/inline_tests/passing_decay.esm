@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "PassingDecayFixture",
     "description": "Inline-test fixture exercising the run_esm_tests happy path. Single first-order decay model with a known closed-form solution x(t) = x0 * exp(-k*t); assertions sample x at t=0, 50, 100 and should pass cleanly. Used by run_esm_tests_test.jl to verify the runner's PASS path.",
@@ -9,7 +9,7 @@
   "models": {
     "PassingDecay": {
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 1.0 },
+        "x": { "type": "unknown", "units": "1", "default": 1.0 },
         "k": { "type": "parameter", "units": "1/s", "default": 0.01 }
       },
       "equations": [

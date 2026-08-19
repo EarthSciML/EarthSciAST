@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MassActionSubstrateCancellation",
     "description": "Cross-binding conformance fixture (esm-06a): mass-action lowering must apply the substrate product to EVERY reaction per esm-spec.md §7.4, even when the rate field references a substrate (cancellation form). Old behavior in Python+Julia+Rust used a detect-and-skip heuristic that returned `k/A` unchanged, producing dynamics independent of B and yielding NaN at A=0 (the geoschem_fullchem R12 pathology). This fixture asserts the spec-conformant analytic trajectory; binding bindings whose runner still implements the heuristic will fail it.",

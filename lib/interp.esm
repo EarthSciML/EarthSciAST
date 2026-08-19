@@ -1,11 +1,18 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Interp",
     "description": "Standard-library interpolation subsystem. Demonstrates the canonical AST recipe for 1-D linear and 2-D bilinear interpolation built from `interp.searchsorted` (esm-spec.md §9.2) + the `index` op (§4.3.3) + arithmetic. The closed registry deliberately ships *only* `searchsorted`; this file is the reference composition and a copy-paste template — it is not an exhaustive `linear_interp_1d(x, xs, ys)` 'function' (the spec has no closed function over inline-array arguments). To use, copy the variable definitions into the consuming subsystem and replace the inline `xs`/`ys`/`table` const arrays with the caller's data. See docs/standard_library.md for the design rationale.",
-    "authors": ["EarthSciML"],
+    "authors": [
+      "EarthSciML"
+    ],
     "created": "2026-04-25T00:00:00Z",
-    "tags": ["standard-library", "interpolation", "searchsorted", "closed-function-registry"],
+    "tags": [
+      "standard-library",
+      "interpolation",
+      "searchsorted",
+      "closed-function-registry"
+    ],
     "references": [
       {
         "citation": "esm-spec.md §9.2 (interp.searchsorted closed function); §4.3.3 (index op)."
@@ -22,27 +29,58 @@
           "description": "1-D query point. Replace at composition time with the caller's value."
         },
         "y_linear": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "1-D linear interpolation of the inline table (xs = 0,0.25,0.5,0.75,1.0; ys = 0,1,4,9,16) at `x`. Recipe: `i_raw = searchsorted(xs, x); i = min(N, max(2, i_raw)); t = clamp((x - xs[i-1])/(xs[i] - xs[i-1]), 0, 1); y = ys[i-1] + t*(ys[i] - ys[i-1])`. The clamp on `t` provides constant-value extrapolation outside [xs[1], xs[N]] (matching the spec's recommended boundary behavior; see esm-spec.md §9.2 note on `searchsorted` out-of-range queries).",
-          "expression": {
+          "description": "1-D linear interpolation of the inline table (xs = 0,0.25,0.5,0.75,1.0; ys = 0,1,4,9,16) at `x`. Recipe: `i_raw = searchsorted(xs, x); i = min(N, max(2, i_raw)); t = clamp((x - xs[i-1])/(xs[i] - xs[i-1]), 0, 1); y = ys[i-1] + t*(ys[i] - ys[i-1])`. The clamp on `t` provides constant-value extrapolation outside [xs[1], xs[N]] (matching the spec's recommended boundary behavior; see esm-spec.md §9.2 note on `searchsorted` out-of-range queries)."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y_linear",
+          "rhs": {
             "op": "+",
             "args": [
               {
                 "op": "index",
                 "args": [
-                  { "op": "const", "args": [], "value": [0.0, 1.0, 4.0, 9.0, 16.0] },
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      0.0,
+                      1.0,
+                      4.0,
+                      9.0,
+                      16.0
+                    ]
+                  },
                   {
                     "op": "-",
                     "args": [
-                      { "op": "min", "args": [
+                      {
+                        "op": "min",
+                        "args": [
                           5,
-                          { "op": "max", "args": [
+                          {
+                            "op": "max",
+                            "args": [
                               2,
-                              { "op": "fn", "name": "interp.searchsorted",
+                              {
+                                "op": "fn",
+                                "name": "interp.searchsorted",
                                 "args": [
                                   "x",
-                                  { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] }
+                                  {
+                                    "op": "const",
+                                    "args": [],
+                                    "value": [
+                                      0.0,
+                                      0.25,
+                                      0.5,
+                                      0.75,
+                                      1.0
+                                    ]
+                                  }
                                 ]
                               }
                             ]
@@ -58,9 +96,12 @@
                 "op": "*",
                 "args": [
                   {
-                    "op": "min", "args": [
+                    "op": "min",
+                    "args": [
                       1.0,
-                      { "op": "max", "args": [
+                      {
+                        "op": "max",
+                        "args": [
                           0.0,
                           {
                             "op": "/",
@@ -72,18 +113,44 @@
                                   {
                                     "op": "index",
                                     "args": [
-                                      { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] },
+                                      {
+                                        "op": "const",
+                                        "args": [],
+                                        "value": [
+                                          0.0,
+                                          0.25,
+                                          0.5,
+                                          0.75,
+                                          1.0
+                                        ]
+                                      },
                                       {
                                         "op": "-",
                                         "args": [
-                                          { "op": "min", "args": [
+                                          {
+                                            "op": "min",
+                                            "args": [
                                               5,
-                                              { "op": "max", "args": [
+                                              {
+                                                "op": "max",
+                                                "args": [
                                                   2,
-                                                  { "op": "fn", "name": "interp.searchsorted",
+                                                  {
+                                                    "op": "fn",
+                                                    "name": "interp.searchsorted",
                                                     "args": [
                                                       "x",
-                                                      { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] }
+                                                      {
+                                                        "op": "const",
+                                                        "args": [],
+                                                        "value": [
+                                                          0.0,
+                                                          0.25,
+                                                          0.5,
+                                                          0.75,
+                                                          1.0
+                                                        ]
+                                                      }
                                                     ]
                                                   }
                                                 ]
@@ -103,15 +170,41 @@
                                   {
                                     "op": "index",
                                     "args": [
-                                      { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] },
-                                      { "op": "min", "args": [
+                                      {
+                                        "op": "const",
+                                        "args": [],
+                                        "value": [
+                                          0.0,
+                                          0.25,
+                                          0.5,
+                                          0.75,
+                                          1.0
+                                        ]
+                                      },
+                                      {
+                                        "op": "min",
+                                        "args": [
                                           5,
-                                          { "op": "max", "args": [
+                                          {
+                                            "op": "max",
+                                            "args": [
                                               2,
-                                              { "op": "fn", "name": "interp.searchsorted",
+                                              {
+                                                "op": "fn",
+                                                "name": "interp.searchsorted",
                                                 "args": [
                                                   "x",
-                                                  { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] }
+                                                  {
+                                                    "op": "const",
+                                                    "args": [],
+                                                    "value": [
+                                                      0.0,
+                                                      0.25,
+                                                      0.5,
+                                                      0.75,
+                                                      1.0
+                                                    ]
+                                                  }
                                                 ]
                                               }
                                             ]
@@ -123,18 +216,44 @@
                                   {
                                     "op": "index",
                                     "args": [
-                                      { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] },
+                                      {
+                                        "op": "const",
+                                        "args": [],
+                                        "value": [
+                                          0.0,
+                                          0.25,
+                                          0.5,
+                                          0.75,
+                                          1.0
+                                        ]
+                                      },
                                       {
                                         "op": "-",
                                         "args": [
-                                          { "op": "min", "args": [
+                                          {
+                                            "op": "min",
+                                            "args": [
                                               5,
-                                              { "op": "max", "args": [
+                                              {
+                                                "op": "max",
+                                                "args": [
                                                   2,
-                                                  { "op": "fn", "name": "interp.searchsorted",
+                                                  {
+                                                    "op": "fn",
+                                                    "name": "interp.searchsorted",
                                                     "args": [
                                                       "x",
-                                                      { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] }
+                                                      {
+                                                        "op": "const",
+                                                        "args": [],
+                                                        "value": [
+                                                          0.0,
+                                                          0.25,
+                                                          0.5,
+                                                          0.75,
+                                                          1.0
+                                                        ]
+                                                      }
                                                     ]
                                                   }
                                                 ]
@@ -160,15 +279,41 @@
                       {
                         "op": "index",
                         "args": [
-                          { "op": "const", "args": [], "value": [0.0, 1.0, 4.0, 9.0, 16.0] },
-                          { "op": "min", "args": [
+                          {
+                            "op": "const",
+                            "args": [],
+                            "value": [
+                              0.0,
+                              1.0,
+                              4.0,
+                              9.0,
+                              16.0
+                            ]
+                          },
+                          {
+                            "op": "min",
+                            "args": [
                               5,
-                              { "op": "max", "args": [
+                              {
+                                "op": "max",
+                                "args": [
                                   2,
-                                  { "op": "fn", "name": "interp.searchsorted",
+                                  {
+                                    "op": "fn",
+                                    "name": "interp.searchsorted",
                                     "args": [
                                       "x",
-                                      { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] }
+                                      {
+                                        "op": "const",
+                                        "args": [],
+                                        "value": [
+                                          0.0,
+                                          0.25,
+                                          0.5,
+                                          0.75,
+                                          1.0
+                                        ]
+                                      }
                                     ]
                                   }
                                 ]
@@ -180,18 +325,44 @@
                       {
                         "op": "index",
                         "args": [
-                          { "op": "const", "args": [], "value": [0.0, 1.0, 4.0, 9.0, 16.0] },
+                          {
+                            "op": "const",
+                            "args": [],
+                            "value": [
+                              0.0,
+                              1.0,
+                              4.0,
+                              9.0,
+                              16.0
+                            ]
+                          },
                           {
                             "op": "-",
                             "args": [
-                              { "op": "min", "args": [
+                              {
+                                "op": "min",
+                                "args": [
                                   5,
-                                  { "op": "max", "args": [
+                                  {
+                                    "op": "max",
+                                    "args": [
                                       2,
-                                      { "op": "fn", "name": "interp.searchsorted",
+                                      {
+                                        "op": "fn",
+                                        "name": "interp.searchsorted",
                                         "args": [
                                           "x",
-                                          { "op": "const", "args": [], "value": [0.0, 0.25, 0.5, 0.75, 1.0] }
+                                          {
+                                            "op": "const",
+                                            "args": [],
+                                            "value": [
+                                              0.0,
+                                              0.25,
+                                              0.5,
+                                              0.75,
+                                              1.0
+                                            ]
+                                          }
                                         ]
                                       }
                                     ]
@@ -210,8 +381,7 @@
             ]
           }
         }
-      },
-      "equations": []
+      ]
     }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventSystemEdgeCases",
     "description": "Edge case test fixtures for advanced event system behaviors",
@@ -12,19 +12,19 @@
     "EventOrderingSystem": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Primary variable"
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 2.0,
           "description": "Secondary variable"
         },
         "z": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Tertiary variable"
@@ -255,19 +255,19 @@
     "BoundaryConditionSystem": {
       "variables": {
         "position": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1e-15,
           "description": "Near-zero position"
         },
         "velocity": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": -1e-10,
           "description": "Very small velocity"
         },
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 273.15000001,
           "description": "Temperature near freezing"
@@ -470,7 +470,7 @@
     "VariableScopingSystem": {
       "variables": {
         "local_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Local state variable"
@@ -482,15 +482,8 @@
           "description": "Parameter shared across systems"
         },
         "observed_value": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "expression": {
-            "op": "*",
-            "args": [
-              "local_var",
-              "shared_param"
-            ]
-          },
           "description": "Observed variable for testing scoped access"
         }
       },
@@ -525,6 +518,16 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "observed_value",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "local_var",
+              "shared_param"
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -587,7 +590,7 @@
     "DiscreteParameterChainSystem": {
       "variables": {
         "state_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "State variable"
@@ -784,13 +787,13 @@
     "FunctionalAffectEdgeCases": {
       "variables": {
         "input_signal": {
-          "type": "state",
+          "type": "unknown",
           "units": "V",
           "default": 0.0,
           "description": "Input signal"
         },
         "output_signal": {
-          "type": "state",
+          "type": "unknown",
           "units": "V",
           "default": 0.0,
           "description": "Output signal"

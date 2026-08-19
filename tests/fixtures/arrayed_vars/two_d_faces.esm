@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TwoDFaces",
     "description": "Arrayed-variable schema (RFC §10.2): a 2-D cell-centered pressure and an x_face-staggered velocity on the same (x, y) domain.",
@@ -17,7 +17,7 @@
     "StaggeredFlow2D": {
       "variables": {
         "p": {
-          "type": "state",
+          "type": "unknown",
           "units": "Pa",
           "default": 0.0,
           "description": "Pressure on cell centers",
@@ -28,7 +28,7 @@
           "location": "cell_center"
         },
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "x-component of velocity on x-normal faces",

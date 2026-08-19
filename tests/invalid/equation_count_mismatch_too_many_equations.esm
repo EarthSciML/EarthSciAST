@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TooManyEquations",
     "description": "More equations than state variables - variation 2"
@@ -7,7 +7,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0 },
+        "x": { "type": "unknown", "units": "m", "default": 0.0 },
         "k": { "type": "parameter", "units": "1/s", "default": 0.1 }
       },
       "equations": [

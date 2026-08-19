@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventsContinuousAffectNeg",
     "description": "Test fixture for continuous events with affect_neg - Bouncing ball with energy loss on ground collision",
@@ -23,13 +23,13 @@
       },
       "variables": {
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 10.0,
           "description": "Ball height above ground"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Ball vertical velocity (positive upward)"
@@ -123,13 +123,13 @@
       },
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Position from equilibrium"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity"
@@ -293,7 +293,7 @@
       },
       "variables": {
         "P": {
-          "type": "state",
+          "type": "unknown",
           "units": "individuals",
           "default": 100.0,
           "description": "Population size"

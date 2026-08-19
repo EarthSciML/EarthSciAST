@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "PdeInlineAssertionsExec",
     "description": "Executable shared fixture for the SS 6.6.5 inline-assertion runner (run_pde_tests) consumed by the Julia, Python, and Rust binding test suites on identical input. A lifted field decay model du_i/dt = -u_i over x (interval, size 8) seeded by the coordinate expression ic(u) = cos(pi x_i) with x_i = (i - 1/2)/8; exact solution e^{-t} cos(pi x_i). The assertions pin the three cross-binding conventions: (1) coords values are positions in 1-based INDEX space (fractional allowed) with nearest-index sampling and exact half-way ties rounding DOWN (x: 3.5 samples cell 3; x: 5.6 samples cell 6); (2) reduce: integral is the uniform-cell Riemann sum under a UNIT total domain measure per axis (sum(field)/N = mean; the symmetric cosine field integrates to zero); (3) from_file references resolve relative to this file's directory, default (and only) v1 format json, a row-major nested array matching the field's shape (pde_inline_assertions_reference.json holds the exact t=0 field).",
@@ -24,7 +24,7 @@
     "M": {
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "x"

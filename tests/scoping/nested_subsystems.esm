@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NestedSubsystemTests",
     "description": "Test hierarchical subsystem nesting and scoped reference resolution\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -83,19 +83,19 @@
             "FastChem": {
               "variables": {
                 "O3": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mol/mol",
                   "default": 4e-08,
                   "description": "Ozone"
                 },
                 "NO": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mol/mol",
                   "default": 1e-10,
                   "description": "NO"
                 },
                 "NO2": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mol/mol",
                   "default": 1e-09,
                   "description": "NO2"
@@ -174,13 +174,13 @@
             "SlowChem": {
               "variables": {
                 "CH4": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mol/mol",
                   "default": 1.8e-06,
                   "description": "Methane"
                 },
                 "OH": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mol/mol",
                   "default": 1e-12,
                   "description": "OH radical"
@@ -292,7 +292,7 @@
     "Ocean": {
       "variables": {
         "sea_surface_temp": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288,
           "description": "SST"

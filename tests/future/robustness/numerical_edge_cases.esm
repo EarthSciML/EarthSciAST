@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NumericalEdgeCases",
     "description": "Test numerical edge cases including overflow, underflow, NaN, and Inf",
@@ -8,8 +8,8 @@
   "models": {
     "NumericalModel": {
       "variables": {
-        "overflow_test": { "type": "state", "units": "1", "default": 1.7976931348623157e+308 },
-        "underflow_test": { "type": "state", "units": "1", "default": 5e-324 },
+        "overflow_test": { "type": "unknown", "units": "1", "default": 1.7976931348623157e+308 },
+        "underflow_test": { "type": "unknown", "units": "1", "default": 5e-324 },
         "nan_test": { "type": "parameter", "units": "1", "default": "NaN" },
         "inf_test": { "type": "parameter", "units": "1", "default": "Infinity" },
         "neg_inf_test": { "type": "parameter", "units": "1", "default": "-Infinity" },

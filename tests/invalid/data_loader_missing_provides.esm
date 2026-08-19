@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DataLoaderMissingVariables",
     "description": "Test case: data loader missing required 'variables' field",
@@ -16,7 +16,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 1.0 }
+        "x": { "type": "unknown", "units": "1", "default": 1.0 }
       },
       "equations": [
         {

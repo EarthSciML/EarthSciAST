@@ -1,5 +1,5 @@
 {
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "coupled_refresh_regrid",
     "description": "Shared offline fixture for the cross-language REFRESH-PATH conformance (CONFORMANCE_SPEC.md §5.10). A discretized, COUPLED, non-PDE model whose forcing is read from data loaders at a discrete cadence and REGRIDDED from the loader's coarse 6-cell native grid onto the 3-cell simulation grid — IN-MODEL, as a coupling expression, not through a regrid seam. The 2:1 area-weighted coarsening is a const weight matrix `W[i,j]` (an in-file `const` observed): `F_tgt[j] = sum_i W[i,j]*F_src[i]`, `scale_tgt[j] = sum_i W[i,j]*scale_src[i]`. `F_src` is DISCRETE — its loader `emis` declares a `temporal` block, so it refreshes at the hourly cadence anchors and the regridded `F_tgt` is a DISCRETE-materialized field (state-free but forcing-tainted). `scale_src` is CONST — its loader `factors` has no `temporal`, so it materializes once and the regridded `scale_tgt` is CONST-cadence. The coupled states integrate the regridded forcing: `D(c[j]) = scale_tgt[j]*F_tgt[j]` (the forced tracer) and `D(d[j]) = c[j]` (a dependent variable integrating the tracer across the cadence). The forcing is piecewise-constant across the cadence segments, so the regridded arrays and the integrated trajectory are closed-form and checkable to solver tolerance — the analytic golden lives in golden/coupled_refresh_regrid.json. TWO-VIEW contract (RFC pure-io-data-loaders §4.6): the loader-fed `F_src`/`scale_src` are declared `discrete`+`data_ingest` here so the cadence classifier resolves them CONST/DISCRETE, but the typed array-simulate compiler has no Discrete VariableType — a consumer STRIPS the loader-fed discrete declarations before compiling the RHS, where `F_src`/`scale_src` then resolve through the forcing buffer refreshed at each cadence anchor. There is NO regrid seam / RegridApplier (removed as obsolete in v0.8.0): regridding is an ordinary in-model coupling contraction over the native forcing.",
@@ -57,84 +57,65 @@
     "M": {
       "variables": {
         "W": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "shape": ["src_cells", "tgt_cells"],
-          "description": "Const conservative-regrid weight matrix W[i,j] (i=1..6 native source cells, j=1..3 sim target cells): the 2:1 area-weighted coarsening. Each target cell j averages its two source cells (W=0.5), so W is the in-model realization of the native->sim regrid. A build-once const observed.",
-          "expression": {
-            "op": "const",
-            "args": [],
-            "value": [
-              [0.5, 0.0, 0.0],
-              [0.5, 0.0, 0.0],
-              [0.0, 0.5, 0.0],
-              [0.0, 0.5, 0.0],
-              [0.0, 0.0, 0.5],
-              [0.0, 0.0, 0.5]
-            ]
-          }
+          "shape": [
+            "src_cells",
+            "tgt_cells"
+          ],
+          "description": "Const conservative-regrid weight matrix W[i,j] (i=1..6 native source cells, j=1..3 sim target cells): the 2:1 area-weighted coarsening. Each target cell j averages its two source cells (W=0.5), so W is the in-model realization of the native->sim regrid. A build-once const observed."
         },
         "F_src": {
           "type": "discrete",
-          "shape": ["src_cells"],
-          "refresh": { "kind": "data_ingest", "source": "emis" },
+          "shape": [
+            "src_cells"
+          ],
+          "refresh": {
+            "kind": "data_ingest",
+            "source": "emis"
+          },
           "description": "Loader-fed source read from the `emis` DataLoader (WITH temporal): DISCRETE cadence, refreshed at each hourly anchor on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
         },
         "scale_src": {
           "type": "discrete",
-          "shape": ["src_cells"],
-          "refresh": { "kind": "data_ingest", "source": "factors" },
+          "shape": [
+            "src_cells"
+          ],
+          "refresh": {
+            "kind": "data_ingest",
+            "source": "factors"
+          },
           "description": "Loader-fed scale factor read from the `factors` DataLoader (NO temporal): CONST cadence, materialized once on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
         },
         "F_tgt": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg/s",
-          "shape": ["tgt_cells"],
-          "description": "In-model regridded source on the 3-cell sim grid: F_tgt[j] = sum_i W[i,j]*F_src[i]. State-free but DISCRETE-forcing-tainted (reads F_src), so it materializes once per cadence refresh — the in-model regrid is the DISCRETE-materialized field.",
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": ["j"],
-            "ranges": { "i": [1, 6], "j": [1, 3] },
-            "args": [],
-            "expr": {
-              "op": "*",
-              "args": [
-                { "op": "index", "args": ["W", "i", "j"] },
-                { "op": "index", "args": ["F_src", "i"] }
-              ]
-            }
-          }
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "In-model regridded source on the 3-cell sim grid: F_tgt[j] = sum_i W[i,j]*F_src[i]. State-free but DISCRETE-forcing-tainted (reads F_src), so it materializes once per cadence refresh — the in-model regrid is the DISCRETE-materialized field."
         },
         "scale_tgt": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "shape": ["tgt_cells"],
-          "description": "In-model regridded scale on the 3-cell sim grid: scale_tgt[j] = sum_i W[i,j]*scale_src[i]. Reads only const W and the CONST loader scale_src, so it is CONST-cadence (materialized once).",
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": ["j"],
-            "ranges": { "i": [1, 6], "j": [1, 3] },
-            "args": [],
-            "expr": {
-              "op": "*",
-              "args": [
-                { "op": "index", "args": ["W", "i", "j"] },
-                { "op": "index", "args": ["scale_src", "i"] }
-              ]
-            }
-          }
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "In-model regridded scale on the 3-cell sim grid: scale_tgt[j] = sum_i W[i,j]*scale_src[i]. Reads only const W and the CONST loader scale_src, so it is CONST-cadence (materialized once)."
         },
         "c": {
-          "type": "state",
-          "shape": ["tgt_cells"],
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ],
           "default": 0.0,
           "description": "Integrated tracer concentration on the sim grid — CONTINUOUS cadence (changes every step). D(c[j]) = scale_tgt[j]*F_tgt[j], the regridded forcing."
         },
         "d": {
-          "type": "state",
-          "shape": ["tgt_cells"],
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ],
           "default": 0.0,
           "description": "Integrated coupled tracer — CONTINUOUS. D(d[j]) = c[j]; a dependent variable integrating the forced tracer across the cadence, coupled to c."
         }
@@ -145,24 +126,58 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "ranges": { "j": [1, 3] },
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["c", "j"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "j"
+                  ]
+                }
+              ],
               "wrt": "t"
             }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "ranges": { "j": [1, 3] },
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
             "expr": {
               "op": "*",
               "args": [
-                { "op": "index", "args": ["scale_tgt", "j"] },
-                { "op": "index", "args": ["F_tgt", "j"] }
+                {
+                  "op": "index",
+                  "args": [
+                    "scale_tgt",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "F_tgt",
+                    "j"
+                  ]
+                }
               ]
             }
           }
@@ -172,20 +187,169 @@
           "lhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "ranges": { "j": [1, 3] },
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
             "expr": {
               "op": "D",
-              "args": [{ "op": "index", "args": ["d", "j"] }],
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "d",
+                    "j"
+                  ]
+                }
+              ],
               "wrt": "t"
             }
           },
           "rhs": {
             "op": "aggregate",
             "args": [],
-            "output_idx": ["j"],
-            "ranges": { "j": [1, 3] },
-            "expr": { "op": "index", "args": ["c", "j"] }
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "c",
+                "j"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "W",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [
+              [
+                0.5,
+                0.0,
+                0.0
+              ],
+              [
+                0.5,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.5,
+                0.0
+              ],
+              [
+                0.0,
+                0.5,
+                0.0
+              ],
+              [
+                0.0,
+                0.0,
+                0.5
+              ],
+              [
+                0.0,
+                0.0,
+                0.5
+              ]
+            ]
+          }
+        },
+        {
+          "lhs": "F_tgt",
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ],
+              "j": [
+                1,
+                3
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "W",
+                    "i",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "F_src",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "scale_tgt",
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                6
+              ],
+              "j": [
+                1,
+                3
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "W",
+                    "i",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "scale_src",
+                    "i"
+                  ]
+                }
+              ]
+            }
           }
         }
       ]

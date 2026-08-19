@@ -1,5 +1,5 @@
 {
-  "esm": "0.5.0",
+  "esm": "1.0.0",
   "kind": "grid_discretization_descriptor",
   "metadata": {
     "name": "cartesian_1d_n8_periodic",

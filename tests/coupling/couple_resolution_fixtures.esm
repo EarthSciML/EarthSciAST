@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CoupleResolutionFixtures",
     "description": "Test fixtures for couple coupling resolution algorithm (Section 4.7.2)",
@@ -12,13 +12,13 @@
     "FluidDynamics": {
       "variables": {
         "velocity": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 1.0,
           "description": "Flow velocity"
         },
         "pressure": {
-          "type": "state",
+          "type": "unknown",
           "units": "Pa",
           "default": 101325.0,
           "description": "Fluid pressure"
@@ -92,13 +92,13 @@
     "HeatTransfer": {
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 300.0,
           "description": "Temperature"
         },
         "heat_flux": {
-          "type": "state",
+          "type": "unknown",
           "units": "W/m^2",
           "default": 0.0,
           "description": "Heat flux"
@@ -172,13 +172,13 @@
     "MassTransfer": {
       "variables": {
         "concentration": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^3",
           "default": 1.0,
           "description": "Species concentration"
         },
         "mass_flux": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2/s",
           "default": 0.0,
           "description": "Mass flux"

@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": { "name": "grid_latlon", "description": "Uniform lon-lat grid, NLON x NLAT" },
   "metaparameters": {
     "NLON": { "type": "integer", "default": 144 },

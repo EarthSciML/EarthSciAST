@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsDimensionalAnalysis",
     "description": "Test fixtures for dimensional analysis in physics and chemistry equations",
@@ -28,7 +28,7 @@
           "description": "Mass"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 5.0,
           "description": "Velocity"
@@ -46,76 +46,30 @@
           "description": "Time"
         },
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Position"
         },
         "F": {
-          "type": "observed",
+          "type": "unknown",
           "units": "N",
-          "description": "Force from Newton's second law",
-          "expression": {
-            "op": "*",
-            "args": [
-              "m",
-              "a"
-            ]
-          }
+          "description": "Force from Newton's second law"
         },
         "p": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg*m/s",
-          "description": "Momentum",
-          "expression": {
-            "op": "*",
-            "args": [
-              "m",
-              "v"
-            ]
-          }
+          "description": "Momentum"
         },
         "E_kinetic": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "description": "Kinetic energy",
-          "expression": {
-            "op": "*",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  0.5,
-                  "m"
-                ]
-              },
-              {
-                "op": "^",
-                "args": [
-                  "v",
-                  2
-                ]
-              }
-            ]
-          }
+          "description": "Kinetic energy"
         },
         "W": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "description": "Work done",
-          "expression": {
-            "op": "*",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "m",
-                  "a"
-                ]
-              },
-              "x"
-            ]
-          }
+          "description": "Work done"
         }
       },
       "equations": [
@@ -138,6 +92,64 @@
             "wrt": "t"
           },
           "rhs": "a"
+        },
+        {
+          "lhs": "F",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "m",
+              "a"
+            ]
+          }
+        },
+        {
+          "lhs": "p",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "m",
+              "v"
+            ]
+          }
+        },
+        {
+          "lhs": "E_kinetic",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "m"
+                ]
+              },
+              {
+                "op": "^",
+                "args": [
+                  "v",
+                  2
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "W",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "m",
+                  "a"
+                ]
+              },
+              "x"
+            ]
+          }
         }
       ],
       "tolerance": {
@@ -203,7 +215,7 @@
           "description": "Gas constant"
         },
         "T": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 298.15,
           "description": "Temperature — the only integrated unknown; P and V are held fixed (constant-volume process, matching Cv)"
@@ -233,10 +245,70 @@
           "description": "Heat capacity at constant volume"
         },
         "U": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "description": "Internal energy",
-          "expression": {
+          "description": "Internal energy"
+        },
+        "H": {
+          "type": "unknown",
+          "units": "J",
+          "description": "Enthalpy"
+        },
+        "S": {
+          "type": "unknown",
+          "units": "J/K",
+          "description": "Entropy (simplified): n*R*log(V/V0) — the logarithm takes the dimensionless volume ratio, not a bare volume"
+        },
+        "G": {
+          "type": "unknown",
+          "units": "J",
+          "description": "Gibbs free energy: U + P*V - T*S, with S = n*R*log(V/V0) taking the dimensionless volume ratio"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "T"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          "P",
+                          "V"
+                        ]
+                      },
+                      {
+                        "op": "*",
+                        "args": [
+                          "n",
+                          "R"
+                        ]
+                      }
+                    ]
+                  },
+                  "T"
+                ]
+              },
+              1.0
+            ]
+          }
+        },
+        {
+          "lhs": "U",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -250,11 +322,9 @@
             ]
           }
         },
-        "H": {
-          "type": "observed",
-          "units": "J",
-          "description": "Enthalpy",
-          "expression": {
+        {
+          "lhs": "H",
+          "rhs": {
             "op": "+",
             "args": [
               {
@@ -280,11 +350,9 @@
             ]
           }
         },
-        "S": {
-          "type": "observed",
-          "units": "J/K",
-          "description": "Entropy (simplified): n*R*log(V/V0) — the logarithm takes the dimensionless volume ratio, not a bare volume",
-          "expression": {
+        {
+          "lhs": "S",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -309,11 +377,9 @@
             ]
           }
         },
-        "G": {
-          "type": "observed",
-          "units": "J",
-          "description": "Gibbs free energy: U + P*V - T*S, with S = n*R*log(V/V0) taking the dimensionless volume ratio",
-          "expression": {
+        {
+          "lhs": "G",
+          "rhs": {
             "op": "-",
             "args": [
               {
@@ -371,48 +437,6 @@
                   }
                 ]
               }
-            ]
-          }
-        }
-      },
-      "equations": [
-        {
-          "lhs": {
-            "op": "D",
-            "args": [
-              "T"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "/",
-            "args": [
-              {
-                "op": "-",
-                "args": [
-                  {
-                    "op": "/",
-                    "args": [
-                      {
-                        "op": "*",
-                        "args": [
-                          "P",
-                          "V"
-                        ]
-                      },
-                      {
-                        "op": "*",
-                        "args": [
-                          "n",
-                          "R"
-                        ]
-                      }
-                    ]
-                  },
-                  "T"
-                ]
-              },
-              1.0
             ]
           }
         }
@@ -501,10 +525,30 @@
           "description": "Speed of light"
         },
         "F_electric": {
-          "type": "observed",
+          "type": "unknown",
           "units": "N",
-          "description": "Electric force",
-          "expression": {
+          "description": "Electric force"
+        },
+        "F_magnetic": {
+          "type": "unknown",
+          "units": "N",
+          "description": "Magnetic force"
+        },
+        "energy_density": {
+          "type": "unknown",
+          "units": "J/m^3",
+          "description": "Electromagnetic energy density"
+        },
+        "cyclotron_freq": {
+          "type": "unknown",
+          "units": "Hz",
+          "description": "Cyclotron frequency"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "F_electric",
+          "rhs": {
             "op": "*",
             "args": [
               "q",
@@ -512,11 +556,9 @@
             ]
           }
         },
-        "F_magnetic": {
-          "type": "observed",
-          "units": "N",
-          "description": "Magnetic force",
-          "expression": {
+        {
+          "lhs": "F_magnetic",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -530,11 +572,9 @@
             ]
           }
         },
-        "energy_density": {
-          "type": "observed",
-          "units": "J/m^3",
-          "description": "Electromagnetic energy density",
-          "expression": {
+        {
+          "lhs": "energy_density",
+          "rhs": {
             "op": "+",
             "args": [
               {
@@ -584,11 +624,9 @@
             ]
           }
         },
-        "cyclotron_freq": {
-          "type": "observed",
-          "units": "Hz",
-          "description": "Cyclotron frequency",
-          "expression": {
+        {
+          "lhs": "cyclotron_freq",
+          "rhs": {
             "op": "/",
             "args": [
               {
@@ -614,8 +652,7 @@
             ]
           }
         }
-      },
-      "equations": [],
+      ],
       "tolerance": {
         "rel": 1e-10
       },
@@ -668,7 +705,7 @@
           "description": "Fluid density"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 2.0,
           "description": "Flow velocity"
@@ -704,10 +741,62 @@
           "description": "Characteristic length"
         },
         "nu": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m^2/s",
-          "description": "Kinematic viscosity",
-          "expression": {
+          "description": "Kinematic viscosity"
+        },
+        "Re": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Reynolds number"
+        },
+        "dynamic_pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Dynamic pressure"
+        },
+        "hydrostatic_pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Hydrostatic pressure"
+        },
+        "total_pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Total pressure (Bernoulli)"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "v"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "grad",
+                    "args": [
+                      "P"
+                    ],
+                    "dim": "x"
+                  }
+                ]
+              },
+              "rho"
+            ]
+          }
+        },
+        {
+          "lhs": "nu",
+          "rhs": {
             "op": "/",
             "args": [
               "mu",
@@ -715,11 +804,9 @@
             ]
           }
         },
-        "Re": {
-          "type": "observed",
-          "units": "1",
-          "description": "Reynolds number",
-          "expression": {
+        {
+          "lhs": "Re",
+          "rhs": {
             "op": "/",
             "args": [
               {
@@ -739,11 +826,9 @@
             ]
           }
         },
-        "dynamic_pressure": {
-          "type": "observed",
-          "units": "Pa",
-          "description": "Dynamic pressure",
-          "expression": {
+        {
+          "lhs": "dynamic_pressure",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -763,11 +848,9 @@
             ]
           }
         },
-        "hydrostatic_pressure": {
-          "type": "observed",
-          "units": "Pa",
-          "description": "Hydrostatic pressure",
-          "expression": {
+        {
+          "lhs": "hydrostatic_pressure",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -781,11 +864,9 @@
             ]
           }
         },
-        "total_pressure": {
-          "type": "observed",
-          "units": "Pa",
-          "description": "Total pressure (Bernoulli)",
-          "expression": {
+        {
+          "lhs": "total_pressure",
+          "rhs": {
             "op": "+",
             "args": [
               "P",
@@ -821,35 +902,6 @@
                   "h"
                 ]
               }
-            ]
-          }
-        }
-      },
-      "equations": [
-        {
-          "lhs": {
-            "op": "D",
-            "args": [
-              "v"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "/",
-            "args": [
-              {
-                "op": "-",
-                "args": [
-                  {
-                    "op": "grad",
-                    "args": [
-                      "P"
-                    ],
-                    "dim": "x"
-                  }
-                ]
-              },
-              "rho"
             ]
           }
         }
@@ -930,19 +982,19 @@
           "description": "Trimolecular rate constant"
         },
         "A": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 1.0,
           "description": "Concentration of species A"
         },
         "B": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 0.5,
           "description": "Concentration of species B"
         },
         "C": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 0.1,
           "description": "Concentration of species C"
@@ -966,92 +1018,24 @@
           "description": "Temperature"
         },
         "rate_unimol": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/(m^3*s)",
-          "description": "Unimolecular reaction rate",
-          "expression": {
-            "op": "*",
-            "args": [
-              "k_unimolecular",
-              "A"
-            ]
-          }
+          "description": "Unimolecular reaction rate"
         },
         "rate_bimol": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/(m^3*s)",
-          "description": "Bimolecular reaction rate",
-          "expression": {
-            "op": "*",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "k_bimolecular",
-                  "A"
-                ]
-              },
-              "B"
-            ]
-          }
+          "description": "Bimolecular reaction rate"
         },
         "rate_trimol": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/(m^3*s)",
-          "description": "Trimolecular reaction rate",
-          "expression": {
-            "op": "*",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "k_trimolecular",
-                  "A"
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  "B",
-                  "C"
-                ]
-              }
-            ]
-          }
+          "description": "Trimolecular reaction rate"
         },
         "arrhenius_rate": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1/s",
-          "description": "Arrhenius rate constant",
-          "expression": {
-            "op": "*",
-            "args": [
-              "k_unimolecular",
-              {
-                "op": "exp",
-                "args": [
-                  {
-                    "op": "/",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          "Ea"
-                        ]
-                      },
-                      {
-                        "op": "*",
-                        "args": [
-                          "R",
-                          "T"
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
+          "description": "Arrhenius rate constant"
         }
       },
       "equations": [
@@ -1122,6 +1106,86 @@
                 ]
               },
               "B"
+            ]
+          }
+        },
+        {
+          "lhs": "rate_unimol",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k_unimolecular",
+              "A"
+            ]
+          }
+        },
+        {
+          "lhs": "rate_bimol",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k_bimolecular",
+                  "A"
+                ]
+              },
+              "B"
+            ]
+          }
+        },
+        {
+          "lhs": "rate_trimol",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k_trimolecular",
+                  "A"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "B",
+                  "C"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "arrhenius_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k_unimolecular",
+              {
+                "op": "exp",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "Ea"
+                        ]
+                      },
+                      {
+                        "op": "*",
+                        "args": [
+                          "R",
+                          "T"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
             ]
           }
         }

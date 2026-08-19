@@ -1,6 +1,6 @@
 {
   "_comment": "CEDS (Community Emissions Data System) fixture. Expresses an instantiation of EarthSciData.jl CEDSFileSet with species='SO2'. Source: EarthSciData.jl src/ceds.jl (struct CEDSFileSet at lines 59-151, relpath at lines 159-167). The url_template encodes the chunked path grammar 'input4MIPs/CMIP7/CMIP/PNNL-JGCRI/{version}/atmos/mon/{species}_em_anthro/gn/{data_version}/{species}-em-anthro_..._{Y1}01-{Y2}12.nc'. Sectors are aggregated at runtime (sum or filter) and per-species files are accessed by substituting {species}.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CEDSFixture",
     "description": "CEDS CMIP anthropogenic emissions (0.5deg global, SO2 species, all sectors) in the STAC-like DataLoader schema.",
@@ -59,7 +59,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

@@ -1,18 +1,52 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "template_import_minimal",
     "description": "Minimal consuming model for template_import_lib.esm (esm-spec 9.7.2): the imported match rule lowers scale_by_n(x) to x * 8 at load, and the library's cells index set (size N = 8 by default) merges into this document's registry (9.7.5)."
   },
   "models": {
     "M": {
-      "expression_template_imports": [ { "ref": "./template_import_lib.esm" } ],
+      "expression_template_imports": [
+        {
+          "ref": "./template_import_lib.esm"
+        }
+      ],
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 1.0 },
-        "y": { "type": "observed", "units": "1", "expression": { "op": "scale_by_n", "args": ["x"] } }
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
       },
       "equations": [
-        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "-", "args": ["x"] } }
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "scale_by_n",
+            "args": [
+              "x"
+            ]
+          }
+        }
       ]
     }
   }

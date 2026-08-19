@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MultipleErrorsCombined",
     "description": "File with multiple different structural error types"
@@ -7,14 +7,37 @@
   "models": {
     "BadModel": {
       "variables": {
-        "x": { "type": "state", "units": "mol", "default": 1.0 },
-        "y": { "type": "state", "units": "mol", "default": 2.0 },
-        "observed_without_expr": { "type": "observed", "units": "mol" }
+        "x": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 2.0
+        },
+        "observed_without_expr": {
+          "type": "unknown",
+          "units": "mol"
+        }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "*", "args": ["undefined_rate", "x"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "undefined_rate",
+              "x"
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -34,7 +57,10 @@
   "reaction_systems": {
     "BadReactions": {
       "species": {
-        "A": { "units": "mol/mol", "default": 1e-9 }
+        "A": {
+          "units": "mol/mol",
+          "default": 1e-09
+        }
       },
       "parameters": {},
       "reactions": [
@@ -46,8 +72,12 @@
         },
         {
           "id": "undefined_species_reaction",
-          "substrates": { "A": 1 },
-          "products": { "UndefinedProduct": 1 },
+          "substrates": {
+            "A": 1
+          },
+          "products": {
+            "UndefinedProduct": 1
+          },
           "rate": "also_missing_param"
         }
       ]

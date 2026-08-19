@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MissingObservedExprSingle",
     "description": "Single observed variable missing expression"
@@ -7,13 +7,32 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "mol", "default": 1.0 },
-        "total": { "type": "observed", "units": "mol" }
+        "x": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0
+        },
+        "total": {
+          "type": "unknown",
+          "units": "mol"
+        }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [-0.1, "x"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
         }
       ]
     }

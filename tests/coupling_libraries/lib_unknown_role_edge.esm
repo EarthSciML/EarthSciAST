@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "IllegalLibraryUnknownRoleEdge",
     "description": "INVALID coupling library: an edge's top-level system segment ('Ghost') is not a declared role (esm-spec 10.9, role-scoped resolution). Expected: coupling_edge_unknown_role."

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DataLoadersComprehensive",
     "description": "Comprehensive test fixtures for data loader types, validation, and configuration",
@@ -195,13 +195,13 @@
     "SimpleChemistry": {
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 5e-08,
           "description": "Ozone concentration"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-08,
           "description": "NO concentration"

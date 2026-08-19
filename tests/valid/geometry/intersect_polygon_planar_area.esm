@@ -1,5 +1,5 @@
 {
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "intersect_polygon_planar_area",
     "description": "M4 conservative-regridding geometry kernel — the EVALUABLE planar companion to intersect_polygon_clip_area (RFC semiring-faq-unified-ir §8.1 / Appendix B; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.4, the Python kernel). The `intersect_polygon` LEAF clips two lon-lat polygon rings under a declared `manifold` and returns the overlap vertex ring of DATA-DEPENDENT length; the ring rides the value-invention machinery as a kind:\"derived\" index set named by the clip node's `id` (from_faq). `polygon_area` is NOT a new op — it is an ORDINARY sum_product FAQ over that ring. Here the body is the REAL planar shoelace / Gauss–Green integrand `0.5·Σ_v (x_v·y_{v+1} − x_{v+1}·y_v)` over the closed clip ring (the evaluator returns the ring closed, so the wrap edge is an ordinary v+1 lookup). The two source/target cells are unit-aligned squares overlapping in the [1,2]×[1,2] box, so the planar overlap area is exactly 1.0. The `planar` manifold is dependency-free (numpy Sutherland–Hodgman); the `spherical`/`geodesic` manifolds delegate the clip to the pinned optional `spherely` (S2). The Python evaluator (ess-my4.4.4) evaluates this fixture's clip + area-FAQ directly; cross-binding area agreement is tolerance-based (§5.8.2 / B.5).",
@@ -57,13 +57,46 @@
           "description": "Target cell as a closed CCW lon-lat vertex ring: the square (1,1)-(3,1)-(3,3)-(1,3). The `poly_b` operand of the clip."
         },
         "clip": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "clip_ring",
             "coord"
           ],
-          "description": "The clipped overlap ring A ∩ B = the unit square (1,1)-(2,1)-(2,2)-(1,2), of data-dependent length: the `intersect_polygon` leaf output. Its vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\").",
-          "expression": {
+          "description": "The clipped overlap ring A ∩ B = the unit square (1,1)-(2,1)-(2,2)-(1,2), of data-dependent length: the `intersect_polygon` leaf output. Its vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\")."
+        },
+        "area": {
+          "type": "unknown",
+          "shape": [],
+          "description": "Overlap area A_ij = polygon_area(clip) = 1.0: an ORDINARY sum_product FAQ over the clipped ring (NOT a new op). Body is the planar shoelace cross-term 0.5·(x_v·y_{v+1} − x_{v+1}·y_v) summed over the closed ring's edges v ∈ clip_ring."
+        },
+        "tracer": {
+          "type": "unknown",
+          "shape": [],
+          "description": "A scalar tracer whose decay rate is weighted by the overlap area — makes this a well-formed ODE system that consumes the geometry FAQ."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Well-formed ODE that uses the area FAQ: d(tracer)/dt = -area·tracer.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "tracer"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "area",
+              "tracer"
+            ]
+          }
+        },
+        {
+          "lhs": "clip",
+          "rhs": {
             "op": "intersect_polygon",
             "id": "overlap_clip",
             "manifold": "planar",
@@ -73,11 +106,9 @@
             ]
           }
         },
-        "area": {
-          "type": "observed",
-          "shape": [],
-          "description": "Overlap area A_ij = polygon_area(clip) = 1.0: an ORDINARY sum_product FAQ over the clipped ring (NOT a new op). Body is the planar shoelace cross-term 0.5·(x_v·y_{v+1} − x_{v+1}·y_v) summed over the closed ring's edges v ∈ clip_ring.",
-          "expression": {
+        {
+          "lhs": "area",
+          "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
             "output_idx": [],
@@ -154,31 +185,6 @@
                 }
               ]
             }
-          }
-        },
-        "tracer": {
-          "type": "state",
-          "shape": [],
-          "description": "A scalar tracer whose decay rate is weighted by the overlap area — makes this a well-formed ODE system that consumes the geometry FAQ."
-        }
-      },
-      "equations": [
-        {
-          "_comment": "Well-formed ODE that uses the area FAQ: d(tracer)/dt = -area·tracer.",
-          "lhs": {
-            "op": "D",
-            "args": [
-              "tracer"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "*",
-            "args": [
-              -1.0,
-              "area",
-              "tracer"
-            ]
           }
         }
       ]

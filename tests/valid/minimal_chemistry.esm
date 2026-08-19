@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MinimalChemAdvection",
     "description": "O3-NO-NO2 chemistry with advection and external meteorology\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",

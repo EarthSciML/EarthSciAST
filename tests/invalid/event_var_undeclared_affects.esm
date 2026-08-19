@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventVarUndeclaredAffects",
     "description": "Discrete event with undefined variable in affects"
@@ -7,7 +7,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "mol", "default": 1.0 },
+        "x": { "type": "unknown", "units": "mol", "default": 1.0 },
         "k": { "type": "parameter", "units": "1/s", "default": 0.1 }
       },
       "equations": [

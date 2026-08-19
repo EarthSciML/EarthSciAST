@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "function_tables_linear_conformance",
     "description": "Single-output 1-axis linear function table — the canonical 1-D blend (esm-spec §9.5.6).",
@@ -19,7 +19,7 @@
   "models": {
     "M": {
       "variables": {
-        "k_O3":  {"type": "state",     "default": 0.0},
+        "k_O3":  {"type": "unknown",     "default": 0.0},
         "lambda":{"type": "parameter", "default": 4.5}
       },
       "equations": [

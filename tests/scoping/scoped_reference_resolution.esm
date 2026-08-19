@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ScopedReferenceResolutionTestFixture",
     "description": "Comprehensive test fixture for hierarchical variable references covering all scoped reference resolution patterns from ESM spec Section 4.3",
@@ -111,7 +111,7 @@
               "description": "Surface pressure"
             },
             "temperature_mean": {
-              "type": "state",
+              "type": "unknown",
               "units": "K",
               "default": 288.15,
               "description": "Mean atmospheric temperature"
@@ -159,19 +159,19 @@
                 "TroposphericChemistry": {
                   "variables": {
                     "O3": {
-                      "type": "state",
+                      "type": "unknown",
                       "units": "mol/mol",
                       "default": 4e-08,
                       "description": "Tropospheric ozone"
                     },
                     "NO": {
-                      "type": "state",
+                      "type": "unknown",
                       "units": "mol/mol",
                       "default": 1e-10,
                       "description": "Nitric oxide"
                     },
                     "NO2": {
-                      "type": "state",
+                      "type": "unknown",
                       "units": "mol/mol",
                       "default": 1e-09,
                       "description": "Nitrogen dioxide"
@@ -250,7 +250,7 @@
                 "StratosphericChemistry": {
                   "variables": {
                     "O3_strat": {
-                      "type": "state",
+                      "type": "unknown",
                       "units": "mol/mol",
                       "default": 8e-06,
                       "description": "Stratospheric ozone"
@@ -352,7 +352,7 @@
           },
           "variables": {
             "sea_surface_temperature": {
-              "type": "state",
+              "type": "unknown",
               "units": "K",
               "default": 285.0,
               "description": "Sea surface temperature"
@@ -397,7 +397,7 @@
       },
       "variables": {
         "carbon_pool": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2",
           "default": 5.0,
           "description": "Total CARBON pool (kilograms of carbon per square metre). The species is named here, not in the unit string: esm-spec §4.8.1 — a unit string carries dimensions only, and 'kg C/m^2' would parse as kg*coulomb/m^2 under whitespace-as-multiplication."

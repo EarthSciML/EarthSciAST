@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ScopedReferenceResolutionErrors",
     "description": "Test fixture containing multiple scoped reference resolution errors that should be caught by validators",
@@ -18,7 +18,7 @@
     "SystemA": {
       "variables": {
         "valid_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Valid variable"
@@ -52,7 +52,7 @@
         "SubsystemB": {
           "variables": {
             "nested_var": {
-              "type": "state",
+              "type": "unknown",
               "units": "kg",
               "default": 2.0,
               "description": "Nested variable"

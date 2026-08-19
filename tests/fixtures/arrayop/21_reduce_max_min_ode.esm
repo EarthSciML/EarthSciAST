@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "arrayop_21_reduce_max_ode",
     "description": "Tests arrayop with reduce=max in the ODE equation path: D(u[i]) = arrayop[i,j reduce=max] body. Two cells converge to max_j(i+2j-2)=i+2. Complements fixture 19 (reduce=+) and fixture 20 (embedded max) by exercising max in the top-level D(u[i])=arrayop... form.",
@@ -24,7 +24,7 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "shape": ["i"]
         }
       },

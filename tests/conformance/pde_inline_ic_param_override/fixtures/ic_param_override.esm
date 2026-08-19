@@ -1,5 +1,5 @@
 {
-    "esm": "0.8.0",
+    "esm": "1.0.0",
     "metadata": {
         "name": "pde_inline_ic_param_override",
         "description": "esm-spec 6.6.5 'Build-time evaluation scope': the model parameters an inline test resolves before the run -- for a coordinate-expression `ic` (11.4.1) and for an analytic assertion `reference` -- are bound to their `parameter_overrides`-or-default values. Parameter `A` (default 1.0) appears ONLY inside `ic(u)` and inside assertion references, nowhere in the equations, so a test that overrides `A` can only change the answer through the build-time scope. State `v` is seeded by the parameter-FREE `ic(v) = cos(pi x)` and serves as the independent anchor the parameter-dependent `reference` is measured against, so a binding that ignored the override in BOTH the ic and the reference cannot cancel out and still pass.",
@@ -35,7 +35,7 @@
                     "description": "Amplitude of the initial profile. Referenced ONLY by ic(u) and by assertion references -- never by an equation."
                 },
                 "u": {
-                    "type": "state",
+                    "type": "unknown",
                     "units": "1",
                     "shape": [
                         "x"
@@ -43,7 +43,7 @@
                     "description": "Seeded by the parameter-dependent coordinate-expression ic A*cos(pi x); held constant by D(u)/dt = 0."
                 },
                 "v": {
-                    "type": "state",
+                    "type": "unknown",
                     "units": "1",
                     "shape": [
                         "x"

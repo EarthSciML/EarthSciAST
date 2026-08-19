@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UndefinedSpeciesTest",
     "description": "Reaction references species not declared in species section",

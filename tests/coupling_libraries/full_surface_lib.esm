@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "FullSurfaceCoupling",
     "description": "A coupling library that exercises EVERY esm-spec 10.10.2 role-occurrence site so expansion is proven to rewrite all of them: a variable_map whose transform is an apply_expression_template with role-scoped bindings VALUES; a couple with a systems array + connector equations (from/to/expression); an operator_compose with a translate map (role-scoped keys AND values); and an event referencing roles in conditions/affects/discrete_parameters. Roles Fuel and Spread are each used at multiple sites (no coupling_role_unused)."

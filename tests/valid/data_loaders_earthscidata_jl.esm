@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DataLoadersEarthSciDataJLCoverage",
     "description": "Expressiveness fixture: demonstrates the STAC-like DataLoader schema can express every data source currently implemented in EarthSciData.jl. Each loader documents the Julia source file + struct it corresponds to in its metadata.description. Hand-constructed from the EarthSciData.jl parameter footprint (no actual data fetched) — see task gt-dba Mayor amendment.",
@@ -242,7 +242,7 @@
     "ExpressivenessWitness": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Placeholder state variable — this model exists only to satisfy the ESM schema requirement that at least one model or reaction_system be present."

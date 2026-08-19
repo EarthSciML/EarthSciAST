@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CallbackExamples",
     "description": "Test fixtures for callback coupling with simulation callbacks",
@@ -15,19 +15,19 @@
       },
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.15,
           "description": "Air temperature"
         },
         "humidity": {
-          "type": "state",
+          "type": "unknown",
           "units": "%",
           "default": 50.0,
           "description": "Relative humidity"
         },
         "wind_speed": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 5.0,
           "description": "Wind speed"
@@ -128,13 +128,13 @@
       },
       "variables": {
         "biomass": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2",
           "default": 0.1,
           "description": "Crop biomass"
         },
         "water_stress": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Water stress index"

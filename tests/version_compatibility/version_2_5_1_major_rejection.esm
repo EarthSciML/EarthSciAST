@@ -1,5 +1,5 @@
 {
-  "esm": "2.5.1",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Version_2_5_1_MajorRejection",
     "description": "Test file with version 2.5.1 - should be rejected by 0.x.x and 1.x.x libraries",

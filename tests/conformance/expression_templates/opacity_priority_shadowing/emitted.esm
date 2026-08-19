@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -30,6 +30,24 @@
             ],
             "op": "-"
           }
+        },
+        {
+          "lhs": "flux",
+          "rhs": {
+            "args": [
+              1,
+              {
+                "args": [],
+                "bindings": {
+                  "u": "U",
+                  "w": "q"
+                },
+                "name": "flux_prod",
+                "op": "apply_expression_template"
+              }
+            ],
+            "op": "*"
+          }
         }
       ],
       "expression_templates": {
@@ -53,26 +71,11 @@
           "shape": [
             "x"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         },
         "flux": {
-          "expression": {
-            "args": [
-              1,
-              {
-                "args": [],
-                "bindings": {
-                  "u": "U",
-                  "w": "q"
-                },
-                "name": "flux_prod",
-                "op": "apply_expression_template"
-              }
-            ],
-            "op": "*"
-          },
-          "type": "observed",
+          "type": "unknown",
           "units": "1"
         },
         "q": {
@@ -80,7 +83,7 @@
           "shape": [
             "x"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         }
       }

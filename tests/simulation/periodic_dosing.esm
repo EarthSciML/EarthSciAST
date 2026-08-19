@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "PeriodicDosingTest",
     "description": "Pharmacokinetic model with periodic drug dosing - discrete event handling test",
@@ -21,7 +21,7 @@
       },
       "variables": {
         "drug_amount": {
-          "type": "state",
+          "type": "unknown",
           "units": "mg",
           "default": 0.0,
           "description": "Amount of drug in system"

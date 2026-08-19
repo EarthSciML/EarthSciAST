@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "LoaderUnitConversion",
     "description": "esm-spec \u00a78.5 `unit_conversion`, executed: \"either a plain multiplicative factor or a full Expression AST (\u00a74); the runtime applies it when producing values in the declared `units`\". One FF10 point loader over a committed four-record fixture, whose variables cover the four cases the runtime must distinguish: a NUMERIC factor (feet -> metres), an OPEN Expression (degF -> K, which \u00a74.8.1 says MUST be an expression because the affine offset is deliberately absent from the dimensional metadata), a CLOSED Expression (no free variable, folding to a constant factor), and NO conversion at all -- the control that pins the no-op property, since a document declaring no conversion must deliver exactly the raw on-disk column. Nothing here is model math: the point is that a document declaring a conversion needs no caller to apply it, and that the three bindings apply it to the same bits. The url_template is a placeholder; each binding's adapter patches it onto the committed CSV next to this file.",

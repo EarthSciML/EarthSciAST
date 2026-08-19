@@ -1,5 +1,5 @@
 {
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "inverse_trig_leaves",
     "description": "Cross-binding conformance fixture (bead ess-9x1) for the four inverse-trigonometric scalar leaf ops acos / asin / atan / atan2. Each state variable integrates a CONSTANT inverse-trig RHS from a zero initial condition, so y(t=1) = rate*1 = rate exactly — no integrator-tolerance dependency and all bindings (Julia tree_walk, Python numpy simulate, Rust simulate) must agree on the same inline `tests[].assertions[].expected`. asin(0.5)=pi/6, acos(0.5)=pi/3, atan(1)=pi/4, and atan2(1,-1)=3pi/4 (second quadrant — this distinguishes the 2-arg atan2 from atan(1/-1)=atan(-1)=-pi/4, exercising the quadrant resolution rather than a bare ratio). These leaves back the spherical-geometry FAQs (great-circle arc = R*acos, lat/lon = asin/atan2) used by M4 polygon_area (ess-my4.4.3) and the ESD-DUO geometry beads.",
@@ -25,10 +25,10 @@
         "abs": 1e-9
       },
       "variables": {
-        "asin_v": { "type": "state", "default": 0.0 },
-        "acos_v": { "type": "state", "default": 0.0 },
-        "atan_v": { "type": "state", "default": 0.0 },
-        "atan2_v": { "type": "state", "default": 0.0 }
+        "asin_v": { "type": "unknown", "default": 0.0 },
+        "acos_v": { "type": "unknown", "default": 0.0 },
+        "atan_v": { "type": "unknown", "default": 0.0 },
+        "atan2_v": { "type": "unknown", "default": 0.0 }
       },
       "equations": [
         {

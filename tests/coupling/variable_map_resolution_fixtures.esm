@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "VariableMapResolutionFixtures",
     "description": "Test fixtures for variable_map coupling resolution algorithm (Section 4.7.3)",
@@ -12,13 +12,13 @@
     "AtmosphericModel": {
       "variables": {
         "ozone": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "description": "Ozone mixing ratio"
         },
         "pressure": {
-          "type": "state",
+          "type": "unknown",
           "units": "Pa",
           "default": 101325.0,
           "description": "Atmospheric pressure"
@@ -107,13 +107,13 @@
     "OceanModel": {
       "variables": {
         "sea_surface_temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 285.0,
           "description": "Sea surface temperature"
         },
         "salinity": {
-          "type": "state",
+          "type": "unknown",
           "units": "psu",
           "default": 35.0,
           "description": "Salinity"
@@ -175,13 +175,13 @@
     "LandModel": {
       "variables": {
         "soil_moisture": {
-          "type": "state",
+          "type": "unknown",
           "units": "m^3/m^3",
           "default": 0.3,
           "description": "Soil moisture"
         },
         "leaf_temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 295.0,
           "description": "Leaf temperature"

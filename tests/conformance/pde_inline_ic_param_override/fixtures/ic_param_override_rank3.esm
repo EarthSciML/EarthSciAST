@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ic_param_override_rank3",
     "description": "esm-spec 6.6.5 build-time evaluation scope for a RANK-3 (lon/lat/lev) coordinate-expression ic (11.4.1) whose amplitude parameter appears ONLY in the ic. amp is declared 1.0 and overridden to 2.0 through the inline test's parameter_overrides. The sibling fixture ic_param_default_rank3 is the same document with amp DECLARED 2.0 and no override; the two share one golden, so the pair is the controlled defaults-vs-overrides comparison a real model reproduced by hand -- if the override were dropped from the build-time ic scope, this fixture would read the 1.0 default and the pair would diverge.",
@@ -40,7 +40,7 @@
           "description": "Amplitude of the 3-D initial field. Referenced ONLY by ic(w) -- never by an equation -- so it can move the answer through the build-time ic scope and nowhere else."
         },
         "w": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lon",
@@ -50,7 +50,7 @@
           "description": "Seeded by the rank-3 coordinate-expression ic amp*cos(pi x)cos(pi y)(1+z); held constant by D(w)/dt = 0."
         },
         "s": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Integrates the (0-D) sum of w's corner cell, so the seeded field also has to reach the trajectory."

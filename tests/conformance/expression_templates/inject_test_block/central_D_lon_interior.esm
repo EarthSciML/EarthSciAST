@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": { "name": "central_D_lon_interior" },
   "expression_template_imports": [ { "ref": "./grid_latlon.esm" } ],
   "expression_templates": {

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "OneDArrayed",
     "description": "Arrayed-variable schema (RFC §10.2): a 1-D cell-centered state variable on the x axis.",
@@ -16,7 +16,7 @@
     "Diffusion1D": {
       "variables": {
         "c": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 0.0,
           "description": "Concentration along x",

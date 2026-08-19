@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NEI2016Monthly_ptegu",
     "description": "Source: EarthSciData/src/nei2016monthly.jl — NEI2016MonthlyEmisFileSet / NEI2016MonthlyEmis(). Parameter footprint: mirror (EPA gaftp), sector (e.g. ptegu, ptnonipm, onroad, nonpt, ...), starttime, endtime. Monthly emission files on the 12US1 (12-km CONUS Lambert conformal) grid, one file per month. This fixture represents the 'ptegu' (EGU point sources) sector for 2016.",
@@ -74,7 +74,7 @@
     "stub": {
       "variables": {
         "x": {
-          "type": "state"
+          "type": "unknown"
         }
       },
       "equations": [

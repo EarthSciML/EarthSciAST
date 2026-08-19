@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CrossSystemScopedReferences",
     "description": "Test fixture for cross-system scoped references in coupling contexts, demonstrating variable resolution across different top-level systems",
@@ -24,7 +24,7 @@
           "description": "Surface pressure"
         },
         "global_temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.0,
           "description": "Global mean temperature"
@@ -100,7 +100,7 @@
               "description": "Boundary layer height"
             },
             "potential_temperature": {
-              "type": "state",
+              "type": "unknown",
               "units": "K",
               "default": 295.0,
               "description": "Potential temperature"
@@ -111,13 +111,13 @@
             "Chemistry": {
               "variables": {
                 "CO": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mol/mol",
                   "default": 1e-07,
                   "description": "Carbon monoxide"
                 },
                 "OH": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mol/mol",
                   "default": 1e-12,
                   "description": "Hydroxyl radical"
@@ -183,7 +183,7 @@
     "OceanModel": {
       "variables": {
         "sea_surface_temp": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 285.0,
           "description": "Sea surface temperature"
@@ -247,7 +247,7 @@
               "description": "Mixed layer depth"
             },
             "heat_content": {
-              "type": "state",
+              "type": "unknown",
               "units": "J/m^2",
               "default": 100000000.0,
               "description": "Heat content"
@@ -277,7 +277,7 @@
     "LandModel": {
       "variables": {
         "soil_temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 283.0,
           "description": "Soil temperature"
@@ -350,7 +350,7 @@
               "description": "Leaf area index"
             },
             "canopy_temp": {
-              "type": "state",
+              "type": "unknown",
               "units": "K",
               "default": 290.0,
               "description": "Canopy temperature"
@@ -361,7 +361,7 @@
             "Photosynthesis": {
               "variables": {
                 "gpp": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "kg/m^2/s",
                   "default": 1e-08,
                   "description": "Gross primary productivity, as CARBON mass flux (kilograms of carbon per square metre per second). The species is named here, not in the unit string: esm-spec §4.8.1 — a unit string carries dimensions only."

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "arrayop_14_broadcast_elementwise",
     "description": "Exercises the `broadcast` op with operands of compatible but different shapes. a is a (3,) vector and b is reshaped to a (1, 3) row, so broadcast(+, a, reshape(b,[1,3])) produces a (3, 3) matrix where result[i, j] = a[i] + b[j]. Three scalar probes sample distinct positions of the result to verify both shape and element-wise semantics.",
@@ -9,11 +9,11 @@
   "models": {
     "BroadcastShapes": {
       "variables": {
-        "a":    { "type": "state" },
-        "b":    { "type": "state" },
-        "corner": { "type": "state" },
-        "middle": { "type": "state" },
-        "far":    { "type": "state" }
+        "a":    { "type": "unknown" },
+        "b":    { "type": "unknown" },
+        "corner": { "type": "unknown" },
+        "middle": { "type": "unknown" },
+        "far":    { "type": "unknown" }
       },
       "equations": [
         { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["a", 1] }], "wrt": "t" }, "rhs": 0.0 },

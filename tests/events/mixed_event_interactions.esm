@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MixedEventInteractions",
     "description": "Test cases for mixed continuous/discrete event interactions and cross-system events",
@@ -12,13 +12,13 @@
     "HybridControlSystem": {
       "variables": {
         "plant_output": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Plant output"
         },
         "controller_state": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Controller integrator state"
@@ -343,7 +343,7 @@
     "EventSynchronizationSystem": {
       "variables": {
         "sync_state": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Synchronization state variable"
@@ -511,7 +511,7 @@
     "EventLoggingSystem": {
       "variables": {
         "monitored_variable": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Variable being monitored"

@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ModelOnly",
     "description": "Valid ESM file containing only models section, no reaction_systems\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -22,25 +22,25 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity x-component"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity y-component"
         },
         "p": {
-          "type": "state",
+          "type": "unknown",
           "units": "Pa",
           "default": 101325.0,
           "description": "Pressure"
         },
         "T": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 298.15,
           "description": "Temperature"
@@ -431,13 +431,13 @@
       },
       "variables": {
         "phi": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Wave displacement"
         },
         "phi_t": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Wave velocity"
@@ -535,13 +535,13 @@
       },
       "variables": {
         "prey": {
-          "type": "state",
+          "type": "unknown",
           "units": "individuals/km^2",
           "default": 100.0,
           "description": "Prey population density"
         },
         "predator": {
-          "type": "state",
+          "type": "unknown",
           "units": "individuals/km^2",
           "default": 10.0,
           "description": "Predator population density"

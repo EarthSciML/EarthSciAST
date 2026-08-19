@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "arrayop_06_rearranged_algebraic",
     "description": "Regression test for arrayop with the algebraic variable buried in a rearranged LHS sum: (-1 - 0.5*sin(u[i]) + v[i]) ~ (v[i] - v[i]). v should still be eliminated during mtkcompile. Mirrors MTK fork test #6 which guards against the MethodOfLines PDE discretization producing this specific shape.",
@@ -9,8 +9,8 @@
   "models": {
     "Rearranged": {
       "variables": {
-        "u": { "type": "state" },
-        "v": { "type": "state" }
+        "u": { "type": "unknown" },
+        "v": { "type": "unknown" }
       },
       "equations": [
         {

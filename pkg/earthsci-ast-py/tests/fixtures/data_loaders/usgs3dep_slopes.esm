@@ -1,6 +1,6 @@
 {
   "_comment": "USGS 3DEP derived-slopes fixture. Expresses an instantiation of EarthSciData.jl USGS3DEPSlopeFileSet, which wraps a USGS3DEPFileSet and computes slope (and aspect) at runtime from elevation. Source: EarthSciData.jl src/usgs3dep.jl (struct USGS3DEPSlopeFileSet at lines 195-202). We express this as a separate static data loader whose variables are slope_* fields. The underlying source is the same 3DEP elevation endpoint; slope computation is a runtime transform declared via metadata.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "USGS3DEPSlopesFixture",
     "description": "USGS 3DEP derived slope/aspect/grade over a CONUS bounding box (runtime-derived from elevation) in the STAC-like DataLoader schema.",
@@ -54,7 +54,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

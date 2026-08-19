@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "WRF_hourly_d01_example",
     "description": "Covers EarthSciData.jl/src/wrf.jl WRFFileSet. relpath = <yr><mo>/wrfout_hourly_d01_<yyyy>-<mm>-<dd>_<hh>.nc. Lambert-conformal projection on Arakawa C-grid (staggered U/V/W). CRS varies by domain; using a typical CONUS LCC here. WRF hourly domain-1 output on a CONUS Lambert-conformal grid.",

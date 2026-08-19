@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "USGS3DEP_Fixture",
     "description": "EarthSciData.jl USGS3DEP elevation and slopes loaders expressed in the STAC-like DataLoader schema. Covers two structs from src/usgs3dep.jl: USGS3DEPFileSet (lines 21-27) with its constructor (lines 44-108) and exportImage URL builder (lines 115-129) for raw elevation; and USGS3DEPSlopeFileSet (lines 195-198) with its derivation machinery in loadslice! (lines 218-265) for dzdx/dzdy terrain slopes. Both are static datasets served by the USGS National Map ArcGIS ImageServer as GeoTIFF. bbox/width/height are derived from the simulation domain at runtime; the custom substitutions {bbox_w}/{bbox_s}/{bbox_e}/{bbox_n}/{width}/{height} encode that API contract. The slope loader fetches the same tile as USGS3DEP and applies a central-finite-difference derivative at load time — this derivation is runtime behavior (analogous to how CEDS sums over sectors at runtime) and is NOT schema-described.",
@@ -85,7 +85,7 @@
     "fixture_stub": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

@@ -1,5 +1,5 @@
 {
-    "esm": "0.8.0",
+    "esm": "1.0.0",
     "metadata": {
         "name": "StreamingDecayGrid",
         "description": "Minimal runnable model for the streaming-output-sinks Wave 2 end-to-end test: a single array state `c` over a 3x2 lon/lat grid with pointwise exponential decay D(c) = -k*c (k scalar). No data loaders, no array-shaped parameters, so it flattens to six per-cell ODEs (c[i,j]) and runs straight through EarthSciAST.simulate — the streamed Zarr store is compared cell-by-cell against an in-RAM reference run.",
@@ -27,7 +27,7 @@
         "Grid": {
             "variables": {
                 "c": {
-                    "type": "state",
+                    "type": "unknown",
                     "units": "kg",
                     "shape": ["lon", "lat"],
                     "default": 1.0,

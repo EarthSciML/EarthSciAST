@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EmptyReferenceFieldsExample",
     "description": "Metadata with references containing invalid empty or null fields",
@@ -29,7 +29,7 @@
     "TestModel": {
       "reference": { "notes": "Test model for empty reference fields" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

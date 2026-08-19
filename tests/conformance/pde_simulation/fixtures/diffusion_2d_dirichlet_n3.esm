@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "diffusion_2d_dirichlet_n3",
     "description": "Discretized 2-D heat equation on a 3x3 interior grid (h=0.25, kappa=16) with homogeneous Dirichlet BCs (implicit zero ghost on out-of-bounds neighbours).",
@@ -23,7 +23,7 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "i",
             "j"

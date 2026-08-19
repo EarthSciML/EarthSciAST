@@ -15,7 +15,7 @@
           "description": "Variable with 1MB string to test memory limits"
         },
         "array_bomb": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/L",
           "default": 0.0,
           "expression": {

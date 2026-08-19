@@ -1,5 +1,5 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ClosedFnFixture_interp_linear",
     "description": "Conformance fixture for `interp.linear` (esm-spec §9.2). Trivial ODE whose RHS invokes `interp.linear(table, axis, x)` against a fixed 5-point inline table. Bindings parse this file (exercising `fn`-op handling for the new primitive) and additionally exercise the per-scenario inputs from `expected.json`. Boundary scenarios cover exact-on-axis-knot (every position), midpoint and quarter-point blends, below-min / above-max extrapolate-flat clamps, NaN x propagation, two-point minimal axis, and non-uniform axis spacing. Load-time error scenarios (non-monotonic axis, equal-adjacent axis, NaN-in-axis, length mismatch, single-element axis) are covered in `expected.json` `error_scenarios`.",
@@ -16,7 +16,7 @@
           "description": "Scalar query point."
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "default": 0.0,
           "units": "1",
           "description": "Trivial state whose derivative is the interp.linear result. Bindings read evaluate(rhs, {x: <input>}) for each expected.json scenario and compare against the expected value at the per-fixture tolerance."

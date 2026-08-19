@@ -15,7 +15,7 @@
       "M": {
         "variables": {
           "c": {
-            "type": "state",
+            "type": "unknown",
             "default": 1e-09
           }
         },
@@ -60,7 +60,7 @@
       "M": {
         "variables": {
           "c": {
-            "type": "state",
+            "type": "unknown",
             "default": 1e-09
           }
         },

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventsDiscretePeriodicInterventions",
     "description": "Test fixture for discrete periodic events - Regular time-based interventions and parameter updates",
@@ -23,13 +23,13 @@
       },
       "variables": {
         "C_central": {
-          "type": "state",
+          "type": "unknown",
           "units": "mg/L",
           "default": 0.0,
           "description": "Drug concentration in central compartment"
         },
         "C_peripheral": {
-          "type": "state",
+          "type": "unknown",
           "units": "mg/L",
           "default": 0.0,
           "description": "Drug concentration in peripheral compartment"
@@ -214,13 +214,13 @@
       },
       "variables": {
         "pollutant_level": {
-          "type": "state",
+          "type": "unknown",
           "units": "ppm",
           "default": 0.1,
           "description": "Pollutant concentration"
         },
         "sensor_drift": {
-          "type": "state",
+          "type": "unknown",
           "units": "ppm",
           "default": 0.0,
           "description": "Cumulative sensor drift"
@@ -367,13 +367,13 @@
       },
       "variables": {
         "biomass": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2",
           "default": 1.0,
           "description": "Total biomass density"
         },
         "nutrients": {
-          "type": "state",
+          "type": "unknown",
           "units": "g/m^2",
           "default": 10.0,
           "description": "Available nutrients"

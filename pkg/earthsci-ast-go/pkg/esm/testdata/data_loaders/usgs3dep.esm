@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "USGS3DEP_Elevation",
     "description": "Source: EarthSciData/src/usgs3dep.jl — USGS3DEPFileSet / USGS3DEP(). Parameter footprint: mirror (USGS National Map ImageServer REST API), bbox (w,s,e,n in degrees), width, height (pixels), resolution (arc-seconds, default 1/3). Static elevation dataset delivered as GeoTIFF via exportImage REST call. This fixture represents a CONUS-scale elevation pull at ~10 m resolution, clamped to 4000x4000 pixels.",
@@ -45,7 +45,7 @@
     "stub": {
       "variables": {
         "x": {
-          "type": "state"
+          "type": "unknown"
         }
       },
       "equations": [

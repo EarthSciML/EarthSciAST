@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "coarse.x": {
       "kind": "interval",
@@ -190,7 +190,7 @@
           "shape": [
             "coarse.x"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         },
         "cf": {
@@ -198,7 +198,7 @@
           "shape": [
             "fine.x"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         }
       }

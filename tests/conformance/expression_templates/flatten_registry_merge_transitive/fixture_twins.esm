@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "flatten_registry_merge_transitive_twins",
     "description": "esm-spec §9.6.4 rule 7 / §10.7: the SCOPING PRECONDITION of the registry merge, in isolation. Two BYTE-IDENTICAL models import the same rule library with no rebind, so both carry byte-identical `outer_stencil` / `interior_stencil` entries — and `interior_stencil`'s body references the FREE name `inv_dx`, which is a model-local parameter and therefore denotes a DIFFERENT variable in each model. The shared `flatten_template_registries` surface implements the union half only, over the un-namespaced component view: it sees identical bodies and dedupes both entries under their bare names, which is self-consistent with the un-namespaced document it returns. A binding that carries the registry through a namespacing flatten MUST apply the §10.7 component scoping FIRST — that rewrites `inv_dx` to `A.inv_dx` / `B.inv_dx`, makes the two copies non-deep-equal, and forces the owner-path rename of all four entries (the wrapper via the reference-DAG propagation). Deduping BEFORE scoping keeps one body whose `inv_dx` is correct for neither model. The two answers are pinned side by side so the layering cannot drift silently.",
@@ -22,7 +22,7 @@
       ],
       "variables": {
         "c": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^3",
           "shape": [
             "x"
@@ -69,7 +69,7 @@
       ],
       "variables": {
         "c": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^3",
           "shape": [
             "x"

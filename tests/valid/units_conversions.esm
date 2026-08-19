@@ -1,308 +1,889 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsConversions",
     "description": "Test fixtures for unit conversion factors and scaling operations",
-    "authors": ["Chris Tessum with Claude"],
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
     "created": "2026-02-16T00:00:00Z",
-    "tags": ["units", "conversion", "scaling", "dimensional_analysis"]
+    "tags": [
+      "units",
+      "conversion",
+      "scaling",
+      "dimensional_analysis"
+    ]
   },
-
   "models": {
     "TemperatureConversions": {
-      "reference": { "notes": "Temperature unit conversions between K, C, and F" },
+      "reference": {
+        "notes": "Temperature unit conversions between K, C, and F"
+      },
       "variables": {
-        "T_kelvin": { "type": "parameter", "units": "K", "default": 298.15, "description": "Temperature in Kelvin" },
-        "T_celsius": { "type": "observed", "units": "degC", "description": "Temperature in Celsius",
-          "expression": { "op": "+", "args": ["T_kelvin", -273.15] }
+        "T_kelvin": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "Temperature in Kelvin"
         },
-        "T_fahrenheit": { "type": "observed", "units": "degF", "description": "Temperature in Fahrenheit",
-          "expression": { "op": "+", "args": [
-            { "op": "*", "args": [{ "op": "+", "args": ["T_kelvin", -273.15] }, 1.8] },
-            32.0
-          ] }
+        "T_celsius": {
+          "type": "unknown",
+          "units": "degC",
+          "description": "Temperature in Celsius"
+        },
+        "T_fahrenheit": {
+          "type": "unknown",
+          "units": "degF",
+          "description": "Temperature in Fahrenheit"
         }
       },
-      "equations": [],
-      "tolerance": { "abs": 1e-9 },
+      "equations": [
+        {
+          "lhs": "T_celsius",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "T_kelvin",
+              -273.15
+            ]
+          }
+        },
+        {
+          "lhs": "T_fahrenheit",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "+",
+                    "args": [
+                      "T_kelvin",
+                      -273.15
+                    ]
+                  },
+                  1.8
+                ]
+              },
+              32.0
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "abs": 1e-09
+      },
       "tests": [
         {
           "id": "freezing_point",
           "description": "273.15 K = 0 degC = 32 degF (water freezing point). Exercises additive Kelvin-Celsius offset and the full Kelvin->Fahrenheit formula.",
-          "parameter_overrides": { "T_kelvin": 273.15 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "T_kelvin": 273.15
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "T_celsius",    "time": 0.0, "expected":  0.0 },
-            { "variable": "T_fahrenheit", "time": 0.0, "expected": 32.0 }
+            {
+              "variable": "T_celsius",
+              "time": 0.0,
+              "expected": 0.0
+            },
+            {
+              "variable": "T_fahrenheit",
+              "time": 0.0,
+              "expected": 32.0
+            }
           ]
         },
         {
           "id": "boiling_point",
           "description": "373.15 K = 100 degC = 212 degF (water boiling at 1 atm). Second point pins the scale factor in the Kelvin->Fahrenheit formula.",
-          "parameter_overrides": { "T_kelvin": 373.15 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "T_kelvin": 373.15
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "T_celsius",    "time": 0.0, "expected": 100.0 },
-            { "variable": "T_fahrenheit", "time": 0.0, "expected": 212.0 }
+            {
+              "variable": "T_celsius",
+              "time": 0.0,
+              "expected": 100.0
+            },
+            {
+              "variable": "T_fahrenheit",
+              "time": 0.0,
+              "expected": 212.0
+            }
           ]
         }
       ]
     },
-
     "LengthConversions": {
-      "reference": { "notes": "Length unit conversions between different scales" },
+      "reference": {
+        "notes": "Length unit conversions between different scales"
+      },
       "variables": {
-        "distance_m": { "type": "parameter", "units": "m", "default": 1000.0, "description": "Distance in meters" },
-        "distance_km": { "type": "observed", "units": "km", "description": "Distance in kilometers",
-          "expression": { "op": "*", "args": ["distance_m", 0.001] }
+        "distance_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1000.0,
+          "description": "Distance in meters"
         },
-        "distance_cm": { "type": "observed", "units": "cm", "description": "Distance in centimeters",
-          "expression": { "op": "*", "args": ["distance_m", 100.0] }
+        "distance_km": {
+          "type": "unknown",
+          "units": "km",
+          "description": "Distance in kilometers"
         },
-        "distance_mm": { "type": "observed", "units": "mm", "description": "Distance in millimeters",
-          "expression": { "op": "*", "args": ["distance_m", 1000.0] }
+        "distance_cm": {
+          "type": "unknown",
+          "units": "cm",
+          "description": "Distance in centimeters"
         },
-        "distance_um": { "type": "observed", "units": "um", "description": "Distance in micrometers",
-          "expression": { "op": "*", "args": ["distance_m", 1e6] }
+        "distance_mm": {
+          "type": "unknown",
+          "units": "mm",
+          "description": "Distance in millimeters"
         },
-        "distance_nm": { "type": "observed", "units": "nm", "description": "Distance in nanometers",
-          "expression": { "op": "*", "args": ["distance_m", 1e9] }
+        "distance_um": {
+          "type": "unknown",
+          "units": "um",
+          "description": "Distance in micrometers"
+        },
+        "distance_nm": {
+          "type": "unknown",
+          "units": "nm",
+          "description": "Distance in nanometers"
         }
       },
-      "equations": [],
-      "tolerance": { "rel": 1e-12 },
+      "equations": [
+        {
+          "lhs": "distance_km",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "distance_m",
+              0.001
+            ]
+          }
+        },
+        {
+          "lhs": "distance_cm",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "distance_m",
+              100.0
+            ]
+          }
+        },
+        {
+          "lhs": "distance_mm",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "distance_m",
+              1000.0
+            ]
+          }
+        },
+        {
+          "lhs": "distance_um",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "distance_m",
+              1000000.0
+            ]
+          }
+        },
+        {
+          "lhs": "distance_nm",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "distance_m",
+              1000000000.0
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-12
+      },
       "tests": [
         {
           "id": "one_km_chain",
           "description": "1000 m == 1 km == 1e5 cm == 1e6 mm == 1e9 um == 1e12 nm. Pins each scale-factor constant in the fixture.",
-          "parameter_overrides": { "distance_m": 1000.0 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "distance_m": 1000.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "distance_km", "time": 0.0, "expected": 1.0 },
-            { "variable": "distance_cm", "time": 0.0, "expected": 100000.0 },
-            { "variable": "distance_mm", "time": 0.0, "expected": 1000000.0 },
-            { "variable": "distance_um", "time": 0.0, "expected": 1000000000.0 },
-            { "variable": "distance_nm", "time": 0.0, "expected": 1000000000000.0 }
+            {
+              "variable": "distance_km",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "distance_cm",
+              "time": 0.0,
+              "expected": 100000.0
+            },
+            {
+              "variable": "distance_mm",
+              "time": 0.0,
+              "expected": 1000000.0
+            },
+            {
+              "variable": "distance_um",
+              "time": 0.0,
+              "expected": 1000000000.0
+            },
+            {
+              "variable": "distance_nm",
+              "time": 0.0,
+              "expected": 1000000000000.0
+            }
           ]
         }
       ]
     },
-
     "PressureConversions": {
-      "reference": { "notes": "Pressure unit conversions between different systems" },
+      "reference": {
+        "notes": "Pressure unit conversions between different systems"
+      },
       "variables": {
-        "P_pascal": { "type": "parameter", "units": "Pa", "default": 101325.0, "description": "Pressure in Pascal" },
-        "P_bar": { "type": "observed", "units": "bar", "description": "Pressure in bar",
-          "expression": { "op": "*", "args": ["P_pascal", 1e-5] }
+        "P_pascal": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 101325.0,
+          "description": "Pressure in Pascal"
         },
-        "P_atm": { "type": "observed", "units": "atm", "description": "Pressure in atmospheres",
-          "expression": { "op": "/", "args": ["P_pascal", 101325.0] }
+        "P_bar": {
+          "type": "unknown",
+          "units": "bar",
+          "description": "Pressure in bar"
         },
-        "P_torr": { "type": "observed", "units": "Torr", "description": "Pressure in Torr",
-          "expression": { "op": "/", "args": ["P_pascal", 133.322] }
+        "P_atm": {
+          "type": "unknown",
+          "units": "atm",
+          "description": "Pressure in atmospheres"
         },
-        "P_mmHg": { "type": "observed", "units": "mmHg", "description": "Pressure in mmHg",
-          "expression": { "op": "/", "args": ["P_pascal", 133.322] }
+        "P_torr": {
+          "type": "unknown",
+          "units": "Torr",
+          "description": "Pressure in Torr"
         },
-        "P_psi": { "type": "observed", "units": "psi", "description": "Pressure in psi",
-          "expression": { "op": "/", "args": ["P_pascal", 6894.76] }
+        "P_mmHg": {
+          "type": "unknown",
+          "units": "mmHg",
+          "description": "Pressure in mmHg"
+        },
+        "P_psi": {
+          "type": "unknown",
+          "units": "psi",
+          "description": "Pressure in psi"
         }
       },
-      "equations": [],
-      "tolerance": { "rel": 1e-10 },
+      "equations": [
+        {
+          "lhs": "P_bar",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "P_pascal",
+              1e-05
+            ]
+          }
+        },
+        {
+          "lhs": "P_atm",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "P_pascal",
+              101325.0
+            ]
+          }
+        },
+        {
+          "lhs": "P_torr",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "P_pascal",
+              133.322
+            ]
+          }
+        },
+        {
+          "lhs": "P_mmHg",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "P_pascal",
+              133.322
+            ]
+          }
+        },
+        {
+          "lhs": "P_psi",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "P_pascal",
+              6894.76
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "one_bar",
           "description": "1e5 Pa == 1 bar. Pins the 1e-5 Pa->bar factor.",
-          "parameter_overrides": { "P_pascal": 100000.0 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "P_pascal": 100000.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "P_bar", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "P_bar",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         },
         {
           "id": "one_atm",
           "description": "101325 Pa == 1 atm. Pins the 101325 Pa->atm divisor.",
-          "parameter_overrides": { "P_pascal": 101325.0 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "P_pascal": 101325.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "P_atm", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "P_atm",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         },
         {
           "id": "one_torr",
           "description": "133.322 Pa == 1 Torr == 1 mmHg. Pins the 133.322 divisor for both (duplicated-expression guard).",
-          "parameter_overrides": { "P_pascal": 133.322 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "P_pascal": 133.322
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "P_torr", "time": 0.0, "expected": 1.0 },
-            { "variable": "P_mmHg", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "P_torr",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "P_mmHg",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         },
         {
           "id": "one_psi",
           "description": "6894.76 Pa == 1 psi. Pins the 6894.76 Pa->psi divisor.",
-          "parameter_overrides": { "P_pascal": 6894.76 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "P_pascal": 6894.76
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "P_psi", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "P_psi",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         }
       ]
     },
-
     "EnergyConversions": {
-      "reference": { "notes": "Energy unit conversions between different systems" },
+      "reference": {
+        "notes": "Energy unit conversions between different systems"
+      },
       "variables": {
-        "E_joule": { "type": "parameter", "units": "J", "default": 4184.0, "description": "Energy in Joules" },
-        "E_calorie": { "type": "observed", "units": "cal", "description": "Energy in calories",
-          "expression": { "op": "/", "args": ["E_joule", 4.184] }
+        "E_joule": {
+          "type": "parameter",
+          "units": "J",
+          "default": 4184.0,
+          "description": "Energy in Joules"
         },
-        "E_kcal": { "type": "observed", "units": "kcal", "description": "Energy in kilocalories",
-          "expression": { "op": "/", "args": ["E_joule", 4184.0] }
+        "E_calorie": {
+          "type": "unknown",
+          "units": "cal",
+          "description": "Energy in calories"
         },
-        "E_kwh": { "type": "observed", "units": "kWh", "description": "Energy in kilowatt-hours",
-          "expression": { "op": "/", "args": ["E_joule", 3.6e6] }
+        "E_kcal": {
+          "type": "unknown",
+          "units": "kcal",
+          "description": "Energy in kilocalories"
         },
-        "E_btu": { "type": "observed", "units": "BTU", "description": "Energy in British Thermal Units",
-          "expression": { "op": "/", "args": ["E_joule", 1055.06] }
+        "E_kwh": {
+          "type": "unknown",
+          "units": "kWh",
+          "description": "Energy in kilowatt-hours"
         },
-        "E_erg": { "type": "observed", "units": "erg", "description": "Energy in ergs",
-          "expression": { "op": "*", "args": ["E_joule", 1e7] }
+        "E_btu": {
+          "type": "unknown",
+          "units": "BTU",
+          "description": "Energy in British Thermal Units"
+        },
+        "E_erg": {
+          "type": "unknown",
+          "units": "erg",
+          "description": "Energy in ergs"
         }
       },
-      "equations": [],
-      "tolerance": { "rel": 1e-10 },
+      "equations": [
+        {
+          "lhs": "E_calorie",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "E_joule",
+              4.184
+            ]
+          }
+        },
+        {
+          "lhs": "E_kcal",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "E_joule",
+              4184.0
+            ]
+          }
+        },
+        {
+          "lhs": "E_kwh",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "E_joule",
+              3600000.0
+            ]
+          }
+        },
+        {
+          "lhs": "E_btu",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "E_joule",
+              1055.06
+            ]
+          }
+        },
+        {
+          "lhs": "E_erg",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "E_joule",
+              10000000.0
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "one_kcal",
           "description": "4184 J == 1 kcal == 1000 cal. Pins both the 4184 J->kcal divisor and the 4.184 J->cal divisor.",
-          "parameter_overrides": { "E_joule": 4184.0 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "E_joule": 4184.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "E_kcal",    "time": 0.0, "expected": 1.0 },
-            { "variable": "E_calorie", "time": 0.0, "expected": 1000.0 }
+            {
+              "variable": "E_kcal",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "E_calorie",
+              "time": 0.0,
+              "expected": 1000.0
+            }
           ]
         },
         {
           "id": "one_kwh",
           "description": "3.6e6 J == 1 kWh. Pins the 3.6e6 J->kWh divisor.",
-          "parameter_overrides": { "E_joule": 3600000.0 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "E_joule": 3600000.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "E_kwh", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "E_kwh",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         },
         {
           "id": "one_btu",
           "description": "1055.06 J == 1 BTU. Pins the 1055.06 J->BTU divisor.",
-          "parameter_overrides": { "E_joule": 1055.06 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "E_joule": 1055.06
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "E_btu", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "E_btu",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         },
         {
           "id": "one_erg",
           "description": "1e-7 J == 1 erg. Pins the 1e7 J->erg multiplier.",
-          "parameter_overrides": { "E_joule": 1e-7 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "E_joule": 1e-07
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "E_erg", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "E_erg",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         }
       ]
     },
-
     "ConcentrationConversions": {
-      "reference": { "notes": "Atmospheric chemistry concentration unit conversions" },
+      "reference": {
+        "notes": "Atmospheric chemistry concentration unit conversions"
+      },
       "variables": {
-        "T": { "type": "parameter", "units": "K", "default": 298.15, "description": "Temperature" },
-        "P": { "type": "parameter", "units": "Pa", "default": 101325.0, "description": "Pressure" },
-        "M": { "type": "parameter", "units": "molec/cm^3", "default": 2.46e19, "description": "Air number density" },
-        "conc_molec_cm3": { "type": "parameter", "units": "molec/cm^3", "default": 1e12, "description": "Concentration in molecules/cm³" },
-        "conc_mol_mol": { "type": "observed", "units": "mol/mol", "description": "Mole fraction",
-          "expression": { "op": "/", "args": ["conc_molec_cm3", "M"] }
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "Temperature"
         },
-        "conc_ppb": { "type": "observed", "units": "ppb", "description": "Parts per billion",
-          "expression": { "op": "*", "args": [{ "op": "/", "args": ["conc_molec_cm3", "M"] }, 1e9] }
+        "P": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 101325.0,
+          "description": "Pressure"
         },
-        "conc_ppm": { "type": "observed", "units": "ppm", "description": "Parts per million",
-          "expression": { "op": "*", "args": [{ "op": "/", "args": ["conc_molec_cm3", "M"] }, 1e6] }
+        "M": {
+          "type": "parameter",
+          "units": "molec/cm^3",
+          "default": 2.46e+19,
+          "description": "Air number density"
         },
-        "conc_ug_m3": { "type": "observed", "units": "ug/m^3", "description": "Micrograms per cubic meter (assuming MW=48)",
-          "expression": { "op": "*", "args": [
-            { "op": "*", "args": [
-              { "op": "/", "args": ["conc_molec_cm3", 6.022e23] },
-              48.0
-            ] },
-            1e12
-          ] }
+        "conc_molec_cm3": {
+          "type": "parameter",
+          "units": "molec/cm^3",
+          "default": 1000000000000.0,
+          "description": "Concentration in molecules/cm³"
+        },
+        "conc_mol_mol": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "description": "Mole fraction"
+        },
+        "conc_ppb": {
+          "type": "unknown",
+          "units": "ppb",
+          "description": "Parts per billion"
+        },
+        "conc_ppm": {
+          "type": "unknown",
+          "units": "ppm",
+          "description": "Parts per million"
+        },
+        "conc_ug_m3": {
+          "type": "unknown",
+          "units": "ug/m^3",
+          "description": "Micrograms per cubic meter (assuming MW=48)"
         }
       },
-      "equations": [],
-      "tolerance": { "rel": 1e-10 },
+      "equations": [
+        {
+          "lhs": "conc_mol_mol",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "conc_molec_cm3",
+              "M"
+            ]
+          }
+        },
+        {
+          "lhs": "conc_ppb",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  "conc_molec_cm3",
+                  "M"
+                ]
+              },
+              1000000000.0
+            ]
+          }
+        },
+        {
+          "lhs": "conc_ppm",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  "conc_molec_cm3",
+                  "M"
+                ]
+              },
+              1000000.0
+            ]
+          }
+        },
+        {
+          "lhs": "conc_ug_m3",
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      "conc_molec_cm3",
+                      6.022e+23
+                    ]
+                  },
+                  48.0
+                ]
+              },
+              1000000000000.0
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-10
+      },
       "tests": [
         {
           "id": "mole_fraction_unity",
           "description": "When conc_molec_cm3 == M (pure species), mole fraction is 1.0, corresponding to 1e9 ppb and 1e6 ppm. Pins the ppb and ppm scaling.",
           "parameter_overrides": {
-            "M": 1.0e19,
-            "conc_molec_cm3": 1.0e19
+            "M": 1e+19,
+            "conc_molec_cm3": 1e+19
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "conc_mol_mol", "time": 0.0, "expected": 1.0 },
-            { "variable": "conc_ppb",     "time": 0.0, "expected": 1.0e9 },
-            { "variable": "conc_ppm",     "time": 0.0, "expected": 1.0e6 }
+            {
+              "variable": "conc_mol_mol",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "conc_ppb",
+              "time": 0.0,
+              "expected": 1000000000.0
+            },
+            {
+              "variable": "conc_ppm",
+              "time": 0.0,
+              "expected": 1000000.0
+            }
           ]
         },
         {
           "id": "ug_per_m3_from_avogadro",
           "description": "conc_molec_cm3 = 6.022e23 gives conc_ug_m3 = (6.022e23/6.022e23) * 48 * 1e12 = 4.8e13, pinning Avogadro (6.022e23), MW=48, and the cm^3->m^3 + g->ug factor 1e12.",
           "parameter_overrides": {
-            "M": 6.022e23,
-            "conc_molec_cm3": 6.022e23
+            "M": 6.022e+23,
+            "conc_molec_cm3": 6.022e+23
           },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "conc_mol_mol", "time": 0.0, "expected": 1.0 },
-            { "variable": "conc_ug_m3",   "time": 0.0, "expected": 4.8e13 }
+            {
+              "variable": "conc_mol_mol",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "conc_ug_m3",
+              "time": 0.0,
+              "expected": 48000000000000.0
+            }
           ]
         }
       ]
     },
-
     "VolumeConversions": {
-      "reference": { "notes": "Volume unit conversions for scientific applications" },
+      "reference": {
+        "notes": "Volume unit conversions for scientific applications"
+      },
       "variables": {
-        "V_m3": { "type": "parameter", "units": "m^3", "default": 0.001, "description": "Volume in cubic meters" },
-        "V_L": { "type": "observed", "units": "L", "description": "Volume in liters",
-          "expression": { "op": "*", "args": ["V_m3", 1000.0] }
+        "V_m3": {
+          "type": "parameter",
+          "units": "m^3",
+          "default": 0.001,
+          "description": "Volume in cubic meters"
         },
-        "V_mL": { "type": "observed", "units": "mL", "description": "Volume in milliliters",
-          "expression": { "op": "*", "args": ["V_m3", 1e6] }
+        "V_L": {
+          "type": "unknown",
+          "units": "L",
+          "description": "Volume in liters"
         },
-        "V_cm3": { "type": "observed", "units": "cm^3", "description": "Volume in cubic centimeters",
-          "expression": { "op": "*", "args": ["V_m3", 1e6] }
+        "V_mL": {
+          "type": "unknown",
+          "units": "mL",
+          "description": "Volume in milliliters"
         },
-        "V_dm3": { "type": "observed", "units": "dm^3", "description": "Volume in cubic decimeters",
-          "expression": { "op": "*", "args": ["V_m3", 1000.0] }
+        "V_cm3": {
+          "type": "unknown",
+          "units": "cm^3",
+          "description": "Volume in cubic centimeters"
+        },
+        "V_dm3": {
+          "type": "unknown",
+          "units": "dm^3",
+          "description": "Volume in cubic decimeters"
         }
       },
-      "equations": [],
-      "tolerance": { "rel": 1e-12 },
+      "equations": [
+        {
+          "lhs": "V_L",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "V_m3",
+              1000.0
+            ]
+          }
+        },
+        {
+          "lhs": "V_mL",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "V_m3",
+              1000000.0
+            ]
+          }
+        },
+        {
+          "lhs": "V_cm3",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "V_m3",
+              1000000.0
+            ]
+          }
+        },
+        {
+          "lhs": "V_dm3",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "V_m3",
+              1000.0
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-12
+      },
       "tests": [
         {
           "id": "one_liter",
           "description": "0.001 m^3 == 1 L == 1000 mL == 1000 cm^3 == 1 dm^3. Pins all four scale factors and catches mL/cm^3 sharing the same factor.",
-          "parameter_overrides": { "V_m3": 0.001 },
-          "time_span": { "start": 0.0, "end": 0.0 },
+          "parameter_overrides": {
+            "V_m3": 0.001
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
           "assertions": [
-            { "variable": "V_L",   "time": 0.0, "expected": 1.0 },
-            { "variable": "V_mL",  "time": 0.0, "expected": 1000.0 },
-            { "variable": "V_cm3", "time": 0.0, "expected": 1000.0 },
-            { "variable": "V_dm3", "time": 0.0, "expected": 1.0 }
+            {
+              "variable": "V_L",
+              "time": 0.0,
+              "expected": 1.0
+            },
+            {
+              "variable": "V_mL",
+              "time": 0.0,
+              "expected": 1000.0
+            },
+            {
+              "variable": "V_cm3",
+              "time": 0.0,
+              "expected": 1000.0
+            },
+            {
+              "variable": "V_dm3",
+              "time": 0.0,
+              "expected": 1.0
+            }
           ]
         }
       ]

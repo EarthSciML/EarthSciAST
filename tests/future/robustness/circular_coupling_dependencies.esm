@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CircularCouplingDependencies",
     "description": "Test circular dependencies in coupling system references",
@@ -8,8 +8,8 @@
   "models": {
     "ModelA": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 1.0 },
-        "y": { "type": "state", "units": "m", "default": 2.0 }
+        "x": { "type": "unknown", "units": "m", "default": 1.0 },
+        "y": { "type": "unknown", "units": "m", "default": 2.0 }
       },
       "equations": [
         {
@@ -20,8 +20,8 @@
     },
     "ModelB": {
       "variables": {
-        "z": { "type": "state", "units": "m", "default": 3.0 },
-        "w": { "type": "state", "units": "m", "default": 4.0 }
+        "z": { "type": "unknown", "units": "m", "default": 3.0 },
+        "w": { "type": "unknown", "units": "m", "default": 4.0 }
       },
       "equations": [
         {
@@ -32,8 +32,8 @@
     },
     "ModelC": {
       "variables": {
-        "u": { "type": "state", "units": "m", "default": 5.0 },
-        "v": { "type": "state", "units": "m", "default": 6.0 }
+        "u": { "type": "unknown", "units": "m", "default": 5.0 },
+        "v": { "type": "unknown", "units": "m", "default": 6.0 }
       },
       "equations": [
         {

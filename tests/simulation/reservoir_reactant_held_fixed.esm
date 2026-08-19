@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ReservoirReactantHeldFixed",
     "description": "Cross-binding conformance fixture for esm-spec.md §7.4 reservoir species. A `constant: true` species R appears as a STOICHIOMETRIC SUBSTRATE of the only reaction (R + A -> B), so a binding that ignores the flag would put R in the ODE state vector and CONSUME it. Per §7.4 a reservoir gets NO dX/dt equation (its concentration is held fixed at its `default`) yet STILL contributes as a mass-action concentration factor to every rate law it appears in. Held at R=2 with k=0.5 the effective rate law is v = k*R*A = 1.0*A, so A(t) = exp(-t) and B(t) = 1 - exp(-t) exactly, and R never moves. A buggy binding that treats R as a consumed state instead lets R drift down from 2, giving A a strictly SLOWER decay (A(1) ~= 0.4353 vs 0.3679, A(3) ~= 0.1256 vs 0.0498) that misses every t>0 assertion; a binding that instead DROPPED R from the rate law would decay at k=0.5 (A(1) = exp(-0.5) ~= 0.6065), also caught. The A/B trajectory therefore proves, transitively, that R stayed pinned at its default while the non-reservoir species evolved.",

@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "coupletype_reaction_system",
     "description": "coupletype removal (RFC 5/11): a ReactionSystem still carrying the deleted `coupletype` field. ReactionSystem is additionalProperties:false, so it fails schema validation loudly. Expected: schema validation error."

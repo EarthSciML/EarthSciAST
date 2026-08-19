@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ScalarNoShape",
     "description": "Regression guard: a pre-0.2 model with no shape/location fields must still parse and round-trip unchanged.",
@@ -11,7 +11,7 @@
     "Scalar0D": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Scalar state variable"

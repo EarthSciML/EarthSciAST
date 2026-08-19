@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ReferenceTypesExample",
     "description": "Demonstrates various valid reference formatting types",
@@ -32,7 +32,7 @@
     "ReferenceTestModel": {
       "reference": { "notes": "Test model for reference types" },
       "variables": {
-        "concentration": { "type": "state", "units": "mol/mol", "default": 1e-9 }
+        "concentration": { "type": "unknown", "units": "mol/mol", "default": 1e-9 }
       },
       "equations": [
         {

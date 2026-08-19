@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "InvalidDateFormatExample",
     "description": "Metadata with invalid ISO 8601 date format",
@@ -12,7 +12,7 @@
     "TestModel": {
       "reference": { "notes": "Test model for invalid date format" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

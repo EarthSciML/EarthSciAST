@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "StiffODESystemTest",
     "description": "Stiff ODE system requiring implicit solvers for numerical stability",
@@ -20,13 +20,13 @@
       },
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 2.0,
           "description": "Position variable"
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Velocity variable"

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MathematicalCorrectnessValidation",
     "description": "Test mathematical correctness verification across all operations",
@@ -188,13 +188,13 @@
       },
       "variables": {
         "position": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Position coordinate"
         },
         "velocity": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity"
@@ -212,53 +212,18 @@
           "description": "Spring constant"
         },
         "kinetic_energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "expression": {
-            "op": "*",
-            "args": [
-              0.5,
-              "mass",
-              {
-                "op": "^",
-                "args": [
-                  "velocity",
-                  2
-                ]
-              }
-            ]
-          },
           "description": "Kinetic energy = ½mv²"
         },
         "potential_energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "expression": {
-            "op": "*",
-            "args": [
-              0.5,
-              "spring_constant",
-              {
-                "op": "^",
-                "args": [
-                  "position",
-                  2
-                ]
-              }
-            ]
-          },
           "description": "Potential energy = ½kx²"
         },
         "total_energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "expression": {
-            "op": "+",
-            "args": [
-              "kinetic_energy",
-              "potential_energy"
-            ]
-          },
           "description": "Total energy (conserved)"
         }
       },
@@ -317,6 +282,50 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "kinetic_energy",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.5,
+              "mass",
+              {
+                "op": "^",
+                "args": [
+                  "velocity",
+                  2
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "potential_energy",
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.5,
+              "spring_constant",
+              {
+                "op": "^",
+                "args": [
+                  "position",
+                  2
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "total_energy",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "kinetic_energy",
+              "potential_energy"
+            ]
+          }
         }
       ]
     },
@@ -326,25 +335,25 @@
       },
       "variables": {
         "x1": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": -1.0,
           "description": "Position of mass 1"
         },
         "x2": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Position of mass 2"
         },
         "v1": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 1.0,
           "description": "Velocity of mass 1"
         },
         "v2": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": -0.5,
           "description": "Velocity of mass 2"
@@ -362,65 +371,13 @@
           "description": "Mass 2"
         },
         "total_momentum": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg⋅m/s",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "m1",
-                  "v1"
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  "m2",
-                  "v2"
-                ]
-              }
-            ]
-          },
           "description": "Total momentum (conserved)"
         },
         "total_kinetic_energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  0.5,
-                  "m1",
-                  {
-                    "op": "^",
-                    "args": [
-                      "v1",
-                      2
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  0.5,
-                  "m2",
-                  {
-                    "op": "^",
-                    "args": [
-                      "v2",
-                      2
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Total kinetic energy"
         }
       },
@@ -500,6 +457,64 @@
             ]
           },
           "rhs": -0.5
+        },
+        {
+          "lhs": "total_momentum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "m1",
+                  "v1"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "m2",
+                  "v2"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "total_kinetic_energy",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "m1",
+                  {
+                    "op": "^",
+                    "args": [
+                      "v1",
+                      2
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "m2",
+                  {
+                    "op": "^",
+                    "args": [
+                      "v2",
+                      2
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -628,12 +643,12 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "default": 1.0
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "default": 2.0
         },
@@ -648,75 +663,18 @@
           "default": -1.5
         },
         "linear_combination": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "alpha",
-                  "u"
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  "beta",
-                  "v"
-                ]
-              }
-            ]
-          },
           "description": "αu + βv"
         },
         "derivative_of_combination": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1/s",
-          "expression": {
-            "op": "D",
-            "args": [
-              "linear_combination"
-            ],
-            "wrt": "t"
-          },
           "description": "d(αu + βv)/dt"
         },
         "combination_of_derivatives": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1/s",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "alpha",
-                  {
-                    "op": "D",
-                    "args": [
-                      "u"
-                    ],
-                    "wrt": "t"
-                  }
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  "beta",
-                  {
-                    "op": "D",
-                    "args": [
-                      "v"
-                    ],
-                    "wrt": "t"
-                  }
-                ]
-              }
-            ]
-          },
           "description": "α(du/dt) + β(dv/dt)"
         }
       },
@@ -770,6 +728,72 @@
             ]
           },
           "rhs": 2.0
+        },
+        {
+          "lhs": "linear_combination",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "alpha",
+                  "u"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "beta",
+                  "v"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "derivative_of_combination",
+          "rhs": {
+            "op": "D",
+            "args": [
+              "linear_combination"
+            ],
+            "wrt": "t"
+          }
+        },
+        {
+          "lhs": "combination_of_derivatives",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "alpha",
+                  {
+                    "op": "D",
+                    "args": [
+                      "u"
+                    ],
+                    "wrt": "t"
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "beta",
+                  {
+                    "op": "D",
+                    "args": [
+                      "v"
+                    ],
+                    "wrt": "t"
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     }

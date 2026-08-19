@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "AlgebraicDiameterGrowth",
     "description": "Cross-binding conformance fixture (esm-sph): a single ODE coupled to TWO algebraic equations defining intermediate variables. Mirrors the diameter-growth shape that polecat nux's audit caught silently producing 1000x-wrong answers in earthsci_ast.simulation.simulate (escalation hq-wisp-ywi). A binding that silently drops the algebraic equations and leaves the intermediates at their default value 0 will compute dD_p/dt = 0 and produce D_p(t) ≡ D_p(0), failing every t > 0 assertion.",
@@ -13,19 +13,19 @@
       },
       "variables": {
         "D_p": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Particle-diameter-shaped state variable."
         },
         "mu": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Algebraic intermediate (= alpha). Default chosen to satisfy the algebraic constraint at t=0; bindings that drop the algebraic equations leave it pinned at 1.0 and make D_p decay linearly instead of exponentially."
         },
         "G": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Algebraic intermediate (= mu * D_p). Same rationale as mu."

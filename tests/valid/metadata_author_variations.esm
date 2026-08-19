@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "AuthorVariationsExample",
     "description": "Demonstrates various valid author formatting styles",
@@ -17,7 +17,7 @@
     "TestModel": {
       "reference": { "notes": "Test model for author variations" },
       "variables": {
-        "y": { "type": "state", "units": "kg", "default": 1.0 }
+        "y": { "type": "unknown", "units": "kg", "default": 1.0 }
       },
       "equations": [
         {

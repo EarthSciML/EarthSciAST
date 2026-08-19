@@ -14,46 +14,178 @@
             "AtmosphereSystem": {
               "subsystems": {
                 "Troposphere": {
-                  "variables": {"trop_temp": {"type": "state", "units": "K"}},
-                  "equations": [{"lhs": "D(trop_temp)", "rhs": {"op": "+", "args": ["heating_rate", "mixing_from_strat"]}}]
+                  "variables": {
+                    "trop_temp": {
+                      "type": "unknown",
+                      "units": "K"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": "D(trop_temp)",
+                      "rhs": {
+                        "op": "+",
+                        "args": [
+                          "heating_rate",
+                          "mixing_from_strat"
+                        ]
+                      }
+                    }
+                  ]
                 },
                 "Stratosphere": {
-                  "variables": {"strat_temp": {"type": "state", "units": "K"}},
-                  "equations": [{"lhs": "D(strat_temp)", "rhs": {"op": "+", "args": ["radiative_heating", "ozone_heating"]}}]
+                  "variables": {
+                    "strat_temp": {
+                      "type": "unknown",
+                      "units": "K"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": "D(strat_temp)",
+                      "rhs": {
+                        "op": "+",
+                        "args": [
+                          "radiative_heating",
+                          "ozone_heating"
+                        ]
+                      }
+                    }
+                  ]
                 }
               },
-              "variables": {"atm_pressure": {"type": "state", "units": "Pa"}},
-              "equations": [{"lhs": "D(atm_pressure)", "rhs": {"op": "hydrostatic", "args": ["Troposphere.trop_temp", "Stratosphere.strat_temp"]}}]
+              "variables": {
+                "atm_pressure": {
+                  "type": "unknown",
+                  "units": "Pa"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "D(atm_pressure)",
+                  "rhs": {
+                    "op": "hydrostatic",
+                    "args": [
+                      "Troposphere.trop_temp",
+                      "Stratosphere.strat_temp"
+                    ]
+                  }
+                }
+              ]
             },
             "OceanSystem": {
               "subsystems": {
                 "SurfaceOcean": {
-                  "variables": {"sst": {"type": "state", "units": "K"}},
-                  "equations": [{"lhs": "D(sst)", "rhs": {"op": "+", "args": ["solar_heating", "atm_heat_flux"]}}]
+                  "variables": {
+                    "sst": {
+                      "type": "unknown",
+                      "units": "K"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": "D(sst)",
+                      "rhs": {
+                        "op": "+",
+                        "args": [
+                          "solar_heating",
+                          "atm_heat_flux"
+                        ]
+                      }
+                    }
+                  ]
                 },
                 "DeepOcean": {
-                  "variables": {"deep_temp": {"type": "state", "units": "K"}},
-                  "equations": [{"lhs": "D(deep_temp)", "rhs": {"op": "*", "args": ["vertical_mixing", {"op": "-", "args": ["SurfaceOcean.sst", "deep_temp"]}]}}]
+                  "variables": {
+                    "deep_temp": {
+                      "type": "unknown",
+                      "units": "K"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": "D(deep_temp)",
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          "vertical_mixing",
+                          {
+                            "op": "-",
+                            "args": [
+                              "SurfaceOcean.sst",
+                              "deep_temp"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
                 }
               },
-              "variables": {"ocean_circulation": {"type": "state", "units": "m/s"}},
-              "equations": [{"lhs": "D(ocean_circulation)", "rhs": {"op": "thermohaline", "args": ["SurfaceOcean.sst", "DeepOcean.deep_temp"]}}]
+              "variables": {
+                "ocean_circulation": {
+                  "type": "unknown",
+                  "units": "m/s"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "D(ocean_circulation)",
+                  "rhs": {
+                    "op": "thermohaline",
+                    "args": [
+                      "SurfaceOcean.sst",
+                      "DeepOcean.deep_temp"
+                    ]
+                  }
+                }
+              ]
             },
             "LandSystem": {
-              "variables": {"land_temp": {"type": "state", "units": "K"}},
-              "equations": [{"lhs": "D(land_temp)", "rhs": {"op": "+", "args": ["soil_heating", "vegetation_cooling"]}}]
+              "variables": {
+                "land_temp": {
+                  "type": "unknown",
+                  "units": "K"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "D(land_temp)",
+                  "rhs": {
+                    "op": "+",
+                    "args": [
+                      "soil_heating",
+                      "vegetation_cooling"
+                    ]
+                  }
+                }
+              ]
             }
           },
-          "variables": {"global_mean_temp": {"type": "observed", "units": "K"}},
+          "variables": {
+            "global_mean_temp": {
+              "type": "unknown",
+              "units": "K"
+            }
+          },
           "equations": [
             {
               "lhs": "global_mean_temp",
               "rhs": {
                 "op": "weighted_mean",
                 "args": [
-                  {"component": "AtmosphereSystem.Troposphere.trop_temp", "weight": 0.3},
-                  {"component": "OceanSystem.SurfaceOcean.sst", "weight": 0.5},
-                  {"component": "LandSystem.land_temp", "weight": 0.2}
+                  {
+                    "component": "AtmosphereSystem.Troposphere.trop_temp",
+                    "weight": 0.3
+                  },
+                  {
+                    "component": "OceanSystem.SurfaceOcean.sst",
+                    "weight": 0.5
+                  },
+                  {
+                    "component": "LandSystem.land_temp",
+                    "weight": 0.2
+                  }
                 ]
               }
             }
@@ -65,19 +197,25 @@
           "source_model": "GlobalEarthSystem.AtmosphereSystem.Troposphere",
           "target_model": "GlobalEarthSystem.OceanSystem.SurfaceOcean",
           "coupling_type": "variable_map",
-          "variable_map": {"trop_temp": "atm_temp_input"}
+          "variable_map": {
+            "trop_temp": "atm_temp_input"
+          }
         },
         {
           "source_model": "GlobalEarthSystem.OceanSystem.SurfaceOcean",
           "target_model": "GlobalEarthSystem.AtmosphereSystem.Troposphere",
           "coupling_type": "variable_map",
-          "variable_map": {"sst": "ocean_temp_input"}
+          "variable_map": {
+            "sst": "ocean_temp_input"
+          }
         },
         {
           "source_model": "GlobalEarthSystem.AtmosphereSystem.Stratosphere",
           "target_model": "GlobalEarthSystem.AtmosphereSystem.Troposphere",
           "coupling_type": "variable_map",
-          "variable_map": {"strat_temp": "stratosphere_influence"}
+          "variable_map": {
+            "strat_temp": "stratosphere_influence"
+          }
         }
       ]
     },
@@ -88,57 +226,83 @@
         "GlobalEarthSystem": {
           "level": 0,
           "parent": null,
-          "children": ["AtmosphereSystem", "OceanSystem", "LandSystem"],
-          "variables": ["global_mean_temp"],
+          "children": [
+            "AtmosphereSystem",
+            "OceanSystem",
+            "LandSystem"
+          ],
+          "variables": [
+            "global_mean_temp"
+          ],
           "type": "composite_system"
         },
         "GlobalEarthSystem.AtmosphereSystem": {
           "level": 1,
           "parent": "GlobalEarthSystem",
-          "children": ["Troposphere", "Stratosphere"],
-          "variables": ["atm_pressure"],
+          "children": [
+            "Troposphere",
+            "Stratosphere"
+          ],
+          "variables": [
+            "atm_pressure"
+          ],
           "type": "composite_system"
         },
         "GlobalEarthSystem.OceanSystem": {
           "level": 1,
           "parent": "GlobalEarthSystem",
-          "children": ["SurfaceOcean", "DeepOcean"],
-          "variables": ["ocean_circulation"],
+          "children": [
+            "SurfaceOcean",
+            "DeepOcean"
+          ],
+          "variables": [
+            "ocean_circulation"
+          ],
           "type": "composite_system"
         },
         "GlobalEarthSystem.LandSystem": {
           "level": 1,
           "parent": "GlobalEarthSystem",
           "children": [],
-          "variables": ["land_temp"],
+          "variables": [
+            "land_temp"
+          ],
           "type": "leaf_system"
         },
         "GlobalEarthSystem.AtmosphereSystem.Troposphere": {
           "level": 2,
           "parent": "GlobalEarthSystem.AtmosphereSystem",
           "children": [],
-          "variables": ["trop_temp"],
+          "variables": [
+            "trop_temp"
+          ],
           "type": "leaf_system"
         },
         "GlobalEarthSystem.AtmosphereSystem.Stratosphere": {
           "level": 2,
           "parent": "GlobalEarthSystem.AtmosphereSystem",
           "children": [],
-          "variables": ["strat_temp"],
+          "variables": [
+            "strat_temp"
+          ],
           "type": "leaf_system"
         },
         "GlobalEarthSystem.OceanSystem.SurfaceOcean": {
           "level": 2,
           "parent": "GlobalEarthSystem.OceanSystem",
           "children": [],
-          "variables": ["sst"],
+          "variables": [
+            "sst"
+          ],
           "type": "leaf_system"
         },
         "GlobalEarthSystem.OceanSystem.DeepOcean": {
           "level": 2,
           "parent": "GlobalEarthSystem.OceanSystem",
           "children": [],
-          "variables": ["deep_temp"],
+          "variables": [
+            "deep_temp"
+          ],
           "type": "leaf_system"
         }
       },
@@ -177,27 +341,40 @@
       "dependency_levels": [
         {
           "level": 0,
-          "components": ["GlobalEarthSystem.LandSystem", "GlobalEarthSystem.AtmosphereSystem.Stratosphere"],
+          "components": [
+            "GlobalEarthSystem.LandSystem",
+            "GlobalEarthSystem.AtmosphereSystem.Stratosphere"
+          ],
           "description": "Independent leaf components"
         },
         {
           "level": 1,
-          "components": ["GlobalEarthSystem.AtmosphereSystem.Troposphere", "GlobalEarthSystem.OceanSystem.SurfaceOcean"],
+          "components": [
+            "GlobalEarthSystem.AtmosphereSystem.Troposphere",
+            "GlobalEarthSystem.OceanSystem.SurfaceOcean"
+          ],
           "description": "Coupled leaf components (requires iteration)"
         },
         {
           "level": 2,
-          "components": ["GlobalEarthSystem.OceanSystem.DeepOcean"],
+          "components": [
+            "GlobalEarthSystem.OceanSystem.DeepOcean"
+          ],
           "description": "Components dependent on surface ocean"
         },
         {
           "level": 3,
-          "components": ["GlobalEarthSystem.AtmosphereSystem", "GlobalEarthSystem.OceanSystem"],
+          "components": [
+            "GlobalEarthSystem.AtmosphereSystem",
+            "GlobalEarthSystem.OceanSystem"
+          ],
           "description": "Composite systems aggregating subsystem state"
         },
         {
           "level": 4,
-          "components": ["GlobalEarthSystem"],
+          "components": [
+            "GlobalEarthSystem"
+          ],
           "description": "Root system aggregating all subsystems"
         }
       ]
@@ -217,14 +394,50 @@
           "subsystems": {
             "MeteorologicalLayer": {
               "variables": {
-                "wind_speed": {"type": "state", "units": "m/s"},
-                "temperature": {"type": "state", "units": "K"},
-                "boundary_layer_height": {"type": "state", "units": "m"}
+                "wind_speed": {
+                  "type": "unknown",
+                  "units": "m/s"
+                },
+                "temperature": {
+                  "type": "unknown",
+                  "units": "K"
+                },
+                "boundary_layer_height": {
+                  "type": "unknown",
+                  "units": "m"
+                }
               },
               "equations": [
-                {"lhs": "D(wind_speed)", "rhs": {"op": "+", "args": ["pressure_gradient", "coriolis_force"]}},
-                {"lhs": "D(temperature)", "rhs": {"op": "+", "args": ["solar_heating", "surface_heat_flux"]}},
-                {"lhs": "D(boundary_layer_height)", "rhs": {"op": "pbl_parameterization", "args": ["wind_speed", "temperature"]}}
+                {
+                  "lhs": "D(wind_speed)",
+                  "rhs": {
+                    "op": "+",
+                    "args": [
+                      "pressure_gradient",
+                      "coriolis_force"
+                    ]
+                  }
+                },
+                {
+                  "lhs": "D(temperature)",
+                  "rhs": {
+                    "op": "+",
+                    "args": [
+                      "solar_heating",
+                      "surface_heat_flux"
+                    ]
+                  }
+                },
+                {
+                  "lhs": "D(boundary_layer_height)",
+                  "rhs": {
+                    "op": "pbl_parameterization",
+                    "args": [
+                      "wind_speed",
+                      "temperature"
+                    ]
+                  }
+                }
               ]
             }
           }
@@ -235,38 +448,99 @@
           "subsystems": {
             "NOxChemistry": {
               "species": [
-                {"name": "NO", "units": "ppb"},
-                {"name": "NO2", "units": "ppb"}
+                {
+                  "name": "NO",
+                  "units": "ppb"
+                },
+                {
+                  "name": "NO2",
+                  "units": "ppb"
+                }
               ],
               "reactions": [
                 {
-                  "substrates": {"NO2": 1},
-                  "products": {"NO": 1, "O3": 1},
-                  "rate_expression": {"op": "*", "args": ["j_NO2", "NO2"]}
+                  "substrates": {
+                    "NO2": 1
+                  },
+                  "products": {
+                    "NO": 1,
+                    "O3": 1
+                  },
+                  "rate_expression": {
+                    "op": "*",
+                    "args": [
+                      "j_NO2",
+                      "NO2"
+                    ]
+                  }
                 }
               ],
-              "parameters": [{"name": "j_NO2", "value": 0.008, "units": "1/s"}]
+              "parameters": [
+                {
+                  "name": "j_NO2",
+                  "value": 0.008,
+                  "units": "1/s"
+                }
+              ]
             },
             "VOCChemistry": {
               "species": [
-                {"name": "HCHO", "units": "ppb"},
-                {"name": "OH", "units": "ppt"}
+                {
+                  "name": "HCHO",
+                  "units": "ppb"
+                },
+                {
+                  "name": "OH",
+                  "units": "ppt"
+                }
               ],
               "reactions": [
                 {
-                  "substrates": {"HCHO": 1, "OH": 1},
-                  "products": {"HO2": 1, "CO": 1},
-                  "rate_expression": {"op": "*", "args": ["k_OH_HCHO", "HCHO", "OH"]}
+                  "substrates": {
+                    "HCHO": 1,
+                    "OH": 1
+                  },
+                  "products": {
+                    "HO2": 1,
+                    "CO": 1
+                  },
+                  "rate_expression": {
+                    "op": "*",
+                    "args": [
+                      "k_OH_HCHO",
+                      "HCHO",
+                      "OH"
+                    ]
+                  }
                 }
               ],
-              "parameters": [{"name": "k_OH_HCHO", "value": 9.0e-12, "units": "cm³/molecule/s"}]
+              "parameters": [
+                {
+                  "name": "k_OH_HCHO",
+                  "value": 9e-12,
+                  "units": "cm³/molecule/s"
+                }
+              ]
             }
           },
           "coupling_reactions": [
             {
-              "substrates": {"NOxChemistry.NO": 1, "VOCChemistry.HO2": 1},
-              "products": {"NO2": 1, "OH": 1},
-              "rate_expression": {"op": "*", "args": ["k_NO_HO2", "NOxChemistry.NO", "VOCChemistry.HO2"]}
+              "substrates": {
+                "NOxChemistry.NO": 1,
+                "VOCChemistry.HO2": 1
+              },
+              "products": {
+                "NO2": 1,
+                "OH": 1
+              },
+              "rate_expression": {
+                "op": "*",
+                "args": [
+                  "k_NO_HO2",
+                  "NOxChemistry.NO",
+                  "VOCChemistry.HO2"
+                ]
+              }
             }
           ]
         }
@@ -276,14 +550,32 @@
           "type": "spatial",
           "subsystems": {
             "TurbulentDiffusion": {
-              "parameters": {"eddy_diffusivity": {"value": 100, "units": "m²/s"}},
-              "inputs": ["concentration_profile"],
-              "outputs": ["mixed_concentration"]
+              "parameters": {
+                "eddy_diffusivity": {
+                  "value": 100,
+                  "units": "m²/s"
+                }
+              },
+              "inputs": [
+                "concentration_profile"
+              ],
+              "outputs": [
+                "mixed_concentration"
+              ]
             },
             "ConvectiveTransport": {
-              "parameters": {"convective_velocity": {"value": 2.0, "units": "m/s"}},
-              "inputs": ["surface_concentration"],
-              "outputs": ["transported_concentration"]
+              "parameters": {
+                "convective_velocity": {
+                  "value": 2.0,
+                  "units": "m/s"
+                }
+              },
+              "inputs": [
+                "surface_concentration"
+              ],
+              "outputs": [
+                "transported_concentration"
+              ]
             }
           }
         }
@@ -293,19 +585,31 @@
           "source_model": "UrbanAirQualitySystem.MeteorologicalLayer",
           "target_model": "UrbanChemistry",
           "coupling_type": "variable_map",
-          "variable_map": {"temperature": "temperature", "wind_speed": "turbulence_input"}
+          "variable_map": {
+            "temperature": "temperature",
+            "wind_speed": "turbulence_input"
+          }
         },
         {
           "source_model": "UrbanChemistry.NOxChemistry",
           "target_model": "VerticalMixing.TurbulentDiffusion",
           "coupling_type": "operator_compose",
-          "connections": [{"from": "NO2", "to": "concentration_profile"}]
+          "connections": [
+            {
+              "from": "NO2",
+              "to": "concentration_profile"
+            }
+          ]
         }
       ]
     },
     "expected_hierarchy": {
       "component_types_by_level": {
-        "level_0": ["UrbanAirQualitySystem", "UrbanChemistry", "VerticalMixing"],
+        "level_0": [
+          "UrbanAirQualitySystem",
+          "UrbanChemistry",
+          "VerticalMixing"
+        ],
         "level_1": [
           "UrbanAirQualitySystem.MeteorologicalLayer",
           "UrbanChemistry.NOxChemistry",
@@ -315,9 +619,20 @@
         ]
       },
       "type_classification": {
-        "models": ["UrbanAirQualitySystem", "UrbanAirQualitySystem.MeteorologicalLayer"],
-        "reaction_systems": ["UrbanChemistry", "UrbanChemistry.NOxChemistry", "UrbanChemistry.VOCChemistry"],
-        "operators": ["VerticalMixing", "VerticalMixing.TurbulentDiffusion", "VerticalMixing.ConvectiveTransport"]
+        "models": [
+          "UrbanAirQualitySystem",
+          "UrbanAirQualitySystem.MeteorologicalLayer"
+        ],
+        "reaction_systems": [
+          "UrbanChemistry",
+          "UrbanChemistry.NOxChemistry",
+          "UrbanChemistry.VOCChemistry"
+        ],
+        "operators": [
+          "VerticalMixing",
+          "VerticalMixing.TurbulentDiffusion",
+          "VerticalMixing.ConvectiveTransport"
+        ]
       },
       "cross_type_couplings": [
         {
@@ -325,14 +640,19 @@
           "target_type": "reaction_system",
           "source": "UrbanAirQualitySystem.MeteorologicalLayer",
           "target": "UrbanChemistry",
-          "coupling_variables": ["temperature", "wind_speed"]
+          "coupling_variables": [
+            "temperature",
+            "wind_speed"
+          ]
         },
         {
           "source_type": "reaction_system",
           "target_type": "operator",
           "source": "UrbanChemistry.NOxChemistry",
           "target": "VerticalMixing.TurbulentDiffusion",
-          "coupling_variables": ["NO2"]
+          "coupling_variables": [
+            "NO2"
+          ]
         }
       ],
       "internal_subsystem_couplings": [
@@ -362,26 +682,103 @@
             "SeasonalModule": {
               "conditional_subsystems": {
                 "SummerPhysics": {
-                  "activation_condition": {"op": ">", "args": ["day_of_year", 150]},
-                  "deactivation_condition": {"op": ">", "args": ["day_of_year", 250]},
-                  "variables": {"summer_heating": {"type": "state", "units": "W/m²"}},
-                  "equations": [{"lhs": "summer_heating", "rhs": {"op": "*", "args": ["solar_intensity", "albedo_summer"]}}]
+                  "activation_condition": {
+                    "op": ">",
+                    "args": [
+                      "day_of_year",
+                      150
+                    ]
+                  },
+                  "deactivation_condition": {
+                    "op": ">",
+                    "args": [
+                      "day_of_year",
+                      250
+                    ]
+                  },
+                  "variables": {
+                    "summer_heating": {
+                      "type": "unknown",
+                      "units": "W/m²"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": "summer_heating",
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          "solar_intensity",
+                          "albedo_summer"
+                        ]
+                      }
+                    }
+                  ]
                 },
                 "WinterPhysics": {
-                  "activation_condition": {"op": "or", "args": [{"op": "<", "args": ["day_of_year", 80]}, {"op": ">", "args": ["day_of_year", 300]}]},
-                  "variables": {"winter_cooling": {"type": "state", "units": "W/m²"}},
-                  "equations": [{"lhs": "winter_cooling", "rhs": {"op": "*", "args": ["radiative_loss", "snow_cover"]}}]
+                  "activation_condition": {
+                    "op": "or",
+                    "args": [
+                      {
+                        "op": "<",
+                        "args": [
+                          "day_of_year",
+                          80
+                        ]
+                      },
+                      {
+                        "op": ">",
+                        "args": [
+                          "day_of_year",
+                          300
+                        ]
+                      }
+                    ]
+                  },
+                  "variables": {
+                    "winter_cooling": {
+                      "type": "unknown",
+                      "units": "W/m²"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": "winter_cooling",
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          "radiative_loss",
+                          "snow_cover"
+                        ]
+                      }
+                    }
+                  ]
                 }
               },
-              "variables": {"base_temperature": {"type": "state", "units": "K"}},
+              "variables": {
+                "base_temperature": {
+                  "type": "unknown",
+                  "units": "K"
+                }
+              },
               "equations": [
                 {
                   "lhs": "D(base_temperature)",
                   "rhs": {
                     "op": "+",
                     "args": [
-                      {"op": "conditional", "condition": "SummerPhysics.active", "value": "SummerPhysics.summer_heating", "default": 0},
-                      {"op": "conditional", "condition": "WinterPhysics.active", "value": "WinterPhysics.winter_cooling", "default": 0}
+                      {
+                        "op": "conditional",
+                        "condition": "SummerPhysics.active",
+                        "value": "SummerPhysics.summer_heating",
+                        "default": 0
+                      },
+                      {
+                        "op": "conditional",
+                        "condition": "WinterPhysics.active",
+                        "value": "WinterPhysics.winter_cooling",
+                        "default": 0
+                      }
                     ]
                   }
                 }
@@ -392,16 +789,28 @@
       },
       "events": [
         {
-          "trigger": {"op": "time_event", "time": "daily"},
+          "trigger": {
+            "op": "time_event",
+            "time": "daily"
+          },
           "actions": [
-            {"type": "evaluate_conditions", "target": "AdaptiveClimateModel.SeasonalModule.conditional_subsystems"},
-            {"type": "reconfigure_hierarchy", "based_on": "activation_conditions"}
+            {
+              "type": "evaluate_conditions",
+              "target": "AdaptiveClimateModel.SeasonalModule.conditional_subsystems"
+            },
+            {
+              "type": "reconfigure_hierarchy",
+              "based_on": "activation_conditions"
+            }
           ]
         }
       ]
     },
     "expected_hierarchy": {
-      "static_components": ["AdaptiveClimateModel", "AdaptiveClimateModel.SeasonalModule"],
+      "static_components": [
+        "AdaptiveClimateModel",
+        "AdaptiveClimateModel.SeasonalModule"
+      ],
       "dynamic_components": [
         "AdaptiveClimateModel.SeasonalModule.SummerPhysics",
         "AdaptiveClimateModel.SeasonalModule.WinterPhysics"
@@ -410,24 +819,45 @@
         {
           "state_name": "spring_configuration",
           "condition": "day_of_year < 150",
-          "active_components": ["AdaptiveClimateModel", "AdaptiveClimateModel.SeasonalModule"],
-          "inactive_components": ["SummerPhysics", "WinterPhysics"]
+          "active_components": [
+            "AdaptiveClimateModel",
+            "AdaptiveClimateModel.SeasonalModule"
+          ],
+          "inactive_components": [
+            "SummerPhysics",
+            "WinterPhysics"
+          ]
         },
         {
           "state_name": "summer_configuration",
           "condition": "150 <= day_of_year <= 250",
-          "active_components": ["AdaptiveClimateModel", "AdaptiveClimateModel.SeasonalModule", "SummerPhysics"],
-          "inactive_components": ["WinterPhysics"]
+          "active_components": [
+            "AdaptiveClimateModel",
+            "AdaptiveClimateModel.SeasonalModule",
+            "SummerPhysics"
+          ],
+          "inactive_components": [
+            "WinterPhysics"
+          ]
         },
         {
           "state_name": "winter_configuration",
           "condition": "day_of_year < 80 or day_of_year > 300",
-          "active_components": ["AdaptiveClimateModel", "AdaptiveClimateModel.SeasonalModule", "WinterPhysics"],
-          "inactive_components": ["SummerPhysics"]
+          "active_components": [
+            "AdaptiveClimateModel",
+            "AdaptiveClimateModel.SeasonalModule",
+            "WinterPhysics"
+          ],
+          "inactive_components": [
+            "SummerPhysics"
+          ]
         }
       ],
       "reconfiguration_analysis": {
-        "triggers": ["time_event", "condition_evaluation"],
+        "triggers": [
+          "time_event",
+          "condition_evaluation"
+        ],
         "affected_graph_properties": [
           "node_count",
           "edge_count",
@@ -435,8 +865,13 @@
           "execution_order"
         ],
         "stability_analysis": {
-          "invariant_subgraph": ["AdaptiveClimateModel", "AdaptiveClimateModel.SeasonalModule"],
-          "variable_subgraph": ["conditional_subsystems"],
+          "invariant_subgraph": [
+            "AdaptiveClimateModel",
+            "AdaptiveClimateModel.SeasonalModule"
+          ],
+          "variable_subgraph": [
+            "conditional_subsystems"
+          ],
           "reconfiguration_frequency": "daily"
         }
       }

@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CompleteMetadataExample",
     "description": "Comprehensive example demonstrating all ESM metadata fields and variations including extended references, funding information, validation details, and software requirements\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",

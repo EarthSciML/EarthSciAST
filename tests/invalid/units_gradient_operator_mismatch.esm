@@ -1,40 +1,93 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsGradientOperatorMismatch",
     "description": "Invalid file. The single defect is the bad_sum observed variable, which adds 'm' to 'kg' (an ordinary §4.8.3 dimensional mismatch). The file ALSO applies grad over a coordinate 'x' declared without units — that is DELIBERATELY NOT an error: grad/div/laplacian are open-tier rewrite-target sugar with no dimensional rule (§4.8.3 'any other op'), so their dimension is undeterminable until lowered and a checker reports unknown and skips (§4.8.4). This fixture guards that despecialization — a binding must not re-add a bespoke gradient-units rule.",
-    "authors": ["Chris Tessum with Claude"],
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
     "created": "2026-04-18T00:00:00Z"
   },
-
   "models": {
     "SpatialModel": {
       "variables": {
-        "c":         { "type": "state",     "units": "mol/m^3", "default": 0.0, "description": "Tracer concentration (state)" },
-        "t":         { "type": "parameter", "units": "s",       "default": 1.0, "description": "Time (independent variable placeholder)" },
-        "x":         { "type": "parameter", "default": 0.0, "description": "Spatial coordinate declared WITHOUT units. The grad over dim 'x' therefore has an undeterminable dimension (§4.8.3 'any other op' -> §4.8.4 unknown, skip); a checker MUST NOT flag it. Only the bad_sum addition is a real mismatch." },
-        "D_coef":    { "type": "parameter", "units": "m^2/s",   "default": 0.1, "description": "Diffusion coefficient" },
-        "length":    { "type": "parameter", "units": "m",       "default": 1.0, "description": "Length parameter used to make the dimensional mismatch visible to bindings that only inspect observed variable additions" },
-        "mass":      { "type": "parameter", "units": "kg",      "default": 1.0, "description": "Mass parameter used to trigger an addition unit mismatch" },
-        "bad_sum":   { "type": "observed",  "units": "1",       "description": "Invalid: adds 'length' (m) to 'mass' (kg) — a dimensional mismatch any unit validator can detect. This is the sole pinned finding for this fixture.",
-          "expression": { "op": "+", "args": ["length", "mass"] }
+        "c": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 0.0,
+          "description": "Tracer concentration (state)"
+        },
+        "t": {
+          "type": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "description": "Time (independent variable placeholder)"
+        },
+        "x": {
+          "type": "parameter",
+          "default": 0.0,
+          "description": "Spatial coordinate declared WITHOUT units. The grad over dim 'x' therefore has an undeterminable dimension (§4.8.3 'any other op' -> §4.8.4 unknown, skip); a checker MUST NOT flag it. Only the bad_sum addition is a real mismatch."
+        },
+        "D_coef": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 0.1,
+          "description": "Diffusion coefficient"
+        },
+        "length": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "Length parameter used to make the dimensional mismatch visible to bindings that only inspect observed variable additions"
+        },
+        "mass": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 1.0,
+          "description": "Mass parameter used to trigger an addition unit mismatch"
+        },
+        "bad_sum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: adds 'length' (m) to 'mass' (kg) — a dimensional mismatch any unit validator can detect. This is the sole pinned finding for this fixture."
         }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
           "rhs": {
             "op": "*",
             "args": [
               "D_coef",
-              { "op": "grad", "args": ["c"], "dim": "x" }
+              {
+                "op": "grad",
+                "args": [
+                  "c"
+                ],
+                "dim": "x"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "bad_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length",
+              "mass"
             ]
           }
         }
       ]
     }
   },
-
   "domain": {
     "independent_variable": "t"
   }

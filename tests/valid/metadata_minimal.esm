@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MinimalMetadataExample"
   },
@@ -8,7 +8,7 @@
     "SimpleModel": {
       "reference": { "notes": "Minimal test model" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

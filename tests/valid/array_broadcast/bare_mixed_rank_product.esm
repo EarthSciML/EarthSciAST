@@ -1,8 +1,8 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "bare_mixed_rank_product",
-    "description": "Cross-binding conformance fixture for esm-spec \u00a74.3.4 name-based broadcast of TWO operands with disjoint missing axes (issue #100). The whole-array equation D(dp) ~ w2 * z1 multiplies a `[lon,lat]` field by a `[lev]` field into a `[lon,lat,lev]` result. Each operand broadcasts along the axes it does not declare \u2014 `w2` along `lev`, `z1` along `lon` and `lat` \u2014 so dp[i,j,k](t=1) = (i + 10 j) * 100 k, the outer product the index-set names describe, identical to the aggregate spelling sum_{i,j,k} index(w2,i,j) * index(z1,k). Because the two operands are missing DIFFERENT axes, no single positional rank-padding convention can produce this result: a binding that flattens both into the result's linear layout returns dp[1,1,2]=1100 instead of 2200 and zero in the last `lon` column.",
+    "description": "Cross-binding conformance fixture for esm-spec §4.3.4 name-based broadcast of TWO operands with disjoint missing axes (issue #100). The whole-array equation D(dp) ~ w2 * z1 multiplies a `[lon,lat]` field by a `[lev]` field into a `[lon,lat,lev]` result. Each operand broadcasts along the axes it does not declare — `w2` along `lev`, `z1` along `lon` and `lat` — so dp[i,j,k](t=1) = (i + 10 j) * 100 k, the outer product the index-set names describe, identical to the aggregate spelling sum_{i,j,k} index(w2,i,j) * index(z1,k). Because the two operands are missing DIFFERENT axes, no single positional rank-padding convention can produce this result: a binding that flattens both into the result's linear layout returns dp[1,1,2]=1100 instead of 2200 and zero in the last `lon` column.",
     "authors": [
       "EarthSciAST Test Suite"
     ],
@@ -38,7 +38,7 @@
       },
       "variables": {
         "dp": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lon",
@@ -49,14 +49,44 @@
           "description": "Rank-3 accumulator over the full grid. Its tendency is CONSTANT in time and its initial value is 0, so dp(t=1) reads back the array-level RHS cell by cell."
         },
         "w2": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lon",
             "lat"
           ],
-          "description": "Rank-2 field over `lon`,`lat`: w2[i,j] = i + 10 j.",
-          "expression": {
+          "description": "Rank-2 field over `lon`,`lat`: w2[i,j] = i + 10 j."
+        },
+        "z1": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Rank-1 field over `lev` only: z1[k] = 100 k, i.e. [100, 200]."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(dp)/dt = w2 * z1 with w2 over [lon,lat] and z1 over [lev]. dp[i,j,k](1) = (i + 10 j) * 100 k.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dp"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "w2",
+              "z1"
+            ]
+          }
+        },
+        {
+          "lhs": "w2",
+          "rhs": {
             "op": "aggregate",
             "args": [],
             "output_idx": [
@@ -86,14 +116,9 @@
             }
           }
         },
-        "z1": {
-          "type": "observed",
-          "units": "1",
-          "shape": [
-            "lev"
-          ],
-          "description": "Rank-1 field over `lev` only: z1[k] = 100 k, i.e. [100, 200].",
-          "expression": {
+        {
+          "lhs": "z1",
+          "rhs": {
             "op": "aggregate",
             "args": [],
             "output_idx": [
@@ -113,30 +138,11 @@
             }
           }
         }
-      },
-      "equations": [
-        {
-          "_comment": "D(dp)/dt = w2 * z1 with w2 over [lon,lat] and z1 over [lev]. dp[i,j,k](1) = (i + 10 j) * 100 k.",
-          "lhs": {
-            "op": "D",
-            "args": [
-              "dp"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "*",
-            "args": [
-              "w2",
-              "z1"
-            ]
-          }
-        }
       ],
       "tests": [
         {
           "id": "bare_mixed_rank_product_t1",
-          "description": "Sample the rank-3 result at t=1 through \u00a76.6.5 `coords`, one probe per distinct broadcast outcome.",
+          "description": "Sample the rank-3 result at t=1 through §6.6.5 `coords`, one probe per distinct broadcast outcome.",
           "time_span": {
             "start": 0.0,
             "end": 1.0

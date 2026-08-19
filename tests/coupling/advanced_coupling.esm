@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "AdvancedCouplingTests",
     "description": "Test all coupling types: couple, operator_apply, callback\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -15,13 +15,13 @@
     "Chemistry": {
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "description": "Ozone"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-10,
           "description": "NO"
@@ -33,15 +33,8 @@
           "description": "Temperature"
         },
         "deposition_flux": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/m^2/s",
-          "expression": {
-            "op": "*",
-            "args": [
-              "O3",
-              0.001
-            ]
-          },
           "description": "Surface deposition flux"
         }
       },
@@ -97,6 +90,16 @@
             ]
           },
           "rhs": 1e-09
+        },
+        {
+          "lhs": "deposition_flux",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "O3",
+              0.001
+            ]
+          }
         }
       ]
     },
@@ -109,24 +112,28 @@
           "description": "Surface resistance"
         },
         "deposition_velocity": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m/s",
-          "expression": {
+          "description": "Deposition velocity"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "deposition_velocity",
+          "rhs": {
             "op": "/",
             "args": [
               1.0,
               "surface_resistance"
             ]
-          },
-          "description": "Deposition velocity"
+          }
         }
-      },
-      "equations": []
+      ]
     },
     "Transport": {
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.0,
           "description": "Transported scalar concentration"

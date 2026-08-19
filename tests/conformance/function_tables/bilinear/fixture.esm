@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "function_tables_bilinear_conformance",
     "description": "Multi-output 2-axis bilinear function table with named outputs (esm-spec §9.5.6).",
@@ -25,8 +25,8 @@
   "models": {
     "M": {
       "variables": {
-        "j_NO2":  {"type": "state",     "default": 0.0},
-        "j_O3":   {"type": "state",     "default": 0.0},
+        "j_NO2":  {"type": "unknown",     "default": 0.0},
+        "j_O3":   {"type": "unknown",     "default": 0.0},
         "P_atm":  {"type": "parameter", "default": 100.0},
         "cos_sza":{"type": "parameter", "default": 0.5}
       },

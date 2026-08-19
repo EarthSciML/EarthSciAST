@@ -1,6 +1,6 @@
 {
   "_comment": "EDGAR v8.1 Monthly Emissions fixture. Expresses an instantiation of EarthSciData.jl EDGARv81MonthlyEmisFileSet with substance='NOx', sector='TRO_noRES'. Source: EarthSciData.jl src/edgar_v81_monthly.jl (struct EDGARv81MonthlyEmisFileSet at lines 91-140, relpath at lines 148-152). Data ships as a per-(substance, sector) zip that runtime extracts; the resulting per-year NetCDF files inside are aggregated via NCDataset multi-file mode. url_template here points at the zip archive.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EDGARv81MonthlyFixture",
     "description": "EDGAR v8.1 monthly NOx emissions from road transport (excluding residential) in the STAC-like DataLoader schema.",
@@ -57,7 +57,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

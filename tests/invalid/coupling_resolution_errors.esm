@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CouplingResolutionErrorTests",
     "description": "Error cases for scoped reference resolution algorithm verification",
@@ -20,7 +20,7 @@
     "ValidModel": {
       "variables": {
         "valid_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "default": 1.0,
           "description": "Valid variable"

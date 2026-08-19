@@ -1,11 +1,18 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Calendar",
     "description": "Standard-library calendar subsystem. Decomposes a UTC scalar time `t_utc` (IEEE-754 binary64 seconds since 1970-01-01T00:00:00Z, proleptic Gregorian, no leap-second consultation; see esm-spec.md §9.2) into the closed `datetime.*` calendar fields plus a small set of derived helpers (`seconds_since_midnight`, `fractional_year`) authored as pure-AST compositions of those fields. Includable as a subsystem via §4.7 reference; see docs/standard_library.md.",
-    "authors": ["EarthSciML"],
+    "authors": [
+      "EarthSciML"
+    ],
     "created": "2026-04-25T00:00:00Z",
-    "tags": ["standard-library", "calendar", "datetime", "closed-function-registry"],
+    "tags": [
+      "standard-library",
+      "calendar",
+      "datetime",
+      "closed-function-registry"
+    ],
     "references": [
       {
         "citation": "esm-spec.md §9.2 (datetime.* closed function registry); Fliegel, H.F., Van Flandern, T.C., 1968. A machine algorithm for processing calendar dates. Communications of the ACM 11(10), 657."
@@ -46,88 +53,207 @@
           "description": "The NOAA fractional-year rate, 2π/365 radians per day-of-year count (§4.8.3 dimensional bridge). `day_of_year` and `hour` are dimensionless counts, so this constant is what makes `fractional_year` an angle."
         },
         "year": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "Proleptic-Gregorian calendar year of `t_utc` (e.g. 2026; 1969 for late-1969 instants; -1 for 2 BC). Integer-valued (zero ulp) per esm-spec.md §9.2.",
-          "expression": { "op": "fn", "name": "datetime.year", "args": ["t_utc"] }
+          "description": "Proleptic-Gregorian calendar year of `t_utc` (e.g. 2026; 1969 for late-1969 instants; -1 for 2 BC). Integer-valued (zero ulp) per esm-spec.md §9.2."
         },
         "month": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "Calendar month of `t_utc`, 1..12 (1 = January). Integer-valued.",
-          "expression": { "op": "fn", "name": "datetime.month", "args": ["t_utc"] }
+          "description": "Calendar month of `t_utc`, 1..12 (1 = January). Integer-valued."
         },
         "day": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "Day of month, 1..31. Integer-valued.",
-          "expression": { "op": "fn", "name": "datetime.day", "args": ["t_utc"] }
+          "description": "Day of month, 1..31. Integer-valued."
         },
         "hour": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "UTC hour, 0..23. Integer-valued.",
-          "expression": { "op": "fn", "name": "datetime.hour", "args": ["t_utc"] }
+          "description": "UTC hour, 0..23. Integer-valued."
         },
         "minute": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "UTC minute, 0..59. Integer-valued.",
-          "expression": { "op": "fn", "name": "datetime.minute", "args": ["t_utc"] }
+          "description": "UTC minute, 0..59. Integer-valued."
         },
         "second": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "UTC second, 0..59 (no leap-second slot per esm-spec.md §9.2). Integer-valued.",
-          "expression": { "op": "fn", "name": "datetime.second", "args": ["t_utc"] }
+          "description": "UTC second, 0..59 (no leap-second slot per esm-spec.md §9.2). Integer-valued."
         },
         "day_of_year": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "Day of the proleptic-Gregorian year of `t_utc`, 1..366 (1 = Jan 1). Integer-valued.",
-          "expression": { "op": "fn", "name": "datetime.day_of_year", "args": ["t_utc"] }
+          "description": "Day of the proleptic-Gregorian year of `t_utc`, 1..366 (1 = Jan 1). Integer-valued."
         },
         "julian_day": {
-          "type": "observed",
+          "type": "unknown",
           "units": "day",
-          "description": "Continuous Julian Day Number including fractional time-of-day (JD 0 = noon UTC on 4713-01-01 BC, proleptic Julian calendar). Tolerance ≤ 1 ulp per esm-spec.md §9.2.",
-          "expression": { "op": "fn", "name": "datetime.julian_day", "args": ["t_utc"] }
+          "description": "Continuous Julian Day Number including fractional time-of-day (JD 0 = noon UTC on 4713-01-01 BC, proleptic Julian calendar). Tolerance ≤ 1 ulp per esm-spec.md §9.2."
         },
         "is_leap_year": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "1 if the proleptic-Gregorian year of `t_utc` is a leap year, else 0. Integer-valued.",
-          "expression": { "op": "fn", "name": "datetime.is_leap_year", "args": ["t_utc"] }
+          "description": "1 if the proleptic-Gregorian year of `t_utc` is a leap year, else 0. Integer-valued."
         },
         "seconds_since_midnight": {
-          "type": "observed",
+          "type": "unknown",
           "units": "s",
-          "description": "Seconds elapsed since the most recent UTC midnight, 0..86399. Built from the integer-exact `hour`, `minute`, `second` decompositions: `hour*s_per_hour + minute*s_per_minute + second*s_per_second`, i.e. `hour*3600 + minute*60 + second`. The three conversion factors carry the seconds (§4.8.3); the clock fields themselves are dimensionless counts. Integer-valued, and numerically identical to the bare-literal form (x*1.0 == x exactly).",
-          "expression": {
-            "op": "+",
+          "description": "Seconds elapsed since the most recent UTC midnight, 0..86399. Built from the integer-exact `hour`, `minute`, `second` decompositions: `hour*s_per_hour + minute*s_per_minute + second*s_per_second`, i.e. `hour*3600 + minute*60 + second`. The three conversion factors carry the seconds (§4.8.3); the clock fields themselves are dimensionless counts. Integer-valued, and numerically identical to the bare-literal form (x*1.0 == x exactly)."
+        },
+        "fractional_year": {
+          "type": "unknown",
+          "units": "rad",
+          "description": "NOAA solar-position fractional-year angle γ (radians): `rad_per_day * ((day_of_year - 1) + (hour - 12)/24)`, i.e. `(2π/365) * (...)`. The bracket is a dimensionless day count; `rad_per_day` is what makes the result an angle (§4.8.3). Always uses 365.0 (NOAA convention; the resulting ~1-minute leap-year drift is below the algorithm's intrinsic accuracy). Tolerance ~3 ulp per esm-spec.md §9.2 (one transcendental composition)."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "year",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.year",
             "args": [
-              { "op": "*", "args": ["hour", "s_per_hour"] },
-              { "op": "*", "args": ["minute", "s_per_minute"] },
-              { "op": "*", "args": ["second", "s_per_second"] }
+              "t_utc"
             ]
           }
         },
-        "fractional_year": {
-          "type": "observed",
-          "units": "rad",
-          "description": "NOAA solar-position fractional-year angle γ (radians): `rad_per_day * ((day_of_year - 1) + (hour - 12)/24)`, i.e. `(2π/365) * (...)`. The bracket is a dimensionless day count; `rad_per_day` is what makes the result an angle (§4.8.3). Always uses 365.0 (NOAA convention; the resulting ~1-minute leap-year drift is below the algorithm's intrinsic accuracy). Tolerance ~3 ulp per esm-spec.md §9.2 (one transcendental composition).",
-          "expression": {
+        {
+          "lhs": "month",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.month",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "day",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.day",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "hour",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.hour",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "minute",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.minute",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "second",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.second",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "day_of_year",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.day_of_year",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "julian_day",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.julian_day",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "is_leap_year",
+          "rhs": {
+            "op": "fn",
+            "name": "datetime.is_leap_year",
+            "args": [
+              "t_utc"
+            ]
+          }
+        },
+        {
+          "lhs": "seconds_since_midnight",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "hour",
+                  "s_per_hour"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "minute",
+                  "s_per_minute"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "second",
+                  "s_per_second"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "fractional_year",
+          "rhs": {
             "op": "*",
             "args": [
               "rad_per_day",
               {
                 "op": "+",
                 "args": [
-                  { "op": "-", "args": ["day_of_year", 1] },
+                  {
+                    "op": "-",
+                    "args": [
+                      "day_of_year",
+                      1
+                    ]
+                  },
                   {
                     "op": "/",
                     "args": [
-                      { "op": "-", "args": ["hour", 12] },
+                      {
+                        "op": "-",
+                        "args": [
+                          "hour",
+                          12
+                        ]
+                      },
                       24.0
                     ]
                   }
@@ -136,8 +262,7 @@
             ]
           }
         }
-      },
-      "equations": []
+      ]
     }
   }
 }

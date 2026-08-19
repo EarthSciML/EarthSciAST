@@ -1,8 +1,8 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "bare_rank_lift",
-    "description": "Cross-binding conformance fixture for esm-spec \u00a74.3.4 name-based broadcast in a BARE array-level equation (issue #100). The whole-array equation D(dp) ~ w1 has a rank-1 operand `w1`, declared over `lat` alone, in a rank-3 `[lon,lat,lev]` result. Operands of a bare array-level expression align by index-set NAME, so `w1` supplies the `lat` axis and REPLICATES along `lon` and `lev`: dp[i,j,k](t=1) = w1[j] = 10 j, constant in i and k. This is exactly what the explicit aggregate spelling sum_{i,j,k} index(w1, j) computes, and the two spellings MUST agree cell for cell. A binding that instead flattens `w1` into the result's linear layout lays its two elements along `lon` and zero-fills the third `lon` cell, producing dp[1,1,1]=10, dp[2,1,1]=20, dp[3,1,1]=0 \u2014 plausible, finite, and wrong.",
+    "description": "Cross-binding conformance fixture for esm-spec §4.3.4 name-based broadcast in a BARE array-level equation (issue #100). The whole-array equation D(dp) ~ w1 has a rank-1 operand `w1`, declared over `lat` alone, in a rank-3 `[lon,lat,lev]` result. Operands of a bare array-level expression align by index-set NAME, so `w1` supplies the `lat` axis and REPLICATES along `lon` and `lev`: dp[i,j,k](t=1) = w1[j] = 10 j, constant in i and k. This is exactly what the explicit aggregate spelling sum_{i,j,k} index(w1, j) computes, and the two spellings MUST agree cell for cell. A binding that instead flattens `w1` into the result's linear layout lays its two elements along `lon` and zero-fills the third `lon` cell, producing dp[1,1,1]=10, dp[2,1,1]=20, dp[3,1,1]=0 — plausible, finite, and wrong.",
     "authors": [
       "EarthSciAST Test Suite"
     ],
@@ -37,7 +37,7 @@
       },
       "variables": {
         "dp": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lon",
@@ -48,13 +48,29 @@
           "description": "Rank-3 accumulator over the full grid. Its tendency is CONSTANT in time and its initial value is 0, so dp(t=1) reads back the array-level RHS cell by cell."
         },
         "w1": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lat"
           ],
-          "description": "Rank-1 field over `lat` only: w1[j] = 10 j, i.e. [10, 20].",
-          "expression": {
+          "description": "Rank-1 field over `lat` only: w1[j] = 10 j, i.e. [10, 20]."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(dp)/dt = w1 with w1 declared over [lat] only: broadcast along lon and lev. dp[i,j,k](1) = 10 j.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dp"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "w1"
+        },
+        {
+          "lhs": "w1",
+          "rhs": {
             "op": "aggregate",
             "args": [],
             "output_idx": [
@@ -74,24 +90,11 @@
             }
           }
         }
-      },
-      "equations": [
-        {
-          "_comment": "D(dp)/dt = w1 with w1 declared over [lat] only: broadcast along lon and lev. dp[i,j,k](1) = 10 j.",
-          "lhs": {
-            "op": "D",
-            "args": [
-              "dp"
-            ],
-            "wrt": "t"
-          },
-          "rhs": "w1"
-        }
       ],
       "tests": [
         {
           "id": "bare_rank_lift_t1",
-          "description": "Sample the rank-3 result at t=1 through \u00a76.6.5 `coords`, one probe per distinct broadcast outcome.",
+          "description": "Sample the rank-3 result at t=1 through §6.6.5 `coords`, one probe per distinct broadcast outcome.",
           "time_span": {
             "start": 0.0,
             "end": 1.0

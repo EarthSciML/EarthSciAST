@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TemporalRecordsPerFileInvalid",
     "description": "Test case: data loader temporal.records_per_file must be a positive integer or the string \"auto\"",
@@ -23,7 +23,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 1.0 }
+        "x": { "type": "unknown", "units": "1", "default": 1.0 }
       },
       "equations": [
         {

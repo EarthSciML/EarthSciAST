@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UndefinedVariableInAssertionReference",
     "description": "Invalid: an undefined variable inside a test assertion's `reference` expression (\u00a76.6.3). Reference integrity must apply to EVERY expression-bearing field, not just `equations` (esm-spec \u00a74.9.5). `y` and `k` are declared; the ONLY defect is the undefined name `undefined_xyz`. The file is schema-valid, so it reaches structural validation (CONFORMANCE_SPEC \u00a77.1.2). Expected error: undefined_variable @ /models/TestModel/tests/0/assertions/0/reference.",
@@ -12,7 +12,7 @@
     "TestModel": {
       "variables": {
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "description": "State."
         },

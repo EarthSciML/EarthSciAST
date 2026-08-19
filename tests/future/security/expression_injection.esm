@@ -1,43 +1,67 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ExpressionInjectionTest",
     "description": "Test input sanitization for user-provided expressions with potential injection attacks",
-    "authors": ["Security Test"]
+    "authors": [
+      "Security Test"
+    ]
   },
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 1.0 },
+        "x": {
+          "type": "unknown",
+          "units": "m",
+          "default": 1.0
+        },
         "malicious_var": {
-          "type": "observed",
-          "units": "1",
-          "expression": {
-            "op": "eval",
-            "args": ["system('rm -rf /')"]
-          }
+          "type": "unknown",
+          "units": "1"
         },
         "script_injection": {
-          "type": "observed",
-          "units": "1",
-          "expression": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "unsafe_eval",
+            "args": [
+              "__import__('os').system('echo PWNED')"
+            ]
+          }
+        },
+        {
+          "lhs": "malicious_var",
+          "rhs": {
+            "op": "eval",
+            "args": [
+              "system('rm -rf /')"
+            ]
+          }
+        },
+        {
+          "lhs": "script_injection",
+          "rhs": {
             "op": "+",
             "args": [
               1.0,
               {
                 "op": "custom_func",
-                "args": ["<script>alert('XSS')</script>"]
+                "args": [
+                  "<script>alert('XSS')</script>"
+                ]
               }
             ]
-          }
-        }
-      },
-      "equations": [
-        {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": {
-            "op": "unsafe_eval",
-            "args": ["__import__('os').system('echo PWNED')"]
           }
         }
       ]

@@ -1,6 +1,6 @@
 {
   "_comment": "WRF regional reanalysis fixture. Expresses an instantiation of EarthSciData.jl WRFFileSet (hourly output, d01 domain). Source: EarthSciData.jl src/wrf.jl (struct WRFFileSet at lines 4-37, relpath at lines 39-45). The path grammar $year$month/wrfout_hourly_d01_{yyyy-mm-dd}_{HH:MM:SS}.nc is encoded in url_template via {date} substitutions. Staggering matches WRF's Arakawa-C grid (U on west_east edges, V on south_north edges, mass points centered).",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "WRFFixture",
     "description": "WRF hourly regional reanalysis (d01 domain) expressed in the STAC-like DataLoader schema.",
@@ -74,7 +74,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

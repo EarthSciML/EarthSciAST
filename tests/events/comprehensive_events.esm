@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ComprehensiveEventTests",
     "description": "Complete test coverage for all event system capabilities",
@@ -12,25 +12,25 @@
     "BouncingBall": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Position"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": -5.0,
           "description": "Velocity"
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Y position"
         },
         "vy": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 2.0,
           "description": "Y velocity"
@@ -54,33 +54,8 @@
           "description": "Friction flag"
         },
         "total_energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  0.5,
-                  {
-                    "op": "^",
-                    "args": [
-                      "v",
-                      2
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  "g",
-                  "x"
-                ]
-              }
-            ]
-          },
           "description": "Total mechanical energy"
         }
       },
@@ -165,6 +140,34 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "total_energy",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "^",
+                    "args": [
+                      "v",
+                      2
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "g",
+                  "x"
+                ]
+              }
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -425,7 +428,7 @@
           "description": "Emission rate"
         },
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 298.15,
           "description": "Temperature"

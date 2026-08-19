@@ -1,5 +1,5 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ClosedFnFixture_datetime_month",
     "description": "Conformance fixture for `datetime.month` (esm-spec §9.2). Trivial ODE whose RHS invokes the function on a `t_utc` parameter; bindings exercise the same set of `t_utc` inputs from `expected.json` and assert agreement at the spec tolerance.",
@@ -16,7 +16,7 @@
           "description": "UTC seconds since Unix epoch (input to the closed function)."
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "default": 0.0,
           "units": "1",
           "description": "Trivial state whose derivative is the closed-function output. Bindings read `evaluate(rhs, {t_utc: <input>})` and compare against expected.json."

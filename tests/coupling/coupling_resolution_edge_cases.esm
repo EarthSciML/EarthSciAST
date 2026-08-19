@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CouplingResolutionEdgeCases",
     "description": "Edge cases and boundary conditions for coupling resolution algorithms",
@@ -16,7 +16,7 @@
     "SingleVariableSystem": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "default": 1.0,
           "description": "Single state variable"
@@ -61,16 +61,14 @@
     "AlgebraicSystem": {
       "variables": {
         "y": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "description": "Algebraic variable",
-          "expression": 0.0
+          "description": "Algebraic variable"
         },
         "z": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "description": "Another algebraic variable",
-          "expression": 0.0
+          "description": "Another algebraic variable"
         },
         "c": {
           "units": "dimensionless",
@@ -99,19 +97,27 @@
               "c"
             ]
           }
+        },
+        {
+          "lhs": "y",
+          "rhs": 0.0
+        },
+        {
+          "lhs": "z",
+          "rhs": 0.0
         }
       ]
     },
     "ConflictingNamesSystem": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Position x (different from SingleVariableSystem.x)"
         },
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 300.0,
           "description": "Temperature state"
@@ -161,7 +167,7 @@
     "PlaceholderTestSystem": {
       "variables": {
         "normal_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "default": 2.0,
           "description": "Normal variable"

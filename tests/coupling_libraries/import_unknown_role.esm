@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "import_unknown_role",
     "description": "INVALID import: the bind carries key 'Ghost', which rothermel_fuel.esm does not declare as a role (catches typos and stale binds; esm-spec 10.10.1). Expected: coupling_import_unknown_role."

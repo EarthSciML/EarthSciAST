@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "IllegalLibraryWithModels",
     "description": "INVALID coupling library: declares `models`. A coupling library is nothing but roles + wiring (esm-spec 10.9 purity). Expected: coupling_library_illegal_payload."

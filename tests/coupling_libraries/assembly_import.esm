@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "wildfire_rothermel_import",
     "description": "Assembly that stands up the Rothermel fuel stack by IMPORTING rothermel_fuel.esm (one coupling_import binding Fuel/Spread). Its flattened system must be byte-identical to assembly_inline.esm (esm-spec 10.10.3 / RFC 11 equivalence)."
@@ -22,7 +22,7 @@
         "delta": { "type": "parameter", "units": "m", "default": 0.0 },
         "Mx": { "type": "parameter", "units": "1", "default": 0.0 },
         "h": { "type": "parameter", "units": "J/kg", "default": 0.0 },
-        "r": { "type": "state", "units": "m/s", "default": 0.0 }
+        "r": { "type": "unknown", "units": "m/s", "default": 0.0 }
       },
       "equations": [
         { "lhs": { "op": "D", "args": ["r"], "wrt": "t" }, "rhs": { "op": "-", "args": ["r"] } }

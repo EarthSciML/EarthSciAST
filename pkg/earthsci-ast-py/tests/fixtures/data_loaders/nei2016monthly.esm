@@ -1,6 +1,6 @@
 {
   "_comment": "NEI 2016 Monthly Emissions fixture. Expresses an instantiation of EarthSciData.jl NEI2016MonthlyEmisFileSet with sector='all'. Source: EarthSciData.jl src/nei2016monthly.jl (struct NEI2016MonthlyEmisFileSet at lines 142-166, relpath at lines 173-177). The url_template encodes the path grammar 'emismod/2016/v1/gridded/monthly_netCDF/2016fh_16j_{sector}_12US1_month_{MM}.ncf'. Data is only available for 2016. Grid is 12km CONUS (12US1).",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NEI2016MonthlyFixture",
     "description": "NEI 2016 monthly gridded emissions (12US1 CONUS grid, all sectors) expressed in the STAC-like DataLoader schema.",
@@ -78,7 +78,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

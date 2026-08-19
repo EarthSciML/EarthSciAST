@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "PowLogistic",
     "description": "Cross-binding conformance fixture (esm-sph): exercises the pow / `^` op with a non-integer-shaped Bernoulli ODE dZ/dt = k*Z^n - decay*Z. Catches the pow-op silent gap surfaced by polecat nux's audit (escalation hq-wisp-ywi).",
@@ -13,7 +13,7 @@
       },
       "variables": {
         "Z": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Bernoulli state."

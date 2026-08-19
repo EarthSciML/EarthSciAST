@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "scalar_ic",
     "description": "esm-spec 11.4: a 0-D component's `ic` RHS is a scalar, and every state SHOULD have exactly one `ic` equation (a missing one falls back to the declared `default`). Every state here declares a `default` that DIFFERS from its `ic`, so a binding that drops the `ic` equation and seeds from the default is caught rather than masked. The three RHS forms are separated: `u` a plain literal, `q` a literal ARITHMETIC expression, `w` a PARAMETER-referencing expression (the 6.6.5 build-time evaluation scope). `y` is the non-vacuity anchor -- it carries no interesting ic of its own but integrates D(y)/dt = u, so the seeded value of `u` reaches y(1) through the dynamics and a dropped ic cannot hide in u0 alone. `z` declares NO ic at all and pins the default fallback.",
@@ -26,31 +26,31 @@
           "description": "Referenced ONLY by ic(w) -- never by an equation -- so an override moves the answer through the build-time ic scope and nowhere else."
         },
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "ic(u) = 3.0, a plain literal. `default` is 0.0 so a dropped ic reads 0."
         },
         "q": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "ic(q) = 1.5 + 2*0.25, a literal arithmetic expression that must const-fold to 2.0."
         },
         "w": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "ic(w) = 2*A, a parameter-referencing expression (esm-spec 6.6.5)."
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Non-vacuity anchor: ic(y) = 0.0 and D(y)/dt = u, so y(1) equals u's seeded value exactly."
         },
         "z": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 7.0,
           "description": "NO ic equation: pins the declared-default fallback of esm-spec 11.4."

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "WRF_d01_hourly",
     "description": "Source: EarthSciData/src/wrf.jl — WRFFileSet / WRF(). Parameter footprint: mirror (NCAR RDA d340000), domain. File-per-hour NetCDF (wrfout_hourly_d01_{YYYY}-{MM}-{DD}_{HH}.nc) on the Lambert conformal WRF grid. This fixture represents the d01 domain 2018 snapshot.",
@@ -69,7 +69,7 @@
     "stub": {
       "variables": {
         "x": {
-          "type": "state"
+          "type": "unknown"
         }
       },
       "equations": [

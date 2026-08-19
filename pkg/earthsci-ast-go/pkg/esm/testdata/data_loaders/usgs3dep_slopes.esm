@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "USGS3DEP_Slopes",
     "description": "Source: EarthSciData/src/usgs3dep.jl — USGS3DEPSlopeFileSet / USGS3DEPSlopes(). Wraps the underlying USGS3DEPFileSet and computes terrain slope components ds_dx and ds_dy. Parameter footprint: parent USGS3DEPFileSet (mirror, bbox, width, height, freq_info) plus component symbol (:ds_dx | :ds_dy). Static dataset — same URL template as the parent elevation loader, exposing derived slope variables.",
@@ -50,7 +50,7 @@
     "stub": {
       "variables": {
         "x": {
-          "type": "state"
+          "type": "unknown"
         }
       },
       "equations": [

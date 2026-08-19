@@ -1,5 +1,5 @@
 {
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "conservative_regrid_overlap_join",
     "description": "M4 END-TO-END worked example (RFC semiring-faq-unified-ir §A.8 / §8.1 / §6.1; CONFORMANCE_SPEC.md §5.8; bead ess-my4.4.5): the FULL conservative-regridding overlap-join idiom in one document — the synthesis the schema-only blocker fixtures (bin_skolem_spatial_join.esm = broad phase, intersect_polygon_clip_area.esm = narrow phase) deferred here. The operation is `F_tgt[j] = (1/A_j)·Σ_i A_ij·F_src[i]`, `A_ij = area(src_i ∩ tgt_j)`, `A_j = Σ_i A_ij` — verified piece-by-piece against ConservativeRegridding.jl / EarthSciData.jl (§A.8). The A.8 mapping, in the order the equations realize it: (1) OVERLAP PAIRS {(i,j):A_ij>0} — NOT M2's equi-only join.on directly (the spatial/theta join), realized as a bin-Skolem EQUI-join: each cell's representative bbox corner is quantized to an INTEGER lat-lon bin via `floor` (the item-3 decision — no new bin/floor leaf op), a bin key is minted with `skolem`, and the candidate pairs are the landed M2 `join.on` of source and target cells sharing a bin key (a `distinct` bool_and_or index-set-producing aggregate, id `candidate_set`, materialized as the derived `candidate_pairs` set). Integer bin keys keep this candidate set BYTE-IDENTICAL across bindings (§5.8.5 / §5.5 determinism — no floating-point coordinate comparison enters the broad phase; the sorted total order of §5.7 fixes the emitted set); the adversarial permuted-input-order variant collapsing to the identical candidate set is asserted by the M4 conformance gate (ess-my4.4.8 / §5.8.6). STR-tree acceleration is an explicit perf follow-on (a physical-operator/planner concern), NOT in scope and NOT in the IR. (2) A_ij — the `intersect_polygon` kernel leaf + the `polygon_area` `sum_product` FAQ (§8.1): the narrow phase, demonstrated here on a representative candidate pair (the `clip`/`A_ij_rep` observed pair, mirroring intersect_polygon_clip_area.esm) and supplied to the assembly as the build-once sparse overlap-area FACTOR `A_ij` (ConservativeRegridding.jl's `intersections` matrix of RAW areas — the static-partition build-once output, §6.1; one clip per candidate pair fills each entry, exactly as `dc`/`dv` are factors over the derived edge set in edge_enumeration_area_eff.esm). ZERO-AREA FILTERING: a candidate that clips to a sub-`atol` sliver is treated as equal-to-zero (§5.8.2) and dropped from the surviving-overlap set via `filter: A_ij > atol` on the assembly aggregates — this is exactly §5.8.5's 'candidate set ≠ surviving-overlap set' boundary made explicit: the join produces the byte-identical CANDIDATE set, the filter produces the tolerance-dependent SURVIVING set. (3) A_j = Σ_i A_ij — the group-by-`j` `sum_product` FAQ (ConservativeRegridding.jl's row-sums → `dst_areas`). (4) APPLY Σ_i A_ij·F_src[i] — a `sum_product` FAQ over the overlap set (the sparse mat-vec `mul!(dst, intersections, src)`); dynamic if F_src is time-varying (§6.1). (5) NORMALIZE /A_j — elementwise, foldable to build time (`dst ./= dst_areas`); partition-of-unity Σ_i W_ij = 1 holds BY CONSTRUCTION because the denominator is the row-sum of the SAME computed areas (§5.8.3). The `mass_tgt` tracer integrates Σ_j A_j·F_tgt[j], the conserved global mass (§5.8.3 conservation invariant). NO NEW PHYSICAL OPERATOR: the idiom composes from `floor`, `skolem`, `join.on`, `distinct`, `sum_product`, and the already-landed `intersect_polygon` leaf. STRUCTURAL fixture: validates against the additive M3+M4 schema with no evaluator (skolem/distinct/intersect_polygon are resolver/kernel concerns — the value-invention half rides the M3 determinism goldens, the clip is the tolerance-based M4 kernel gate ess-my4.4.8, and the per-binding assembly is ess-my4.4.6/.7/.12).",
@@ -130,34 +130,462 @@
           "description": "The source field being remapped. A `parameter` here (static field, build-once apply); in the time-varying case it is `state`/`discrete` and the apply FAQ (eq. 5) becomes CONTINUOUS-cadence per §6.1 — the build-once weights / apply-many split is exactly the static/dynamic partition."
         },
         "src_bin": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "src_cells"
           ],
           "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)). `floor` does the integer quantization (no bespoke binning op); `skolem` mints the content-addressed key. The equi-join column the candidate set joins on."
         },
         "tgt_bin": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "tgt_cells"
           ],
           "description": "Integer bin key of each target cell — identically quantized, so a shared key means source and target bboxes fall in the same broad-phase bucket."
         },
         "pair_exists": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "candidate_pairs"
           ],
           "description": "Membership over the candidate overlap-pair set produced by the bin-Skolem equi-join (the broad phase) — the byte-identical integer candidate set of §5.8.5, materialized as the derived `candidate_pairs` index set via from_faq:\"candidate_set\"."
         },
         "clip": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "clip_ring",
             "coord"
           ],
-          "description": "NARROW-PHASE DEMO: the clipped overlap ring A ∩ B for a representative candidate pair — the `intersect_polygon` leaf output, a vertex ring of DATA-DEPENDENT length whose vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\", riding the M3 value-invention machinery, §8.1). One such clip is computed per candidate pair to fill the `A_ij` factor.",
-          "expression": {
+          "description": "NARROW-PHASE DEMO: the clipped overlap ring A ∩ B for a representative candidate pair — the `intersect_polygon` leaf output, a vertex ring of DATA-DEPENDENT length whose vertex set is the derived `clip_ring` index set (from_faq:\"overlap_clip\", riding the M3 value-invention machinery, §8.1). One such clip is computed per candidate pair to fill the `A_ij` factor."
+        },
+        "A_ij_rep": {
+          "type": "unknown",
+          "shape": [],
+          "description": "NARROW-PHASE DEMO: the representative overlap area A_ij = polygon_area(clip) on the SPHERE — a sum_product FAQ over the clipped ring whose body is the great-circle fan triangulation Σ_v E(v_1,v_v,v_{v+1}) of Van Oosterom-Strackee spherical excesses E(a,b,c)=2·atan2(a·(b×c),1+a·b+b·c+c·a) (unit sphere). This is how each entry of the build-once A_ij factor is produced; the test asserts it equals polygon_area(clip,\"spherical\") and the matching A_ij[i,j]."
+        },
+        "A_j": {
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Target-cell area denominator A_j = Σ_i A_ij — the group-by-`j` row-sum over the bin-Skolem CANDIDATE pairs (join.on [[src_bin,tgt_bin]] on the MATERIALISED bin buffers) with the sub-atol sliver filter. d(A_j[j])/dt from a zero IC ⇒ du = A_j[j]; the test asserts it reproduces the supplied `dst_areas` (PoU by construction, §5.8.3)."
+        },
+        "F_tgt": {
+          "type": "unknown",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Regridded field F_tgt[j] = (1/dst_areas[j])·Σ_i A_ij[i,j]·F_src[i] = Σ_i W_ij·F_src[i], W_ij = A_ij/A_j — the apply sum_product FAQ over the bin-Skolem candidate set with the normalize `/ dst_areas[j]` folded in. d(F_tgt[j])/dt from a zero IC ⇒ du = F_tgt[j]."
+        },
+        "dst_areas": {
+          "type": "parameter",
+          "shape": [
+            "tgt_cells"
+          ],
+          "description": "Build-once target-cell area denominator A_j = Σ_i A_ij stored at regridder-build time (ConservativeRegridding.jl's `dst_areas`). The NORMALIZE factor the apply body divides by; supplied as a const_array. The `A_j` FAQ recomputes the same row-sum to prove the group-by reproduces it (partition-of-unity by construction, §5.8.3)."
+        },
+        "narrow_phase_area": {
+          "type": "unknown",
+          "shape": [],
+          "description": "Tracer consuming the representative narrow-phase area so the spherical clip + polygon_area FAQ evaluate in a well-formed ODE: d(narrow_phase_area)/dt = A_ij_rep from a zero IC ⇒ du = A_ij_rep. The conformance test checks it equals polygon_area(clip,\"spherical\") (the kept Van Oosterom-Strackee oracle) and the matching A_ij entry."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "(1a) OVERLAP PAIRS — bin each SOURCE cell to an integer lat-lon bin key. floor(lon/dx), floor(lat/dy) are integer bin coordinates (the existing `floor` op); skolem mints the content-addressed bin key. Per-element map (output i, no contraction).",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "src_bin",
+              "i"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              }
+            },
+            "args": [
+              "src_lon",
+              "src_lat",
+              "dx",
+              "dy"
+            ],
+            "expr": {
+              "op": "skolem",
+              "label": "bin",
+              "args": [
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lon",
+                            "i"
+                          ]
+                        },
+                        "dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "src_lat",
+                            "i"
+                          ]
+                        },
+                        "dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "(1b) OVERLAP PAIRS — bin each TARGET cell identically (same dx/dy quantization).",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "tgt_bin",
+              "j"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "args": [
+              "tgt_lon",
+              "tgt_lat",
+              "dx",
+              "dy"
+            ],
+            "expr": {
+              "op": "skolem",
+              "label": "bin",
+              "args": [
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lon",
+                            "j"
+                          ]
+                        },
+                        "dx"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "floor",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "tgt_lat",
+                            "j"
+                          ]
+                        },
+                        "dy"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "(1c) OVERLAP PAIRS — the candidate overlap-pair set = the bin-Skolem EQUI-join. The index-set-producing aggregate (bool_and_or, distinct:true, id `candidate_set` referenced by candidate_pairs.from_faq) ranges source i and target j, the M2 `join.on` keeps only (i,j) whose bin keys are EQUAL, and skolem(\"pair\", i, j) names each surviving candidate; the `true` body marks membership. Integer bin keys ⇒ the candidate set is byte-identical across bindings in the §5.7 sorted order (§5.8.5). No spatial-index op in the IR — the index is a physical-operator concern (STR-tree acceleration is the perf follow-on, out of scope).",
+          "lhs": {
+            "op": "index",
+            "args": [
+              "pair_exists",
+              "p"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "id": "candidate_set",
+            "semiring": "bool_and_or",
+            "distinct": true,
+            "output_idx": [
+              "p"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "args": [
+              "src_bin",
+              "tgt_bin"
+            ],
+            "key": {
+              "op": "skolem",
+              "label": "pair",
+              "args": [
+                "i",
+                "j"
+              ]
+            },
+            "expr": {
+              "op": "true",
+              "args": []
+            }
+          }
+        },
+        {
+          "_comment": "NARROW-PHASE DEMO consumer: d(narrow_phase_area)/dt = A_ij_rep, the representative spherical polygon_area(intersect_polygon(...)) overlap area. A_ij_rep is a scalar observed substituted inline; from a zero IC du = A_ij_rep.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "narrow_phase_area"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "A_ij_rep"
+        },
+        {
+          "_comment": "(3) A_j[j] = Σ_i A_ij[i,j] — the group-by-`j` sum_product FAQ. The OVERLAP JOIN restricts the contraction to bin-Skolem CANDIDATE pairs by gating on the MATERIALISED bin buffers: join.on [[src_bin,tgt_bin]] admits (i,j) iff src_bin[i] == tgt_bin[j] (the F3 buffer-gated join, §5.3). filter A_ij>atol drops sub-atol slivers → the SURVIVING set. Zero IC ⇒ du[A_j[j]] = A_j[j].",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_j",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
+            },
+            "args": [
+              "A_ij",
+              "src_bin",
+              "tgt_bin"
+            ],
+            "expr": {
+              "op": "index",
+              "args": [
+                "A_ij",
+                "i",
+                "j"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "(4)+(5) APPLY + NORMALIZE — F_tgt[j] = Σ_i A_ij[i,j]·F_src[i] / dst_areas[j]. Same bin-Skolem buffer-gated join + zero-area filter as A_j; the elementwise `/ dst_areas[j]` folds in the normalize (dst_areas is the build-once denominator A_j). F_tgt = Σ_i W_ij·F_src[i], Σ_i W_ij = 1 by construction. Zero IC ⇒ du[F_tgt[j]] = F_tgt[j].",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "F_tgt",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            },
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "src_cells"
+              },
+              "j": {
+                "from": "tgt_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_bin",
+                    "tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A_ij",
+                    "i",
+                    "j"
+                  ]
+                },
+                "atol"
+              ]
+            },
+            "args": [
+              "A_ij",
+              "F_src",
+              "dst_areas",
+              "src_bin",
+              "tgt_bin"
+            ],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "A_ij",
+                        "i",
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "F_src",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "dst_areas",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "clip",
+          "rhs": {
             "op": "intersect_polygon",
             "id": "overlap_clip",
             "manifold": "spherical",
@@ -167,11 +595,9 @@
             ]
           }
         },
-        "A_ij_rep": {
-          "type": "observed",
-          "shape": [],
-          "description": "NARROW-PHASE DEMO: the representative overlap area A_ij = polygon_area(clip) on the SPHERE — a sum_product FAQ over the clipped ring whose body is the great-circle fan triangulation Σ_v E(v_1,v_v,v_{v+1}) of Van Oosterom-Strackee spherical excesses E(a,b,c)=2·atan2(a·(b×c),1+a·b+b·c+c·a) (unit sphere). This is how each entry of the build-once A_ij factor is produced; the test asserts it equals polygon_area(clip,\"spherical\") and the matching A_ij[i,j].",
-          "expression": {
+        {
+          "lhs": "A_ij_rep",
+          "rhs": {
             "op": "aggregate",
             "semiring": "sum_product",
             "output_idx": [],
@@ -1596,426 +2022,6 @@
                         }
                       ]
                     }
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        "A_j": {
-          "type": "state",
-          "shape": [
-            "tgt_cells"
-          ],
-          "description": "Target-cell area denominator A_j = Σ_i A_ij — the group-by-`j` row-sum over the bin-Skolem CANDIDATE pairs (join.on [[src_bin,tgt_bin]] on the MATERIALISED bin buffers) with the sub-atol sliver filter. d(A_j[j])/dt from a zero IC ⇒ du = A_j[j]; the test asserts it reproduces the supplied `dst_areas` (PoU by construction, §5.8.3)."
-        },
-        "F_tgt": {
-          "type": "state",
-          "shape": [
-            "tgt_cells"
-          ],
-          "description": "Regridded field F_tgt[j] = (1/dst_areas[j])·Σ_i A_ij[i,j]·F_src[i] = Σ_i W_ij·F_src[i], W_ij = A_ij/A_j — the apply sum_product FAQ over the bin-Skolem candidate set with the normalize `/ dst_areas[j]` folded in. d(F_tgt[j])/dt from a zero IC ⇒ du = F_tgt[j]."
-        },
-        "dst_areas": {
-          "type": "parameter",
-          "shape": [
-            "tgt_cells"
-          ],
-          "description": "Build-once target-cell area denominator A_j = Σ_i A_ij stored at regridder-build time (ConservativeRegridding.jl's `dst_areas`). The NORMALIZE factor the apply body divides by; supplied as a const_array. The `A_j` FAQ recomputes the same row-sum to prove the group-by reproduces it (partition-of-unity by construction, §5.8.3)."
-        },
-        "narrow_phase_area": {
-          "type": "state",
-          "shape": [],
-          "description": "Tracer consuming the representative narrow-phase area so the spherical clip + polygon_area FAQ evaluate in a well-formed ODE: d(narrow_phase_area)/dt = A_ij_rep from a zero IC ⇒ du = A_ij_rep. The conformance test checks it equals polygon_area(clip,\"spherical\") (the kept Van Oosterom-Strackee oracle) and the matching A_ij entry."
-        }
-      },
-      "equations": [
-        {
-          "_comment": "(1a) OVERLAP PAIRS — bin each SOURCE cell to an integer lat-lon bin key. floor(lon/dx), floor(lat/dy) are integer bin coordinates (the existing `floor` op); skolem mints the content-addressed bin key. Per-element map (output i, no contraction).",
-          "lhs": {
-            "op": "index",
-            "args": [
-              "src_bin",
-              "i"
-            ]
-          },
-          "rhs": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "i"
-            ],
-            "ranges": {
-              "i": {
-                "from": "src_cells"
-              }
-            },
-            "args": [
-              "src_lon",
-              "src_lat",
-              "dx",
-              "dy"
-            ],
-            "expr": {
-              "op": "skolem",
-              "label": "bin",
-              "args": [
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "src_lon",
-                            "i"
-                          ]
-                        },
-                        "dx"
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "src_lat",
-                            "i"
-                          ]
-                        },
-                        "dy"
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        {
-          "_comment": "(1b) OVERLAP PAIRS — bin each TARGET cell identically (same dx/dy quantization).",
-          "lhs": {
-            "op": "index",
-            "args": [
-              "tgt_bin",
-              "j"
-            ]
-          },
-          "rhs": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "j"
-            ],
-            "ranges": {
-              "j": {
-                "from": "tgt_cells"
-              }
-            },
-            "args": [
-              "tgt_lon",
-              "tgt_lat",
-              "dx",
-              "dy"
-            ],
-            "expr": {
-              "op": "skolem",
-              "label": "bin",
-              "args": [
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "tgt_lon",
-                            "j"
-                          ]
-                        },
-                        "dx"
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        {
-                          "op": "index",
-                          "args": [
-                            "tgt_lat",
-                            "j"
-                          ]
-                        },
-                        "dy"
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        {
-          "_comment": "(1c) OVERLAP PAIRS — the candidate overlap-pair set = the bin-Skolem EQUI-join. The index-set-producing aggregate (bool_and_or, distinct:true, id `candidate_set` referenced by candidate_pairs.from_faq) ranges source i and target j, the M2 `join.on` keeps only (i,j) whose bin keys are EQUAL, and skolem(\"pair\", i, j) names each surviving candidate; the `true` body marks membership. Integer bin keys ⇒ the candidate set is byte-identical across bindings in the §5.7 sorted order (§5.8.5). No spatial-index op in the IR — the index is a physical-operator concern (STR-tree acceleration is the perf follow-on, out of scope).",
-          "lhs": {
-            "op": "index",
-            "args": [
-              "pair_exists",
-              "p"
-            ]
-          },
-          "rhs": {
-            "op": "aggregate",
-            "id": "candidate_set",
-            "semiring": "bool_and_or",
-            "distinct": true,
-            "output_idx": [
-              "p"
-            ],
-            "ranges": {
-              "i": {
-                "from": "src_cells"
-              },
-              "j": {
-                "from": "tgt_cells"
-              }
-            },
-            "join": [
-              {
-                "on": [
-                  [
-                    "src_bin",
-                    "tgt_bin"
-                  ]
-                ]
-              }
-            ],
-            "args": [
-              "src_bin",
-              "tgt_bin"
-            ],
-            "key": {
-              "op": "skolem",
-              "label": "pair",
-              "args": [
-                "i",
-                "j"
-              ]
-            },
-            "expr": {
-              "op": "true",
-              "args": []
-            }
-          }
-        },
-        {
-          "_comment": "NARROW-PHASE DEMO consumer: d(narrow_phase_area)/dt = A_ij_rep, the representative spherical polygon_area(intersect_polygon(...)) overlap area. A_ij_rep is a scalar observed substituted inline; from a zero IC du = A_ij_rep.",
-          "lhs": {
-            "op": "D",
-            "args": [
-              "narrow_phase_area"
-            ],
-            "wrt": "t"
-          },
-          "rhs": "A_ij_rep"
-        },
-        {
-          "_comment": "(3) A_j[j] = Σ_i A_ij[i,j] — the group-by-`j` sum_product FAQ. The OVERLAP JOIN restricts the contraction to bin-Skolem CANDIDATE pairs by gating on the MATERIALISED bin buffers: join.on [[src_bin,tgt_bin]] admits (i,j) iff src_bin[i] == tgt_bin[j] (the F3 buffer-gated join, §5.3). filter A_ij>atol drops sub-atol slivers → the SURVIVING set. Zero IC ⇒ du[A_j[j]] = A_j[j].",
-          "lhs": {
-            "op": "aggregate",
-            "args": [],
-            "output_idx": [
-              "j"
-            ],
-            "expr": {
-              "op": "D",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "A_j",
-                    "j"
-                  ]
-                }
-              ],
-              "wrt": "t"
-            },
-            "ranges": {
-              "j": [
-                1,
-                3
-              ]
-            }
-          },
-          "rhs": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "j"
-            ],
-            "ranges": {
-              "i": {
-                "from": "src_cells"
-              },
-              "j": {
-                "from": "tgt_cells"
-              }
-            },
-            "join": [
-              {
-                "on": [
-                  [
-                    "src_bin",
-                    "tgt_bin"
-                  ]
-                ]
-              }
-            ],
-            "filter": {
-              "op": ">",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "A_ij",
-                    "i",
-                    "j"
-                  ]
-                },
-                "atol"
-              ]
-            },
-            "args": [
-              "A_ij",
-              "src_bin",
-              "tgt_bin"
-            ],
-            "expr": {
-              "op": "index",
-              "args": [
-                "A_ij",
-                "i",
-                "j"
-              ]
-            }
-          }
-        },
-        {
-          "_comment": "(4)+(5) APPLY + NORMALIZE — F_tgt[j] = Σ_i A_ij[i,j]·F_src[i] / dst_areas[j]. Same bin-Skolem buffer-gated join + zero-area filter as A_j; the elementwise `/ dst_areas[j]` folds in the normalize (dst_areas is the build-once denominator A_j). F_tgt = Σ_i W_ij·F_src[i], Σ_i W_ij = 1 by construction. Zero IC ⇒ du[F_tgt[j]] = F_tgt[j].",
-          "lhs": {
-            "op": "aggregate",
-            "args": [],
-            "output_idx": [
-              "j"
-            ],
-            "expr": {
-              "op": "D",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "F_tgt",
-                    "j"
-                  ]
-                }
-              ],
-              "wrt": "t"
-            },
-            "ranges": {
-              "j": [
-                1,
-                3
-              ]
-            }
-          },
-          "rhs": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "j"
-            ],
-            "ranges": {
-              "i": {
-                "from": "src_cells"
-              },
-              "j": {
-                "from": "tgt_cells"
-              }
-            },
-            "join": [
-              {
-                "on": [
-                  [
-                    "src_bin",
-                    "tgt_bin"
-                  ]
-                ]
-              }
-            ],
-            "filter": {
-              "op": ">",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "A_ij",
-                    "i",
-                    "j"
-                  ]
-                },
-                "atol"
-              ]
-            },
-            "args": [
-              "A_ij",
-              "F_src",
-              "dst_areas",
-              "src_bin",
-              "tgt_bin"
-            ],
-            "expr": {
-              "op": "/",
-              "args": [
-                {
-                  "op": "*",
-                  "args": [
-                    {
-                      "op": "index",
-                      "args": [
-                        "A_ij",
-                        "i",
-                        "j"
-                      ]
-                    },
-                    {
-                      "op": "index",
-                      "args": [
-                        "F_src",
-                        "i"
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "dst_areas",
-                    "j"
                   ]
                 }
               ]

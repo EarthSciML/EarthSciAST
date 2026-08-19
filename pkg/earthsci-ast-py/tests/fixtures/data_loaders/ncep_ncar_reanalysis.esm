@@ -1,6 +1,6 @@
 {
   "_comment": "NCEP-NCAR Reanalysis fixture. Expresses an instantiation of EarthSciData.jl NCEPNCARReanalysisFileSet. Source: EarthSciData.jl src/NCEP-NCAR_Reanalysis.jl (struct at lines 4-66, relpath at lines 72-79). The loader uses two filename templates — per-variable per-year files at 'pressure/{var}.{year}.nc' and static surface files at 'surface/{var}.sfc.nc'. Since the schema allows only one url_template per loader, we split this into two logical loaders: one for time-varying pressure-level variables and one for the static surface field.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NCEPNCARReanalysisFixture",
     "description": "NCEP-NCAR Reanalysis 1 pressure-level variables and static surface geopotential in the STAC-like DataLoader schema.",
@@ -97,7 +97,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

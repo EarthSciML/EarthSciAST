@@ -1,5 +1,5 @@
 {
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "refresh_on_non_discrete",
     "description": "INVALID (bead ess-my4.3.2; RFC semiring-faq-unified-ir §6.1 / §8): a `refresh` trigger placed on a non-`discrete` variable (here a `state`). The refresh-trigger descriptor schedules the per-event recompute of a DISCRETE-cadence buffer and is meaningful only for the `discrete` variable kind; the ModelVariable schema's kind-conditional `allOf` forbids `refresh` whenever `type` is not \"discrete\" (mirroring the existing brownian-only guard for noise_kind / correlation_group). Attaching it to a state variable is a pure schema violation — caught by every binding. The trigger itself is well-formed, so the only failure cause is its placement on a non-discrete variable.",
@@ -17,7 +17,7 @@
     "BadRefresh": {
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "description": "A continuous state variable that wrongly carries a refresh trigger — invalid.",
           "refresh": {
             "kind": "schedule",

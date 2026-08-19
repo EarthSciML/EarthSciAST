@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ExpressionGraphVariableDependencies",
     "description": "Complex variable-level dependency graph test case. Every expression is dimensionally coherent: the coefficients that used to be bare literals (-1000, 298.15, 8.314) are now named parameters carrying the units they always implicitly had, so a dimensional checker can prove the file sound. The k2*x^alpha*z^beta term deliberately keeps SYMBOLIC exponents — its dimension is genuinely undeterminable and must be reported as unknown, never assumed dimensionless.",
@@ -12,17 +12,17 @@
       },
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/L",
           "default": 1.0
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/L",
           "default": 2.0
         },
         "z": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/L",
           "default": 0.5
         },

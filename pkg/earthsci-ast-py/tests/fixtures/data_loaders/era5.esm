@@ -1,6 +1,6 @@
 {
   "_comment": "ERA5 pressure-level reanalysis fixture. Expresses an instantiation of EarthSciData.jl ERA5PressureLevelFileSet. Source: EarthSciData.jl src/era5.jl (struct ERA5PressureLevelFileSet at lines 56-211, relpath at lines 213-217). CDS API source is represented by the 'cds://' scheme in url_template; the file path pattern era5_pl_{YYYY}_{MM}.nc comes from relpath. Variables list mirrors ERA5_VARIABLES at lines 16-33.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ERA5Fixture",
     "description": "ERA5 pressure-level reanalysis (CDS API) expressed in the STAC-like DataLoader schema.",
@@ -86,7 +86,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

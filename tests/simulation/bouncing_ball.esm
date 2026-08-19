@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "BouncingBallTest",
     "description": "Ball dropping with elastic collisions - continuous event handling test",
@@ -21,13 +21,13 @@
       },
       "variables": {
         "height": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 10.0,
           "description": "Height above ground"
         },
         "velocity": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Vertical velocity (positive upward)"

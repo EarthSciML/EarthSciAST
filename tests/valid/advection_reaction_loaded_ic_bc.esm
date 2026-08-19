@@ -1,5 +1,5 @@
 {
-    "esm": "0.8.0",
+    "esm": "1.0.0",
     "metadata": {
         "name": "AdvectionReactionLoadedICBC",
         "description": "Runnable worked example of the v0.8.0 scoped-reference `ic` pattern (spec 11.4.1) for a REAL reaction system spatially lifted by advection. A 0-D O3-NOx reaction network (`Chemistry`) is lowered to generic per-species ODEs, spatially LIFTED onto a 4x2 lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise, and transported by per-species lon advection whose two-arg grad templates each read that species' own loaded western Dirichlet inflow. The lifted species draw their initial FIELDS from a data loader via scoped-reference ic equations (ChemistryICs). Runs end to end through EarthSciAST.simulate. Every loaded field is bound from its declared data_loader and injected through the data-Provider seam: the initial fields via the scoped-reference `ic` equations (ChemistryICs -> InitialConditions), the wind field and per-species western inflow BCs via `variable_map` param_to_var couplings (Meteorology.u_wind -> Advection.u_wind, BoundaryConditions.*_inflow -> Advection.*_inflow; spec 11.5 'BCs from data'). lat advection is dropped (lon-only transport on the tiny grid) for a minimal, self-contained run.",

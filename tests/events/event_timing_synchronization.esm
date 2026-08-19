@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventTimingSynchronization",
     "description": "Test fixtures for event timing, synchronization, and race conditions",
@@ -12,7 +12,7 @@
     "FastDynamicsSystem": {
       "variables": {
         "fast_state": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Rapidly changing state"
@@ -179,19 +179,19 @@
     "SynchronizedOscillators": {
       "variables": {
         "osc1_phase": {
-          "type": "state",
+          "type": "unknown",
           "units": "rad",
           "default": 0.0,
           "description": "Oscillator 1 phase"
         },
         "osc2_phase": {
-          "type": "state",
+          "type": "unknown",
           "units": "rad",
           "default": 1.57,
           "description": "Oscillator 2 phase (90° offset)"
         },
         "osc3_phase": {
-          "type": "state",
+          "type": "unknown",
           "units": "rad",
           "default": 3.14,
           "description": "Oscillator 3 phase (180° offset)"
@@ -466,7 +466,7 @@
     "RaceConditionSystem": {
       "variables": {
         "shared_resource": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 10.0,
           "description": "Shared resource accessed by multiple events"

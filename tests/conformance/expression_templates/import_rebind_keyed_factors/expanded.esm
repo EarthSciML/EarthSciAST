@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "cols": {
       "kind": "interval",
@@ -43,12 +43,10 @@
             ],
             "op": "-"
           }
-        }
-      ],
-      "variables": {
-        "meshA_cols": {
-          "description": "values keyed factor of the rebound nz_of_row set (column ids, padded to maxnz)",
-          "expression": {
+        },
+        {
+          "lhs": "meshA_cols",
+          "rhs": {
             "args": [],
             "op": "const",
             "value": [
@@ -65,16 +63,11 @@
                 4
               ]
             ]
-          },
-          "shape": [
-            "rows",
-            "maxnz"
-          ],
-          "type": "observed"
+          }
         },
-        "meshA_count": {
-          "description": "offsets keyed factor of the rebound nz_of_row set (per-row nonzero count)",
-          "expression": {
+        {
+          "lhs": "meshA_count",
+          "rhs": {
             "args": [],
             "op": "const",
             "value": [
@@ -82,15 +75,11 @@
               1,
               2
             ]
-          },
-          "shape": [
-            "rows"
-          ],
-          "type": "observed"
+          }
         },
-        "meshA_w": {
-          "description": "free weight factor of the rule, rebound from row_w",
-          "expression": {
+        {
+          "lhs": "meshA_w",
+          "rhs": {
             "args": [],
             "op": "const",
             "value": [
@@ -107,22 +96,11 @@
                 3.5
               ]
             ]
-          },
-          "shape": [
-            "rows",
-            "maxnz"
-          ],
-          "type": "observed"
+          }
         },
-        "row_count": {
-          "default": 7.5,
-          "description": "unrelated consumer parameter reusing the library's factor name: rebinding un-reserved it (esm-spec 9.7.7)",
-          "type": "parameter",
-          "units": "1"
-        },
-        "total": {
-          "description": "rowsum(u), lowered by the rebound rule instance",
-          "expression": {
+        {
+          "lhs": "total",
+          "rhs": {
             "args": [
               "u",
               "meshA_cols",
@@ -171,18 +149,52 @@
               }
             },
             "semiring": "sum_product"
-          },
+          }
+        }
+      ],
+      "variables": {
+        "meshA_cols": {
+          "description": "values keyed factor of the rebound nz_of_row set (column ids, padded to maxnz)",
+          "shape": [
+            "rows",
+            "maxnz"
+          ],
+          "type": "unknown"
+        },
+        "meshA_count": {
+          "description": "offsets keyed factor of the rebound nz_of_row set (per-row nonzero count)",
           "shape": [
             "rows"
           ],
-          "type": "observed"
+          "type": "unknown"
+        },
+        "meshA_w": {
+          "description": "free weight factor of the rule, rebound from row_w",
+          "shape": [
+            "rows",
+            "maxnz"
+          ],
+          "type": "unknown"
+        },
+        "row_count": {
+          "default": 7.5,
+          "description": "unrelated consumer parameter reusing the library's factor name: rebinding un-reserved it (esm-spec 9.7.7)",
+          "type": "parameter",
+          "units": "1"
+        },
+        "total": {
+          "description": "rowsum(u), lowered by the rebound rule instance",
+          "shape": [
+            "rows"
+          ],
+          "type": "unknown"
         },
         "u": {
           "description": "column vector being row-summed",
           "shape": [
             "cols"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         }
       }

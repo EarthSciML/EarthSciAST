@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ChemistrySubsystem",
     "description": "A chemistry model intended for inclusion as a subsystem by reference",
@@ -10,13 +10,13 @@
     "Chemistry": {
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 1e-6,
           "description": "Ozone concentration"
         },
         "NO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 5e-7,
           "description": "Nitrogen dioxide concentration"

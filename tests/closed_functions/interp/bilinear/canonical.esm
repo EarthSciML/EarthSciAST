@@ -1,5 +1,5 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ClosedFnFixture_interp_bilinear",
     "description": "Conformance fixture for `interp.bilinear` (esm-spec §9.2). Trivial ODE whose RHS invokes `interp.bilinear(table, axis_x, axis_y, x, y)` against a fixed 3x3 inline table. Bindings parse this file (exercising `fn`-op handling for the new primitive) and additionally exercise the per-scenario inputs from `expected.json`. Boundary scenarios cover exact corners, exact-on-interior-knot in either axis, midpoint and quarter-point blends in both axes, below/above each axis (extrapolate-flat clamps), NaN x or y propagation, minimal 2x2 grid, and non-uniform spacing in either axis. Load-time error scenarios (non-monotonic axis, equal-adjacent axis, NaN-in-axis, length mismatch on either axis, inner-row length mismatch, single-element axis) are covered in `expected.json` `error_scenarios`.",
@@ -22,7 +22,7 @@
           "description": "Scalar y-axis query."
         },
         "z": {
-          "type": "state",
+          "type": "unknown",
           "default": 0.0,
           "units": "1",
           "description": "Trivial state whose derivative is the interp.bilinear result. Bindings read evaluate(rhs, {x: <input_x>, y: <input_y>}) for each expected.json scenario and compare against the expected value at the per-fixture tolerance."

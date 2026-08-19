@@ -1,6 +1,6 @@
 {
   "_comment": "OpenAQ point observations fixture. Expresses an instantiation of EarthSciData.jl OpenAQFileSet for 'o3' parameter. Source: EarthSciData.jl src/openaq.jl (struct OpenAQFileSet at lines 57-70, constructor at lines 89-116). This is a 'points' kind loader because OpenAQ returns irregular station observations. The url_template points at the OpenAQ v3 measurements API. API key (ENV['OPENAQ_API_KEY']) is runtime-only and not in the schema.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "OpenAQFixture",
     "description": "OpenAQ point-observation ozone measurements in the STAC-like DataLoader schema.",
@@ -55,7 +55,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

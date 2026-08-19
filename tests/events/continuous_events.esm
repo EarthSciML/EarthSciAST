@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ContinuousEventExamples",
     "description": "Test fixtures for continuous event handling (root-finding)",
@@ -15,13 +15,13 @@
       },
       "variables": {
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 10.0,
           "description": "Ball height"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Ball velocity"
@@ -79,7 +79,7 @@
       },
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "System state"
@@ -147,7 +147,7 @@
       },
       "variables": {
         "P": {
-          "type": "state",
+          "type": "unknown",
           "units": "individuals",
           "default": 10.0,
           "description": "Population size"

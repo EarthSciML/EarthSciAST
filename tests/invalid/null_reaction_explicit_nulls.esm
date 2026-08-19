@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NullReactionExplicitNulls",
     "description": "Reaction with explicitly null substrates and products"

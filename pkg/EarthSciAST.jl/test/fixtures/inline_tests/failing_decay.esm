@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "FailingDecayFixture",
     "description": "Inline-test fixture with an intentionally-wrong expected value. The model is the same first-order decay as passing_decay.esm but the t=100 assertion expects 0.5 (truth: 0.367879). Used by run_esm_tests_test.jl to verify the runner correctly reports FAIL.",
@@ -9,7 +9,7 @@
   "models": {
     "FailingDecay": {
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 1.0 },
+        "x": { "type": "unknown", "units": "1", "default": 1.0 },
         "k": { "type": "parameter", "units": "1/s", "default": 0.01 }
       },
       "equations": [

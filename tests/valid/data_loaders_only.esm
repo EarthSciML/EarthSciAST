@@ -1,5 +1,5 @@
 {
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DataLoadersOnlyDocument",
     "description": "Loader-only ESM document (RFC pure-io-data-loaders 4.3/4.4, beads ess-v9a.4/ess-v9a.8): a top-level data_loaders block with no models or reaction_systems is a VALID document, satisfying the data_loaders branch of the top-level anyOf. This is the cross-binding positive counterpart to tests/invalid/no_systems.esm (which carries none of the anyOf branches). One pure-I/O grid loader: its native grid is expressed as a GDD Grid (with a crs descriptor) rather than the removed DataLoaderSpatial block, a temporal block marks it time-varying, and variables bind file variables to units; the loader performs no regridding (now a per-variable model concern, RFC 4.1).",

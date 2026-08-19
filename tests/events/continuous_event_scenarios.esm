@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ContinuousEventScenarios",
     "description": "Comprehensive continuous event detection and handling test cases",
@@ -12,19 +12,19 @@
     "RootFindingSystem": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "Oscillating variable"
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.5,
           "description": "Growing variable"
         },
         "z": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": -0.2,
           "description": "Decaying variable"
@@ -307,7 +307,7 @@
     "MultipleEventsSystem": {
       "variables": {
         "state_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Main state variable"
@@ -494,7 +494,7 @@
     "AffectNegSystem": {
       "variables": {
         "oscillator": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Oscillating state"
@@ -650,13 +650,13 @@
     "NestedEventChain": {
       "variables": {
         "primary": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Primary trigger variable"
         },
         "secondary": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Secondary cascade variable"

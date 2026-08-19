@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UndefinedVarNested",
     "description": "Undefined variable in nested expression"
@@ -7,7 +7,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "T": { "type": "state", "units": "K", "default": 298.15 },
+        "T": { "type": "unknown", "units": "K", "default": 298.15 },
         "A": { "type": "parameter", "units": "1/s", "default": 1e6 }
       },
       "equations": [

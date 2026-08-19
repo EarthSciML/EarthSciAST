@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "StructuralIssuesTest",
     "description": "A schema-valid, structurally-valid two-state model kept deliberately small: it exercises the structural layer (equation/unknown balance, reference integrity, dimensional consistency) rather than any single feature. Both state variables x and y carry a defining ODE, so the equation-unknown balance holds; a file that violates that balance belongs in tests/invalid (see equation_count_mismatch.esm).",
@@ -10,13 +10,13 @@
     "TestModel": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-6,
           "description": "Test state variable x"
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 2e-6,
           "description": "Test state variable y"

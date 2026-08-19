@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -30,46 +30,10 @@
             ],
             "op": "-"
           }
-        }
-      ],
-      "expression_templates": {
-        "deriv_c": {
-          "body": {
-            "args": [
-              "f"
-            ],
-            "op": "D",
-            "wrt": "x"
-          },
-          "params": [
-            "f"
-          ]
         },
-        "scale_c": {
-          "body": {
-            "args": [
-              "k",
-              "f"
-            ],
-            "op": "*"
-          },
-          "params": [
-            "f",
-            "k"
-          ]
-        }
-      },
-      "variables": {
-        "c": {
-          "default": 0.5,
-          "shape": [
-            "x"
-          ],
-          "type": "state",
-          "units": "1"
-        },
-        "d_eager": {
-          "expression": {
+        {
+          "lhs": "d_eager",
+          "rhs": {
             "args": [
               {
                 "args": [
@@ -119,15 +83,11 @@
               "i"
             ],
             "op": "index"
-          },
-          "shape": [
-            "x"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "d_survive": {
-          "expression": {
+        {
+          "lhs": "d_survive",
+          "rhs": {
             "args": [
               {
                 "args": [],
@@ -141,11 +101,57 @@
               "i"
             ],
             "op": "index"
+          }
+        }
+      ],
+      "expression_templates": {
+        "deriv_c": {
+          "body": {
+            "args": [
+              "f"
+            ],
+            "op": "D",
+            "wrt": "x"
           },
+          "params": [
+            "f"
+          ]
+        },
+        "scale_c": {
+          "body": {
+            "args": [
+              "k",
+              "f"
+            ],
+            "op": "*"
+          },
+          "params": [
+            "f",
+            "k"
+          ]
+        }
+      },
+      "variables": {
+        "c": {
+          "default": 0.5,
           "shape": [
             "x"
           ],
-          "type": "observed",
+          "type": "unknown",
+          "units": "1"
+        },
+        "d_eager": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "d_survive": {
+          "shape": [
+            "x"
+          ],
+          "type": "unknown",
           "units": "1"
         }
       }

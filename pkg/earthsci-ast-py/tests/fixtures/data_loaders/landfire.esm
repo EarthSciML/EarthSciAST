@@ -1,6 +1,6 @@
 {
   "_comment": "LANDFIRE fuel model fixture. Expresses an instantiation of EarthSciData.jl LANDFIREFileSet for product='FBFM13' (Anderson 13 fuel models), version='LF2022'. Source: EarthSciData.jl src/landfire.jl (struct at lines 65-73, constructor at lines 90-107, url at lines 114+). Static (time-invariant) dataset served by an ArcGIS ImageServer REST API. Pixel values are integer fuel model codes.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "LANDFIREFixture",
     "description": "LANDFIRE Anderson 13 fuel models over CONUS in the STAC-like DataLoader schema.",
@@ -49,7 +49,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

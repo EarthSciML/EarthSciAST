@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "description": "Metadata missing required name field",
     "authors": ["Test Author"],
@@ -10,7 +10,7 @@
     "TestModel": {
       "reference": { "notes": "Test model for missing metadata name" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

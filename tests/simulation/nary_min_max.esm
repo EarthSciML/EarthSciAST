@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NaryMinMax",
     "description": "Cross-binding conformance fixture (esm-sph): exercises n-ary min(...) and max(...) ops. Catches binding gaps where these are aliased only as binary or rejected outright (companion to clamp_via_abs.esm; escalation hq-wisp-ywi).",
@@ -13,7 +13,7 @@
       },
       "variables": {
         "Y": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Linear-growing state driven by max - min of constants."

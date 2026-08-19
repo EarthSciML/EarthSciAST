@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ScopedReferencesCouplingTest",
     "description": "Test fixture for scoped references in coupling transformations and cross-system dependencies",
@@ -22,13 +22,13 @@
       },
       "variables": {
         "OH_concentration": {
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "default": 1000000.0,
           "description": "Hydroxyl radical concentration"
         },
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 298.0,
           "description": "Atmospheric temperature"
@@ -41,13 +41,13 @@
           },
           "variables": {
             "NO2": {
-              "type": "state",
+              "type": "unknown",
               "units": "ppbv",
               "default": 10.0,
               "description": "Nitrogen dioxide concentration"
             },
             "O3": {
-              "type": "state",
+              "type": "unknown",
               "units": "ppbv",
               "default": 50.0,
               "description": "Ozone concentration"
@@ -105,7 +105,7 @@
           },
           "variables": {
             "PM25": {
-              "type": "state",
+              "type": "unknown",
               "units": "μg/m^3",
               "default": 15.0,
               "description": "PM2.5 concentration"
@@ -124,7 +124,7 @@
               },
               "variables": {
                 "SOA_precursor": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "ppbv",
                   "default": 5.0,
                   "description": "SOA precursor concentration"
@@ -260,7 +260,7 @@
       },
       "variables": {
         "total_emissions": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/s",
           "default": 0.0,
           "description": "Total emission rate"
@@ -279,7 +279,7 @@
               "description": "NOx emission rate"
             },
             "traffic_density": {
-              "type": "state",
+              "type": "unknown",
               "units": "vehicles/km^2",
               "default": 100.0,
               "description": "Traffic density"
@@ -339,7 +339,7 @@
               "description": "Particulate matter emissions"
             },
             "production_rate": {
-              "type": "state",
+              "type": "unknown",
               "units": "units/s",
               "default": 1.0,
               "description": "Industrial production rate"
@@ -366,7 +366,7 @@
               },
               "variables": {
                 "isoprene_flux": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "mg/(m^2*h)",
                   "default": 5.0,
                   "description": "Isoprene emission flux"
@@ -427,7 +427,7 @@
       },
       "variables": {
         "wind_speed": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 5.0,
           "description": "Wind speed"
@@ -440,7 +440,7 @@
           },
           "variables": {
             "surface_temp": {
-              "type": "state",
+              "type": "unknown",
               "units": "K",
               "default": 298.0,
               "description": "Surface temperature"

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ScopedReferencesNestedTest",
     "description": "Test fixture for deeply nested scoped reference notation (A.B.C.D.variable). Every equation is dimensionally coherent: each coefficient is a NAMED PARAMETER carrying the units that make its term land on the left-hand side dimension, so a dimensional checker can prove the file sound rather than having to suppress it.",
@@ -28,7 +28,7 @@
           "description": "Solar constant"
         },
         "system_energy": {
-          "type": "state",
+          "type": "unknown",
           "units": "J",
           "default": 0.0,
           "description": "Total system energy"
@@ -53,7 +53,7 @@
           },
           "variables": {
             "atm_temperature": {
-              "type": "state",
+              "type": "unknown",
               "units": "K",
               "default": 288.0,
               "description": "Mean atmospheric temperature"
@@ -90,7 +90,7 @@
               },
               "variables": {
                 "trop_water_vapor": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "kg/m^3",
                   "default": 0.01,
                   "description": "Water vapor density"
@@ -109,7 +109,7 @@
                   },
                   "variables": {
                     "boundary_height": {
-                      "type": "state",
+                      "type": "unknown",
                       "units": "m",
                       "default": 1000.0,
                       "description": "Boundary layer height"
@@ -277,7 +277,7 @@
           },
           "variables": {
             "ocean_heat_content": {
-              "type": "state",
+              "type": "unknown",
               "units": "J",
               "default": 1e+21,
               "description": "Ocean heat content"
@@ -302,7 +302,7 @@
               },
               "variables": {
                 "sst": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "K",
                   "default": 285.0,
                   "description": "Sea surface temperature"
@@ -382,7 +382,7 @@
               },
               "variables": {
                 "mixing_depth": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "m",
                   "default": 100.0,
                   "description": "Mixed layer depth"
@@ -413,7 +413,7 @@
                   },
                   "variables": {
                     "stratification": {
-                      "type": "state",
+                      "type": "unknown",
                       "units": "K/m",
                       "default": 0.01,
                       "description": "Temperature gradient"
@@ -542,7 +542,7 @@
               },
               "variables": {
                 "deep_temperature": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "K",
                   "default": 278.0,
                   "description": "Deep ocean temperature"

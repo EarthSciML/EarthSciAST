@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventsDiscretePresetTimes",
     "description": "Test fixture for discrete preset_times events - Specific scheduled interventions and observations",
@@ -23,13 +23,13 @@
       },
       "variables": {
         "drug_concentration": {
-          "type": "state",
+          "type": "unknown",
           "units": "mg/L",
           "default": 0.0,
           "description": "Plasma drug concentration"
         },
         "biomarker_level": {
-          "type": "state",
+          "type": "unknown",
           "units": "units/L",
           "default": 100.0,
           "description": "Target biomarker concentration"
@@ -264,19 +264,19 @@
       },
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "°C",
           "default": 25.0,
           "description": "System temperature"
         },
         "pH": {
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "default": 7.0,
           "description": "Solution pH"
         },
         "reaction_progress": {
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "default": 0.0,
           "description": "Reaction completion fraction"
@@ -581,13 +581,13 @@
       },
       "variables": {
         "system_output": {
-          "type": "state",
+          "type": "unknown",
           "units": "V",
           "default": 0.0,
           "description": "System output voltage"
         },
         "error_integral": {
-          "type": "state",
+          "type": "unknown",
           "units": "V*s",
           "default": 0.0,
           "description": "Integral error for PI control"

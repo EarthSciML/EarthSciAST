@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TestModel",
     "description": "Undefined variable hidden in an integral `lower` bound (a non-args child field; the `upper` bound is the symmetric case). The reference check must descend into the integral bounds, not only `args`, to catch it. `s` is the bound integration variable (`var`); `k` is a declared parameter; only `undefined_xyz` is undefined."
@@ -7,7 +7,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "y": { "type": "state" },
+        "y": { "type": "unknown" },
         "k": { "type": "parameter" }
       },
       "equations": [

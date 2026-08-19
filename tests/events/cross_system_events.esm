@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CrossSystemEventExamples",
     "description": "Test fixtures for events that affect multiple coupled systems",
@@ -15,7 +15,7 @@
       },
       "variables": {
         "predator": {
-          "type": "state",
+          "type": "unknown",
           "units": "individuals",
           "default": 10.0,
           "description": "Predator population"
@@ -71,7 +71,7 @@
       },
       "variables": {
         "prey": {
-          "type": "state",
+          "type": "unknown",
           "units": "individuals",
           "default": 100.0,
           "description": "Prey population"
@@ -140,7 +140,7 @@
       },
       "variables": {
         "resource_level": {
-          "type": "state",
+          "type": "unknown",
           "units": "units",
           "default": 1.0,
           "description": "Environmental resource level"

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "advection_1d_periodic_n4",
     "description": "Discretized 1-D linear advection (upwind, a=1, dx=0.25, nu=4) on 4 cells, periodic. First-derivative stencil with a single-cell left makearray region wrapping u[0]->u[N]. du[i]/dt = -nu (u[i]-u[i-1]).",
@@ -23,7 +23,7 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "i"
           ]

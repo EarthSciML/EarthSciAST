@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "RothermelFuelCoupling",
     "description": "Anderson-13 fuel properties -> Rothermel (1972) spread inputs. A pure coupling-library file (esm-spec 10.9): top-level coupling_roles + a role-scoped coupling array, no models/loaders. Mirrors RFC 6."

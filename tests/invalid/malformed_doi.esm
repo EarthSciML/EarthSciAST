@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MalformedDOIExample",
     "description": "Metadata with malformed DOI in references",
@@ -21,7 +21,7 @@
     "TestModel": {
       "reference": { "notes": "Test model for malformed DOI" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "NullByteInjectionTest",
     "description": "Test null byte injection\u0000and other control characters\u0001\u0002\u0003",
@@ -8,7 +8,7 @@
   "models": {
     "TestModel\u0000": {
       "variables": {
-        "x\u0000": { "type": "state", "units": "m\u0000", "default": 0.0 },
+        "x\u0000": { "type": "unknown", "units": "m\u0000", "default": 0.0 },
         "control_chars": {
           "type": "parameter",
           "units": "1",

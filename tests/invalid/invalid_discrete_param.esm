@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "InvalidDiscreteParamTest",
     "description": "Test case: discrete event references undeclared parameter",
@@ -11,7 +11,7 @@
     "TestModel": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0
         },

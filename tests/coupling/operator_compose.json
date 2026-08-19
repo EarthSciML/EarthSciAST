@@ -4,8 +4,8 @@
     "systems": {
       "chemistry": {
         "variables": {
-          "O3": {"type": "state", "units": "mol/mol", "default": 40e-9},
-          "NO": {"type": "state", "units": "mol/mol", "default": 0.1e-9}
+          "O3": {"type": "unknown", "units": "mol/mol", "default": 40e-9},
+          "NO": {"type": "unknown", "units": "mol/mol", "default": 0.1e-9}
         },
         "equations": [
           {
@@ -36,8 +36,8 @@
     },
     "expected_result": {
       "variables": {
-        "O3": {"type": "state", "units": "mol/mol", "default": 40e-9},
-        "NO": {"type": "state", "units": "mol/mol", "default": 0.1e-9},
+        "O3": {"type": "unknown", "units": "mol/mol", "default": 40e-9},
+        "NO": {"type": "unknown", "units": "mol/mol", "default": 0.1e-9},
         "u_wind": {"type": "parameter", "units": "m/s", "default": 5.0},
         "v_wind": {"type": "parameter", "units": "m/s", "default": 0.0}
       },
@@ -72,8 +72,8 @@
     "description": "Placeholder expansion with multiple state variables",
     "target_system": {
       "variables": {
-        "A": {"type": "state"},
-        "B": {"type": "state"},
+        "A": {"type": "unknown"},
+        "B": {"type": "unknown"},
         "C": {"type": "parameter"}
       },
       "equations": [
@@ -111,7 +111,7 @@
     "systems": {
       "model_a": {
         "variables": {
-          "ozone": {"type": "state", "units": "ppb"},
+          "ozone": {"type": "unknown", "units": "ppb"},
           "temp": {"type": "parameter", "units": "K"}
         },
         "equations": [
@@ -120,7 +120,7 @@
       },
       "model_b": {
         "variables": {
-          "O3": {"type": "state", "units": "mol/mol"},
+          "O3": {"type": "unknown", "units": "mol/mol"},
           "T": {"type": "parameter", "units": "K"}
         },
         "equations": [

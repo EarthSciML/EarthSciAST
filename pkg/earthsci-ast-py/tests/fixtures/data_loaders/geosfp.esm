@@ -1,6 +1,6 @@
 {
   "_comment": "GEOS-FP (NASA Global Modeling and Assimilation Office) reanalysis fixture. Expresses an instantiation of EarthSciData.jl GEOSFPFileSet for domain='0.25x0.3125_NA', filetype='A3dyn'. Source: EarthSciData.jl src/geosfp.jl (struct GEOSFPFileSet at lines 50-89, relpath at lines 97-110). The url_template encodes the path grammar 'GEOS_{domain}/GEOS_FP/{year}/{month}/GEOSFP.{yyyymmdd}.{filetype}.{domain_no_underscore}.nc' via {date} substitutions.",
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "GEOSFPFixture",
     "description": "GEOS-FP reanalysis data (0.25x0.3125 NA grid, A3dyn filetype) expressed in the STAC-like DataLoader schema.",
@@ -64,7 +64,7 @@
     "placeholder": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TestModel",
     "description": "Undefined variable hidden in a table_lookup `axes` map value (a non-args child field; table_lookup carries an empty `args`). The reference check must descend into `axes`, not only `args`, to catch it. The table `tbl` and its axis name `a` are declared; only `undefined_xyz` (the coordinate expression bound to axis `a`) is undefined."
@@ -17,7 +17,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "y": { "type": "state" }
+        "y": { "type": "unknown" }
       },
       "equations": [
         {

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "BadUnitsModel",
     "description": "Invalid: parameter default value units do not match declared units (K vs degC)",

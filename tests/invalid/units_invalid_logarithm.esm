@@ -1,21 +1,39 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsInvalidLogarithm",
     "description": "Invalid file demonstrating logarithm of dimensional quantity",
-    "authors": ["Chris Tessum with Claude"],
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
     "created": "2026-02-16T00:00:00Z"
   },
-
   "models": {
     "BadUnitsModel": {
       "variables": {
-        "mass": { "type": "parameter", "units": "kg", "default": 10.0, "description": "Mass" },
-        "invalid_log": { "type": "observed", "units": "1", "description": "Invalid: logarithm of dimensional quantity",
-          "expression": { "op": "ln", "args": ["mass"] }
+        "mass": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 10.0,
+          "description": "Mass"
+        },
+        "invalid_log": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: logarithm of dimensional quantity"
         }
       },
-      "equations": []
+      "equations": [
+        {
+          "lhs": "invalid_log",
+          "rhs": {
+            "op": "ln",
+            "args": [
+              "mass"
+            ]
+          }
+        }
+      ]
     }
   }
 }

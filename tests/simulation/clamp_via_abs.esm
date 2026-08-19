@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ClampViaAbs",
     "description": "Cross-binding conformance fixture (esm-sph): tests the max-clamp idiom (a + |a|)/2 ≡ max(a, 0). Equivalent to D(X) = max(k - X, 0) - 0.1*X. Catches the abs-op silent gap surfaced by polecat nux's audit (escalation hq-wisp-ywi).",
@@ -13,7 +13,7 @@
       },
       "variables": {
         "X": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Clamped state — grows toward steady-state k/1.1."

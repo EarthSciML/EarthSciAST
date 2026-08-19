@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "BadReactions",
     "description": "Invalid: rate constant units '1/s' do not match the 2nd-order reaction A + B -> C (expected L/(mol*s))",

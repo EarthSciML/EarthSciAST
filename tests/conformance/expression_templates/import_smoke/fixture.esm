@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": { "name": "advection_lon" },
   "models": {
     "Advection": {
@@ -9,7 +9,7 @@
           "bindings": { "NLON": 288, "NLAT": 181 } }
       ],
       "variables": {
-        "c": { "type": "state", "units": "kg/m^3", "shape": ["lon", "lat"], "description": "tracer" },
+        "c": { "type": "unknown", "units": "kg/m^3", "shape": ["lon", "lat"], "description": "tracer" },
         "u": { "type": "parameter", "units": "m/s", "default": 5.5, "description": "zonal wind" }
       },
       "equations": [

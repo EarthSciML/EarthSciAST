@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "a.cells": {
       "kind": "interval",
@@ -31,25 +31,28 @@
             ],
             "op": "-"
           }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "args": [
+              6,
+              "x"
+            ],
+            "op": "*"
+          }
         }
       ],
       "variables": {
         "x": {
           "default": 1.5,
           "description": "scalar state",
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         },
         "y": {
           "description": "scale_by_cells(x): lowered by the FIRST registered instance (a, NC = 6)",
-          "expression": {
-            "args": [
-              6,
-              "x"
-            ],
-            "op": "*"
-          },
-          "type": "observed",
+          "type": "unknown",
           "units": "1"
         }
       }

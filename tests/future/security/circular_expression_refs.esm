@@ -1,22 +1,80 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CircularExpressionRefs",
     "description": "Test circular reference detection in expressions within the same system",
-    "authors": ["Security Test"]
+    "authors": [
+      "Security Test"
+    ]
   },
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 1.0 },
-        "y": { "type": "observed", "units": "m", "expression": { "op": "+", "args": ["z", 1.0] } },
-        "z": { "type": "observed", "units": "m", "expression": { "op": "*", "args": ["w", 2.0] } },
-        "w": { "type": "observed", "units": "m", "expression": { "op": "-", "args": ["y", 0.5] } }
+        "x": {
+          "type": "unknown",
+          "units": "m",
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "m"
+        },
+        "z": {
+          "type": "unknown",
+          "units": "m"
+        },
+        "w": {
+          "type": "unknown",
+          "units": "m"
+        }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "+", "args": ["y", "z", "w"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              "y",
+              "z",
+              "w"
+            ]
+          }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "z",
+              1.0
+            ]
+          }
+        },
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "w",
+              2.0
+            ]
+          }
+        },
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "y",
+              0.5
+            ]
+          }
         }
       ]
     }

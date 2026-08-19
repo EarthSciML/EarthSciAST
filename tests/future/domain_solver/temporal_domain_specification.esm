@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TemporalDomainSpecification",
     "description": "Test comprehensive temporal domain specifications with various date-time formats and reference times",
@@ -26,7 +26,7 @@
       },
       "variables": {
         "tracer_concentration": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-09,
           "description": "Simple atmospheric tracer"

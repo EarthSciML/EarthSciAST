@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CEDS_NOx",
     "description": "Source: EarthSciData/src/ceds.jl — CEDSFileSet / CEDS(). Parameter footprint: mirror (ORNL ESGF THREDDS by default), species (NOx, SO2, CO, ...), version (CMIP7 version string), data_version, sectors, starttime, endtime. Input4MIPs CEDS CMIP anthropogenic emissions, 50-year chunked files, monthly data, 0.5 deg global. This fixture represents NOx emissions for the 1950-1999 chunk.",
@@ -70,7 +70,7 @@
     "stub": {
       "variables": {
         "x": {
-          "type": "state"
+          "type": "unknown"
         }
       },
       "equations": [

@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "wildfire_two_fuel_sources",
     "description": "Multiple instantiation (RFC 6 / 11): two coupling_import edges reference rothermel_fuel.esm with DIFFERENT binds, expanding to two independent, non-interfering edge sets - the case type dispatch cannot express."

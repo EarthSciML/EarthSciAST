@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DeeplyNestedJSON",
     "description": "Test parser bombing with deeply nested JSON structures (1000+ levels)",
@@ -8,7 +8,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0 }
+        "x": { "type": "unknown", "units": "m", "default": 0.0 }
       },
       "equations": [
         {

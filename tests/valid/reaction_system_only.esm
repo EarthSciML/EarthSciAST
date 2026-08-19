@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ReactionSystemOnly",
     "description": "Valid ESM file containing only reaction_systems section, no models",

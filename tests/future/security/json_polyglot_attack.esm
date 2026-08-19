@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "JSONPolyglotAttack",
     "description": "Test JSON polyglot attacks with content that could be interpreted as other file formats",
@@ -15,7 +15,7 @@
           "description": "HTML-like content in JSON string"
         },
         "script_like": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "expression": {

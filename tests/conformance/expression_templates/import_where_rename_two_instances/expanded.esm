@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "meshA.x": {
       "kind": "interval",
@@ -46,30 +46,10 @@
             ],
             "op": "-"
           }
-        }
-      ],
-      "variables": {
-        "F_A": {
-          "default": 1.5,
-          "description": "flux on the meshA instance",
-          "shape": [
-            "meshA.x"
-          ],
-          "type": "state",
-          "units": "1"
         },
-        "F_B": {
-          "default": 2.5,
-          "description": "flux on the meshB instance",
-          "shape": [
-            "meshB.x"
-          ],
-          "type": "state",
-          "units": "1"
-        },
-        "div_A": {
-          "description": "div of the meshA field: meshA's rule fires",
-          "expression": {
+        {
+          "lhs": "div_A",
+          "rhs": {
             "args": [
               {
                 "args": [
@@ -81,16 +61,11 @@
               "F_A"
             ],
             "op": "*"
-          },
-          "shape": [
-            "meshA.x"
-          ],
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "div_B": {
-          "description": "div of the meshB field: meshB's rule fires",
-          "expression": {
+        {
+          "lhs": "div_B",
+          "rhs": {
             "args": [
               {
                 "args": [
@@ -102,11 +77,42 @@
               "F_B"
             ],
             "op": "*"
-          },
+          }
+        }
+      ],
+      "variables": {
+        "F_A": {
+          "default": 1.5,
+          "description": "flux on the meshA instance",
+          "shape": [
+            "meshA.x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "F_B": {
+          "default": 2.5,
+          "description": "flux on the meshB instance",
           "shape": [
             "meshB.x"
           ],
-          "type": "observed",
+          "type": "unknown",
+          "units": "1"
+        },
+        "div_A": {
+          "description": "div of the meshA field: meshA's rule fires",
+          "shape": [
+            "meshA.x"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "div_B": {
+          "description": "div of the meshB field: meshB's rule fires",
+          "shape": [
+            "meshB.x"
+          ],
+          "type": "unknown",
           "units": "1"
         }
       }

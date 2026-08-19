@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": 12345,
     "description": ["Should", "be", "string"],
@@ -14,7 +14,7 @@
     "TestModel": {
       "reference": { "notes": "Test model for invalid metadata types" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

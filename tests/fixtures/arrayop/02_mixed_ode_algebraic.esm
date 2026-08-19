@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "arrayop_02_mixed_ode_algebraic",
     "description": "Mixed ODE + algebraic equation on N=5 arrays. D(u[i]) = v[i], v[i] = -u[i]. The algebraic variable v must be eliminated during mtkcompile so the compiled system has N unknowns. Final u_i(1) = i*exp(-1). Mirrors MTK fork test #2.",
@@ -9,8 +9,8 @@
   "models": {
     "MixedODEAlg": {
       "variables": {
-        "u": { "type": "state" },
-        "v": { "type": "state" }
+        "u": { "type": "unknown" },
+        "v": { "type": "unknown" }
       },
       "equations": [
         {

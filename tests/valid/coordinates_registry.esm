@@ -1,5 +1,5 @@
 {
-    "esm": "0.8.0",
+    "esm": "1.0.0",
     "metadata": {
         "name": "CoordinatesRegistry",
         "description": "Exercises the additive document-scoped `coordinates` registry (RFC streaming-output-sinks §8). Demonstrates all three CF coordinate forms under one rule: (1) rectilinear DIMENSION coordinates for a lon/lat grid supplied as inline literal `values` with an `axis` role; (2) an `interval`-axis dimension coordinate (vertical level) whose values come from an existing parameter array by `source`; (3) unstructured AUXILIARY coordinates `cell_lat`/`cell_lon`, each 1-D over the shared `cells` dimension, referenced by `source` with no `axis` (their source shape, not an axis attachment, drives CF emission). Purely additive: removing `coordinates` leaves a still-valid document that emits bare integer axes.",
@@ -70,14 +70,14 @@
             },
             "variables": {
                 "tracer": {
-                    "type": "state",
+                    "type": "unknown",
                     "units": "kg/kg",
                     "shape": ["lon", "lat", "lev"],
                     "default": 0.0,
                     "description": "Gridded tracer over the rectilinear atmosphere grid; carries grid_lon/grid_lat/level as CF dimension coordinates."
                 },
                 "cell_tracer": {
-                    "type": "state",
+                    "type": "unknown",
                     "units": "kg/kg",
                     "shape": ["cells"],
                     "default": 0.0,

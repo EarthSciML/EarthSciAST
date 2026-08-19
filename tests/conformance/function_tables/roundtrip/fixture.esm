@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "function_tables_roundtrip_conformance",
     "description": "Mixed file: a function_tables block plus a hand-written inline-const interp.linear lookup. Round-trip MUST preserve both forms verbatim — no auto-promotion of the inline-const lookup into a table_lookup, no demotion of the table_lookup into an inline-const lookup. Pinned by esm-spec §9.5.4.",
@@ -17,8 +17,8 @@
   "models": {
     "M": {
       "variables": {
-        "k_table":   {"type": "state", "default": 0.0},
-        "k_inline":  {"type": "state", "default": 0.0},
+        "k_table":   {"type": "unknown", "default": 0.0},
+        "k_inline":  {"type": "unknown", "default": 0.0},
         "lambda":    {"type": "parameter", "default": 2.5}
       },
       "equations": [

@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SpatialDiffusionTest",
     "description": "1D diffusion equation with spatial operators\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -22,7 +22,7 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 0.0,
           "description": "Temperature field"

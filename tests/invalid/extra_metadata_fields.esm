@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ExtraFieldsExample",
     "description": "Metadata with additional non-schema fields",
@@ -16,7 +16,7 @@
     "TestModel": {
       "reference": { "notes": "Test model for extra metadata fields" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

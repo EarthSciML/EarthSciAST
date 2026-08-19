@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "stencil_lib",
     "description": "Leaf stencil library: a match-less interior stencil over the document index set `x`, scaled by the FREE name `inv_dx` the consuming component supplies."

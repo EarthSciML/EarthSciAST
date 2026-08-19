@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ExcessiveNestingBomb",
     "description": "Test deeply nested expressions and structures to trigger parser bombing attacks (1000+ levels deep)",
@@ -9,7 +9,7 @@
     "DeepModel": {
       "variables": {
         "deep_nested_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "expression": {

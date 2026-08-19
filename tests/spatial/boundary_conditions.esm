@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "BoundaryConditionTests",
     "description": "Test boundary condition implementation for atmospheric models (ESM v0.2.0 — model-level BCs per docs/rfcs/discretization.md §9)",
@@ -20,7 +20,7 @@
       },
       "variables": {
         "concentration": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-08,
           "description": "Species concentration with zero-gradient at boundaries"
@@ -71,7 +71,7 @@
       },
       "variables": {
         "tracer": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.0,
           "description": "Tracer with fixed concentration at boundaries"
@@ -127,7 +127,7 @@
       },
       "variables": {
         "global_tracer": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-09,
           "description": "Globally transported species with periodic longitude boundaries"
@@ -184,7 +184,7 @@
       },
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.15
         },
@@ -232,7 +232,7 @@
       },
       "variables": {
         "pollution": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.0,
           "description": "Pollutant with mixed boundary conditions"

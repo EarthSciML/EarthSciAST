@@ -1,22 +1,46 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsInconsistentSubtraction",
     "description": "Invalid file demonstrating unit inconsistency in subtraction",
-    "authors": ["Chris Tessum with Claude"],
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
     "created": "2026-04-16T00:00:00Z"
   },
-
   "models": {
     "BadUnitsModel": {
       "variables": {
-        "pressure": { "type": "parameter", "units": "Pa", "default": 101325.0, "description": "Pressure in pascals" },
-        "temperature": { "type": "parameter", "units": "K", "default": 298.15, "description": "Temperature in kelvin" },
-        "invalid_diff": { "type": "observed", "units": "Pa", "description": "Invalid: trying to subtract K from Pa",
-          "expression": { "op": "-", "args": ["pressure", "temperature"] }
+        "pressure": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 101325.0,
+          "description": "Pressure in pascals"
+        },
+        "temperature": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "Temperature in kelvin"
+        },
+        "invalid_diff": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Invalid: trying to subtract K from Pa"
         }
       },
-      "equations": []
+      "equations": [
+        {
+          "lhs": "invalid_diff",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "pressure",
+              "temperature"
+            ]
+          }
+        }
+      ]
     }
   }
 }

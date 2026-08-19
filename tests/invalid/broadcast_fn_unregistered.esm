@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "InvalidBroadcastFn",
     "description": "A `broadcast` node whose `fn` names an operator that is not in the registry. esm-spec §4.3.4 requires `fn` to name a scalar operator, so this file MUST be rejected with `invalid_broadcast_fn`. It is otherwise well-formed: schema-valid, one state with one equation, every reference declared. Regression for issue #101, where every binding returned `is_valid: true` and then evaluated the node to its operand — the `fn` was discarded, silently and without error."
@@ -7,7 +7,7 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 1.0 }
+        "x": { "type": "unknown", "units": "m", "default": 1.0 }
       },
       "equations": [
         {

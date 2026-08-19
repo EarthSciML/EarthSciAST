@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "inject_coupling_entry",
     "description": "esm-spec §9.7.10 form B / §10.8: an operator_compose of a 0-D system (Emit) and a discretization-agnostic spatial model (Advection, bare D(c, wrt: lon) with NO import of its own) injects the central-difference BC rule into Advection by name. On load the injection is appended to Advection's scope and the §9.6.3 fixpoint lowers its lon-derivative; the coupling entry's injection map is consumed and does not survive parse->emit."
@@ -7,7 +7,7 @@
   "models": {
     "Emit": {
       "variables": {
-        "e": { "type": "state", "units": "1", "default": 0.0, "description": "0-D box source" }
+        "e": { "type": "unknown", "units": "1", "default": 0.0, "description": "0-D box source" }
       },
       "equations": [
         { "lhs": { "op": "D", "args": ["e"], "wrt": "t" }, "rhs": 0.0 }
@@ -15,7 +15,7 @@
     },
     "Advection": {
       "variables": {
-        "c": { "type": "state", "units": "kg/m^3", "shape": ["lon", "lat"], "description": "tracer" },
+        "c": { "type": "unknown", "units": "kg/m^3", "shape": ["lon", "lat"], "description": "tracer" },
         "u": { "type": "parameter", "units": "m/s", "default": 5.5, "description": "zonal wind" }
       },
       "equations": [

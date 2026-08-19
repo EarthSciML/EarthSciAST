@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "BoxModelOzone",
     "description": "Simple 0D ozone-NOx photochemistry box model with known analytical behavior",
@@ -22,19 +22,19 @@
       },
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "ppbv",
           "default": 50.0,
           "description": "Ozone concentration"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "ppbv",
           "default": 10.0,
           "description": "Nitric oxide concentration"
         },
         "NO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "ppbv",
           "default": 20.0,
           "description": "Nitrogen dioxide concentration"
@@ -58,22 +58,9 @@
           "description": "O + O2 → O3 rate (fast, assumed instantaneous)"
         },
         "O": {
-          "type": "observed",
+          "type": "unknown",
           "units": "ppbv",
-          "description": "Oxygen atom (pseudo-steady state)",
-          "expression": {
-            "op": "/",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  "j_NO2",
-                  "NO2"
-                ]
-              },
-              "k_O_O2"
-            ]
-          }
+          "description": "Oxygen atom (pseudo-steady state)"
         }
       },
       "equations": [
@@ -190,6 +177,22 @@
             ]
           },
           "rhs": 20.0
+        },
+        {
+          "lhs": "O",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "j_NO2",
+                  "NO2"
+                ]
+              },
+              "k_O_O2"
+            ]
+          }
         }
       ],
       "tolerance": {

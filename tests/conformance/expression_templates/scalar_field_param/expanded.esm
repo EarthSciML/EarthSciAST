@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "coord": {
       "kind": "interval",
@@ -41,33 +41,39 @@
             ],
             "op": "-"
           }
-        }
-      ],
-      "variables": {
-        "area_planar": {
-          "description": "First instantiation: the manifold parameter bound to the literal 'planar'.",
-          "expression": {
+        },
+        {
+          "lhs": "area_planar",
+          "rhs": {
             "args": [
               "poly_a",
               "poly_b"
             ],
             "manifold": "planar",
             "op": "polygon_intersection_area"
-          },
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "area_spherical": {
-          "description": "Second instantiation: the SAME template bound to 'spherical' — the one-file two-manifold factoring the scalar-field substitution rule exists for.",
-          "expression": {
+        {
+          "lhs": "area_spherical",
+          "rhs": {
             "args": [
               "poly_a",
               "poly_b"
             ],
             "manifold": "spherical",
             "op": "polygon_intersection_area"
-          },
-          "type": "observed",
+          }
+        }
+      ],
+      "variables": {
+        "area_planar": {
+          "description": "First instantiation: the manifold parameter bound to the literal 'planar'.",
+          "type": "unknown",
+          "units": "1"
+        },
+        "area_spherical": {
+          "description": "Second instantiation: the SAME template bound to 'spherical' — the one-file two-manifold factoring the scalar-field substitution rule exists for.",
+          "type": "unknown",
           "units": "1"
         },
         "poly_a": {
@@ -86,7 +92,7 @@
         },
         "u": {
           "default": 0.5,
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         }
       }

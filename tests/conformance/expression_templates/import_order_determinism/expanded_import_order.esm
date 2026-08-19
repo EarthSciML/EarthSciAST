@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "description": "Two libraries declare equal-priority rules matching the same node; the winner is pinned by the effective declaration order = import array order (esm-spec 9.7.4): lib_rule_first wins, y = 2*x",
     "name": "import_order_determinism"
@@ -21,23 +21,26 @@
             ],
             "op": "-"
           }
-        }
-      ],
-      "variables": {
-        "x": {
-          "default": 1.5,
-          "type": "state",
-          "units": "1"
         },
-        "y": {
-          "expression": {
+        {
+          "lhs": "y",
+          "rhs": {
             "args": [
               2,
               "x"
             ],
             "op": "*"
-          },
-          "type": "observed",
+          }
+        }
+      ],
+      "variables": {
+        "x": {
+          "default": 1.5,
+          "type": "unknown",
+          "units": "1"
+        },
+        "y": {
+          "type": "unknown",
           "units": "1"
         }
       }

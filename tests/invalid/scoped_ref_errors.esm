@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ScopedReferenceErrors",
     "description": "Invalid scoped reference patterns that should cause validation errors",
@@ -15,7 +15,7 @@
       },
       "variables": {
         "valid_var": {
-          "type": "state",
+          "type": "unknown",
           "units": "units",
           "default": 1.0,
           "description": "Valid variable"
@@ -25,7 +25,7 @@
         "ValidSubsystem": {
           "variables": {
             "subsystem_var": {
-              "type": "state",
+              "type": "unknown",
               "units": "units",
               "default": 2.0,
               "description": "Valid subsystem variable"
@@ -132,7 +132,7 @@
       },
       "variables": {
         "var1": {
-          "type": "state",
+          "type": "unknown",
           "units": "units",
           "default": 1.0,
           "description": "Variable 1"
@@ -160,7 +160,7 @@
       },
       "variables": {
         "var2": {
-          "type": "state",
+          "type": "unknown",
           "units": "units",
           "default": 2.0,
           "description": "Variable 2"

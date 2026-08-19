@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CorrelatedNoise",
     "description": "SDE with two correlated Wiener noise sources (same correlation_group tag) driving two state variables. Exercises the correlation_group field and multiple brownians in one model.",
@@ -10,8 +10,8 @@
   "models": {
     "TwoBody": {
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 0.0 },
-        "y": { "type": "state", "units": "1", "default": 0.0 },
+        "x": { "type": "unknown", "units": "1", "default": 0.0 },
+        "y": { "type": "unknown", "units": "1", "default": 0.0 },
         "k": { "type": "parameter", "units": "1/s", "default": 1.0 },
         "sx": { "type": "parameter", "units": "1/s^0.5", "default": 0.3 },
         "sy": { "type": "parameter", "units": "1/s^0.5", "default": 0.4 },

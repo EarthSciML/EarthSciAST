@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TooManyStateVars",
     "description": "More state variables than equations - variation 1"
@@ -7,9 +7,9 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0 },
-        "y": { "type": "state", "units": "m", "default": 1.0 },
-        "z": { "type": "state", "units": "m", "default": 2.0 }
+        "x": { "type": "unknown", "units": "m", "default": 0.0 },
+        "y": { "type": "unknown", "units": "m", "default": 1.0 },
+        "z": { "type": "unknown", "units": "m", "default": 2.0 }
       },
       "equations": [
         {

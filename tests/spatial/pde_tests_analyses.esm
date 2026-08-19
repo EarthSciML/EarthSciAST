@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "PDETestsAndAnalyses",
     "description": "PDE-aware tests and analyses: spatial-point assertions, domain-reduce assertions, L2-error assertions against an analytic reference, expression-shaped initial conditions (v0.8.0: `ic` equations, §11.4), and field plot types (field_slice / field_snapshot). Exercises the §6.6.5, §6.7.4 and §11.4 extensions added under gt-vzwk.",
@@ -14,7 +14,7 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Diffused field"
@@ -133,7 +133,7 @@
         "notes": "2-D heat equation u_t = alpha * laplacian(u) on (x,y) in [0,1]^2 — used for the field_snapshot plot type. IC u(x,y,0) = sin(pi x) sin(pi y)."
       },
       "variables": {
-        "u": { "type": "state", "units": "1", "default": 0.0 },
+        "u": { "type": "unknown", "units": "1", "default": 0.0 },
         "alpha": { "type": "parameter", "units": "1", "default": 0.01 }
       },
       "equations": [

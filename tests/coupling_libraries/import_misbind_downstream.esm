@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "import_misbind_downstream",
     "description": "Mis-bind caught downstream (RFC 11): the bind is STRUCTURALLY COMPLETE (both roles bound to real components), so binding-time checks pass, but 'Spread' points at RothermelNoW0, which lacks the parameter `w0` the library's `Fuel.w_0 -> Spread.w0` edge references. Per esm-spec 4.1/7 the expanded edge fails at flatten with unresolved_scoped_ref naming RothermelNoW0.w0 - the same diagnostic a hand-authored bad edge produces."

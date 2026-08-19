@@ -1,5 +1,5 @@
 {
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "join_not_array",
     "description": "INVALID (bead ess-my4.2.1): an `aggregate` node whose `join` is a bare object instead of an array of join clauses (RFC semiring-faq-unified-ir §5.3 / §8). `join` is declared `type: array` (a list of `{ \"on\": … }` clauses), so supplying a single object is a pure schema (type) violation — caught by every binding.",
@@ -26,7 +26,7 @@
     "BadJoinShape": {
       "variables": {
         "u": {
-          "type": "state"
+          "type": "unknown"
         }
       },
       "equations": [

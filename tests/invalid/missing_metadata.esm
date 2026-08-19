@@ -1,11 +1,11 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
 
   "models": {
     "TestModel": {
       "reference": { "notes": "Test model missing metadata section" },
       "variables": {
-        "x": { "type": "state", "units": "dimensionless", "default": 1.0 }
+        "x": { "type": "unknown", "units": "dimensionless", "default": 1.0 }
       },
       "equations": [
         {

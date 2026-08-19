@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ISO8601DateFormatsExample",
     "description": "Demonstrates valid ISO 8601 date-time formats",

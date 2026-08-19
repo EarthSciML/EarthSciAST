@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "import_not_library",
     "description": "INVALID import: the coupling_import ref targets plain_model.esm, an ordinary model document with no top-level coupling_roles - not a coupling-library file (esm-spec 10.9/10.11). Expected: coupling_import_not_library."

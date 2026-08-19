@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "LandAtmosphereHydrology",
     "description": "End-to-end test for coupled land-atmosphere water and energy cycles with vegetation dynamics\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -30,19 +30,19 @@
       },
       "variables": {
         "air_temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 295.15,
           "description": "Air temperature at 2m height"
         },
         "specific_humidity": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/kg",
           "default": 0.008,
           "description": "Specific humidity at 2m height"
         },
         "wind_speed": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 3.0,
           "description": "Wind speed at 10m height"
@@ -72,56 +72,8 @@
           "description": "Precipitation rate"
         },
         "relative_humidity": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "expression": {
-            "op": "/",
-            "args": [
-              "specific_humidity",
-              {
-                "op": "*",
-                "args": [
-                  0.622,
-                  {
-                    "op": "exp",
-                    "args": [
-                      {
-                        "op": "/",
-                        "args": [
-                          {
-                            "op": "*",
-                            "args": [
-                              17.67,
-                              {
-                                "op": "-",
-                                "args": [
-                                  "air_temperature",
-                                  273.15
-                                ]
-                              }
-                            ]
-                          },
-                          {
-                            "op": "+",
-                            "args": [
-                              {
-                                "op": "-",
-                                "args": [
-                                  "air_temperature",
-                                  273.15
-                                ]
-                              },
-                              243.5
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Relative humidity from temperature and specific humidity"
         }
       },
@@ -182,6 +134,57 @@
             ]
           },
           "rhs": 3.0
+        },
+        {
+          "lhs": "relative_humidity",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "specific_humidity",
+              {
+                "op": "*",
+                "args": [
+                  0.622,
+                  {
+                    "op": "exp",
+                    "args": [
+                      {
+                        "op": "/",
+                        "args": [
+                          {
+                            "op": "*",
+                            "args": [
+                              17.67,
+                              {
+                                "op": "-",
+                                "args": [
+                                  "air_temperature",
+                                  273.15
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "+",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "air_temperature",
+                                  273.15
+                                ]
+                              },
+                              243.5
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     },
@@ -192,37 +195,37 @@
       },
       "variables": {
         "soil_moisture_layer1": {
-          "type": "state",
+          "type": "unknown",
           "units": "m^3/m^3",
           "default": 0.25,
           "description": "Volumetric soil moisture in layer 1 (0-10cm)"
         },
         "soil_moisture_layer2": {
-          "type": "state",
+          "type": "unknown",
           "units": "m^3/m^3",
           "default": 0.3,
           "description": "Volumetric soil moisture in layer 2 (10-50cm)"
         },
         "soil_moisture_layer3": {
-          "type": "state",
+          "type": "unknown",
           "units": "m^3/m^3",
           "default": 0.35,
           "description": "Volumetric soil moisture in layer 3 (50-150cm)"
         },
         "soil_temperature_layer1": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.15,
           "description": "Soil temperature in layer 1"
         },
         "soil_temperature_layer2": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.15,
           "description": "Soil temperature in layer 2"
         },
         "soil_temperature_layer3": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.15,
           "description": "Soil temperature in layer 3"
@@ -300,97 +303,13 @@
           "description": "Thickness of soil layer 3"
         },
         "root_zone_moisture": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m^3/m^3",
-          "expression": {
-            "op": "/",
-            "args": [
-              {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      "soil_moisture_layer1",
-                      "layer1_thickness"
-                    ]
-                  },
-                  {
-                    "op": "*",
-                    "args": [
-                      "soil_moisture_layer2",
-                      "layer2_thickness",
-                      0.8
-                    ]
-                  },
-                  {
-                    "op": "*",
-                    "args": [
-                      "soil_moisture_layer3",
-                      "layer3_thickness",
-                      0.2
-                    ]
-                  }
-                ]
-              },
-              {
-                "op": "+",
-                "args": [
-                  "layer1_thickness",
-                  {
-                    "op": "*",
-                    "args": [
-                      "layer2_thickness",
-                      0.8
-                    ]
-                  },
-                  {
-                    "op": "*",
-                    "args": [
-                      "layer3_thickness",
-                      0.2
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Root-zone weighted soil moisture"
         },
         "water_stress_factor": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "expression": {
-            "op": "max",
-            "args": [
-              0.0,
-              {
-                "op": "min",
-                "args": [
-                  1.0,
-                  {
-                    "op": "/",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          "root_zone_moisture",
-                          "wilting_point"
-                        ]
-                      },
-                      {
-                        "op": "-",
-                        "args": [
-                          "field_capacity",
-                          "wilting_point"
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Water stress factor for vegetation (0=stressed, 1=unstressed)"
         }
       },
@@ -751,6 +670,96 @@
             ]
           },
           "rhs": 288.15
+        },
+        {
+          "lhs": "root_zone_moisture",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "soil_moisture_layer1",
+                      "layer1_thickness"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      "soil_moisture_layer2",
+                      "layer2_thickness",
+                      0.8
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      "soil_moisture_layer3",
+                      "layer3_thickness",
+                      0.2
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "+",
+                "args": [
+                  "layer1_thickness",
+                  {
+                    "op": "*",
+                    "args": [
+                      "layer2_thickness",
+                      0.8
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      "layer3_thickness",
+                      0.2
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "water_stress_factor",
+          "rhs": {
+            "op": "max",
+            "args": [
+              0.0,
+              {
+                "op": "min",
+                "args": [
+                  1.0,
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "root_zone_moisture",
+                          "wilting_point"
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          "field_capacity",
+                          "wilting_point"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     },
@@ -760,19 +769,19 @@
       },
       "variables": {
         "leaf_area_index": {
-          "type": "state",
+          "type": "unknown",
           "units": "m^2/m^2",
           "default": 3.0,
           "description": "Leaf area index"
         },
         "above_ground_biomass": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2",
           "default": 2.0,
           "description": "Above-ground plant biomass"
         },
         "below_ground_biomass": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2",
           "default": 1.5,
           "description": "Below-ground (root) biomass"
@@ -826,94 +835,13 @@
           "description": "Root turnover rate"
         },
         "photosynthesis_rate": {
-          "type": "observed",
+          "type": "unknown",
           "units": "umol/m^2/s",
-          "expression": {
-            "op": "*",
-            "args": [
-              "max_photosynthesis_rate",
-              {
-                "op": "/",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "/",
-                        "args": [
-                          "incoming_radiation",
-                          4.6
-                        ]
-                      },
-                      "leaf_area_index"
-                    ]
-                  },
-                  {
-                    "op": "+",
-                    "args": [
-                      {
-                        "op": "*",
-                        "args": [
-                          {
-                            "op": "/",
-                            "args": [
-                              "incoming_radiation",
-                              4.6
-                            ]
-                          },
-                          "leaf_area_index"
-                        ]
-                      },
-                      "light_saturation_point"
-                    ]
-                  }
-                ]
-              },
-              "water_stress_factor"
-            ]
-          },
           "description": "Actual photosynthesis rate with light and water limitations"
         },
         "net_primary_productivity": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg/m^2/s",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      "photosynthesis_rate",
-                      1.2e-05,
-                      3600
-                    ]
-                  },
-                  "growth_efficiency"
-                ]
-              },
-              {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "-",
-                    "args": [
-                      "maintenance_respiration_rate"
-                    ]
-                  },
-                  {
-                    "op": "+",
-                    "args": [
-                      "above_ground_biomass",
-                      "below_ground_biomass"
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
           "description": "Net primary productivity (growth - respiration)"
         }
       },
@@ -1038,6 +966,93 @@
             ]
           },
           "rhs": 1.5
+        },
+        {
+          "lhs": "photosynthesis_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "max_photosynthesis_rate",
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "/",
+                        "args": [
+                          "incoming_radiation",
+                          4.6
+                        ]
+                      },
+                      "leaf_area_index"
+                    ]
+                  },
+                  {
+                    "op": "+",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "/",
+                            "args": [
+                              "incoming_radiation",
+                              4.6
+                            ]
+                          },
+                          "leaf_area_index"
+                        ]
+                      },
+                      "light_saturation_point"
+                    ]
+                  }
+                ]
+              },
+              "water_stress_factor"
+            ]
+          }
+        },
+        {
+          "lhs": "net_primary_productivity",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "photosynthesis_rate",
+                      1.2e-05,
+                      3600
+                    ]
+                  },
+                  "growth_efficiency"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "maintenance_respiration_rate"
+                    ]
+                  },
+                  {
+                    "op": "+",
+                    "args": [
+                      "above_ground_biomass",
+                      "below_ground_biomass"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     },
@@ -1048,7 +1063,7 @@
       },
       "variables": {
         "surface_temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 290.15,
           "description": "Surface skin temperature"
@@ -1084,9 +1099,78 @@
           "description": "Canopy stomatal conductance"
         },
         "net_radiation": {
-          "type": "observed",
+          "type": "unknown",
           "units": "W/m^2",
-          "expression": {
+          "description": "Net radiation at surface"
+        },
+        "sensible_heat_flux": {
+          "type": "unknown",
+          "units": "W/m^2",
+          "description": "Sensible heat flux to atmosphere"
+        },
+        "latent_heat_flux": {
+          "type": "unknown",
+          "units": "W/m^2",
+          "description": "Latent heat flux (evapotranspiration)"
+        },
+        "ground_heat_flux": {
+          "type": "unknown",
+          "units": "W/m^2",
+          "description": "Ground heat flux into soil"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "surface_temperature"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "net_radiation",
+                  {
+                    "op": "-",
+                    "args": [
+                      "sensible_heat_flux"
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "latent_heat_flux"
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "ground_heat_flux"
+                    ]
+                  }
+                ]
+              },
+              500000.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "surface_temperature"
+            ]
+          },
+          "rhs": 290.15
+        },
+        {
+          "lhs": "net_radiation",
+          "rhs": {
             "op": "+",
             "args": [
               {
@@ -1123,13 +1207,11 @@
                 ]
               }
             ]
-          },
-          "description": "Net radiation at surface"
+          }
         },
-        "sensible_heat_flux": {
-          "type": "observed",
-          "units": "W/m^2",
-          "expression": {
+        {
+          "lhs": "sensible_heat_flux",
+          "rhs": {
             "op": "*",
             "args": [
               1200.0,
@@ -1142,13 +1224,11 @@
                 ]
               }
             ]
-          },
-          "description": "Sensible heat flux to atmosphere"
+          }
         },
-        "latent_heat_flux": {
-          "type": "observed",
-          "units": "W/m^2",
-          "expression": {
+        {
+          "lhs": "latent_heat_flux",
+          "rhs": {
             "op": "*",
             "args": [
               2450000.0,
@@ -1260,13 +1340,11 @@
                 ]
               }
             ]
-          },
-          "description": "Latent heat flux (evapotranspiration)"
+          }
         },
-        "ground_heat_flux": {
-          "type": "observed",
-          "units": "W/m^2",
-          "expression": {
+        {
+          "lhs": "ground_heat_flux",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -1290,58 +1368,7 @@
                 ]
               }
             ]
-          },
-          "description": "Ground heat flux into soil"
-        }
-      },
-      "equations": [
-        {
-          "lhs": {
-            "op": "D",
-            "args": [
-              "surface_temperature"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "/",
-            "args": [
-              {
-                "op": "+",
-                "args": [
-                  "net_radiation",
-                  {
-                    "op": "-",
-                    "args": [
-                      "sensible_heat_flux"
-                    ]
-                  },
-                  {
-                    "op": "-",
-                    "args": [
-                      "latent_heat_flux"
-                    ]
-                  },
-                  {
-                    "op": "-",
-                    "args": [
-                      "ground_heat_flux"
-                    ]
-                  }
-                ]
-              },
-              500000.0
-            ]
           }
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
-              "surface_temperature"
-            ]
-          },
-          "rhs": 290.15
         }
       ]
     }

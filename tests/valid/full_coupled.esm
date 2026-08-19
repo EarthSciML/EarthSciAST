@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "FullCoupledSystem",
     "description": "Comprehensive ESM test exercising all sections: models, reaction_systems, data_loaders, operators, coupling (all 6 types), domain with spatial+temporal+ICs+BCs, and solver\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",

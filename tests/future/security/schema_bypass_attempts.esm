@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SchemaBypassAttempts",
     "description": "Test various attempts to bypass JSON schema validation with edge case field names and structures",
@@ -8,11 +8,11 @@
   "models": {
     "TestModel": {
       "variables": {
-        "__proto__": { "type": "state", "units": "m", "default": 1.0 },
+        "__proto__": { "type": "unknown", "units": "m", "default": 1.0 },
         "constructor": { "type": "parameter", "units": "1", "default": 0.0 },
-        "toString": { "type": "state", "units": "kg", "default": 2.0 },
+        "toString": { "type": "unknown", "units": "kg", "default": 2.0 },
         "valueOf": { "type": "parameter", "units": "s", "default": 3.0 },
-        "hasOwnProperty": { "type": "state", "units": "A", "default": 4.0 }
+        "hasOwnProperty": { "type": "unknown", "units": "A", "default": 4.0 }
       },
       "equations": [
         {

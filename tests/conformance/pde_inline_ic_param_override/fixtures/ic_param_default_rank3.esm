@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ic_param_default_rank3",
     "description": "The control half of the ic_param_override_rank3 pair: the same document with the amplitude carried as amp's DECLARED DEFAULT (2.0) instead of an inline test parameter_overrides. Same equations, same assertions, same golden actuals. A binding that drops an ic-only override from the build-time scope passes this and fails its sibling.",
@@ -40,7 +40,7 @@
           "description": "Amplitude of the 3-D initial field. Referenced ONLY by ic(w) -- never by an equation -- so it can move the answer through the build-time ic scope and nowhere else."
         },
         "w": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lon",
@@ -50,7 +50,7 @@
           "description": "Seeded by the rank-3 coordinate-expression ic amp*cos(pi x)cos(pi y)(1+z); held constant by D(w)/dt = 0."
         },
         "s": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Integrates the (0-D) sum of w's corner cell, so the seeded field also has to reach the trajectory."

@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SpatialOperatorDiscretization",
     "description": "Test finite difference implementation of spatial operators on structured grids\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -21,7 +21,7 @@
       },
       "variables": {
         "tracer": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-09,
           "description": "Test tracer concentration"
@@ -192,7 +192,7 @@
       },
       "variables": {
         "tracer": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-09
         },
@@ -272,9 +272,30 @@
       },
       "variables": {
         "analytical_field": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "expression": {
+          "description": "sin(πx)sin(πy)"
+        },
+        "analytical_laplacian": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "description": "-2π²sin(πx)sin(πy)"
+        },
+        "numerical_laplacian": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "description": "Finite difference ∇²(sin(πx)sin(πy))"
+        },
+        "discretization_error": {
+          "type": "unknown",
+          "units": "dimensionless",
+          "description": "Absolute error in finite difference Laplacian"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "analytical_field",
+          "rhs": {
             "op": "*",
             "args": [
               {
@@ -302,13 +323,11 @@
                 ]
               }
             ]
-          },
-          "description": "sin(πx)sin(πy)"
+          }
         },
-        "analytical_laplacian": {
-          "type": "observed",
-          "units": "dimensionless",
-          "expression": {
+        {
+          "lhs": "analytical_laplacian",
+          "rhs": {
             "op": "*",
             "args": [
               -19.739,
@@ -342,24 +361,20 @@
                 ]
               }
             ]
-          },
-          "description": "-2π²sin(πx)sin(πy)"
+          }
         },
-        "numerical_laplacian": {
-          "type": "observed",
-          "units": "dimensionless",
-          "expression": {
+        {
+          "lhs": "numerical_laplacian",
+          "rhs": {
             "op": "laplacian",
             "args": [
               "analytical_field"
             ]
-          },
-          "description": "Finite difference ∇²(sin(πx)sin(πy))"
+          }
         },
-        "discretization_error": {
-          "type": "observed",
-          "units": "dimensionless",
-          "expression": {
+        {
+          "lhs": "discretization_error",
+          "rhs": {
             "op": "abs",
             "args": [
               {
@@ -370,11 +385,9 @@
                 ]
               }
             ]
-          },
-          "description": "Absolute error in finite difference Laplacian"
+          }
         }
-      },
-      "equations": []
+      ]
     }
   },
   "domain": {

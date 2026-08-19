@@ -9,7 +9,7 @@
       "type": "operator_compose"
     }
   ],
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "lat": {
       "kind": "interval",
@@ -263,7 +263,7 @@
             "lon",
             "lat"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^3"
         },
         "u": {
@@ -291,7 +291,7 @@
         "e": {
           "default": 0.0,
           "description": "0-D box source",
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         }
       }

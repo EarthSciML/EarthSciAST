@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventsCrossSystemInteraction",
     "description": "Test fixture for cross-system events - Events spanning multiple coupled systems with inter-system dependencies\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -211,28 +211,27 @@
       },
       "variables": {
         "solar_intensity": {
-          "type": "state",
+          "type": "unknown",
           "units": "W/m^2",
           "default": 800.0,
           "description": "Solar radiation intensity"
         },
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "°C",
           "default": 25.0,
           "description": "Air temperature"
         },
         "wind_speed": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 3.0,
           "description": "Wind speed for mixing"
         },
         "temperature_factor": {
-          "type": "observed",
+          "type": "unknown",
           "units": "dimensionless",
-          "description": "Temperature factor for biological processes",
-          "expression": 0.0
+          "description": "Temperature factor for biological processes"
         },
         "diurnal_amplitude": {
           "units": "W/m^2",
@@ -415,6 +414,10 @@
               }
             ]
           }
+        },
+        {
+          "lhs": "temperature_factor",
+          "rhs": 0.0
         }
       ]
     }

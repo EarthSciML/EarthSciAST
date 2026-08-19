@@ -10,24 +10,73 @@
       },
       "models": {
         "SourceModel": {
-          "variables": {"input": {"type": "parameter", "value": 1.0}},
+          "variables": {
+            "input": {
+              "type": "parameter",
+              "value": 1.0
+            }
+          },
           "equations": []
         },
         "ProcessorModel": {
-          "variables": {"intermediate": {"type": "state"}},
-          "equations": [{"lhs": "intermediate", "rhs": {"op": "*", "args": ["SourceModel.input", "2.0"]}}]
+          "variables": {
+            "intermediate": {
+              "type": "unknown"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "intermediate",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "SourceModel.input",
+                  "2.0"
+                ]
+              }
+            }
+          ]
         },
         "SinkModel": {
-          "variables": {"output": {"type": "state"}},
-          "equations": [{"lhs": "output", "rhs": {"op": "+", "args": ["ProcessorModel.intermediate", "offset"]}}]
+          "variables": {
+            "output": {
+              "type": "unknown"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "output",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "ProcessorModel.intermediate",
+                  "offset"
+                ]
+              }
+            }
+          ]
         }
       }
     },
     "expected_analysis": {
       "has_cycles": false,
       "cycles": [],
-      "topological_order": ["SourceModel", "ProcessorModel", "SinkModel"],
-      "strongly_connected_components": [["SourceModel"], ["ProcessorModel"], ["SinkModel"]],
+      "topological_order": [
+        "SourceModel",
+        "ProcessorModel",
+        "SinkModel"
+      ],
+      "strongly_connected_components": [
+        [
+          "SourceModel"
+        ],
+        [
+          "ProcessorModel"
+        ],
+        [
+          "SinkModel"
+        ]
+      ],
       "dependency_levels": {
         "SourceModel": 0,
         "ProcessorModel": 1,
@@ -46,12 +95,44 @@
       },
       "models": {
         "ModelA": {
-          "variables": {"x": {"type": "state", "units": "dimensionless"}},
-          "equations": [{"lhs": "D(x)", "rhs": {"op": "+", "args": ["ModelB.y", "source_a"]}}]
+          "variables": {
+            "x": {
+              "type": "unknown",
+              "units": "dimensionless"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "D(x)",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "ModelB.y",
+                  "source_a"
+                ]
+              }
+            }
+          ]
         },
         "ModelB": {
-          "variables": {"y": {"type": "state", "units": "dimensionless"}},
-          "equations": [{"lhs": "D(y)", "rhs": {"op": "*", "args": ["ModelA.x", "coupling_coeff"]}}]
+          "variables": {
+            "y": {
+              "type": "unknown",
+              "units": "dimensionless"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "D(y)",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "ModelA.x",
+                  "coupling_coeff"
+                ]
+              }
+            }
+          ]
         }
       },
       "coupling": [
@@ -59,27 +140,44 @@
           "source_model": "ModelA",
           "target_model": "ModelB",
           "coupling_type": "variable_map",
-          "variable_map": {"x": "input_from_a"}
+          "variable_map": {
+            "x": "input_from_a"
+          }
         },
         {
           "source_model": "ModelB",
           "target_model": "ModelA",
           "coupling_type": "variable_map",
-          "variable_map": {"y": "input_from_b"}
+          "variable_map": {
+            "y": "input_from_b"
+          }
         }
       ]
     },
     "expected_analysis": {
       "has_cycles": true,
-      "cycles": [["ModelA.x", "ModelB.y", "ModelA.x"]],
-      "cycle_types": ["feedback_loop"],
+      "cycles": [
+        [
+          "ModelA.x",
+          "ModelB.y",
+          "ModelA.x"
+        ]
+      ],
+      "cycle_types": [
+        "feedback_loop"
+      ],
       "topological_order": null,
-      "strongly_connected_components": [["ModelA", "ModelB"]],
+      "strongly_connected_components": [
+        [
+          "ModelA",
+          "ModelB"
+        ]
+      ],
       "execution_strategy": {
         "method": "fixed_point_iteration",
         "convergence_criteria": "relative_tolerance",
         "max_iterations": 100,
-        "tolerance": 1e-6
+        "tolerance": 1e-06
       }
     }
   },
@@ -95,42 +193,167 @@
       "models": {
         "AtmosphereModel": {
           "variables": {
-            "temperature": {"type": "state", "units": "K"},
-            "pressure": {"type": "state", "units": "Pa"}
+            "temperature": {
+              "type": "unknown",
+              "units": "K"
+            },
+            "pressure": {
+              "type": "unknown",
+              "units": "Pa"
+            }
           },
           "equations": [
-            {"lhs": "D(temperature)", "rhs": {"op": "+", "args": ["OceanModel.heat_flux", "LandModel.sensible_heat"]}},
-            {"lhs": "D(pressure)", "rhs": {"op": "-", "args": ["pressure", {"op": "/", "args": ["buoyancy", "scale_height"]}]}}
+            {
+              "lhs": "D(temperature)",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "OceanModel.heat_flux",
+                  "LandModel.sensible_heat"
+                ]
+              }
+            },
+            {
+              "lhs": "D(pressure)",
+              "rhs": {
+                "op": "-",
+                "args": [
+                  "pressure",
+                  {
+                    "op": "/",
+                    "args": [
+                      "buoyancy",
+                      "scale_height"
+                    ]
+                  }
+                ]
+              }
+            }
           ]
         },
         "OceanModel": {
           "variables": {
-            "sea_surface_temp": {"type": "state", "units": "K"},
-            "heat_flux": {"type": "state", "units": "W/m²"}
+            "sea_surface_temp": {
+              "type": "unknown",
+              "units": "K"
+            },
+            "heat_flux": {
+              "type": "unknown",
+              "units": "W/m²"
+            }
           },
           "equations": [
-            {"lhs": "D(sea_surface_temp)", "rhs": {"op": "-", "args": ["AtmosphereModel.temperature", "sea_surface_temp"]}},
-            {"lhs": "heat_flux", "rhs": {"op": "*", "args": ["exchange_coeff", {"op": "-", "args": ["sea_surface_temp", "AtmosphereModel.temperature"]}]}}
+            {
+              "lhs": "D(sea_surface_temp)",
+              "rhs": {
+                "op": "-",
+                "args": [
+                  "AtmosphereModel.temperature",
+                  "sea_surface_temp"
+                ]
+              }
+            },
+            {
+              "lhs": "heat_flux",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "exchange_coeff",
+                  {
+                    "op": "-",
+                    "args": [
+                      "sea_surface_temp",
+                      "AtmosphereModel.temperature"
+                    ]
+                  }
+                ]
+              }
+            }
           ]
         },
         "LandModel": {
           "variables": {
-            "surface_temp": {"type": "state", "units": "K"},
-            "sensible_heat": {"type": "state", "units": "W/m²"}
+            "surface_temp": {
+              "type": "unknown",
+              "units": "K"
+            },
+            "sensible_heat": {
+              "type": "unknown",
+              "units": "W/m²"
+            }
           },
           "equations": [
-            {"lhs": "D(surface_temp)", "rhs": {"op": "*", "args": ["thermal_inertia", {"op": "-", "args": ["AtmosphereModel.temperature", "surface_temp"]}]}},
-            {"lhs": "sensible_heat", "rhs": {"op": "*", "args": ["heat_transfer_coeff", {"op": "-", "args": ["surface_temp", "AtmosphereModel.temperature"]}]}}
+            {
+              "lhs": "D(surface_temp)",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "thermal_inertia",
+                  {
+                    "op": "-",
+                    "args": [
+                      "AtmosphereModel.temperature",
+                      "surface_temp"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "lhs": "sensible_heat",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "heat_transfer_coeff",
+                  {
+                    "op": "-",
+                    "args": [
+                      "surface_temp",
+                      "AtmosphereModel.temperature"
+                    ]
+                  }
+                ]
+              }
+            }
           ]
         },
         "ChemistryModel": {
           "variables": {
-            "ozone": {"type": "species", "units": "ppb"},
-            "temperature": {"type": "state", "units": "K"}
+            "ozone": {
+              "type": "species",
+              "units": "ppb"
+            },
+            "temperature": {
+              "type": "state",
+              "units": "K"
+            }
           },
           "equations": [
-            {"lhs": "D(ozone)", "rhs": {"op": "*", "args": ["rate_constant", {"op": "exp", "args": [{"op": "/", "args": ["-activation_energy", "temperature"]}]}]}},
-            {"lhs": "temperature", "rhs": "AtmosphereModel.temperature"}
+            {
+              "lhs": "D(ozone)",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "rate_constant",
+                  {
+                    "op": "exp",
+                    "args": [
+                      {
+                        "op": "/",
+                        "args": [
+                          "-activation_energy",
+                          "temperature"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "lhs": "temperature",
+              "rhs": "AtmosphereModel.temperature"
+            }
           ]
         }
       },
@@ -139,31 +362,41 @@
           "source_model": "AtmosphereModel",
           "target_model": "OceanModel",
           "coupling_type": "variable_map",
-          "variable_map": {"temperature": "atm_temp_input"}
+          "variable_map": {
+            "temperature": "atm_temp_input"
+          }
         },
         {
           "source_model": "OceanModel",
           "target_model": "AtmosphereModel",
           "coupling_type": "variable_map",
-          "variable_map": {"heat_flux": "ocean_heat_input"}
+          "variable_map": {
+            "heat_flux": "ocean_heat_input"
+          }
         },
         {
           "source_model": "AtmosphereModel",
           "target_model": "LandModel",
           "coupling_type": "variable_map",
-          "variable_map": {"temperature": "atm_temp_forcing"}
+          "variable_map": {
+            "temperature": "atm_temp_forcing"
+          }
         },
         {
           "source_model": "LandModel",
           "target_model": "AtmosphereModel",
           "coupling_type": "variable_map",
-          "variable_map": {"sensible_heat": "land_heat_input"}
+          "variable_map": {
+            "sensible_heat": "land_heat_input"
+          }
         },
         {
           "source_model": "AtmosphereModel",
           "target_model": "ChemistryModel",
           "coupling_type": "variable_map",
-          "variable_map": {"temperature": "temperature_input"}
+          "variable_map": {
+            "temperature": "temperature_input"
+          }
         }
       ]
     },
@@ -171,28 +404,48 @@
       "has_cycles": true,
       "cycles": [
         {
-          "nodes": ["AtmosphereModel.temperature", "OceanModel.heat_flux", "AtmosphereModel.temperature"],
+          "nodes": [
+            "AtmosphereModel.temperature",
+            "OceanModel.heat_flux",
+            "AtmosphereModel.temperature"
+          ],
           "length": 2,
           "type": "atmosphere_ocean_feedback"
         },
         {
-          "nodes": ["AtmosphereModel.temperature", "LandModel.sensible_heat", "AtmosphereModel.temperature"],
+          "nodes": [
+            "AtmosphereModel.temperature",
+            "LandModel.sensible_heat",
+            "AtmosphereModel.temperature"
+          ],
           "length": 2,
           "type": "atmosphere_land_feedback"
         }
       ],
       "strongly_connected_components": [
-        ["AtmosphereModel", "OceanModel", "LandModel"],
-        ["ChemistryModel"]
+        [
+          "AtmosphereModel",
+          "OceanModel",
+          "LandModel"
+        ],
+        [
+          "ChemistryModel"
+        ]
       ],
       "execution_strategy": {
         "scc_1": {
-          "components": ["AtmosphereModel", "OceanModel", "LandModel"],
+          "components": [
+            "AtmosphereModel",
+            "OceanModel",
+            "LandModel"
+          ],
           "method": "jacobi_iteration",
           "reason": "Multiple coupled cycles require simultaneous solution"
         },
         "scc_2": {
-          "components": ["ChemistryModel"],
+          "components": [
+            "ChemistryModel"
+          ],
           "method": "direct_evaluation",
           "reason": "No cycles within this component"
         }
@@ -227,7 +480,10 @@
       "models": {
         "AutocatalyticModel": {
           "variables": {
-            "concentration": {"type": "state", "units": "mol/L"}
+            "concentration": {
+              "type": "unknown",
+              "units": "mol/L"
+            }
           },
           "equations": [
             {
@@ -236,7 +492,19 @@
                 "op": "*",
                 "args": [
                   "rate_constant",
-                  {"op": "*", "args": ["concentration", {"op": "-", "args": ["carrying_capacity", "concentration"]}]}
+                  {
+                    "op": "*",
+                    "args": [
+                      "concentration",
+                      {
+                        "op": "-",
+                        "args": [
+                          "carrying_capacity",
+                          "concentration"
+                        ]
+                      }
+                    ]
+                  }
                 ]
               }
             }
@@ -244,7 +512,10 @@
         },
         "DelayModel": {
           "variables": {
-            "state": {"type": "state", "units": "dimensionless"}
+            "state": {
+              "type": "unknown",
+              "units": "dimensionless"
+            }
           },
           "equations": [
             {
@@ -252,7 +523,13 @@
               "rhs": {
                 "op": "+",
                 "args": [
-                  {"op": "delay", "args": ["state", "delay_time"]},
+                  {
+                    "op": "delay",
+                    "args": [
+                      "state",
+                      "delay_time"
+                    ]
+                  },
                   "external_input"
                 ]
               }
@@ -265,21 +542,29 @@
       "has_cycles": true,
       "cycles": [
         {
-          "nodes": ["AutocatalyticModel.concentration"],
+          "nodes": [
+            "AutocatalyticModel.concentration"
+          ],
           "length": 1,
           "type": "self_loop",
           "equation": "D(concentration) = f(concentration, ...)"
         },
         {
-          "nodes": ["DelayModel.state"],
+          "nodes": [
+            "DelayModel.state"
+          ],
           "length": 1,
           "type": "delay_feedback",
           "equation": "D(state) = f(delay(state), ...)"
         }
       ],
       "strongly_connected_components": [
-        ["AutocatalyticModel"],
-        ["DelayModel"]
+        [
+          "AutocatalyticModel"
+        ],
+        [
+          "DelayModel"
+        ]
       ],
       "execution_strategy": {
         "AutocatalyticModel": {
@@ -308,20 +593,80 @@
         "SystemA": {
           "subsystems": {
             "SubA1": {
-              "variables": {"x1": {"type": "state"}},
-              "equations": [{"lhs": "D(x1)", "rhs": {"op": "+", "args": ["SubA2.x2", "input_a1"]}}]
+              "variables": {
+                "x1": {
+                  "type": "unknown"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "D(x1)",
+                  "rhs": {
+                    "op": "+",
+                    "args": [
+                      "SubA2.x2",
+                      "input_a1"
+                    ]
+                  }
+                }
+              ]
             },
             "SubA2": {
-              "variables": {"x2": {"type": "state"}},
-              "equations": [{"lhs": "D(x2)", "rhs": {"op": "*", "args": ["SubA1.x1", "coupling_coeff"]}}]
+              "variables": {
+                "x2": {
+                  "type": "unknown"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "D(x2)",
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      "SubA1.x1",
+                      "coupling_coeff"
+                    ]
+                  }
+                }
+              ]
             }
           },
-          "variables": {"total": {"type": "observed"}},
-          "equations": [{"lhs": "total", "rhs": {"op": "+", "args": ["SubA1.x1", "SubA2.x2"]}}]
+          "variables": {
+            "total": {
+              "type": "unknown"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "total",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "SubA1.x1",
+                  "SubA2.x2"
+                ]
+              }
+            }
+          ]
         },
         "SystemB": {
-          "variables": {"y": {"type": "state"}},
-          "equations": [{"lhs": "D(y)", "rhs": {"op": "-", "args": ["SystemA.total", "decay_rate"]}}]
+          "variables": {
+            "y": {
+              "type": "unknown"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "D(y)",
+              "rhs": {
+                "op": "-",
+                "args": [
+                  "SystemA.total",
+                  "decay_rate"
+                ]
+              }
+            }
+          ]
         }
       },
       "coupling": [
@@ -329,7 +674,9 @@
           "source_model": "SystemB",
           "target_model": "SystemA.SubA1",
           "coupling_type": "variable_map",
-          "variable_map": {"y": "external_forcing"}
+          "variable_map": {
+            "y": "external_forcing"
+          }
         }
       ]
     },
@@ -337,7 +684,11 @@
       "has_cycles": true,
       "variable_level_cycles": [
         {
-          "nodes": ["SystemA.SubA1.x1", "SystemA.SubA2.x2", "SystemA.SubA1.x1"],
+          "nodes": [
+            "SystemA.SubA1.x1",
+            "SystemA.SubA2.x2",
+            "SystemA.SubA1.x1"
+          ],
           "level": "subsystem",
           "description": "Cycle between subsystems within SystemA"
         }
@@ -345,14 +696,29 @@
       "component_level_cycles": [],
       "hierarchical_analysis": {
         "level_0": {
-          "components": ["SystemA", "SystemB"],
+          "components": [
+            "SystemA",
+            "SystemB"
+          ],
           "has_cycles": false,
-          "topological_order": ["SystemB", "SystemA"]
+          "topological_order": [
+            "SystemB",
+            "SystemA"
+          ]
         },
         "level_1_SystemA": {
-          "components": ["SystemA.SubA1", "SystemA.SubA2"],
+          "components": [
+            "SystemA.SubA1",
+            "SystemA.SubA2"
+          ],
           "has_cycles": true,
-          "cycles": [["SubA1", "SubA2", "SubA1"]]
+          "cycles": [
+            [
+              "SubA1",
+              "SubA2",
+              "SubA1"
+            ]
+          ]
         }
       },
       "execution_strategy": {
@@ -365,7 +731,10 @@
           {
             "step": 2,
             "description": "Solve SystemA subsystem cycle using fixed-point iteration",
-            "components": ["SubA1", "SubA2"],
+            "components": [
+              "SubA1",
+              "SubA2"
+            ],
             "method": "gauss_seidel"
           },
           {

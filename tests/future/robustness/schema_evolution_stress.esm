@@ -18,7 +18,7 @@
       "schema_version": "0.0.1",
       "variables": {
         "old_style_var": {
-          "type": "state",
+          "type": "unknown",
           "unit": "ppm",
           "initial": 1e-6,
           "bounds": [0, 1e-3]

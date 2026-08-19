@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ic_in_reaction_system",
     "description": "Invalid: an `ic`-op equation placed inside a reaction system's `constraint_equations`. ICs are model-hosted (esm-spec.md §11.4.1): a reaction system has no `equations` field and MUST NOT carry an `ic` equation. This file is SCHEMA-VALID (constraint_equations is an array of Equation and `ic` is a legal op, so nothing in JSON Schema forbids it) but MUST be rejected by structural validation with diagnostic `ic_in_reaction_system`. A reaction-system species' initial value is its scalar `species.default`; a non-constant / spatial / loaded-field IC is declared with a scoped-reference `ic` equation in a MODEL (`ic(Chemistry.O3) ~ <field>`), never inside the reaction system.",

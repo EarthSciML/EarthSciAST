@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "InvalidTriggerTypeTest",
     "description": "Test case for invalid discrete event trigger type",
@@ -11,7 +11,7 @@
     "SimpleModel": {
       "reference": { "notes": "Simple model with invalid trigger type" },
       "variables": {
-        "x": { "type": "state", "units": "1", "default": 0.0, "description": "State variable" }
+        "x": { "type": "unknown", "units": "1", "default": 0.0, "description": "State variable" }
       },
       "parameters": {
         "rate": { "units": "1/s", "default": 1.0, "description": "Rate parameter" }

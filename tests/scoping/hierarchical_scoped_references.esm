@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "HierarchicalScopedReferences",
     "description": "Test fixtures for hierarchical scoped reference resolution (A.B.C.variable)",
@@ -21,7 +21,7 @@
           "description": "Global scaling parameter"
         },
         "system_output": {
-          "type": "state",
+          "type": "unknown",
           "units": "units",
           "default": 0.0,
           "description": "Combined system output"
@@ -34,7 +34,7 @@
           },
           "variables": {
             "local_state": {
-              "type": "state",
+              "type": "unknown",
               "units": "units",
               "default": 1.0,
               "description": "Local state A"
@@ -53,7 +53,7 @@
               },
               "variables": {
                 "deep_variable": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "units",
                   "default": 0.1,
                   "description": "Deep variable A"
@@ -129,7 +129,7 @@
           },
           "variables": {
             "local_state": {
-              "type": "state",
+              "type": "unknown",
               "units": "units",
               "default": 2.0,
               "description": "Local state B"
@@ -148,7 +148,7 @@
               },
               "variables": {
                 "oscillator": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "units",
                   "default": 1.0,
                   "description": "Oscillating variable"
@@ -196,7 +196,7 @@
                   "description": "Phase shift parameter"
                 },
                 "feedback_state": {
-                  "type": "state",
+                  "type": "unknown",
                   "units": "units",
                   "default": 0.0,
                   "description": "Feedback state"

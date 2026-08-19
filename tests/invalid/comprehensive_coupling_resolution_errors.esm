@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CouplingResolutionErrorFixtures",
     "description": "Invalid coupling configurations that should produce deterministic errors",
@@ -22,13 +22,13 @@
       "description": "Valid system for testing error conditions",
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Position"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 1.0,
           "description": "Velocity"
@@ -80,7 +80,7 @@
       "description": "System with variables that have incompatible units for testing",
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 300.0,
           "description": "Temperature"

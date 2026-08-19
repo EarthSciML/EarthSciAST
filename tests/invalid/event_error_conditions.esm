@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventErrorConditions",
     "description": "Invalid event configurations for testing error handling",
@@ -12,13 +12,13 @@
     "ErrorTestModel": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1.0,
           "description": "State variable"
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 2.0,
           "description": "Another state variable"

@@ -1,16 +1,25 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "LibCalendarSubsystemInclusion",
     "description": "Demonstrates §4.7 subsystem inclusion of the standard-library calendar subsystem (lib/calendar.esm). A trivial diurnal-cycle consumer mounts `Calendar` as a subsystem-by-reference and uses `Calendar.seconds_since_midnight` to construct a sin-of-time-of-day weight. Validates that the AST veneer over the closed `datetime.*` registry resolves through subsystem inclusion. See docs/standard_library.md.",
-    "authors": ["EarthSciML"],
+    "authors": [
+      "EarthSciML"
+    ],
     "created": "2026-04-25T00:00:00Z",
-    "tags": ["standard-library", "subsystem-inclusion", "calendar", "closed-function-registry"]
+    "tags": [
+      "standard-library",
+      "subsystem-inclusion",
+      "calendar",
+      "closed-function-registry"
+    ]
   },
   "models": {
     "Diurnal": {
       "subsystems": {
-        "Calendar": { "ref": "../../lib/calendar.esm" }
+        "Calendar": {
+          "ref": "../../lib/calendar.esm"
+        }
       },
       "variables": {
         "amplitude": {
@@ -20,26 +29,12 @@
           "description": "Peak diurnal amplitude."
         },
         "diurnal_weight": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "Sinusoidal diurnal weight max at solar noon (12:00 UTC) using the integer-exact `seconds_since_midnight` helper.",
-          "expression": {
-            "op": "*",
-            "args": [
-              "amplitude",
-              { "op": "sin", "args": [
-                  { "op": "*", "args": [
-                      7.272205216643040e-5,
-                      "Calendar.seconds_since_midnight"
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
+          "description": "Sinusoidal diurnal weight max at solar noon (12:00 UTC) using the integer-exact `seconds_since_midnight` helper."
         },
         "C": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Accumulator state to give the model real ODE semantics."
@@ -47,8 +42,35 @@
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["C"], "wrt": "t" },
+          "lhs": {
+            "op": "D",
+            "args": [
+              "C"
+            ],
+            "wrt": "t"
+          },
           "rhs": "diurnal_weight"
+        },
+        {
+          "lhs": "diurnal_weight",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "amplitude",
+              {
+                "op": "sin",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      7.27220521664304e-05,
+                      "Calendar.seconds_since_midnight"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     }

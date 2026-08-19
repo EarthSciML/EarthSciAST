@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "BareReferenceResolutionTest",
     "description": "Test fixture for bare reference resolution within system contexts (no dots in variable names)",
@@ -17,19 +17,19 @@
     "SimpleChemistry": {
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "description": "Ozone"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-10,
           "description": "Nitric oxide"
         },
         "NO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-09,
           "description": "Nitrogen dioxide"
@@ -194,7 +194,7 @@
               "description": "Solar zenith angle"
             },
             "NO2_photo": {
-              "type": "state",
+              "type": "unknown",
               "units": "mol/mol",
               "default": 1e-09,
               "description": "NO2 for photolysis"

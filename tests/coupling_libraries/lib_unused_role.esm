@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "IllegalLibraryUnusedRole",
     "description": "INVALID coupling library: role 'Extra' is declared but referenced by no edge (esm-spec 10.9 - a declared role must appear at some 10.10.2 occurrence site). Expected: coupling_role_unused."

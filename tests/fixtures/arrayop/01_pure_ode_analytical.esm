@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "arrayop_01_pure_ode_analytical",
     "description": "Pure ODE on an N=5 array state u. D(u[i]) = -u[i], analytical u_i(t) = i*exp(-t). Mirrors MTK fork test #1 at /tmp/mtk-arrayop/test/arrayop_block_tearing_test.jl line 12.",
@@ -9,7 +9,7 @@
   "models": {
     "PureODE": {
       "variables": {
-        "u": { "type": "state" }
+        "u": { "type": "unknown" }
       },
       "equations": [
         {

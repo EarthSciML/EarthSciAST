@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ERA5_pressure_levels_example",
     "description": "Covers EarthSciData.jl/src/era5.jl ERA5PressureLevelFileSet. Files come from CDS API or a local mirror (era5_pl_YYYY_MM.nc per month, 37 pressure levels 1000..1 hPa, hourly valid_time). Variables follow ERA5_VARIABLES mapping (full name -> short name used in the NetCDF). ERA5 pressure-level reanalysis, monthly files, hourly frequency, 37 pressure levels from CDS.",

@@ -12,7 +12,7 @@
     "SimpleModel": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-06
         }

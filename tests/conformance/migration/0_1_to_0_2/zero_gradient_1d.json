@@ -15,7 +15,7 @@
       "M": {
         "variables": {
           "u": {
-            "type": "state",
+            "type": "unknown",
             "default": 0.0
           }
         },
@@ -60,7 +60,7 @@
       "M": {
         "variables": {
           "u": {
-            "type": "state",
+            "type": "unknown",
             "default": 0.0
           }
         },

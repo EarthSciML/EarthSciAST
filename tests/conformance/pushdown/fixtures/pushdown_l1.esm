@@ -193,7 +193,7 @@
       }
     }
   },
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -213,10 +213,10 @@
   },
   "models": {
     "ISRM": {
-      "equations": [],
-      "variables": {
-        "E_NH3": {
-          "expression": {
+      "equations": [
+        {
+          "lhs": "E_NH3",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -352,14 +352,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_NOx": {
-          "expression": {
+        {
+          "lhs": "E_NOx",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -495,14 +492,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_PM25": {
-          "expression": {
+        {
+          "lhs": "E_PM25",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -638,14 +632,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_SOx": {
-          "expression": {
+        {
+          "lhs": "E_SOx",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -781,14 +772,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "E_VOC": {
-          "expression": {
+        {
+          "lhs": "E_VOC",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -924,61 +912,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "MortalityRate": {
-          "default": 0.0,
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "SR_PrimaryPM25": {
-          "default": 0.0,
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "SR_SOA": {
-          "default": 0.0,
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "SR_pNH4": {
-          "default": 0.0,
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "SR_pNO3": {
-          "default": 0.0,
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "SR_pSO4": {
-          "default": 0.0,
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "TotalPM25": {
-          "expression": {
+        {
+          "lhs": "TotalPM25",
+          "rhs": {
             "args": [
               "conc_SOA",
               "conc_pNO3",
@@ -1041,21 +979,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "TotalPop": {
-          "default": 0.0,
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "X": {
-          "expression": {
+        {
+          "lhs": "X",
+          "rhs": {
             "args": [
               "emis_lon",
               "emis_lat"
@@ -1146,14 +1074,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed"
+          }
         },
-        "Y": {
-          "expression": {
+        {
+          "lhs": "Y",
+          "rhs": {
             "args": [
               "emis_lon",
               "emis_lat"
@@ -1250,14 +1175,11 @@
                 "from": "emis_records"
               }
             }
-          },
-          "shape": [
-            "emis_records"
-          ],
-          "type": "observed"
+          }
         },
-        "conc_PrimaryPM25": {
-          "expression": {
+        {
+          "lhs": "conc_PrimaryPM25",
+          "rhs": {
             "args": [
               "SR_PrimaryPM25",
               "E_PM25"
@@ -1295,14 +1217,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "conc_SOA": {
-          "expression": {
+        {
+          "lhs": "conc_SOA",
+          "rhs": {
             "args": [
               "SR_SOA",
               "E_VOC"
@@ -1340,14 +1259,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "conc_pNH4": {
-          "expression": {
+        {
+          "lhs": "conc_pNH4",
+          "rhs": {
             "args": [
               "SR_pNH4",
               "E_NH3"
@@ -1385,14 +1301,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "conc_pNO3": {
-          "expression": {
+        {
+          "lhs": "conc_pNO3",
+          "rhs": {
             "args": [
               "SR_pNO3",
               "E_NOx"
@@ -1430,14 +1343,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "conc_pSO4": {
-          "expression": {
+        {
+          "lhs": "conc_pSO4",
+          "rhs": {
             "args": [
               "SR_pSO4",
               "E_SOx"
@@ -1475,14 +1385,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "deathsK": {
-          "expression": {
+        {
+          "lhs": "deathsK",
+          "rhs": {
             "args": [
               "TotalPM25",
               "TotalPop",
@@ -1574,14 +1481,11 @@
                 "from": "rcv_cells"
               }
             }
-          },
-          "shape": [
-            "rcv_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "deathsL": {
-          "expression": {
+        {
+          "lhs": "deathsL",
+          "rhs": {
             "args": [
               "TotalPM25",
               "TotalPop",
@@ -1673,11 +1577,153 @@
                 "from": "rcv_cells"
               }
             }
-          },
+          }
+        }
+      ],
+      "variables": {
+        "E_NH3": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_NOx": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_PM25": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_SOx": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "E_VOC": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "MortalityRate": {
+          "default": 0.0,
           "shape": [
             "rcv_cells"
           ],
-          "type": "observed"
+          "type": "parameter"
+        },
+        "SR_PrimaryPM25": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_SOA": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_pNH4": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_pNO3": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "SR_pSO4": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "TotalPM25": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "TotalPop": {
+          "default": 0.0,
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "X": {
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown"
+        },
+        "Y": {
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown"
+        },
+        "conc_PrimaryPM25": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "conc_SOA": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "conc_pNH4": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "conc_pNO3": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "conc_pSO4": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "deathsK": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "deathsL": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
         },
         "emis_annual": {
           "default": 0.0,

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SimpleODETest",
     "description": "Basic ODE test for exponential decay with known analytical solution",
@@ -20,7 +20,7 @@
       },
       "variables": {
         "N": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol",
           "default": 100.0,
           "description": "Amount of decaying species"

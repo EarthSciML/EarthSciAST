@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "IsorropiaShape",
     "description": "Minimal ISORROPIA-shaped aerosol equilibrium: a nonlinear (algebraic-only) model whose unknowns are determined by algebraic equations plus extra initialization constraints with solver guesses. Exercises Model.system_kind='nonlinear', initialization_equations, and guesses.",
@@ -12,13 +12,13 @@
       "system_kind": "nonlinear",
       "variables": {
         "H": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 1.0e-6,
           "description": "Aqueous H+ concentration"
         },
         "SO4": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 1.0e-6,
           "description": "Aqueous SO4(2-) concentration"

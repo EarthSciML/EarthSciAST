@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventChainTest",
     "description": "Complex event system test with interconnected events and parameter modifications",
@@ -22,19 +22,19 @@
       },
       "variables": {
         "concentration": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/L",
           "default": 0.1,
           "description": "Reactant concentration"
         },
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 298.15,
           "description": "System temperature"
         },
         "product": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/L",
           "default": 0.0,
           "description": "Product concentration"
@@ -82,10 +82,9 @@
           "description": "Heating system status (0=off, 1=on)"
         },
         "k_eff": {
-          "type": "observed",
+          "type": "unknown",
           "units": "L/(mol*s)",
-          "description": "Effective rate constant",
-          "expression": 0.0
+          "description": "Effective rate constant"
         }
       },
       "equations": [
@@ -230,6 +229,10 @@
             ]
           },
           "rhs": 1
+        },
+        {
+          "lhs": "k_eff",
+          "rhs": 0.0
         }
       ],
       "tolerance": {

@@ -6,7 +6,7 @@
         "name": "Single state variable expansion",
         "target_system": {
           "variables": {
-            "C": {"type": "state", "units": "mol/mol"},
+            "C": {"type": "unknown", "units": "mol/mol"},
             "k": {"type": "parameter", "units": "1/s"}
           }
         },
@@ -25,9 +25,9 @@
         "name": "Multiple state variables expansion",
         "target_system": {
           "variables": {
-            "O3": {"type": "state"},
-            "NO": {"type": "state"},
-            "NO2": {"type": "state"},
+            "O3": {"type": "unknown"},
+            "NO": {"type": "unknown"},
+            "NO2": {"type": "unknown"},
             "T": {"type": "parameter"}
           }
         },
@@ -67,8 +67,8 @@
         "name": "Complex placeholder in nested expression",
         "target_system": {
           "variables": {
-            "X": {"type": "state"},
-            "Y": {"type": "state"}
+            "X": {"type": "unknown"},
+            "Y": {"type": "unknown"}
           }
         },
         "operator_equation": {

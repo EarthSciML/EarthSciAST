@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "x": {
       "kind": "interval",
@@ -81,11 +81,10 @@
               }
             }
           }
-        }
-      ],
-      "variables": {
-        "c0": {
-          "expression": {
+        },
+        {
+          "lhs": "c0",
+          "rhs": {
             "args": [
               {
                 "args": [
@@ -126,19 +125,26 @@
               }
             ],
             "op": "cos"
-          },
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "dx": {
-          "expression": {
+        {
+          "lhs": "dx",
+          "rhs": {
             "args": [
               1,
               8
             ],
             "op": "/"
-          },
-          "type": "observed",
+          }
+        }
+      ],
+      "variables": {
+        "c0": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "dx": {
+          "type": "unknown",
           "units": "1"
         },
         "u": {
@@ -146,7 +152,7 @@
           "shape": [
             "x"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "1"
         }
       }

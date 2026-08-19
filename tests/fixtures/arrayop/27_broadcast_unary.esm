@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "arrayop_27_broadcast_unary",
     "description": "Exercises `broadcast` with a SINGLE operand (esm-spec §4.3.4: 'applies a scalar operator element-wise to one or more broadcast-compatible arrays'). `a` is a (3,) vector holding [1, 4, 9]; each probe integrates a constant tendency read out of a one-operand broadcast, so its value at t = 1 IS that element. broadcast(fn, [a]) MUST equal the bare {op: fn, args: [a]} node applied element-wise — for the unary functions (neg, -, sqrt, log) and for a genuinely n-ary fn applied to one operand (+), which folds to the identity exactly as the bare `+(a)` node does. Regression for issue #101: a one-operand broadcast used to discard its `fn` and return the operand unchanged, so `negated` came out +4 instead of -4.",
@@ -9,12 +9,12 @@
   "models": {
     "BroadcastUnary": {
       "variables": {
-        "a": { "type": "state" },
-        "negated": { "type": "state" },
-        "minused": { "type": "state" },
-        "rooted": { "type": "state" },
-        "logged": { "type": "state" },
-        "identity": { "type": "state" }
+        "a": { "type": "unknown" },
+        "negated": { "type": "unknown" },
+        "minused": { "type": "unknown" },
+        "rooted": { "type": "unknown" },
+        "logged": { "type": "unknown" },
+        "identity": { "type": "unknown" }
       },
       "equations": [
         { "lhs": { "op": "D", "args": [{ "op": "index", "args": ["a", 1] }], "wrt": "t" }, "rhs": 0.0 },

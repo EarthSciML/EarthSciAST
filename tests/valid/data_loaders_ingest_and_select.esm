@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DataLoaderIngestAndSelect",
     "description": "The loader-ingest surface of esm-spec §8.9, in one document: reader_options (the zip member glob + asserted header row of an FF10 point inventory), codes (the text POLID column mapped to the pollutant enum, unrecognised values dropping the record), record_filter (a point with no coordinate and a row with no annual total are not records), extent (the surviving count binds the runtime-discovered metaparameter N_REC, which sizes the emis_records index set), and select (the store's full-grid W read whole as `W`, its [0:N_SRC] prefix read again as `src_W`, and — a THIRD variable over the same file_variable — `emis_W` gated on the derived set `emis_cells`, which is the one selector that DEFERS: its axis does not exist until value-invention has run, so the fetch is issued after it, pre-sliced to the discovered support set rather than to the full axis). Nothing here is model math: the point is that a document declaring these needs no caller to read the file, count the rows, map the codes and slice the prefix on its behalf. The url_templates are placeholders; the executable form of this fixture is pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs, which patches them onto real local fixtures.",
@@ -203,7 +203,7 @@
           "description": "Source-cell west edges; from Grid.src_W."
         },
         "emis_cell": {
-          "type": "state",
+          "type": "unknown",
           "description": "The value-invention producer's output variable (esm-spec §5.5): its equation below materializes the distinct set of emission-bearing cells, which `index_sets.emis_cells` names via from_faq. Never integrated — the materialized set replaces it before the numeric pipeline."
         },
         "emis_W": {
@@ -216,152 +216,32 @@
           "description": "West edges of the emission-bearing cells; from Grid.emis_W. Its axis is the derived set, so the array that arrives is already the compact slab — it is never a full-grid read that the model then subsets."
         },
         "is_NOx": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "emis_records"
           ],
-          "expression": {
-            "op": "aggregate",
-            "output_idx": [
-              "r"
-            ],
-            "ranges": {
-              "r": {
-                "from": "emis_records"
-              }
-            },
-            "args": [
-              "pollutant"
-            ],
-            "expr": {
-              "op": "ifelse",
-              "args": [
-                {
-                  "op": "==",
-                  "args": [
-                    {
-                      "op": "index",
-                      "args": [
-                        "pollutant",
-                        "r"
-                      ]
-                    },
-                    36
-                  ]
-                },
-                1.0,
-                0.0
-              ]
-            }
-          },
           "description": "Pathway membership, over the codes the loader delivered."
         },
         "E_NOx": {
-          "type": "observed",
+          "type": "unknown",
           "units": "kg/yr",
-          "expression": {
-            "op": "aggregate",
-            "output_idx": [],
-            "ranges": {
-              "r": {
-                "from": "emis_records"
-              }
-            },
-            "args": [
-              "annual",
-              "is_NOx"
-            ],
-            "expr": {
-              "op": "*",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "annual",
-                    "r"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "is_NOx",
-                    "r"
-                  ]
-                }
-              ]
-            }
-          },
           "description": "Total NOx over every surviving record — a scalar whose value depends on the loader having dropped exactly the right rows."
         },
         "src_width": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m",
           "shape": [
             "src_cells"
           ],
-          "expression": {
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "src_cells"
-              }
-            },
-            "args": [
-              "src_W"
-            ],
-            "expr": {
-              "op": "+",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "src_W",
-                    "c"
-                  ]
-                },
-                1.0
-              ]
-            }
-          },
           "description": "Reads the prefix the loader delivered; its shape is src_cells, not pop_cells."
         },
         "emis_width": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m",
           "shape": [
             "emis_cells"
           ],
-          "expression": {
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "emis_cells"
-              }
-            },
-            "args": [
-              "emis_W"
-            ],
-            "expr": {
-              "op": "+",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "emis_W",
-                    "c"
-                  ]
-                },
-                1.0
-              ]
-            }
-          },
           "description": "Reads the gated slab the loader delivered; its extent is the number of emission-bearing cells the graph discovered, which no caller supplied."
         }
       },
@@ -430,6 +310,138 @@
             "expr": {
               "op": "true",
               "args": []
+            }
+          }
+        },
+        {
+          "lhs": "is_NOx",
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "args": [
+              "pollutant"
+            ],
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "==",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "pollutant",
+                        "r"
+                      ]
+                    },
+                    36
+                  ]
+                },
+                1.0,
+                0.0
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "E_NOx",
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [],
+            "ranges": {
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "args": [
+              "annual",
+              "is_NOx"
+            ],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "annual",
+                    "r"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "is_NOx",
+                    "r"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "src_width",
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              }
+            },
+            "args": [
+              "src_W"
+            ],
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "src_W",
+                    "c"
+                  ]
+                },
+                1.0
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "emis_width",
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "emis_cells"
+              }
+            },
+            "args": [
+              "emis_W"
+            ],
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "emis_W",
+                    "c"
+                  ]
+                },
+                1.0
+              ]
             }
           }
         }

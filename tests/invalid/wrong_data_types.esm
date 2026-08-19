@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "WrongDataTypesTest",
     "description": "Test file with wrong data types",
@@ -11,7 +11,7 @@
     "TestModel": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": 42,
           "default": "not-a-number"
         }

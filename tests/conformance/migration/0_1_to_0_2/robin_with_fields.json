@@ -15,7 +15,7 @@
       "M": {
         "variables": {
           "T": {
-            "type": "state",
+            "type": "unknown",
             "default": 288.0
           },
           "k_diff": {
@@ -69,7 +69,7 @@
       "M": {
         "variables": {
           "T": {
-            "type": "state",
+            "type": "unknown",
             "default": 288.0
           },
           "k_diff": {

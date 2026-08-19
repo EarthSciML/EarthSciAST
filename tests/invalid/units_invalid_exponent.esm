@@ -1,22 +1,46 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsInvalidExponent",
     "description": "Invalid file demonstrating dimensional quantity used as exponent (exponents must be dimensionless)",
-    "authors": ["Chris Tessum with Claude"],
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
     "created": "2026-04-16T00:00:00Z"
   },
-
   "models": {
     "BadUnitsModel": {
       "variables": {
-        "base": { "type": "parameter", "units": "m", "default": 2.0, "description": "Base value with length units" },
-        "mass": { "type": "parameter", "units": "kg", "default": 3.0, "description": "Mass value used (invalidly) as an exponent" },
-        "invalid_power": { "type": "observed", "units": "1", "description": "Invalid: exponent must be dimensionless but 'mass' has units 'kg'",
-          "expression": { "op": "^", "args": ["base", "mass"] }
+        "base": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "Base value with length units"
+        },
+        "mass": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 3.0,
+          "description": "Mass value used (invalidly) as an exponent"
+        },
+        "invalid_power": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: exponent must be dimensionless but 'mass' has units 'kg'"
         }
       },
-      "equations": []
+      "equations": [
+        {
+          "lhs": "invalid_power",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "base",
+              "mass"
+            ]
+          }
+        }
+      ]
     }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DiscreteEventScenarios",
     "description": "Comprehensive discrete event test cases with periodic, preset, and conditional triggers",
@@ -12,7 +12,7 @@
     "PeriodicEventsSystem": {
       "variables": {
         "accumulator": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Accumulating variable"
@@ -193,7 +193,7 @@
     "PresetTimeSystem": {
       "variables": {
         "measurement_value": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Measured variable"
@@ -416,7 +416,7 @@
     "ConditionalEventSystem": {
       "variables": {
         "sensor_value": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Sensor reading"
@@ -688,7 +688,7 @@
     "ParameterModificationSystem": {
       "variables": {
         "dynamic_state": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "State affected by parameter changes"

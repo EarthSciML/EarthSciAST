@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SubsystemRefLocalTest",
     "description": "Test subsystem inclusion by local file path reference. The Atmosphere model includes a Chemistry subsystem from an external file and a Physics subsystem defined inline.",
@@ -28,7 +28,7 @@
         "Physics": {
           "variables": {
             "wind_speed": {
-              "type": "state",
+              "type": "unknown",
               "units": "m/s",
               "default": 5.0,
               "description": "Wind speed"

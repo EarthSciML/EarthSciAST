@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "InterfaceDefinitions",
     "description": "Cross-grid tropopause coupling. Stratospheric ozone (a SPATIALLY-VARYING field on the 3-cell stratospheric grid) is remapped onto the DIFFERENT 4-cell tropospheric grid by a REAL conservative regrid whose overlap weights W[u,l] = A[u,l]/A_l are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. The regridded boundary O3_boundary drives D(O3) (stratosphere-troposphere exchange). Spatial<->0-D maps use the coupling lifting field.",
@@ -41,7 +41,7 @@
     "UpperAtmosphere": {
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-07,
           "shape": [
@@ -50,7 +50,7 @@
           "description": "Ozone mixing ratio on the stratospheric grid"
         },
         "T": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 220.0,
           "shape": [
@@ -59,19 +59,10 @@
           "description": "Temperature on the stratospheric grid"
         },
         "O3_field": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "upper_cells"
           ],
-          "expression": {
-            "op": "const",
-            "value": [
-              5e-08,
-              6e-08,
-              7e-08
-            ],
-            "args": []
-          },
           "description": "SPATIALLY-VARYING stratospheric ozone field on the 3-cell stratospheric grid (non-uniform on purpose). Coupled onto LowerAtmosphere.O3_strat and regridded onto the troposphere across the tropopause."
         }
       },
@@ -113,13 +104,25 @@
             "wrt": "t"
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "O3_field",
+          "rhs": {
+            "op": "const",
+            "value": [
+              5e-08,
+              6e-08,
+              7e-08
+            ],
+            "args": []
+          }
         }
       ]
     },
     "LowerAtmosphere": {
       "variables": {
         "T": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.0,
           "shape": [
@@ -128,7 +131,7 @@
           "description": "Temperature on the tropospheric grid"
         },
         "q": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/kg",
           "default": 0.01,
           "shape": [
@@ -137,7 +140,7 @@
           "description": "Specific humidity on the tropospheric grid"
         },
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "shape": [
@@ -161,225 +164,49 @@
           "description": "Stratospheric ozone sampled on the 3-cell upper-atmosphere grid (a SPATIALLY-VARYING field from UpperAtmosphere), regridded onto the 4-cell troposphere by the inline conservative weights below."
         },
         "rg_src_poly": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "upper_cells",
             "rg_cell_verts",
             "rg_coord"
           ],
-          "expression": {
-            "op": "const",
-            "value": [
-              [
-                [
-                  0,
-                  0.0
-                ],
-                [
-                  1,
-                  0.0
-                ],
-                [
-                  1,
-                  1.0
-                ],
-                [
-                  0,
-                  1.0
-                ]
-              ],
-              [
-                [
-                  1,
-                  0.0
-                ],
-                [
-                  2,
-                  0.0
-                ],
-                [
-                  2,
-                  1.0
-                ],
-                [
-                  1,
-                  1.0
-                ]
-              ],
-              [
-                [
-                  2,
-                  0.0
-                ],
-                [
-                  4,
-                  0.0
-                ],
-                [
-                  4,
-                  1.0
-                ],
-                [
-                  2,
-                  1.0
-                ]
-              ]
-            ],
-            "args": []
-          },
-          "description": "In-file SOURCE-grid geometry: one closed lon-lat vertex ring per source cell (the 3-cell stratospheric grid). The `poly_a` operand of the ranged clip \u2014 the weights are computed FROM this geometry, not supplied."
+          "description": "In-file SOURCE-grid geometry: one closed lon-lat vertex ring per source cell (the 3-cell stratospheric grid). The `poly_a` operand of the ranged clip — the weights are computed FROM this geometry, not supplied."
         },
         "rg_tgt_poly": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "lower_cells",
             "rg_cell_verts",
             "rg_coord"
           ],
-          "expression": {
-            "op": "const",
-            "value": [
-              [
-                [
-                  0,
-                  0.0
-                ],
-                [
-                  1.5,
-                  0.0
-                ],
-                [
-                  1.5,
-                  1.0
-                ],
-                [
-                  0,
-                  1.0
-                ]
-              ],
-              [
-                [
-                  1.5,
-                  0.0
-                ],
-                [
-                  2,
-                  0.0
-                ],
-                [
-                  2,
-                  1.0
-                ],
-                [
-                  1.5,
-                  1.0
-                ]
-              ],
-              [
-                [
-                  2,
-                  0.0
-                ],
-                [
-                  3,
-                  0.0
-                ],
-                [
-                  3,
-                  1.0
-                ],
-                [
-                  2,
-                  1.0
-                ]
-              ],
-              [
-                [
-                  3,
-                  0.0
-                ],
-                [
-                  4,
-                  0.0
-                ],
-                [
-                  4,
-                  1.0
-                ],
-                [
-                  3,
-                  1.0
-                ]
-              ]
-            ],
-            "args": []
-          },
           "description": "In-file TARGET-grid geometry: one closed lon-lat vertex ring per target cell (the 4-cell tropospheric grid). A GENUINELY DIFFERENT grid (distinct cell count and vertex rings) tiling the same domain, so the overlaps are fractional."
         },
         "rg_src_lon": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "upper_cells"
           ],
-          "expression": {
-            "op": "const",
-            "value": [
-              0.0,
-              1.0,
-              2.0
-            ],
-            "args": []
-          },
-          "description": "Source-cell representative longitude (bbox-min) \u2014 enters only the integer binning via floor, never a raw join comparison."
+          "description": "Source-cell representative longitude (bbox-min) — enters only the integer binning via floor, never a raw join comparison."
         },
         "rg_src_lat": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "upper_cells"
           ],
-          "expression": {
-            "op": "const",
-            "value": [
-              0.0,
-              0.0,
-              0.0
-            ],
-            "args": []
-          },
           "description": "Source-cell representative latitude for binning."
         },
         "rg_tgt_lon": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "lower_cells"
           ],
-          "expression": {
-            "op": "const",
-            "value": [
-              0.0,
-              1.5,
-              2.0,
-              3.0
-            ],
-            "args": []
-          },
           "description": "Target-cell representative longitude for binning."
         },
         "rg_tgt_lat": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "lower_cells"
           ],
-          "expression": {
-            "op": "const",
-            "value": [
-              0.0,
-              0.0,
-              0.0,
-              0.0
-            ],
-            "args": []
-          },
           "description": "Target-cell representative latitude for binning."
         },
         "rg_dx": {
@@ -401,271 +228,55 @@
           "default": 1e-12
         },
         "rg_src_bin": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "upper_cells"
           ],
-          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)) \u2014 the equi-join column."
+          "description": "Integer bin key of each source cell: skolem(\"bin\", floor(lon/dx), floor(lat/dy)) — the equi-join column."
         },
         "rg_tgt_bin": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "lower_cells"
           ],
           "description": "Integer bin key of each target cell, identically quantized."
         },
         "rg_pairs": {
-          "type": "state",
+          "type": "unknown",
           "shape": [
             "rg_candidate_pairs"
           ],
           "description": "Membership over the bin-skolem candidate overlap-pair set (broad phase), materialized as the derived rg_candidate_pairs index set via from_faq:\"rg_candidate_set\"."
         },
         "rg_A": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "upper_cells",
             "lower_cells"
           ],
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "u",
-              "l"
-            ],
-            "ranges": {
-              "u": {
-                "from": "upper_cells"
-              },
-              "l": {
-                "from": "lower_cells"
-              }
-            },
-            "join": [
-              {
-                "on": [
-                  [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
-                  ]
-                ]
-              }
-            ],
-            "args": [],
-            "expr": {
-              "op": "polygon_intersection_area",
-              "manifold": "planar",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_src_poly",
-                    "u"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_tgt_poly",
-                    "l"
-                  ]
-                }
-              ]
-            }
-          },
-          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[u,l] = polygon_intersection_area(rg_src_poly[u], rg_tgt_poly[l]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md \u00a78.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE aggregate over the candidate set with NO ragged intermediate \u2014 replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
+          "description": "NARROW PHASE (densely evaluable): overlap-area matrix A[u,l] = polygon_intersection_area(rg_src_poly[u], rg_tgt_poly[l]) computed INLINE from the in-file geometry via the FUSED planar clip+area leaf (esm-spec.md §8.6.1), ranged over the SAME bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) as the row-sum / apply. The fused leaf returns the SCALAR overlap area (defined to equal the standalone intersect_polygon clip composed with the shoelace area) and hides the intersection ring inside the kernel, so this is a DENSE aggregate over the candidate set with NO ragged intermediate — replacing the earlier ragged-ring narrow phase. The weights are computed from cell geometry, not supplied."
         },
         "rg_At": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "lower_cells"
           ],
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "l"
-            ],
-            "ranges": {
-              "u": {
-                "from": "upper_cells"
-              },
-              "l": {
-                "from": "lower_cells"
-              }
-            },
-            "join": [
-              {
-                "on": [
-                  [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
-                  ]
-                ]
-              }
-            ],
-            "filter": {
-              "op": ">",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_A",
-                    "u",
-                    "l"
-                  ]
-                },
-                "rg_atol"
-              ]
-            },
-            "args": [],
-            "expr": {
-              "op": "index",
-              "args": [
-                "rg_A",
-                "u",
-                "l"
-              ]
-            }
-          },
-          "description": "Target-cell area denominator A_j = \u03a3_i A_ij over the bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter \u2014 the row-sum normalization, computed from geometry, not supplied."
+          "description": "Target-cell area denominator A_j = Σ_i A_ij over the bin-skolem candidate pairs (join.on [[rg_src_bin,rg_tgt_bin]]) with the sliver filter — the row-sum normalization, computed from geometry, not supplied."
         },
         "rg_W": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "upper_cells",
             "lower_cells"
           ],
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "u",
-              "l"
-            ],
-            "ranges": {
-              "u": {
-                "from": "upper_cells"
-              },
-              "l": {
-                "from": "lower_cells"
-              }
-            },
-            "join": [
-              {
-                "on": [
-                  [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
-                  ]
-                ]
-              }
-            ],
-            "filter": {
-              "op": ">",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_A",
-                    "u",
-                    "l"
-                  ]
-                },
-                "rg_atol"
-              ]
-            },
-            "args": [],
-            "expr": {
-              "op": "/",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_A",
-                    "u",
-                    "l"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_At",
-                    "l"
-                  ]
-                }
-              ]
-            }
-          },
-          "description": "The conservative regrid weights W_ij = A_ij/A_j over the candidate pairs. Partition-of-unity \u03a3_i W_ij = 1 by construction (denominator is the row-sum of the same areas)."
+          "description": "The conservative regrid weights W_ij = A_ij/A_j over the candidate pairs. Partition-of-unity Σ_i W_ij = 1 by construction (denominator is the row-sum of the same areas)."
         },
         "O3_boundary": {
-          "type": "observed",
+          "type": "unknown",
           "shape": [
             "lower_cells"
           ],
-          "expression": {
-            "op": "aggregate",
-            "semiring": "sum_product",
-            "output_idx": [
-              "l"
-            ],
-            "ranges": {
-              "u": {
-                "from": "upper_cells"
-              },
-              "l": {
-                "from": "lower_cells"
-              }
-            },
-            "join": [
-              {
-                "on": [
-                  [
-                    "rg_src_bin",
-                    "rg_tgt_bin"
-                  ]
-                ]
-              }
-            ],
-            "filter": {
-              "op": ">",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_A",
-                    "u",
-                    "l"
-                  ]
-                },
-                "rg_atol"
-              ]
-            },
-            "args": [],
-            "expr": {
-              "op": "*",
-              "args": [
-                {
-                  "op": "index",
-                  "args": [
-                    "rg_W",
-                    "u",
-                    "l"
-                  ]
-                },
-                {
-                  "op": "index",
-                  "args": [
-                    "O3_strat",
-                    "u"
-                  ]
-                }
-              ]
-            }
-          },
-          "description": "Ozone boundary value on the tropospheric grid, regridded from the stratosphere via the INLINE conservative weights: O3_boundary[l] = \u03a3_u W[u,l]\u00b7O3_strat[u], W = A/A_l from cell geometry (the old tropopause interface as a real overlap-weighted regrid)."
+          "description": "Ozone boundary value on the tropospheric grid, regridded from the stratosphere via the INLINE conservative weights: O3_boundary[l] = Σ_u W[u,l]·O3_strat[u], W = A/A_l from cell geometry (the old tropopause interface as a real overlap-weighted regrid)."
         }
       },
       "equations": [
@@ -918,19 +529,441 @@
               }
             ]
           }
+        },
+        {
+          "lhs": "rg_src_poly",
+          "rhs": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  1,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "rg_tgt_poly",
+          "rhs": {
+            "op": "const",
+            "value": [
+              [
+                [
+                  0,
+                  0.0
+                ],
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ],
+                [
+                  0,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  1.5,
+                  0.0
+                ],
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  2,
+                  1.0
+                ],
+                [
+                  1.5,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  2,
+                  0.0
+                ],
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  3,
+                  1.0
+                ],
+                [
+                  2,
+                  1.0
+                ]
+              ],
+              [
+                [
+                  3,
+                  0.0
+                ],
+                [
+                  4,
+                  0.0
+                ],
+                [
+                  4,
+                  1.0
+                ],
+                [
+                  3,
+                  1.0
+                ]
+              ]
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "rg_src_lon",
+          "rhs": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.0,
+              2.0
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "rg_src_lat",
+          "rhs": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "rg_tgt_lon",
+          "rhs": {
+            "op": "const",
+            "value": [
+              0.0,
+              1.5,
+              2.0,
+              3.0
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "rg_tgt_lat",
+          "rhs": {
+            "op": "const",
+            "value": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "args": []
+          }
+        },
+        {
+          "lhs": "rg_A",
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u",
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "args": [],
+            "expr": {
+              "op": "polygon_intersection_area",
+              "manifold": "planar",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_src_poly",
+                    "u"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_tgt_poly",
+                    "l"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "rg_At",
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "index",
+              "args": [
+                "rg_A",
+                "u",
+                "l"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "rg_W",
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "u",
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_At",
+                    "l"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "O3_boundary",
+          "rhs": {
+            "op": "aggregate",
+            "semiring": "sum_product",
+            "output_idx": [
+              "l"
+            ],
+            "ranges": {
+              "u": {
+                "from": "upper_cells"
+              },
+              "l": {
+                "from": "lower_cells"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rg_src_bin",
+                    "rg_tgt_bin"
+                  ]
+                ]
+              }
+            ],
+            "filter": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_A",
+                    "u",
+                    "l"
+                  ]
+                },
+                "rg_atol"
+              ]
+            },
+            "args": [],
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "rg_W",
+                    "u",
+                    "l"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "O3_strat",
+                    "u"
+                  ]
+                }
+              ]
+            }
+          }
         }
       ]
     },
     "LandSurface": {
       "variables": {
         "T_soil": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 290.0,
           "description": "Soil temperature"
         },
         "soil_moisture": {
-          "type": "state",
+          "type": "unknown",
           "units": "m^3/m^3",
           "default": 0.3,
           "description": "Volumetric soil moisture"
@@ -992,7 +1025,7 @@
     "IceSheet": {
       "variables": {
         "thickness": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 1000.0,
           "description": "Ice thickness"

@@ -4,8 +4,8 @@
     "operation": "add_equation",
     "input_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
         "k1": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant 1" },
         "k2": { "type": "parameter", "units": "1/s", "default": 0.02, "description": "Rate constant 2" }
       },
@@ -18,8 +18,8 @@
     },
     "expected_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
         "k1": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant 1" },
         "k2": { "type": "parameter", "units": "1/s", "default": 0.02, "description": "Rate constant 2" }
       },
@@ -35,8 +35,8 @@
     "operation": "remove_equation",
     "input_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
         "k1": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant 1" },
         "k2": { "type": "parameter", "units": "1/s", "default": 0.02, "description": "Rate constant 2" }
       },
@@ -50,8 +50,8 @@
     },
     "expected_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
         "k1": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant 1" },
         "k2": { "type": "parameter", "units": "1/s", "default": 0.02, "description": "Rate constant 2" }
       },
@@ -66,8 +66,8 @@
     "operation": "remove_equation",
     "input_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
         "k1": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant 1" },
         "k2": { "type": "parameter", "units": "1/s", "default": 0.02, "description": "Rate constant 2" }
       },
@@ -81,8 +81,8 @@
     },
     "expected_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "First variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Second variable" },
         "k1": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant 1" },
         "k2": { "type": "parameter", "units": "1/s", "default": 0.02, "description": "Rate constant 2" }
       },
@@ -97,8 +97,8 @@
     "operation": "substitute_in_equations",
     "input_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
         "T": { "type": "parameter", "units": "K", "default": 298.15, "description": "Temperature" },
         "k": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant" }
       },
@@ -112,8 +112,8 @@
     },
     "expected_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
         "T": { "type": "parameter", "units": "K", "default": 298.15, "description": "Temperature" },
         "k": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Rate constant" }
       },
@@ -129,8 +129,8 @@
     "operation": "substitute_in_equations",
     "input_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
         "total": { "type": "parameter", "units": "mol/mol", "default": 3e-9, "description": "Total concentration" }
       },
       "equations": [
@@ -143,8 +143,8 @@
     },
     "expected_model": {
       "variables": {
-        "x": { "type": "state", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
-        "y": { "type": "state", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
+        "x": { "type": "unknown", "units": "mol/mol", "default": 1e-9, "description": "State variable" },
+        "y": { "type": "unknown", "units": "mol/mol", "default": 2e-9, "description": "Another state variable" },
         "total": { "type": "parameter", "units": "mol/mol", "default": 3e-9, "description": "Total concentration" }
       },
       "equations": [

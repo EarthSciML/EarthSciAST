@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "import_role_unbound",
     "description": "INVALID import: rothermel_fuel.esm declares roles {Fuel, Spread} but the bind omits 'Spread'. Binding is total; there is no auto-bind (esm-spec 10.10.1). Expected: coupling_import_role_unbound."

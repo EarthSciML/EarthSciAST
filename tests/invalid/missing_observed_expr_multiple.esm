@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MissingObservedExprMultiple",
     "description": "Multiple observed variables missing expressions"
@@ -7,24 +7,71 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "mol", "default": 1.0 },
-        "y": { "type": "state", "units": "mol", "default": 2.0 },
-        "total": { "type": "observed", "units": "mol" },
-        "ratio": { "type": "observed", "units": "1" },
-        "valid_observed": {
-          "type": "observed",
+        "x": {
+          "type": "unknown",
           "units": "mol",
-          "expression": { "op": "+", "args": ["x", "y"] }
+          "default": 1.0
+        },
+        "y": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 2.0
+        },
+        "total": {
+          "type": "unknown",
+          "units": "mol"
+        },
+        "ratio": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "valid_observed": {
+          "type": "unknown",
+          "units": "mol"
         }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [-0.1, "x"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
         },
         {
-          "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [-0.2, "y"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.2,
+              "y"
+            ]
+          }
+        },
+        {
+          "lhs": "valid_observed",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "x",
+              "y"
+            ]
+          }
         }
       ]
     }

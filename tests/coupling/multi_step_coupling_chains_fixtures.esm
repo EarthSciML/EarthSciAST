@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MultiStepCouplingChainsFixtures",
     "description": "Test fixtures for complex multi-step coupling resolution chains",
@@ -12,25 +12,25 @@
     "AtmosphereChemistry": {
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "description": "Ozone"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-10,
           "description": "Nitric oxide"
         },
         "NO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 2e-10,
           "description": "Nitrogen dioxide"
         },
         "HO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 5e-11,
           "description": "Hydroperoxyl radical"
@@ -283,19 +283,19 @@
     "OceanBiogeochemistry": {
       "variables": {
         "DIC": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 2000.0,
           "description": "Dissolved inorganic carbon"
         },
         "O2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 250.0,
           "description": "Dissolved oxygen"
         },
         "nutrients": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/m^3",
           "default": 30.0,
           "description": "Nutrient concentration"
@@ -416,13 +416,13 @@
     "LandVegetation": {
       "variables": {
         "biomass": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2",
           "default": 5.0,
           "description": "Vegetation biomass"
         },
         "soil_carbon": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^2",
           "default": 10.0,
           "description": "Soil carbon"

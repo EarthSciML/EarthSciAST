@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "JuliaMTKIntegration",
     "description": "Test Julia ModelingToolkit integration and simulation capability",
@@ -21,13 +21,13 @@
       },
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "meters",
           "default": 1.0,
           "description": "Position"
         },
         "v": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 0.0,
           "description": "Velocity"
@@ -39,51 +39,8 @@
           "description": "Angular frequency"
         },
         "energy": {
-          "type": "observed",
+          "type": "unknown",
           "units": "J/kg",
-          "expression": {
-            "op": "+",
-            "args": [
-              {
-                "op": "/",
-                "args": [
-                  {
-                    "op": "^",
-                    "args": [
-                      "v",
-                      2
-                    ]
-                  },
-                  2
-                ]
-              },
-              {
-                "op": "/",
-                "args": [
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "^",
-                        "args": [
-                          "omega",
-                          2
-                        ]
-                      },
-                      {
-                        "op": "^",
-                        "args": [
-                          "x",
-                          2
-                        ]
-                      }
-                    ]
-                  },
-                  2
-                ]
-              }
-            ]
-          },
           "description": "Total energy (should be conserved)"
         }
       },
@@ -142,6 +99,52 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "energy",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "^",
+                    "args": [
+                      "v",
+                      2
+                    ]
+                  },
+                  2
+                ]
+              },
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "^",
+                        "args": [
+                          "omega",
+                          2
+                        ]
+                      },
+                      {
+                        "op": "^",
+                        "args": [
+                          "x",
+                          2
+                        ]
+                      }
+                    ]
+                  },
+                  2
+                ]
+              }
+            ]
+          }
         }
       ],
       "tolerance": {
@@ -231,13 +234,13 @@
       },
       "variables": {
         "A": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-06,
           "description": "Fast-reacting species A"
         },
         "B": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.0,
           "description": "Product species B"
@@ -255,15 +258,8 @@
           "description": "Slow reaction rate"
         },
         "total_species": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/mol",
-          "expression": {
-            "op": "+",
-            "args": [
-              "A",
-              "B"
-            ]
-          },
           "description": "Total mass (conserved)"
         }
       },
@@ -351,6 +347,16 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "total_species",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "A",
+              "B"
+            ]
+          }
         }
       ],
       "continuous_events": [

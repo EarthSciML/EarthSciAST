@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "transport_3axis_7cubed",
     "description": "RFC out-of-line-expression-templates §12 measurement stack (in-repo, no external data). A 7x7x7 single-tracer transport whose right-hand side is -(Dx(q)+Dy(q)+Dz(q)); each spatial derivative is lowered by a match rule to a per-axis `makearray` with three boundary-class regions (two one-sided faces + a centered interior), and every region value is an `apply_expression_template` reference to a shared per-class stencil template. Under Option A (expand-at-load) the three makearrays' region bodies inline into one fused per-cell tree whose distinct-structure count is the cross-product of boundary classes across axes (the §3-§5 blowup); under Option B the references survive and each stencil body is a single factored declaration. Measured by scripts/bench-out-of-line.jl (node-lowerings: Expand image vs reference-preserving load).",
@@ -102,7 +102,7 @@
             { "op": "apply_expression_template", "args": [], "name": "sz_hi", "bindings": { "f": "f" } } ] } }
       },
       "variables": {
-        "q": { "type": "state", "units": "1", "shape": ["x", "y", "z"], "default": 1.0 }
+        "q": { "type": "unknown", "units": "1", "shape": ["x", "y", "z"], "default": 1.0 }
       },
       "equations": [
         { "lhs": { "op": "D", "args": ["q"], "wrt": "t" },

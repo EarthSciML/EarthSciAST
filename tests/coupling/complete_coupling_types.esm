@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "CompleteCouplingTests",
     "description": "Test all 6 coupling types: operator_compose, couple, variable_map, operator_apply, callback, event\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -21,19 +21,19 @@
       },
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 4e-08,
           "description": "Ozone mixing ratio"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-10,
           "description": "Nitric oxide mixing ratio"
         },
         "NO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1e-09,
           "description": "Nitrogen dioxide mixing ratio"
@@ -201,7 +201,7 @@
       },
       "variables": {
         "u": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 0.0,
           "description": "Transported scalar concentration"
@@ -299,9 +299,21 @@
           "description": "Aerodynamic resistance"
         },
         "deposition_velocity_O3": {
-          "type": "observed",
+          "type": "unknown",
           "units": "m/s",
-          "expression": {
+          "description": "O3 deposition velocity"
+        },
+        "boundary_layer_height": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1000.0,
+          "description": "Planetary boundary layer height"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "deposition_velocity_O3",
+          "rhs": {
             "op": "/",
             "args": [
               1.0,
@@ -313,17 +325,9 @@
                 ]
               }
             ]
-          },
-          "description": "O3 deposition velocity"
-        },
-        "boundary_layer_height": {
-          "type": "parameter",
-          "units": "m",
-          "default": 1000.0,
-          "description": "Planetary boundary layer height"
+          }
         }
-      },
-      "equations": []
+      ]
     },
     "EmissionSources": {
       "reference": {

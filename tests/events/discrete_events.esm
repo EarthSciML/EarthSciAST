@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "DiscreteEventExamples",
     "description": "Test fixtures for discrete event handling (periodic, preset, threshold)",
@@ -15,7 +15,7 @@
       },
       "variables": {
         "C": {
-          "type": "state",
+          "type": "unknown",
           "units": "mg/L",
           "default": 0.0,
           "description": "Drug concentration"
@@ -102,13 +102,13 @@
       },
       "variables": {
         "infection": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Infection level"
         },
         "immunity": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "Immune response"
@@ -232,7 +232,7 @@
       },
       "variables": {
         "temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "°C",
           "default": 20.0,
           "description": "System temperature"
@@ -350,13 +350,13 @@
       },
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0,
           "description": "System state x"
         },
         "y": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 5.0,
           "description": "System state y"

@@ -1,10 +1,10 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": { "name": "pure_ode" },
   "models": {
     "M": {
       "variables": {
-        "x": { "type": "state",     "default": 1.0, "units": "1" },
+        "x": { "type": "unknown",     "default": 1.0, "units": "1" },
         "k": { "type": "parameter", "default": 0.5, "units": "1/s" }
       },
       "equations": [

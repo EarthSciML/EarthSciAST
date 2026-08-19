@@ -1,8 +1,8 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "broadcast_node_mixed_rank",
-    "description": "Cross-binding conformance fixture pinning that the explicit `broadcast` node and the BARE spelling of one array-level expression are the SAME expression (esm-spec \u00a74.3.4; issue #100). This is `bare_mixed_rank_product` written as `{\"op\":\"broadcast\",\"fn\":\"*\",\"args\":[\"w2\",\"z1\"]}` instead of `{\"op\":\"*\",...}`, and it MUST produce identical values: `broadcast(fn: F, args)` applies the scalar operator F element by element, so its operands align by index-set NAME exactly as F's would \u2014 `w2: [lon,lat]` broadcasts along `lev`, `z1: [lev]` along `lon` and `lat`, giving dp[i,j,k](t=1) = (i + 10 j) * 100 k. A binding that treats `broadcast` as opaque to alignment reproduces the original #100 defect one spelling over: it returns dp[2,1,1]=2400 and dp[3,1,1]=0 where the bare spelling correctly returns 1200 and 1300. Same index sets, same variables, same expected values as bare_mixed_rank_product.esm \u2014 only the spelling differs, which is the whole point.",
+    "description": "Cross-binding conformance fixture pinning that the explicit `broadcast` node and the BARE spelling of one array-level expression are the SAME expression (esm-spec §4.3.4; issue #100). This is `bare_mixed_rank_product` written as `{\"op\":\"broadcast\",\"fn\":\"*\",\"args\":[\"w2\",\"z1\"]}` instead of `{\"op\":\"*\",...}`, and it MUST produce identical values: `broadcast(fn: F, args)` applies the scalar operator F element by element, so its operands align by index-set NAME exactly as F's would — `w2: [lon,lat]` broadcasts along `lev`, `z1: [lev]` along `lon` and `lat`, giving dp[i,j,k](t=1) = (i + 10 j) * 100 k. A binding that treats `broadcast` as opaque to alignment reproduces the original #100 defect one spelling over: it returns dp[2,1,1]=2400 and dp[3,1,1]=0 where the bare spelling correctly returns 1200 and 1300. Same index sets, same variables, same expected values as bare_mixed_rank_product.esm — only the spelling differs, which is the whole point.",
     "authors": [
       "EarthSciAST Test Suite"
     ],
@@ -38,7 +38,7 @@
       },
       "variables": {
         "dp": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lon",
@@ -49,14 +49,45 @@
           "description": "Rank-3 accumulator over the full grid. Its tendency is CONSTANT in time and its initial value is 0, so dp(t=1) reads back the array-level RHS cell by cell."
         },
         "w2": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
           "shape": [
             "lon",
             "lat"
           ],
-          "description": "Rank-2 field over `lon`,`lat`: w2[i,j] = i + 10 j.",
-          "expression": {
+          "description": "Rank-2 field over `lon`,`lat`: w2[i,j] = i + 10 j."
+        },
+        "z1": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Rank-1 field over `lev` only: z1[k] = 100 k, i.e. [100, 200]."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(dp)/dt = broadcast(fn:*, [w2, z1]) — the explicit spelling of `w2 * z1`. dp[i,j,k](1) = (i + 10 j) * 100 k, identical to the bare form.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dp"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "broadcast",
+            "fn": "*",
+            "args": [
+              "w2",
+              "z1"
+            ]
+          }
+        },
+        {
+          "lhs": "w2",
+          "rhs": {
             "op": "aggregate",
             "args": [],
             "output_idx": [
@@ -86,14 +117,9 @@
             }
           }
         },
-        "z1": {
-          "type": "observed",
-          "units": "1",
-          "shape": [
-            "lev"
-          ],
-          "description": "Rank-1 field over `lev` only: z1[k] = 100 k, i.e. [100, 200].",
-          "expression": {
+        {
+          "lhs": "z1",
+          "rhs": {
             "op": "aggregate",
             "args": [],
             "output_idx": [
@@ -111,26 +137,6 @@
                 "k"
               ]
             }
-          }
-        }
-      },
-      "equations": [
-        {
-          "_comment": "D(dp)/dt = broadcast(fn:*, [w2, z1]) \u2014 the explicit spelling of `w2 * z1`. dp[i,j,k](1) = (i + 10 j) * 100 k, identical to the bare form.",
-          "lhs": {
-            "op": "D",
-            "args": [
-              "dp"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "broadcast",
-            "fn": "*",
-            "args": [
-              "w2",
-              "z1"
-            ]
           }
         }
       ],

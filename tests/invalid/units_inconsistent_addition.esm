@@ -1,22 +1,46 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsInconsistentAddition",
     "description": "Invalid file demonstrating unit inconsistency in addition",
-    "authors": ["Chris Tessum with Claude"],
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
     "created": "2026-02-16T00:00:00Z"
   },
-
   "models": {
     "BadUnitsModel": {
       "variables": {
-        "length": { "type": "parameter", "units": "m", "default": 5.0, "description": "Length in meters" },
-        "mass": { "type": "parameter", "units": "kg", "default": 10.0, "description": "Mass in kilograms" },
-        "invalid_sum": { "type": "observed", "units": "m", "description": "Invalid: trying to add length + mass",
-          "expression": { "op": "+", "args": ["length", "mass"] }
+        "length": {
+          "type": "parameter",
+          "units": "m",
+          "default": 5.0,
+          "description": "Length in meters"
+        },
+        "mass": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 10.0,
+          "description": "Mass in kilograms"
+        },
+        "invalid_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: trying to add length + mass"
         }
       },
-      "equations": []
+      "equations": [
+        {
+          "lhs": "invalid_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "length",
+              "mass"
+            ]
+          }
+        }
+      ]
     }
   }
 }

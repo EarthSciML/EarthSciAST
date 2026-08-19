@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SubsystemComposedDecay",
     "description": "Inline-test fixture for _resolve_handle model-relative fallback. A composed model wraps a single subsystem whose test assertions use the spec §10.7 fully-qualified 'ModelName.sub.var' form. Verifies that run_esm_tests correctly resolves subsystem variable refs in composed models (fixes esm-ol5qa).",
@@ -16,7 +16,7 @@
         "sub": {
           "variables": {
             "x": {
-              "type": "state",
+              "type": "unknown",
               "default": 1.0,
               "units": "1"
             },

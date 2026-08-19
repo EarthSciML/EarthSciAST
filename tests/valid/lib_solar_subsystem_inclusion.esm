@@ -1,16 +1,25 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "LibSolarSubsystemInclusion",
     "description": "Demonstrates §4.7 subsystem inclusion of the standard-library solar subsystem (lib/solar.esm). A trivial photolysis-rate consumer model `Photolysis` mounts `Solar` as a subsystem-by-reference and references `Solar.solar_zenith_angle` via §4.6 dot notation to compute a cosine-of-zenith-weighted rate. Validates that the closed `datetime.*` + AST composition shipped under lib/ resolves end-to-end through subsystem inclusion. See docs/standard_library.md.",
-    "authors": ["EarthSciML"],
+    "authors": [
+      "EarthSciML"
+    ],
     "created": "2026-04-25T00:00:00Z",
-    "tags": ["standard-library", "subsystem-inclusion", "solar", "closed-function-registry"]
+    "tags": [
+      "standard-library",
+      "subsystem-inclusion",
+      "solar",
+      "closed-function-registry"
+    ]
   },
   "models": {
     "Photolysis": {
       "subsystems": {
-        "Solar": { "ref": "../../lib/solar.esm" }
+        "Solar": {
+          "ref": "../../lib/solar.esm"
+        }
       },
       "variables": {
         "k_max": {
@@ -20,34 +29,57 @@
           "description": "Peak (overhead-sun) photolysis rate."
         },
         "j_rate": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1/s",
-          "description": "Cosine-of-zenith-weighted photolysis rate, clipped to non-negative values (sun-below-horizon gives 0).",
-          "expression": {
-            "op": "*",
-            "args": [
-              "k_max",
-              { "op": "max", "args": [
-                  0.0,
-                  { "op": "cos", "args": ["Solar.solar_zenith_angle"] }
-                ]
-              }
-            ]
-          }
+          "description": "Cosine-of-zenith-weighted photolysis rate, clipped to non-negative values (sun-below-horizon gives 0)."
         },
         "C": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
-          "default": 1.0e-6,
+          "default": 1e-06,
           "description": "Trivial photolyzed species, integrated as a state to give the model real ODE semantics."
         }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["C"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [
-              { "op": "-", "args": ["j_rate"] },
+          "lhs": {
+            "op": "D",
+            "args": [
               "C"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "j_rate"
+                ]
+              },
+              "C"
+            ]
+          }
+        },
+        {
+          "lhs": "j_rate",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "k_max",
+              {
+                "op": "max",
+                "args": [
+                  0.0,
+                  {
+                    "op": "cos",
+                    "args": [
+                      "Solar.solar_zenith_angle"
+                    ]
+                  }
+                ]
+              }
             ]
           }
         }

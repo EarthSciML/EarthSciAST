@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TestsAndAnalysesComprehensive",
     "description": "Worked fixture exercising the full surface area of the inline tests and analyses features: model-level tolerance, per-test and per-assertion tolerance overrides, initial_condition and parameter overrides, multi-dimension Cartesian parameter sweeps, and all three plot types (line, scatter, heatmap) including a heatmap over a sweep with a reduced z value.",
@@ -22,7 +22,7 @@
       },
       "variables": {
         "N": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Population"

@@ -3,22 +3,58 @@
   "description": "Mixed DAE: a scalar state x with dx/dt = -k*x, plus an observed y = x^2. After discretize(), the equation set contains 1 differential and 1 algebraic equation. RFC §12 binding contract: dae_support=true -> accept (metadata.system_class = \"dae\"); dae_support=false -> abort with code E_NO_DAE_SUPPORT.",
   "input": {
     "esm": "0.2.0",
-    "metadata": { "name": "mixed_dae_observed" },
+    "metadata": {
+      "name": "mixed_dae_observed"
+    },
     "models": {
       "M": {
         "variables": {
-          "x": { "type": "state",    "default": 1.0, "units": "1" },
-          "y": { "type": "observed", "units": "1" },
-          "k": { "type": "parameter","default": 0.5, "units": "1/s" }
+          "x": {
+            "type": "unknown",
+            "default": 1.0,
+            "units": "1"
+          },
+          "y": {
+            "type": "unknown",
+            "units": "1"
+          },
+          "k": {
+            "type": "parameter",
+            "default": 0.5,
+            "units": "1/s"
+          }
         },
         "equations": [
           {
-            "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-            "rhs": { "op": "*", "args": [ { "op": "-", "args": ["k"] }, "x" ] }
+            "lhs": {
+              "op": "D",
+              "args": [
+                "x"
+              ],
+              "wrt": "t"
+            },
+            "rhs": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "k"
+                  ]
+                },
+                "x"
+              ]
+            }
           },
           {
             "lhs": "y",
-            "rhs": { "op": "^", "args": ["x", 2] }
+            "rhs": {
+              "op": "^",
+              "args": [
+                "x",
+                2
+              ]
+            }
           }
         ]
       }
@@ -30,15 +66,23 @@
       "kind": "output",
       "system_class": "dae",
       "algebraic_equation_count": 1,
-      "per_model": { "M": 1 }
+      "per_model": {
+        "M": 1
+      }
     },
     {
       "mode": "dae_support_disabled",
       "kind": "error",
       "code": "E_NO_DAE_SUPPORT",
-      "message_must_contain": ["models.M", "equations"],
+      "message_must_contain": [
+        "models.M",
+        "equations"
+      ],
       "note": "The path format for the algebraic-equation reference is binding-idiomatic (Julia is 1-based, JSON-pointer-style bindings are 0-based). The conformance harness only requires that the model name (`models.M`) and the substring `equations` appear in the message so that a reader can locate the offender."
     }
   ],
-  "tags": ["authored_algebraic", "observed_equation"]
+  "tags": [
+    "authored_algebraic",
+    "observed_equation"
+  ]
 }

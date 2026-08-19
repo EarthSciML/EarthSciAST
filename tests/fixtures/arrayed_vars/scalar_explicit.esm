@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ScalarExplicit",
     "description": "Arrayed-variable schema (RFC §10.2): a scalar variable declared with an explicit empty shape. Bindings must preserve the empty-list form.",
@@ -11,7 +11,7 @@
     "ScalarExplicit": {
       "variables": {
         "mass": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg",
           "default": 1.0,
           "description": "Total mass — explicitly scalar (empty shape)",

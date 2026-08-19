@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "TagsAndLicenseExample",
     "description": "Demonstrates proper tag categorization and license specification",
@@ -21,8 +21,8 @@
     "TaggedModel": {
       "reference": { "notes": "Model for testing tags and license" },
       "variables": {
-        "aerosol_mass": { "type": "state", "units": "kg/m^3", "default": 1e-8 },
-        "droplet_number": { "type": "state", "units": "1/m^3", "default": 1e8 }
+        "aerosol_mass": { "type": "unknown", "units": "kg/m^3", "default": 1e-8 },
+        "droplet_number": { "type": "unknown", "units": "1/m^3", "default": 1e8 }
       },
       "equations": [
         {

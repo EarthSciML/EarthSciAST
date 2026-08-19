@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EDGAR_v81_SO2_ENE_example",
     "description": "Covers EarthSciData.jl/src/edgar_v81_monthly.jl EDGARv81MonthlyEmisFileSet. Files are bundled per substance+sector as zips (bkl_<sector>/bkl_<sector>_flx_nc.zip) of per-year netCDFs on a 0.1-degree global lat-lon grid. Each .nc has 12 monthly records per year. EDGAR v8.1 monthly SO2 emissions from the energy (ENE) sector.",

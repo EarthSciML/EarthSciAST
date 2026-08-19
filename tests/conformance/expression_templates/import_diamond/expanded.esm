@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "index_sets": {
     "cells": {
       "kind": "interval",
@@ -27,34 +27,40 @@
             ],
             "op": "-"
           }
-        }
-      ],
-      "variables": {
-        "x": {
-          "default": 1.5,
-          "type": "state",
-          "units": "1"
         },
-        "ya": {
-          "expression": {
+        {
+          "lhs": "ya",
+          "rhs": {
             "args": [
               "x",
               10
             ],
             "op": "*"
-          },
-          "type": "observed",
-          "units": "1"
+          }
         },
-        "yb": {
-          "expression": {
+        {
+          "lhs": "yb",
+          "rhs": {
             "args": [
               "x",
               10
             ],
             "op": "+"
-          },
-          "type": "observed",
+          }
+        }
+      ],
+      "variables": {
+        "x": {
+          "default": 1.5,
+          "type": "unknown",
+          "units": "1"
+        },
+        "ya": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "yb": {
+          "type": "unknown",
           "units": "1"
         }
       }

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MigrationTest_0_1_0",
     "description": "Same content as migration_test_from_0_0_5.esm but migrated to current format conventions",

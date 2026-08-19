@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "OutputDerivationGridded",
     "description": "Output-derivation conformance fixture: a single gridded model over a rectilinear [lon, lat] grid, with the additive `coordinates` registry (streaming-output-sinks RFC §8.3) keyed BY THE DIMENSION NAMES so both entries resolve to CF dimension coordinates with values + standard_name/units/axis. Exercises the whole §7–§9 chain on one grid: the column-major `name[i,j]` cell-key inversion, the rename of positional `<base>_d0` axes to the declared `index_sets` names, per-variable CF attribute retention, dimension-coordinate planning, and the record-axis-first on-disk dimension order.",
@@ -49,14 +49,14 @@
       },
       "variables": {
         "c": {
-          "type": "state",
+          "type": "unknown",
           "units": "kg/kg",
           "shape": ["lon", "lat"],
           "default": 0.0,
           "description": "Gridded tracer."
         },
         "w": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "shape": ["lon", "lat"],
           "default": 0.0

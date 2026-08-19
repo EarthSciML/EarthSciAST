@@ -10,23 +10,64 @@
     "models": {
       "M": {
         "variables": {
-          "x":   {"type": "state",      "default": 1.0},
-          "A":   {"type": "observed",   "default": 0.0},
-          "B":   {"type": "observed",   "default": 0.0},
-          "k":   {"type": "parameter",  "default": 0.1}
+          "x": {
+            "type": "unknown",
+            "default": 1.0
+          },
+          "A": {
+            "type": "unknown",
+            "default": 0.0
+          },
+          "B": {
+            "type": "unknown",
+            "default": 0.0
+          },
+          "k": {
+            "type": "parameter",
+            "default": 0.1
+          }
         },
         "equations": [
           {
-            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "A"]}
+            "lhs": {
+              "op": "D",
+              "args": [
+                "x"
+              ],
+              "wrt": "t"
+            },
+            "rhs": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "k"
+                  ]
+                },
+                "A"
+              ]
+            }
           },
           {
             "lhs": "A",
-            "rhs": {"op": "+", "args": ["B", 1.0]}
+            "rhs": {
+              "op": "+",
+              "args": [
+                "B",
+                1.0
+              ]
+            }
           },
           {
             "lhs": "B",
-            "rhs": {"op": "*", "args": [2.0, "A"]}
+            "rhs": {
+              "op": "*",
+              "args": [
+                2.0,
+                "A"
+              ]
+            }
           }
         ]
       }
@@ -44,8 +85,19 @@
       "DAE"
     ]
   },
-  "tags": ["esm-sph", "cycle", "algebraic-loop", "fail-fast"],
+  "tags": [
+    "esm-sph",
+    "cycle",
+    "algebraic-loop",
+    "fail-fast"
+  ],
   "bindings_required": [],
-  "bindings_optional": ["julia", "python", "rust", "typescript", "go"],
+  "bindings_optional": [
+    "julia",
+    "python",
+    "rust",
+    "typescript",
+    "go"
+  ],
   "note": "All bindings are listed as optional in this initial landing — runner integration is filed as per-binding follow-up beads once the audit surfaces actual behavior. The fixture exists so the per-binding audits have a single shared input to point at; silent-success behavior found during the audit is the bug, not the fixture."
 }

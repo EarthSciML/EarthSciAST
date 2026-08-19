@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "description": "esm-spec §9.7.10 form C / §6.6.6: a discretization-agnostic PDE leaf (bare D(c, wrt: lon), no import of its own) whose inline tests each carry expression_template_imports naming the discretization to run under. Each test runs as an independent per-test ephemeral build, so one suite exercises the leaf under two grid resolutions with no conflict. Unlike a component's own imports, a test's imports are authored per-run config and SURVIVE parse->emit: the enclosing component round-trips with its D intact and each test keeps its import field.",
     "name": "inject_test_block"
@@ -112,7 +112,7 @@
             "lon",
             "lat"
           ],
-          "type": "state",
+          "type": "unknown",
           "units": "kg/m^3"
         },
         "u": {

@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "overlap_gate_point_in_rect_L1",
     "description": "Projection-pushdown Phase 2a CROSS-LANGUAGE conformance fixture: a value-invention index-set-producing aggregate gated by a spatial `join.overlap` (points [X,Y] as the QUERY side vs. cell rectangles [W,S,E,N] as the INDEXED side) plus a strict-containment `filter` narrow phase, over the ISRM L1 geometry (a 3x3 grid of 2x2 cells, 5 emission points placed in cells {1,2,4,9}). Materialising the producer's `distinct` member set yields the EXACT set of containing cells [1,2,4,9] (§5.5 sorted total order). The overlap gate builds its broad-phase candidate set ONCE from the const-array envelope factors via the rstar R*-tree (byte-identical to the brute-force oracle), then DRIVES candidate enumeration (Wall #1). Consumed via the value-invention front door (`materialize_value_invention`) with the geometry supplied as const arrays; NOT loaded through the JSON-schema path (the Phase-2a `join.overlap` clause is a parser/IR extension not yet in the shared esm-schema.json, exactly as in the Julia reference overlap tests). The support set [1,2,4,9] is the Julia golden from EarthSciAST.jl `test/pushdown_edge_test.jl` / `test/auto_pushdown_rewrite_test.jl`.",
@@ -25,7 +25,7 @@
         "E": { "type": "parameter", "shape": ["pop_cells"], "description": "Cell east edge = envelope xmax." },
         "N": { "type": "parameter", "shape": ["pop_cells"], "description": "Cell north edge = envelope ymax." },
         "src_cell_of_ppl": { "type": "parameter", "shape": ["emis_src_cells"], "description": "member_factor of the derived set — the surviving cell index per invented member (Hook-1 feedback; not read during member derivation)." },
-        "emis_src_cell_member": { "type": "state", "shape": ["emis_src_cells"], "description": "Producer LHS (dropped from the ODE; materialised at setup)." }
+        "emis_src_cell_member": { "type": "unknown", "shape": ["emis_src_cells"], "description": "Producer LHS (dropped from the ODE; materialised at setup)." }
       },
       "equations": [
         {

@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MogiShape",
     "description": "Mogi-McTigue-shaped algebraic surface-deformation model: purely nonlinear (no time derivatives). Exercises system_kind='nonlinear' on a Geodynamics-style equilibrium model with no initialization_equations or guesses.",
@@ -12,13 +12,13 @@
       "system_kind": "nonlinear",
       "variables": {
         "ur": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Radial surface displacement"
         },
         "uz": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Vertical surface displacement"

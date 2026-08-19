@@ -1,5 +1,5 @@
 {
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "expression_templates_arrhenius_valid",
     "description": "Authoring-fixture demonstration of the v0.4.0 expression_templates / apply_expression_template mechanism (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md, esm-giy). A 2-parameter `arrhenius` template factors three reactions whose rates share the same A·exp(-Ea/T)·num_density form. After load-time expansion, the canonical AST is the inline form (Option A round-trip); this file is the source-of-truth on disk.",

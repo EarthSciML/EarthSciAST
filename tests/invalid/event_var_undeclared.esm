@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "EventVarUndeclared",
     "description": "Event affects reference undeclared variable"
@@ -7,8 +7,8 @@
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0 },
-        "v": { "type": "state", "units": "m/s", "default": 1.0 }
+        "x": { "type": "unknown", "units": "m", "default": 0.0 },
+        "v": { "type": "unknown", "units": "m/s", "default": 1.0 }
       },
       "equations": [
         {

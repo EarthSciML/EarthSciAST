@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "BareReferenceErrors",
     "description": "Test fixture for errors involving bare references in contexts where scoped references are required",
@@ -35,7 +35,7 @@
     "SystemB": {
       "variables": {
         "velocity": {
-          "type": "state",
+          "type": "unknown",
           "units": "m/s",
           "default": 5.0,
           "description": "Velocity"

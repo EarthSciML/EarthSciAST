@@ -1,5 +1,5 @@
 {
-  "esm": "0.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "ReservoirSpeciesConstant",
     "description": "SuperFast-style reaction system with reservoir (constant) species O2, CH4, H2O. Exercises the Species.constant=true flag (maps to Catalyst isconstantspecies=true).",

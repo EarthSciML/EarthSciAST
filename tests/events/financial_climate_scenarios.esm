@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "FinancialClimateScenarios",
     "description": "Financial market shock events and climate system tipping points",
@@ -12,13 +12,13 @@
     "FinancialMarketModel": {
       "variables": {
         "asset_price": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 100.0,
           "description": "Asset price, in US DOLLARS. A currency is not one of the eight dimension axes (esm-spec §4.8.1), so — exactly like a species tag — it is named here and the unit string is dimensionless."
         },
         "volatility": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.2,
           "description": "Market volatility"
@@ -48,21 +48,8 @@
           "description": "Circuit breaker status (0=off, 1=active)"
         },
         "daily_return": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "expression": {
-            "op": "/",
-            "args": [
-              {
-                "op": "D",
-                "args": [
-                  "asset_price"
-                ],
-                "wrt": "t"
-              },
-              "asset_price"
-            ]
-          },
           "description": "Daily return rate"
         }
       },
@@ -175,6 +162,22 @@
             ]
           },
           "rhs": 0.0
+        },
+        {
+          "lhs": "daily_return",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "D",
+                "args": [
+                  "asset_price"
+                ],
+                "wrt": "t"
+              },
+              "asset_price"
+            ]
+          }
         }
       ],
       "continuous_events": [
@@ -421,25 +424,25 @@
     "ClimateSystemModel": {
       "variables": {
         "global_temperature": {
-          "type": "state",
+          "type": "unknown",
           "units": "K",
           "default": 288.15,
           "description": "Global mean temperature"
         },
         "arctic_ice_extent": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 1.0,
           "description": "Arctic ice extent (normalized)"
         },
         "atmospheric_co2": {
-          "type": "state",
+          "type": "unknown",
           "units": "ppm",
           "default": 280.0,
           "description": "Atmospheric CO2 concentration"
         },
         "ocean_ph": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 8.1,
           "description": "Ocean pH"

@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnresolvedScopedRef",
     "description": "Coupling references nonexistent system or variable"
@@ -7,7 +7,7 @@
   "models": {
     "ModelA": {
       "variables": {
-        "x": { "type": "state", "units": "m", "default": 0.0 },
+        "x": { "type": "unknown", "units": "m", "default": 0.0 },
         "k": { "type": "parameter", "units": "1/s", "default": 1.0 }
       },
       "equations": [

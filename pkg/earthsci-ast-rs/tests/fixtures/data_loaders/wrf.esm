@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "WRF_Fixture",
     "description": "EarthSciData.jl WRF loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/wrf.jl — struct WRFFileSet (lines 4-37) with relpath (lines 39-45) and loadmetadata (lines 61-100+). The Julia loader asserts Lambert Conformal Conic projection (MAP_PROJ == 1) and reads the truelat1/truelat2/stand_lon attributes from the NetCDF file at runtime; the PROJ string below is constructed from those attributes and is captured here as the runtime-equivalent CRS.",
@@ -76,7 +76,7 @@
     "fixture_stub": {
       "variables": {
         "x": {
-          "type": "state",
+          "type": "unknown",
           "units": "1",
           "default": 0.0
         }

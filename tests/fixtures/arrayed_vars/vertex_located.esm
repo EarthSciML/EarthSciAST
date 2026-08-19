@@ -1,5 +1,5 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "VertexLocated",
     "description": "Arrayed-variable schema (RFC §10.2): a 2-D state variable defined at grid vertices rather than cell centers.",
@@ -17,7 +17,7 @@
     "VertexScalar2D": {
       "variables": {
         "phi": {
-          "type": "state",
+          "type": "unknown",
           "units": "m",
           "default": 0.0,
           "description": "Scalar defined at grid vertices",
