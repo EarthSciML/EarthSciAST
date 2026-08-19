@@ -427,6 +427,44 @@ fn the_selected_prefix_reaches_the_model_as_its_own_axis() {
     );
 }
 
+/// FORMAT-08-A-006: a mis-typed decode option cannot quietly select nothing.
+/// The Julia/Python mirrors of this file have asserted it since they were
+/// written; Rust could not, because `DataLoader` had no `reader_options` to
+/// mis-type.
+#[test]
+fn an_unrecognised_reader_option_is_refused_at_construction() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let mut doc = document(tmp.path());
+    doc["data_loaders"]["EGU_Emis"]["reader_options"]["member_filter"] = json!("*egu*");
+    let e = match providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
+    {
+        Ok(_) => panic!("a mis-typed reader option must not build a provider"),
+        Err(e) => e.0,
+    };
+    assert!(e.contains("member_filter"), "{e}");
+    assert!(e.contains("member_glob"), "{e}"); // names what it DOES accept
+}
+
+/// Without the declared glob the loader reads the WRONG members — which is why
+/// an ignored option is a defect rather than a nicety.
+#[test]
+fn reader_options_are_load_bearing_not_decorative() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let mut doc = document(tmp.path());
+    doc["data_loaders"]["EGU_Emis"]["reader_options"] = json!({});
+    let mut provs =
+        providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
+            .expect("providers build");
+    let (_, p) = provs
+        .iter_mut()
+        .find(|(k, _)| k == "EGU_Emis.annual")
+        .expect("no provider EGU_Emis.annual");
+    assert!(
+        p.sample().is_err(),
+        "a whole-zip read cannot decode as one FF10 table"
+    );
+}
+
 #[test]
 fn an_unrecognised_axis_selector_is_refused_at_construction() {
     let tmp = tempfile::tempdir().expect("tmpdir");
