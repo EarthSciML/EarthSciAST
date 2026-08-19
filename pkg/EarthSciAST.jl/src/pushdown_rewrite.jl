@@ -196,33 +196,82 @@ function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractStrin
                              bounds[Px][:max], bounds[Py][:max]])
 end
 
-# Is `ev` a binning aggregate `E[c] = Σ_r [contains(cell_c, pt_r)] · …` over the
-# cell set `C`? Returns the binding (`c_sym`, `r_sym`, record set `R`, and the
-# parsed overlap envelopes) or `nothing`.
-function _pd_detect_binning(ev::ModelVariable, C::AbstractString)
+# Is `ev` a BINNING aggregate — a `+`-semiring reduction over TWO 1-D index
+# sets whose body carries a rectangle-containment predicate between a
+# CELL-indexed rect factor and a RECORD-indexed point factor? BOTH orientations
+# are recognised (§5.5.6 "recognised desugar patterns"):
+#
+#   FORWARD  E[c] = Σ_r [contains(cell_c, pt_r)] · …    (the cell axis is output)
+#   MIRROR   P[r] = Σ_c [contains(cell_c, pt_r)] · …    (the record axis is output)
+#
+# The gate is IDENTICAL either way — the enumeration driver binds its two
+# symbols from the join clause's declared envelopes and knows nothing about
+# cells vs records, and the aggregate's own `output_idx` decides the result's
+# orientation. So the guards here are on the aggregate's SHAPE, not on which
+# axis is which: `out_set` is the index set the observed is shaped on, the
+# single other range supplies the opposite side, and the CONTAINMENT PREDICATE
+# itself says which symbol is the cell (it carries the four rect BOUND factors)
+# and which is the record (the two point coordinates).
+#
+# Returns `(c_sym, r_sym, C, R, out_is_cell, src_env, tgt_env)` or `nothing`.
+function _pd_detect_binning(ev::ModelVariable, out_set::AbstractString)
     ev.type == ObservedVariable || return nothing
-    (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == C) || return nothing
+    (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
     agg = ev.expression
     (agg isa OpExpr && _is_aggregate_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing              # SEMIRING GUARD
     oi = agg.output_idx
     (oi !== nothing && length(oi) == 1) || return nothing
-    c_sym = String(oi[1])
+    out_sym = String(oi[1])
     ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
     length(ranges) == 2 || return nothing
-    (haskey(ranges, c_sym) && ranges[c_sym] isa IndexSetRef && ranges[c_sym].from == C) || return nothing
-    r_sym = nothing
-    for k in keys(ranges); k == c_sym && continue; r_sym = k; end
-    (r_sym !== nothing && ranges[r_sym] isa IndexSetRef) || return nothing
+    (haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
+     ranges[out_sym].from == out_set) || return nothing
+    in_sym = nothing
+    for k in keys(ranges); k == out_sym && continue; in_sym = k; end
+    (in_sym !== nothing && ranges[in_sym] isa IndexSetRef) || return nothing
+    in_set = String(ranges[in_sym].from)
     body = agg.expr_body
     body isa OpExpr || return nothing
     pred = _pd_find_ifelse_cond(body)
     pred === nothing && return nothing
-    env = _pd_parse_containment(pred, c_sym, r_sym)
+    # Exactly one of the two assignments parses: `_pd_parse_containment` demands
+    # each comparison put the cell symbol on one side and the record symbol on
+    # the other, and that the record side yield exactly two coordinates each
+    # with a min AND a max cell bound.
+    env = _pd_parse_containment(pred, out_sym, in_sym)
+    env === nothing || return (c_sym = out_sym, r_sym = in_sym,
+                               C = String(out_set), R = in_set, out_is_cell = true,
+                               src_env = env.src_env, tgt_env = env.tgt_env)
+    env = _pd_parse_containment(pred, in_sym, out_sym)
     env === nothing && return nothing
-    return (c_sym = c_sym, r_sym = r_sym, R = ranges[r_sym].from,
-            src_env = env.src_env, tgt_env = env.tgt_env)
+    return (c_sym = in_sym, r_sym = out_sym, C = in_set, R = String(out_set),
+            out_is_cell = false, src_env = env.src_env, tgt_env = env.tgt_env)
+end
+
+# The MIRRORED-orientation binning aggregates of a model: per-RECORD observeds
+# `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)] · …` over the plan's cell set `C` and
+# record set `R`. Returned as `(name, src_env, tgt_env)` triples, sorted by name
+# so the emitted document is identical across bindings and hash seeds.
+#
+# A mirror needs NOTHING but the gate — see the note on the mirrored arm in
+# `_pd_apply`. Its cell axis stays the FULL `C`, so its envelope factors are the
+# document's own const-array rects, unrewritten.
+function _pd_mirror_specs(model::Model, C::AbstractString, R::AbstractString,
+                          forward_names)
+    out = Tuple{String,Vector{String},Vector{String}}[]
+    for (name, v) in model.variables
+        name in forward_names && continue
+        bind = _pd_detect_binning(v, R)
+        bind === nothing && continue
+        (!bind.out_is_cell && bind.C == C && bind.R == R) || continue
+        # Never stack a second gate on an aggregate that already declares a join.
+        (v.expression isa OpExpr && (v.expression::OpExpr).join !== nothing) && continue
+        push!(out, (name, bind.src_env, bind.tgt_env))
+    end
+    sort!(out; by = t -> t[1])
+    return out
 end
 
 # Detect the pushdown pattern across a model's observeds. Returns a plan
@@ -231,7 +280,8 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
     vars = model.variables
     conc_specs = Tuple{String,String}[]        # (conc name, reduction symbol)
     A_names = String[]                          # provider-backed arrays to gate
-    E_specs = Tuple{String,String}[]            # (E name, cell output symbol)
+    # (E name, cell output symbol, gate src_env, gate tgt_env)
+    E_specs = Tuple{String,String,Vector{String},Vector{String}}[]
     C = nothing; rcv_set = nothing; R = nothing
     src_env = nothing; tgt_env = nothing
     rep_ename = nothing; rep_csym = nothing; rep_rsym = nothing
@@ -261,7 +311,7 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
          length(av.shape) == 2 && av.shape[1] == c_set && av.shape[2] == r_set) || continue
         ev = get(vars, Ename, nothing); ev === nothing && continue
         bind = _pd_detect_binning(ev, c_set)
-        bind === nothing && continue
+        (bind === nothing || !bind.out_is_cell) && continue       # FORWARD arm only
 
         if C === nothing
             C = c_set; rcv_set = r_set; R = bind.R
@@ -272,7 +322,8 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
         end
         push!(conc_specs, (cname, s_sym))
         Aname in A_names || push!(A_names, Aname)
-        any(e -> e[1] == Ename, E_specs) || push!(E_specs, (Ename, bind.c_sym))
+        any(e -> e[1] == Ename, E_specs) ||
+            push!(E_specs, (Ename, bind.c_sym, bind.src_env, bind.tgt_env))
     end
     isempty(conc_specs) && return nothing
     # Deterministic plan order (Phase 3, cross-language goldens): `vars` is a
@@ -284,8 +335,13 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
     # identical across bindings and hash seeds. Consumers are membership-based
     # (`_pushdown_provider_gates`, `_fetch_gated_providers`), so order is inert.
     sort!(A_names)
+    # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
+    # cell/record sets. They are collected only once the forward pattern has
+    # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
+    mirror_specs = _pd_mirror_specs(model, C, R, Set{String}(e[1] for e in E_specs))
     return (C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
-            A_names = A_names, E_specs = E_specs, src_env = src_env, tgt_env = tgt_env,
+            A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
+            src_env = src_env, tgt_env = tgt_env,
             rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym)
 end
 
@@ -334,6 +390,15 @@ function _pd_dict_find_ifelse_cond(node)
 end
 
 _pd_ix(f, idx...) = Dict{String,Any}("op" => "index", "args" => Any[f, idx...])
+
+# One dict-form `join.overlap` clause (§5.5.6 wire form). `eps` is always 0.0:
+# the rewrite derives the envelopes from an EXACT rectangle-containment
+# predicate that stays on as the narrow `filter`, so no FP slack is wanted.
+_pd_overlap_clause(src_env, tgt_env) =
+    Dict{String,Any}("overlap" => Dict{String,Any}(
+        "src_env" => Any[String(f) for f in src_env],
+        "tgt_env" => Any[String(f) for f in tgt_env],
+        "eps" => 0.0))
 
 # Apply the desugar to the raw document, returning a NEW mutable dict tree.
 function _pd_apply(esm, mname::AbstractString, plan)
@@ -384,13 +449,49 @@ function _pd_apply(esm, mname::AbstractString, plan)
         mv[A]["shape"] = Any[setname, plan.rcv_set]
     end
 
-    # --- rewrite E: axis → derived set, rect factors → cell gathers ---
-    for (Ename, csym) in plan.E_specs
-        expr = mv[Ename]["expression"]
+    # --- rewrite E: axis → derived set, rect factors → cell gathers, + GATE ---
+    # The rewritten `E` still reduces over the FULL record axis, so without a
+    # gate it visits |support|·|records| pairs — 1520·43650 on isrm.esm. Attach
+    # the SAME overlap clause the producer carries, re-pointed at the generated
+    # cell gathers, and the enumeration driver (§5.5.6) walks one candidate
+    # partner list per output cell instead. The clause is derived, not authored:
+    # its envelopes are exactly the ones `_pd_parse_containment` read out of this
+    # aggregate's own containment predicate.
+    for (Ename, csym, e_src, e_tgt) in plan.E_specs
+        # DEEP-COPY before the in-place rect rewrite. `_to_ordered` is
+        # identity-MEMOIZED, so a document built in memory keeps whatever
+        # subtree sharing its author created — and the ISRM-shaped fixtures
+        # share one `contains(...)` predicate object across every aggregate that
+        # bins. Rewriting E's rects in place would then reach through the shared
+        # node into a variable that is NOT being re-pointed (a mirrored
+        # per-record aggregate, say) and leave it gathering the compact cell
+        # buffers with full-grid indices. Copying first confines the rewrite to
+        # this variable; the emitted JSON is unchanged (sharing is not a
+        # document-level property).
+        expr = deepcopy(mv[Ename]["expression"])
+        mv[Ename]["expression"] = expr
         expr["ranges"][csym]["from"] = setname
         _pd_rewrite_rects!(expr, rectmap)
         haskey(expr, "args") && (expr["args"] = Any[get(rectmap, string(s), s) for s in expr["args"]])
         mv[Ename]["shape"] = Any[setname]
+        haskey(expr, "join") || (expr["join"] = Any[_pd_overlap_clause(
+            e_src, String[get(rectmap, F, F) for F in e_tgt])])
+    end
+
+    # --- MIRRORED orientation: gate only ---
+    # A per-record binning aggregate `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)]·…`
+    # is the same join read the other way round. It gets ONLY the gate — no
+    # derived index set, no `distinct` producer, no `member_factor`, no provider
+    # gating — because it wants the FULL record axis: every record must produce a
+    # value, and a record outside the grid must come out as the semiring identity
+    # (the driver leaves such a position with no term and 0̄ is emitted). There is
+    # nothing to compact, so a mirrored VALUE-INVENTION would derive a support set
+    # nobody reads. Its envelopes stay the document's own const-array factors
+    # (the cell axis is not re-pointed), so the mirror also needs no rect gathers.
+    for (Pname, p_src, p_tgt) in plan.mirror_specs
+        pexpr = deepcopy(mv[Pname]["expression"])       # see the deep-copy note above
+        mv[Pname]["expression"] = pexpr
+        haskey(pexpr, "join") || (pexpr["join"] = Any[_pd_overlap_clause(p_src, p_tgt)])
     end
 
     # --- restrict the conc reductions to the derived axis ---
@@ -408,9 +509,7 @@ function _pd_apply(esm, mname::AbstractString, plan)
                 plan.rep_csym => Dict{String,Any}("from" => C)),
             "expr" => Dict{String,Any}("op" => "true", "args" => Any[]),
             "distinct" => true, "semiring" => "bool_and_or", "id" => faqid,
-            "join" => Any[Dict{String,Any}("overlap" => Dict{String,Any}(
-                "src_env" => Any[plan.src_env...], "tgt_env" => Any[plan.tgt_env...],
-                "eps" => 0.0))],
+            "join" => Any[_pd_overlap_clause(plan.src_env, plan.tgt_env)],
             "filter" => prod_filter,
             "key" => Dict{String,Any}("op" => "skolem", "label" => "cell",
                                       "args" => Any[plan.rep_csym]),

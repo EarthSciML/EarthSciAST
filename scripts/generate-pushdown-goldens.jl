@@ -226,6 +226,92 @@ function build_l1_doc()
 end
 
 # ---------------------------------------------------------------------------
+# MINIMAL forward fixture — the GATED DENSE AGGREGATE.
+#
+# The smallest document the rewrite fires on: one provider-backed SR array, one
+# binning observed `E[c]`, one `conc[rcv]`. Its golden is the reference for the
+# gate the rewrite now attaches to the REWRITTEN binning aggregate: `join.overlap`
+# with `src_env` the record point coordinates and `tgt_env` the GENERATED
+# `pd_cell__*` gathers, i.e. the envelopes on the COMPACT derived axis the
+# aggregate now ranges over. Deliberately tiny so the whole rewritten document
+# is reviewable in a diff.
+# ---------------------------------------------------------------------------
+_pd_contain() = _op("and",
+    _op("<=", _ix("src_W", "c"), _ix("px", "r")), _op("<", _ix("px", "r"), _ix("src_E", "c")),
+    _op("<=", _ix("src_S", "c"), _ix("py", "r")), _op("<", _ix("py", "r"), _ix("src_N", "c")))
+
+_pd_param(shape) = Dict{String,Any}("type"=>"parameter", "default"=>0.0, "shape"=>shape)
+_pd_obs(shape, expr) = Dict{String,Any}("type"=>"observed", "shape"=>shape, "expression"=>expr)
+
+# The 4 cell-rect factors + the 2 record point coordinates, shared by both docs.
+function _pd_geometry_vars()
+    v = Dict{String,Any}()
+    for n in ("src_W", "src_S", "src_E", "src_N"); v[n] = _pd_param(["src_cells"]); end
+    for n in ("px", "py", "emis_annual"); v[n] = _pd_param(["emis_records"]); end
+    return v
+end
+
+function build_gated_dense_doc()
+    NC = 4; NR = 3; NRCV = 2
+    variables = _pd_geometry_vars()
+    variables["SR_PM25"] = _pd_param(["src_cells", "rcv_cells"])
+    variables["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        _op("*", _op("ifelse", _pd_contain(), 1.0, 0.0), _ix("emis_annual", "r"));
+        reduce="+", args=["src_W","src_S","src_E","src_N","px","py","emis_annual"]))
+    variables["conc_PM25"] = _pd_obs(["rcv_cells"], _agg(["rcv"],
+        Dict("s"=>Dict("from"=>"src_cells"), "rcv"=>Dict("from"=>"rcv_cells")),
+        _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"));
+        reduce="+", args=["SR_PM25", "E_PM25"]))
+    return Dict{String,Any}(
+        "esm" => "0.9.0",
+        "metadata" => Dict{String,Any}("name" => "pushdown_gated_dense"),
+        "index_sets" => Dict{String,Any}(
+            "src_cells"    => Dict("kind"=>"interval", "size"=>NC),
+            "rcv_cells"    => Dict("kind"=>"interval", "size"=>NRCV),
+            "emis_records" => Dict("kind"=>"interval", "size"=>NR)),
+        "models" => Dict{String,Any}("Binned" =>
+            Dict{String,Any}("variables"=>variables, "equations"=>Any[])))
+end
+
+# ---------------------------------------------------------------------------
+# MIRRORED-ORIENTATION fixture.
+#
+# The same join read the other way round: per-RECORD observeds
+# `P[r] = Σ_{c∈src_cells} [contains(cell_c, pt_r)] · …` reducing over CELLS and
+# carrying the identical containment predicate. This is the shape plume rise
+# needs. Its golden pins the second detector arm:
+#
+#   * the mirrored aggregates get ONLY a `join.overlap` clause — their envelopes
+#     are the document's OWN const rect factors (`src_W…src_N`), because their
+#     cell axis is NOT re-pointed onto the compact derived set;
+#   * no second derived index set, `distinct` producer, member factor or
+#     `gated_select` entry is emitted for them;
+#   * their `shape`, `output_idx` and `ranges` are untouched — every record
+#     keeps a value, and a record outside the grid reduces to the semiring
+#     identity 0.
+#
+# Two mirrors are present so the emission order (sorted by name) is observable,
+# and one of them reads a CELL factor while the other reads only the predicate.
+# ---------------------------------------------------------------------------
+function build_mirror_doc()
+    d = build_gated_dense_doc()
+    d["metadata"]["name"] = "pushdown_mirror"
+    v = d["models"]["Binned"]["variables"]
+    # plume_top[r] — the north edge of the cell each record falls in.
+    v["plume_top"] = _pd_obs(["emis_records"], _agg(["r"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        _op("*", _op("ifelse", _pd_contain(), 1.0, 0.0), _ix("src_N", "c"));
+        reduce="+", args=["src_W","src_S","src_E","src_N","px","py"]))
+    # in_grid[r] — 1 when the record is inside SOME cell, 0 otherwise.
+    v["in_grid"] = _pd_obs(["emis_records"], _agg(["r"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        _op("ifelse", _pd_contain(), 1.0, 0.0);
+        reduce="+", args=["src_W","src_S","src_E","src_N","px","py"]))
+    return d
+end
+
+# ---------------------------------------------------------------------------
 function main()
     println("emitting pushdown conformance corpus under $OUTDIR")
 
@@ -236,14 +322,35 @@ function main()
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_l1.esm"), l1)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_l1.rewritten.json"), l1r)
 
-    isrm_path = get(ENV, "ISRM_ESM",
-                    normpath(joinpath(REPO, "..", "isrm.esm", "isrm.esm")))
-    isfile(isrm_path) || error("isrm.esm not found at $isrm_path (set ISRM_ESM)")
-    ser = EA.serialize_esm_file(EA.load(isrm_path))   # metaparameter defaults folded
+    gd = build_gated_dense_doc()
+    gdr = EA.desugar_pushdown(gd; model_name="Binned")
+    gdr === gd && error("gated-dense fixture: desugar_pushdown did not fire")
+    EA.desugar_pushdown(gdr) === gdr || error("gated-dense golden re-desugars (idempotency broken)")
+    write_canon(joinpath(OUTDIR, "fixtures", "pushdown_gated_dense.esm"), gd)
+    write_canon(joinpath(OUTDIR, "golden", "pushdown_gated_dense.rewritten.json"), gdr)
+
+    mr = build_mirror_doc()
+    mrr = EA.desugar_pushdown(mr; model_name="Binned")
+    mrr === mr && error("mirror fixture: desugar_pushdown did not fire")
+    EA.desugar_pushdown(mrr) === mrr || error("mirror golden re-desugars (idempotency broken)")
+    write_canon(joinpath(OUTDIR, "fixtures", "pushdown_mirror.esm"), mr)
+    write_canon(joinpath(OUTDIR, "golden", "pushdown_mirror.rewritten.json"), mrr)
+
+    # The isrm pair regenerates from the COMMITTED input fixture by default: the
+    # upstream isrm.esm keeps evolving, and the frozen fixture — not whatever the
+    # sibling checkout currently holds — is the cross-binding contract. Set
+    # ISRM_ESM_REFRESH=1 to re-cut the input from a checkout instead.
+    if get(ENV, "ISRM_ESM_REFRESH", "0") == "1"
+        isrm_path = get(ENV, "ISRM_ESM",
+                        normpath(joinpath(REPO, "..", "isrm.esm", "isrm.esm")))
+        isfile(isrm_path) || error("isrm.esm not found at $isrm_path (set ISRM_ESM)")
+        ser = EA.serialize_esm_file(EA.load(isrm_path))   # metaparameter defaults folded
+        write_canon(joinpath(OUTDIR, "fixtures", "isrm.esm"), ser)
+    end
+    ser = EA.serialize_esm_file(EA.load(joinpath(OUTDIR, "fixtures", "isrm.esm")))
     isrm = EA.desugar_pushdown(ser)
     isrm === ser && error("isrm.esm: desugar_pushdown did not fire")
     EA.desugar_pushdown(isrm) === isrm || error("isrm golden re-desugars (idempotency broken)")
-    write_canon(joinpath(OUTDIR, "fixtures", "isrm.esm"), ser)
     write_canon(joinpath(OUTDIR, "golden", "isrm.rewritten.json"), isrm)
     println("done")
 end

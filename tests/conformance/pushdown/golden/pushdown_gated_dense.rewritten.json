@@ -1,0 +1,589 @@
+{
+  "esm": "0.9.0",
+  "index_sets": {
+    "emis_records": {
+      "kind": "interval",
+      "size": 3
+    },
+    "pd_support__src_cells": {
+      "from_faq": "pd_faq__src_cells",
+      "kind": "derived",
+      "member_factor": "pd_member_factor__src_cells"
+    },
+    "rcv_cells": {
+      "kind": "interval",
+      "size": 2
+    },
+    "src_cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "name": "pushdown_gated_dense",
+    "x_esd": {
+      "pushdown": {
+        "derived_set": "pd_support__src_cells",
+        "gated_select": {
+          "applies_to": [
+            "SR_PM25"
+          ],
+          "gated_axis": 0,
+          "gated_by": "pd_support__src_cells"
+        },
+        "member_factor": "pd_member_factor__src_cells",
+        "member_var": "pd_members__src_cells",
+        "producer_id": "pd_faq__src_cells"
+      }
+    }
+  },
+  "models": {
+    "Binned": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "pd_members__src_cells",
+              "m"
+            ],
+            "op": "index"
+          },
+          "rhs": {
+            "args": [
+              "px",
+              "py",
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N"
+            ],
+            "distinct": true,
+            "expr": {
+              "args": [],
+              "op": "true"
+            },
+            "filter": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "src_W",
+                        "c"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "px",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "<="
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "px",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "src_E",
+                        "c"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "<"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "src_S",
+                        "c"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "py",
+                        "r"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "<="
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "py",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        "src_N",
+                        "c"
+                      ],
+                      "op": "index"
+                    }
+                  ],
+                  "op": "<"
+                }
+              ],
+              "op": "*"
+            },
+            "id": "pd_faq__src_cells",
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "px",
+                    "py"
+                  ],
+                  "tgt_env": [
+                    "src_W",
+                    "src_S",
+                    "src_E",
+                    "src_N"
+                  ]
+                }
+              }
+            ],
+            "key": {
+              "args": [
+                "c"
+              ],
+              "label": "cell",
+              "op": "skolem"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "m"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "semiring": "bool_and_or"
+          }
+        }
+      ],
+      "variables": {
+        "E_PM25": {
+          "expression": {
+            "args": [
+              "pd_cell__src_cells__src_W",
+              "pd_cell__src_cells__src_S",
+              "pd_cell__src_cells__src_E",
+              "pd_cell__src_cells__src_N",
+              "px",
+              "py",
+              "emis_annual"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "pd_cell__src_cells__src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "px",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "px",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "pd_cell__src_cells__src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "pd_cell__src_cells__src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "py",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "py",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "pd_cell__src_cells__src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    "emis_annual",
+                    "r"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "px",
+                    "py"
+                  ],
+                  "tgt_env": [
+                    "pd_cell__src_cells__src_W",
+                    "pd_cell__src_cells__src_S",
+                    "pd_cell__src_cells__src_E",
+                    "pd_cell__src_cells__src_N"
+                  ]
+                }
+              }
+            ],
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "observed"
+        },
+        "SR_PM25": {
+          "default": 0.0,
+          "shape": [
+            "pd_support__src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "conc_PM25": {
+          "expression": {
+            "args": [
+              "SR_PM25",
+              "E_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_PM25",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_PM25",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "pd_support__src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "emis_annual": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "pd_cell__src_cells__src_E": {
+          "expression": {
+            "args": [
+              "src_E",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_E",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          },
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "observed"
+        },
+        "pd_cell__src_cells__src_N": {
+          "expression": {
+            "args": [
+              "src_N",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_N",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          },
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "observed"
+        },
+        "pd_cell__src_cells__src_S": {
+          "expression": {
+            "args": [
+              "src_S",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_S",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          },
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "observed"
+        },
+        "pd_cell__src_cells__src_W": {
+          "expression": {
+            "args": [
+              "src_W",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_W",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          },
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "observed"
+        },
+        "pd_member_factor__src_cells": {
+          "default": 0.0,
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "parameter"
+        },
+        "pd_members__src_cells": {
+          "shape": [
+            "pd_support__src_cells"
+          ],
+          "type": "state"
+        },
+        "px": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "py": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "src_E": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_N": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_S": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_W": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        }
+      }
+    }
+  }
+}
