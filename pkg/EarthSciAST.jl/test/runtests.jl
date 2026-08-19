@@ -133,10 +133,15 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # EarthSciIO (+ Blosc/JSON/SHA) from the test target (Project.toml
     # [targets].test), which activates the EarthSciASTEarthSciIOExt extension.
     include("provider_selection_test.jl")
+    # esm-spec §8.5 `unit_conversion` at the unit level (parse + apply).
+    include("unit_conversion_test.jl")
     # The loader-ingest surface of esm-spec §8.9 (reader_options / codes /
     # record_filter / extent / select), over local FF10-zip + Zarr-v2 fixtures.
     # The Rust mirror is pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs.
     include("loader_ingest_and_select_test.jl")
+    # esm-spec §8.5 `unit_conversion` on the ESIO provider path — the
+    # manifest-driven cross-binding conformance adapter.
+    include("loader_unit_conversion_conformance_test.jl")
     # Streaming output sinks (Wave 2): end-to-end ZarrSink write → ZarrReader
     # read-back round-trip through the EarthSciIO write boundary (RFC §16).
     include("zarr_sink_e2e_test.jl")
