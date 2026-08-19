@@ -1005,10 +1005,15 @@ the full product had run and every tuple had been rejected. It is not a hole, no
 that falls outside the grid, or a grid cell containing no record, therefore reads
 as `0` under the additive monoid.
 
-The driver is a pure optimisation of the enumeration ORDER and EXTENT, never of
-the result: the emitted leaf set is exactly the set the membership test would
-have admitted, in the same relative order, and a binding MAY fall back to the
-full product for any shape it cannot drive. The materialised member set is
+The driver is a pure optimisation of the enumeration EXTENT, never of the
+result: the emitted leaf set is exactly the set the membership test would have
+admitted, in the same relative order. The three shapes above MUST be driven —
+that is what the MUST NOT above forbids sidestepping by looking at whether the
+node is a producer. A binding MAY fall back to the full product ONLY for a shape
+outside them, where it cannot show that the driven sequence preserves the
+⊕-accumulation order (an aggregate with additional contracted axes beside two
+contracted gated ones, say); such a fallback is slower but produces the same
+answer. The materialised member set is
 likewise IDENTICAL to the full-product path — the gate is conservative, so it
 only skips tuples the narrow `filter` would have rejected. Because the broad
 phase compares only floating-point envelopes but the emitted **keys are integer**
