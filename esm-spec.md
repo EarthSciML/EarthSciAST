@@ -1,6 +1,18 @@
 # ESM Format Specification
 
-**EarthSciML Serialization Format — Version 0.8.0**
+**EarthSciML Serialization Format — Version 1.0.0**
+
+> **1.0.0 is a clean break.** The five declared variable types collapse to two:
+> `unknown` (the solver solves for it; its behavior is stated by **equations**)
+> and `parameter` (supplied to the solver; a value or a `distribution`, with an
+> optional `update`). Everything finer is **derived**, not declared — see §6.3
+> and the classification functions in §6.3.1. Removed with no deprecation path:
+> `state`, `observed` and the variable `expression` field; `brownian` with
+> `noise_kind`/`correlation_group`; `discrete` with `refresh`;
+> `discrete_parameters` and the event `functional_affect`; and the
+> `data_loaders` *component* kind, whose ingest configuration survives as the
+> `data_sources` registry (§8). Rationale and the decisions behind it:
+> `docs/content/rfcs/unified-variable-model.md`.
 
 ## 1. Overview
 
@@ -12,7 +24,7 @@ The ESM (`.esm`) format is a JSON-based serialization format for EarthSciML mode
 
 ESM is **language-agnostic**. Every model must be fully self-describing: all equations, variables, parameters, species, and reactions are specified in the format itself. A conforming parser in any language can reconstruct the complete mathematical system from the `.esm` file alone, without access to any particular software package.
 
-The single exception to full specification is **data loaders**, which are inherently runtime-specific (file I/O, format adapters, regridding, large external grids) and are therefore referenced by type/name rather than fully defined. There is no in-file registry of arbitrary user-defined functions or operators: every callable invoked from an expression is drawn from the **closed function registry** (Section 9), whose entries are spec-defined with fixed names, signatures, and tolerances. See `docs/content/rfcs/closed-function-registry.md` for the rationale.
+Two things are excepted from full specification, both inherently runtime-specific: **data sources** (file I/O, format adapters, large external grids), which are described well enough to locate and decode but not reimplemented in-file; and **update handlers** (§5.5), referenced by `handler_id`. There is no in-file registry of arbitrary user-defined functions or operators: every callable invoked from an expression is drawn from the **closed function registry** (Section 9), whose entries are spec-defined with fixed names, signatures, and tolerances. See `docs/content/rfcs/closed-function-registry.md` for the rationale.
 
 ### 1.1 Authoring Policy: AST first, registry second, factoring third
 
@@ -40,11 +52,11 @@ The full authoring stance, normatively:
 
 ```json
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
-  "data_loaders": { ... },
+  "data_sources": { ... },
   "enums": { ... },
   "function_tables": { ... },
   "coupling": [ ... ],
@@ -63,7 +75,7 @@ The full authoring stance, normatively:
 | `metadata` | ✓ | Authorship, provenance, description |
 | `models` | | ODE-based model components (fully specified) |
 | `reaction_systems` | | Reaction network components (fully specified) |
-| `data_loaders` | | External data source registrations (by reference) |
+| `data_sources` | | External data-source ingest configuration, drawn from by a parameter's `update` (see Section 8). A registry, not a component. |
 | `enums` | | File-local symbol → positive-integer mappings used by the `enum` op to make categorical lookups cross-binding-portable (see Section 9.3) |
 | `function_tables` | | Component-scoped sampled function tables — named axes plus literal nested-array data, referenced by the `table_lookup` AST op (see Section 9.5) |
 | `coupling` | | Composition and coupling rules |
@@ -74,9 +86,9 @@ The full authoring stance, normatively:
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
 
-Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded from a `data_loaders` primitive or declared as variables/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
+Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
-At least one of `models`, `reaction_systems`, `data_loaders`, or `expression_templates` must be present. A document whose sole top-level component is `data_loaders` is a valid loader-only file — referenceable as a loader subsystem (§4.7). A document whose payload is top-level `expression_templates` is a **template-library file** (§9.7.1) — importable via `expression_template_imports`, and the carrier format of the [EarthSciDiscretizations](../earthscidiscretizations) standard library.
+At least one of `models`, `reaction_systems`, `data_sources`, or `expression_templates` must be present. A `data_sources`-only document is a valid **source-catalog file**: it declares ingest configuration that other documents draw from, but it is not a component and is not referenceable as a subsystem (§4.7). A document whose payload is top-level `expression_templates` is a **template-library file** (§9.7.1) — importable via `expression_template_imports`, and the carrier format of the [EarthSciDiscretizations](../earthscidiscretizations) standard library.
 
 ### 2.1 Coordinate registry (`coordinates`)
 
@@ -92,8 +104,9 @@ ordinary data), and adding it changes only the metadata a streaming writer emits
 
 Each entry is keyed by a coordinate name and has exactly one of:
 
-- **`source`** — the name of an existing data array (a model variable, parameter,
-  or data-loader field), referenced by name exactly as a `ragged` `IndexSet`
+- **`source`** — the name of an existing data array (a model unknown or
+  parameter, including one fed from a `data_sources` entry), referenced by name
+  exactly as a `ragged` `IndexSet`
   references its `offsets`/`values` factors. The coordinate's **shape is read from
   that array's declared `shape`** (its ordered index-set dimensions).
 - **`values`** — an inline literal 1-D vector of finite floats, for the simple
@@ -217,7 +230,7 @@ Every `op` string belongs to one of **two tiers**:
 | Op | Additional fields | Meaning |
 |---|---|---|
 | `D` | `"wrt": "t"` or a spatial axis | Derivative ∂/∂(`wrt`) of `args[0]`. `wrt:"t"` (or an absent `wrt`) is the **structural** time derivative (equation LHS, consumed by system assembly) and is **strictly unary**. A spatial `wrt` — or *any* `D` in a right-hand-side expression — is a **rewrite-target** (§9.6.8): lowered to a stencil by a discretization rule, never evaluated directly; it MAY carry **trailing auxiliary operands** after `args[0]` (see below). |
-| `ic` | — | Initial-condition declaration, used as an equation LHS: `ic(u) ~ <initial field>` (§11.4). `args[0]` is the state variable. |
+| `ic` | — | Initial-condition declaration, used as an equation LHS: `ic(u) ~ <initial field>` (§11.4). `args[0]` is the ODE state. |
 
 Example: `{"op": "D", "args": ["O3"], "wrt": "t"}` represents ∂O₃/∂t.
 
@@ -367,7 +380,7 @@ by this spec.
 
 | Op | Required extra fields | Meaning |
 |---|---|---|
-| `const` | `value` | Inline literal value embedded in the expression tree. `value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`. Used to carry small inline tables that participate in `index` lookups, `interp.searchsorted` queries, and other AST positions where a JSON array is needed but a bare scalar number won't do. Large arrays belong in `data_loaders`. |
+| `const` | `value` | Inline literal value embedded in the expression tree. `value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`. Used to carry small inline tables that participate in `index` lookups, `interp.searchsorted` queries, and other AST positions where a JSON array is needed but a bare scalar number won't do. Large arrays belong in a `data_sources` entry. |
 
 #### Array / Tensor
 
@@ -558,7 +571,7 @@ blocked, or parallel-prefix) for an inexact ⊕ in any direction.
 weighting — the format carries no measure concept (§6.6.5 convention 2). A Riemann-sum
 cumulative integral `F(xᵢ) = ∫ u dx′` is spelled by multiplying the per-cell measure into the
 body as an ordinary factor, which the author declares as an ordinary variable or loads from a
-`data_loaders` primitive like any other grid geometry:
+`data_sources` entry like any other grid geometry:
 
 ```json
 {
@@ -673,7 +686,7 @@ Broadcasts do not fuse: a nested expression of broadcasts decomposes into primit
 
 **Broadcast compatibility.** The same rule governs every **array-level expression** — an elementwise operator (arithmetic, elementary function, conditional, comparison) whose operands are arrays, whether spelled with an explicit `broadcast` node or written bare (`{"op": "*", "args": ["w2", "z1"]}`). Two regimes apply, chosen by whether the operands carry **declared index sets**:
 
-1. **Named operands align by index-set NAME.** An operand that is a reference to a variable with a declared `shape` (Section 6.3 — an ordered list of index-set names) carries a *name* for each of its axes, and so does the expression's result: the state or observed variable the array-level equation defines. Alignment is then by name, never by position:
+1. **Named operands align by index-set NAME.** An operand that is a reference to a variable with a declared `shape` (Section 6.3 — an ordered list of index-set names) carries a *name* for each of its axes, and so does the expression's result: the unknown the array-level equation defines. Alignment is then by name, never by position:
 
    - The result's index sets are those of the equation's target. An operand whose declared index sets are a **subset** of the result's is broadcast-compatible: it supplies the axes it declares and **replicates** along every result axis it does not. A `["lat"]` operand in a `["lon","lat","lev"]` result contributes the same value to all `lon` and all `lev` positions.
    - **Axis order is immaterial.** A `["lat","lon"]` operand in a `["lon","lat","lev"]` result aligns `lat` to `lat` and `lon` to `lon` — i.e. it transposes. It is never reinterpreted positionally.
@@ -798,7 +811,7 @@ The **last** segment is always the variable (or species/parameter) name. All pre
 | `"SuperFast.GasPhase.O3"` | Variable `O3` in subsystem `GasPhase` of model `SuperFast` |
 | `"Atmosphere.Chemistry.FastChem.NO2"` | Variable `NO2` in `Atmosphere` → `Chemistry` → `FastChem` |
 
-**Resolution algorithm:** Given a scoped reference string, split on `"."` to produce segments `[s₁, s₂, …, sₙ]`. The final segment `sₙ` is the variable name. The preceding segments `[s₁, …, sₙ₋₁]` form a path: `s₁` must match a key in the top-level `models`, `reaction_systems`, or `data_loaders` section, and each subsequent segment must match a key in the parent system's `subsystems` map. There is **no depth limit**, and a resolver MUST walk every segment — see §4.9.2 for the two-segment shortcut this rules out.
+**Resolution algorithm:** Given a scoped reference string, split on `"."` to produce segments `[s₁, s₂, …, sₙ]`. The final segment `sₙ` is the variable name. The preceding segments `[s₁, …, sₙ₋₁]` form a path: `s₁` must match a key in the top-level `models` or `reaction_systems` section (a `data_sources` entry is not a component and never appears in a scoped reference), and each subsequent segment must match a key in the parent system's `subsystems` map. There is **no depth limit**, and a resolver MUST walk every segment — see §4.9.2 for the two-segment shortcut this rules out.
 
 **Bare references** (no dot) refer to a variable within the current system context. In coupling entries, all references must be fully qualified from the top-level system name.
 
@@ -821,7 +834,7 @@ Subsystems can be defined inline (as described in Sections 6 and 7) or included 
 
 In the example above, `Atmosphere` and `Ocean` are included by reference while `Land` is defined inline. Both forms can be freely mixed within the same `subsystems` map.
 
-A subsystem may be a child **model**, a child **reaction system**, or a pure-I/O **data loader** (RFC pure-io-data-loaders §4.3). A loader subsystem — declared inline or included by reference — exposes its variables to the owning model under the existing dot-notation (`ParentModel.Loader.var`); the owning model is responsible for any reprojection or regridding of those variables (the loader itself performs neither). A loader subsystem has no `subsystems` of its own.
+A subsystem may be a child **model** or a child **reaction system**. A `data_sources` entry is NOT a subsystem: it is ingest configuration rather than a component, and a model reaches it through a parameter whose `update` names it (§5.4, §8). Reprojection and regridding of a data-fed parameter remain the owning model's concern, expressed as ordinary coupling expressions (§8.6).
 
 **Reference format:**
 
@@ -835,11 +848,11 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 
 **URL (remote) references are an OPTIONAL binding capability.** Fetching `http(s)` refs is not required for conformance. A binding without remote support MUST reject a URL ref **cleanly** with the existing unresolved diagnostics — `template_import_unresolved` for a template import (§9.7.2), the subsystem-ref resolution error here — never by silently skipping or misresolving it. A binding that does support URLs MUST treat a URL-loaded document as the base for that document's own relative refs: they resolve by URL joining against the document's URL directory (RFC 3986 relative resolution over the forms above), and cycle detection treats URL identity **canonically** (dot segments removed, relative spellings joined against the base before comparison). Current bindings: **Julia** supports URL refs for both subsystem refs and template imports, including URL-base joining of nested relative refs and canonical-URL cycle detection; **TypeScript** fetches remote subsystem refs (with a remote base for recursive resolution) but rejects remote template-library imports with `template_import_unresolved`; **Rust** rejects remote refs in both mechanisms; **Python** and **Go** fetch both, but do not yet URL-base join relative refs inside a URL-loaded document (such refs fail as unresolved).
 
-**Referenced file requirements (model, reaction-system, or data-loader subsystems):**
+**Referenced file requirements (model or reaction-system subsystems):**
 
 - The referenced file must be a valid ESM file (with `esm` version and `metadata` fields).
-- It must contain exactly one top-level model, reaction system, or data loader and must NOT carry a `"kind"` field (absence of `"kind"` identifies a subsystem file). The single model, reaction system, or data loader defined in the file is used as the subsystem definition. Because the file is single-component, no fragment selector is required.
-- A file whose sole top-level component is `data_loaders` (with exactly one entry) is itself a valid ESM document and is referenceable as a loader subsystem; this is the structural reason a co-located `model + loader` is split into separate files when the loader must be shared by reference.
+- It must contain exactly one top-level model or reaction system and must NOT carry a `"kind"` field (absence of `"kind"` identifies a subsystem file). That single component is used as the subsystem definition. Because the file is single-component, no fragment selector is required.
+- A file whose sole top-level component is `data_sources` is a valid ESM document — a **source-catalog file** — but it is NOT referenceable as a subsystem: a data source is ingest configuration, not a component. Sharing one across documents is a matter of the catalog file being read, not of it being mounted.
 - The subsystem key in the parent file determines the subsystem's name, not any name in the referenced file.
 
 **Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time, after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep-equal redeclaration is idempotent; a non-equal collision — the same name reaching the registry with a different definition, e.g. a mounted mesh file whose `cells` size disagrees with the importer's declaration — is a load-time error, `subsystem_index_set_conflict` (§9.6.6). This is what makes the mounted-mesh pattern sound: the importing model's variables may be shaped over the mesh file's axes without redeclaring them, the mesh file stays the source of truth for its own sizes, and a disagreement between an importer's declaration (or another mounted file's) and the mesh fails loudly at load instead of silently resolving against whichever declaration the binding happened to keep. The merge composes transitively: a mounted file's registry already contains whatever its own subsystem refs merged in.
@@ -854,7 +867,7 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 
 ### 4.8 Units and Dimensional Analysis
 
-Every `units` string in a document (variables, parameters, species, loader `provides`) is resolved against **one shared registry** with **one grammar**, and every dimensional judgement follows **one severity contract**. This section is normative. Before it existed, each binding invented its own answers and the five silently diverged — the units subsystem was broken in four of the five bindings, in four different ways, and no cross-binding test could see it because nothing was written down.
+Every `units` string in a document (unknowns, parameters, species) is resolved against **one shared registry** with **one grammar**, and every dimensional judgement follows **one severity contract**. This section is normative. Before it existed, each binding invented its own answers and the five silently diverged — the units subsystem was broken in four of the five bindings, in four different ways, and no cross-binding test could see it because nothing was written down.
 
 #### 4.8.1 The unit registry
 
@@ -896,7 +909,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 **Unit strings carry DIMENSIONS ONLY — never species tags.** A trailing chemical species is NOT part of a unit. `"kg C/m^2"` for "kilograms of carbon per square metre" is ILLEGAL: whitespace is multiplication (§4.8.2), so it parses as kg·coulomb·m⁻², a *silently wrong dimension* rather than an error, and no checker can catch it. The same trap holds for `"kg N/ha"`, `"mg C/m^3/d"`, `"ug S/m^3"`. **The species belongs in the variable's name or `description`; the unit is `"kg/m^2"`.**
 
 ```json
-{ "carbon_pool": { "type": "state", "units": "kg/m^2",
+{ "carbon_pool": { "type": "unknown", "units": "kg/m^2",
                    "description": "Total soil carbon pool (kilograms of CARBON per m^2)" } }
 ```
 
@@ -936,7 +949,7 @@ atom     := '1' | symbol | '(' unit ')'
 ```
 
 - **A numeric atom is legal ONLY when its value is exactly `1`.** The leading `1` of `"1/s"` is the whole reason `atom` admits a number at all; any OTHER number is a **scaling factor**, and a unit string denotes a *unit*, not a *quantity*. `"1000/s"` and `"0.5 m"` are hard errors. This is pinned because the alternative produced three different answers for one string: an author writing `"(m/s)^-1/3"` — reaching for a rational exponent — gets `((m/s)^-1)/3` under this grammar, and the bindings variously **dropped** the 1/3 (leaving `s/m`), **retained** it (leaving `s/m` scaled by 1/3), or **rejected** the whole string. None of the three is what the author meant. With the scaling factor illegal, `"(m/s)^(-1/3)"` is the only spelling of that unit and the mistake is a diagnostic instead of a silently wrong dimension. The diagnostic MUST say that a number other than 1 is a scaling factor and that a rational exponent is spelled `^(p/q)`.
-- **Exponents are RATIONAL, not integer.** `2`, `-1`, `0.5`, `1.5`, `(1/2)` are all admissible. An integer-only grammar cannot express `1/s^0.5` — the intensity of a Wiener noise term, which is the unit of every `brownian` variable in an SDE (`tests/fixtures/sde/*.esm`) — and under the §4.8.4 hard-error severity an integer-only parser would FALSELY REJECT every conforming SDE file in the corpus. A *symbolic* exponent in a unit string remains inadmissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
+- **Exponents are RATIONAL, not integer.** `2`, `-1`, `0.5`, `1.5`, `(1/2)` are all admissible. An integer-only grammar cannot express `1/s^0.5` — the intensity of a Wiener noise term, which is the unit of every `wiener`-updated parameter in an SDE (`tests/fixtures/sde/*.esm`) — and under the §4.8.4 hard-error severity an integer-only parser would FALSELY REJECT every conforming SDE file in the corpus. A *symbolic* exponent in a unit string remains inadmissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
 - **Whitespace between terms means MULTIPLICATION**, as in pint and UDUNITS — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`. This is what makes a species tag (§4.8.1) illegal rather than merely discouraged.
 - **`*` and `/` are ONE precedence level, evaluated LEFT to RIGHT.** `"J/mol*K"` is `(J/mol)*K` = `J·mol⁻¹·K`, NOT `J/(mol·K)`. A parser that gives `*` a higher precedence than `/` silently negates the exponent of every symbol after the first `/` — it read `J/mol*K` as `J·mol⁻¹·K⁻¹` — and, because the result is a *plausible* dimension, nothing downstream can detect it. Likewise `"kg/m*s"` is `kg·m⁻¹·s`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.
 - **Parentheses are REQUIRED for a compound denominator**: `"J/(mol*K)"`, `"cm^3/(molec*s)"`. A parser that cannot handle parentheses reads `J/(mol*K)` as dimensionless and silently disables every check downstream of it.
@@ -970,7 +983,7 @@ Three outcomes, and only three. The distinction that matters is between *"the fi
 
 | Outcome | Severity | Code | When |
 |---|---|---|---|
-| **Provable dimensional mismatch** | **hard error** (`is_valid: false`) | `unit_dimension_mismatch` (emitted as `unit_inconsistency` by the structural layer) | Every operand dimension is known and the §4.8.3 rule is violated: adding metres to kilograms, a derivative whose two sides cannot be reconciled by any time unit, a transcendental with a dimensional argument, an observed variable whose declared units disagree with its expression, a reaction rate that does not match its stoichiometric order (§7.4). |
+| **Provable dimensional mismatch** | **hard error** (`is_valid: false`) | `unit_dimension_mismatch` (emitted as `unit_inconsistency` by the structural layer) | Every operand dimension is known and the §4.8.3 rule is violated: adding metres to kilograms, a derivative whose two sides cannot be reconciled by any time unit, a transcendental with a dimensional argument, an unknown whose declared units disagree with its defining equation, a reaction rate that does not match its stoichiometric order (§7.4). |
 | **Unresolvable unit string** | **hard error** (`is_valid: false`) | `unit_parse_error` | The declared string does not parse under §4.8.2, or names a symbol absent from the §4.8.1 registry — `"not_a_unit"`, `"1/time"` (`time` is a DIMENSION name, not a unit), `"m/s2"`. This is a defect in the file, not a limit of the checker. |
 | **Undeterminable dimension** | **warning**; report `unknown` and SKIP the enclosing check | — | The checker genuinely cannot compute a dimension: a **symbolic exponent** (`k * x^alpha` — a fitted reaction order is ordinary chemistry), an **op with no dimensional rule**, or an operand naming an **undeclared or out-of-scope** variable. |
 
@@ -979,7 +992,7 @@ Two consequences follow, and both have been violated in this repository:
 1. **An undeterminable dimension MUST NOT be reported as dimensionless.** Returning "dimensionless" for an op the checker does not model manufactures *false* mismatches against real, well-formed files — every structural op (`index`, `fn`, `aggregate`, `table_lookup`, `makearray`, …) would poison the equation containing it. Return "unknown" and skip.
 2. **An incomplete registry MUST NOT be papered over by downgrading the severity.** If a binding cannot parse `J/(mol*K)` or does not know `V`, the fix is the parser and the registry — *not* re-classifying an unresolvable unit as a warning, and not coercing it to dimensionless. Both of those turn a missing feature into a silently-disabled check across every file in the corpus.
 
-An error is reported at the **JSON Pointer of the node that carries the defect** — `/models/<M>/equations/<i>` for an equation, `/models/<M>/variables/<v>` for an observed variable or a declaration, `/reaction_systems/<S>/reactions/<i>` for a rate.
+An error is reported at the **JSON Pointer of the node that carries the defect** — `/models/<M>/equations/<i>` for an equation, `/models/<M>/variables/<v>` for a declaration, `/reaction_systems/<S>/reactions/<i>` for a rate.
 
 ### 4.9 Name Resolution: what a checker MUST NOT call undefined
 
@@ -993,7 +1006,7 @@ Three classes of symbol are in scope in a model's expressions **without appearin
 |---|---|---|
 | **The independent variable** — `domain.independent_variable`, default `"t"` | §11.3. Every time-dependent model may write `t` in an equation, a condition, or an event affect; an analytic forcing `A*sin(omega*t)` is the ordinary spelling. Its dimension is the time dimension (`s`). | `tests/valid/cadence/pure_pointwise.esm` |
 | **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the value of a `dim` field on **any** Expression node, or a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on a `D` node, anywhere in the document — these are axis-naming scalar fields, resolved **structurally by field, without regard to the enclosing `op`** (a `dim` on a user rewrite-target op names a coordinate exactly as a `dim` on `grad` does), or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
-| **`_var`** | §6.4. The operator-model placeholder, substituted with each matching state variable of the target system at `operator_compose` time. It is legal **wherever a state variable is legal** — including an equation LHS/RHS, a continuous-event `affects` / `affect_neg` LHS, and a `functional_affect`'s `read_vars`. A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target. | `tests/valid/full_coupled.esm` |
+| **`_var`** | §6.4. The operator-model placeholder, substituted with each matching **ODE state** of the target system at `operator_compose` time — the set `ode_states` returns (§6.3.1), never the observed or algebraic unknowns. It is legal **wherever an ODE state is legal** — including an equation LHS/RHS, a continuous-event `affects` / `affect_neg` LHS, and a parameter update handler's `read_vars`. A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target. | `tests/valid/full_coupled.esm` |
 
 #### 4.9.2 Scoped references are ARBITRARY DEPTH
 
@@ -1009,10 +1022,10 @@ Anywhere an expression may name a symbol. In particular a **reaction `rate` expr
 
 #### 4.9.4 Equation balance (`equation_count_mismatch`)
 
-The check is **unknowns vs equations**, not *state variables vs time-derivative equations*.
+The check is **unknowns vs equations**, not *ODE states vs time-derivative equations*. Since 1.0.0 this is also the only thing it *could* be: `unknown` is the declared type, and ODE-state-ness is derived from the very equations being counted (§6.3.1).
 
 - An equation is **credited** whichever form its LHS takes: a derivative LHS (`D(x)/dt ~ …`), a bare-variable LHS (`x ~ …`, an observed/algebraic equation), or an **expression LHS** (`H*H*SO4 ~ Ksp`, an implicit algebraic constraint). A checker that credits only a *bare-variable derivative* LHS undercounts every algebraic equation in the system.
-- For `system_kind: "nonlinear"` (algebraic equilibrium — no time derivative at all) and for the algebraic block of a DAE, the balance is between the **unknowns** (the `state` variables) and the **equations**, of any form. `tests/valid/nonlinear_isorropia_shape.esm` declares two states (`H`, `SO4`) and two algebraic equations (`H ~ …` and `H*H*SO4 ~ Ksp`) and is BALANCED; a checker that reports "1 ODE equation, 2 state variables" has miscounted, not found a defect.
+- For `system_kind: "nonlinear"` (algebraic equilibrium — no time derivative at all) and for the algebraic block of a DAE, the balance is between the **unknowns** and the **equations**, of any form. `tests/valid/nonlinear_isorropia_shape.esm` declares two unknowns (`H`, `SO4`) and two algebraic equations (`H ~ …` and `H*H*SO4 ~ Ksp`) and is BALANCED; a checker that reports "1 ODE equation, 2 unknowns" has miscounted, not found a defect.
 - `initialization_equations` (§6.2) are a *separate* block with a separate balance and MUST NOT be counted into the main one.
 
 #### 4.9.5 Reference integrity applies to EVERY expression-bearing field
@@ -1022,7 +1035,7 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 | Expression-bearing field | JSON Pointer of the defect | Code |
 |---|---|---|
 | `models[M].equations[i].{lhs,rhs}` | …`/equations/i/rhs` | `undefined_variable` |
-| `models[M].variables[v].expression` (observed) | …`/variables/v/expression` | `undefined_variable` |
+| `models[M].variables[v].update.{when,expression}` | …`/variables/v/update/expression` | `undefined_variable` |
 | `models[M].guesses[v]` | …`/guesses/v` | `undefined_variable` |
 | `models[M].initialization_equations[i].{lhs,rhs}` | …`/initialization_equations/i/rhs` | `undefined_variable` |
 | `models[M].continuous_events[i].conditions[j]` | …`/continuous_events/i/conditions/j` | `undefined_variable` |
@@ -1031,7 +1044,7 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 | `models[M].discrete_events[i].affects[j].rhs` | …`/discrete_events/i/affects/j/rhs` | `undefined_variable` |
 | `models[M].tests[i].assertions[j].reference` | …`/tests/i/assertions/j/reference` | `undefined_variable` |
 | `reaction_systems[S].reactions[i].rate` | …`/reactions/i/rate` | `undefined_parameter` |
-| `data_loaders[L].variables[v].unit_conversion` | …`/variables/v/unit_conversion` | `undefined_variable` |
+| `models[M].variables[v].update.from.unit_conversion` | …`/variables/v/update/from/unit_conversion` | `undefined_variable` |
 | `coupling[i].connector.equations[j].expression` | …`/connector/equations/j/expression` | `unresolved_scoped_ref` |
 | `coupling[i].transform` (Expression form) | `/coupling/i/transform` | `unresolved_scoped_ref` |
 
@@ -1183,55 +1196,63 @@ Discrete events fire when a **boolean condition evaluates to true** at the end o
     },
 
     {
-      "name": "kill_production",
-      "trigger": {
-        "type": "condition",
-        "expression": { "op": "==", "args": ["t", "t_kill"] }
-      },
-      "affects": [
-        {
-          "lhs": "alpha",
-          "rhs": 0.0
-        }
-      ],
-      "discrete_parameters": ["alpha"],
-      "description": "Set production rate to zero at t_kill"
-    },
-
-    {
-      "name": "periodic_emission_decay",
-      "trigger": {
-        "type": "periodic",
-        "interval": 3600.0
-      },
-      "affects": [
-        {
-          "lhs": "emission_scale",
-          "rhs": { "op": "*", "args": [{ "op": "Pre", "args": ["emission_scale"] }, 0.95] }
-        }
-      ],
-      "discrete_parameters": ["emission_scale"],
-      "description": "Reduce emission scaling factor by 5% every hour"
-    },
-
-    {
-      "name": "preset_measurements",
+      "name": "quench",
       "trigger": {
         "type": "preset_times",
-        "times": [3600.0, 7200.0, 14400.0, 28800.0]
+        "times": [3600.0, 7200.0]
       },
       "affects": [
         {
-          "lhs": "sample_flag",
-          "rhs": { "op": "+", "args": [{ "op": "Pre", "args": ["sample_flag"] }, 1] }
+          "lhs": "N",
+          "rhs": { "op": "*", "args": [{ "op": "Pre", "args": ["N"] }, 0.5] }
         }
       ],
-      "discrete_parameters": ["sample_flag"],
-      "description": "Mark measurement times"
+      "description": "Halve the population at each sampling time"
     }
   ]
 }
 ```
+
+Every `lhs` above names an **unknown**. That is the only thing an event may
+write. A parameter that changes during a run declares the change on itself, as
+an `update` block (§5.4) — these three, which in earlier versions were discrete
+events carrying a `discrete_parameters` list, are now:
+
+```json
+{
+  "alpha": {
+    "type": "parameter", "units": "1/s", "default": 1.0,
+    "update": {
+      "kind": "condition",
+      "when": { "op": "==", "args": ["t", "t_kill"] },
+      "expression": 0.0
+    },
+    "description": "Production rate, driven to zero at t_kill"
+  },
+  "emission_scale": {
+    "type": "parameter", "units": "1", "shape": [], "default": 1.0,
+    "update": {
+      "kind": "schedule",
+      "interval": 3600.0,
+      "expression": { "op": "*", "args": [{ "op": "Pre", "args": ["emission_scale"] }, 0.95] }
+    },
+    "description": "Emission scaling factor, decaying 5% per hour"
+  },
+  "sample_flag": {
+    "type": "parameter", "units": "1", "shape": [], "default": 0.0,
+    "update": {
+      "kind": "schedule",
+      "times": [3600.0, 7200.0, 14400.0, 28800.0],
+      "expression": { "op": "+", "args": [{ "op": "Pre", "args": ["sample_flag"] }, 1] }
+    },
+    "description": "Counter marking measurement times"
+  }
+}
+```
+
+`Pre` (§5.1) means the same thing in an update as in an affect: the value before
+this firing. The `schedule` kind carries the trigger that the event used to
+carry, so nothing about *when* these fire has changed — only where it is written.
 
 #### Discrete Event Fields
 
@@ -1239,8 +1260,7 @@ Discrete events fire when a **boolean condition evaluates to true** at the end o
 |---|---|---|
 | `name` | | Human-readable identifier |
 | `trigger` | ✓ | Trigger specification (see trigger types below) |
-| `affects` | ✓* | Array of `{lhs, rhs}` affect equations. *Required unless `functional_affect` is provided. |
-| `discrete_parameters` | | Array of parameter names that are modified by this event. Parameters not listed here are treated as immutable. Required when affects modify parameters rather than state variables. |
+| `affects` | ✓ | Array of `{lhs, rhs}` affect equations. Every `lhs` MUST name an **unknown**; an event that writes a parameter is `event_affects_parameter`. |
 | `reinitialize` | | Boolean. Whether to reinitialize the system after the event. |
 | `description` | | Human-readable description |
 
@@ -1252,52 +1272,103 @@ Discrete events fire when a **boolean condition evaluates to true** at the end o
 | `periodic` | `interval`, `initial_offset` (optional) | Fires every `interval` time units |
 | `preset_times` | `times` (array of numbers) | Fires at each specified time |
 
-### 5.4 Discrete Parameters
+### 5.4 Parameter Updates
 
-Some events need to modify parameters rather than state variables. In the MTK model, parameters are immutable by default — they can only be changed by events if explicitly declared as `discrete_parameters`. This convention is preserved in ESM.
+A parameter that changes during a run says so **on itself**, in an `update`
+block, rather than being listed by an event that writes it. One mechanism
+replaces three that earlier versions kept apart: the `discrete_parameters` lists,
+the `brownian` variable type, and the `discrete` type's `refresh` trigger.
 
-A parameter listed in `discrete_parameters` of an event:
-- Must also be declared in the model's `variables` (with `"type": "parameter"`) or reaction system's `parameters`
-- Will be modifiable by the event's affect equations
-- Must be time-dependent in the underlying mathematical sense (even if constant between events)
+An update block answers two questions — **when** the parameter refreshes, and
+**what** it refreshes from.
 
-### 5.5 Functional Affects (Registered)
+#### When: the six kinds
 
-Some events require behavior too complex for symbolic affect equations — for example, calling external code, performing interpolation lookups, or implementing control logic. These are analogous to MTK's functional affects.
+| `kind` | Fires | Replaces |
+|---|---|---|
+| `wiener` | every step, with √dt increment scaling | the `brownian` variable type |
+| `schedule` | at preset `times` and/or on a periodic `interval` | `RefreshTrigger.schedule`; discrete events with `periodic` / `preset_times` triggers |
+| `condition` | at the end of any step where the boolean `when` is true | discrete events with a `condition` trigger |
+| `crossing` | when `when` crosses zero, located by root-finding | continuous events that wrote parameters |
+| `data` | when the named `data_sources` entry advances a record | `RefreshTrigger.data_ingest`; the loader coupling edge |
+| `remesh` | on a mesh-topology change | `RefreshTrigger.remesh` |
 
-Since ESM is language-agnostic, functional affects cannot embed executable code. Instead, they reference a **registered affect handler**, analogous to how data loaders are registered. Affect handlers are intentionally *out of scope* for the §9 closed function registry: handlers mutate simulator state at event-firing time, while §9 entries are pure expression-embedded callables. The `handler_id` mechanism survives only here, only for event affects.
+#### What: exactly one value form
+
+Every kind except `wiener` carries **exactly one** of:
+
+| Form | Meaning |
+|---|---|
+| `expression` | the new value, computed symbolically (§4) |
+| `from` | the new value, read from the `data_sources` entry named by `update.source` (§8) |
+| `handler` | the new value, computed by a registered handler (§5.5) |
+
+`wiener` carries none of them: it resamples the parameter's own `distribution`,
+which *is* its value.
+
+#### Cadence
+
+An `update` is the sole seed of the **DISCRETE** cadence class in the
+dependency-partition pass (RFC semiring-faq-unified-ir §6.1). Without it such an
+input would be mis-seeded either as CONST (never refreshed) or as CONTINUOUS
+(recomputed every step). This is why a `schedule`, `data`, or `remesh` parameter
+MUST declare its `shape`: it is a buffer whose extent is fixed at setup and
+refilled on a discrete cadence, so the extent has to be known ahead of time. An
+empty array is a valid (scalar) shape.
+
+`condition` and `crossing` parameters carry no such requirement — they are
+ordinary values that happen to change at events, which is exactly what
+`discrete_parameters` used to declare.
+
+### 5.5 Handler Updates (Registered)
+
+Some updates are too complex for a symbolic expression — calling external code,
+interpolating a lookup, implementing control logic. These reference a
+**registered handler**.
+
+Since ESM is language-agnostic, a handler cannot embed executable code; it
+references a `handler_id` that the runtime resolves. Handlers are intentionally
+*out of scope* for the §9 closed function registry: they mutate simulator state
+at update time, while §9 entries are pure expression-embedded callables.
+`handler_id` is the sole remaining registration mechanism in the format.
+
+A handler needs no list of what it writes. It writes exactly one thing: the
+parameter whose `update` carries it. (Before 1.0.0 a handler sat on an event and
+declared `modified_params`; since that was its only write channel, moving it onto
+the parameter removed the list rather than relocating it.)
 
 ```json
 {
-  "name": "complex_controller",
-  "trigger": {
-    "type": "periodic",
-    "interval": 60.0
-  },
-  "functional_affect": {
-    "handler_id": "PIDController",
-    "read_vars": ["T", "T_setpoint", "error_integral"],
-    "read_params": ["Kp", "Ki", "Kd"],
-    "modified_params": ["heater_power"],
-    "config": {
-      "anti_windup": true,
-      "output_clamp": [0.0, 100.0]
-    }
-  },
-  "reinitialize": true,
-  "description": "PID temperature controller, updates heater power every 60s"
+  "heater_power": {
+    "type": "parameter",
+    "units": "W",
+    "default": 0.0,
+    "update": {
+      "kind": "schedule",
+      "interval": 60.0,
+      "handler": {
+        "handler_id": "PIDController",
+        "read_vars": ["T", "T_setpoint", "error_integral"],
+        "read_params": ["Kp", "Ki", "Kd"],
+        "config": {
+          "anti_windup": true,
+          "output_clamp": [0.0, 100.0]
+        }
+      }
+    },
+    "description": "PID temperature controller, updates heater power every 60s"
+  }
 }
 ```
 
-#### Functional Affect Fields
+#### Handler Fields
 
 | Field | Required | Description |
 |---|---|---|
-| `handler_id` | ✓ | Registered identifier for the affect implementation |
-| `read_vars` | ✓ | State variables accessed by the handler |
-| `read_params` | ✓ | Parameters accessed by the handler |
-| `modified_params` | | Parameters modified by the handler (these are implicitly discrete parameters) |
-| `config` | | Handler-specific configuration |
+| `handler_id` | ✓ | Registered identifier for the handler implementation |
+| `read_vars` | | Unknowns accessed by the handler. Absent means none. |
+| `read_params` | | Parameters accessed by the handler. Absent means none. |
+| `config` | | Handler-specific configuration, passed through verbatim |
 
 ### 5.6 Cross-System Events
 
@@ -1314,12 +1385,11 @@ Events that involve variables from multiple coupled systems can be specified at 
       ],
       "affects": [
         {
-          "lhs": "EmissionModel.NOx_scale",
-          "rhs": 0.5
+          "lhs": "EmissionModel.NOx_burden",
+          "rhs": { "op": "*", "args": [{ "op": "Pre", "args": ["EmissionModel.NOx_burden"] }, 0.5] }
         }
       ],
-      "discrete_parameters": ["EmissionModel.NOx_scale"],
-      "description": "Reduce NOx emissions by half when O3 exceeds threshold"
+      "description": "Halve the accumulated NOx burden when O3 exceeds threshold"
     }
   ]
 }
@@ -1329,7 +1399,7 @@ Events that involve variables from multiple coupled systems can be specified at 
 
 ## 6. Models (ODE Systems)
 
-Each model corresponds to an ODE system — a set of time-dependent equations with state variables and parameters. Models are keyed by a unique identifier.
+Each model corresponds to an ODE system — a set of time-dependent equations with unknowns and parameters. Models are keyed by a unique identifier.
 
 **All models must be fully specified.** Every equation, variable, and parameter must be present in the `.esm` file. This ensures any conforming parser can reconstruct the model without external dependencies.
 
@@ -1349,19 +1419,19 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 
       "variables": {
         "O3": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1.0e-8,
           "description": "Ozone mixing ratio"
         },
         "NO": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1.0e-10,
           "description": "Nitric oxide mixing ratio"
         },
         "NO2": {
-          "type": "state",
+          "type": "unknown",
           "units": "mol/mol",
           "default": 1.0e-10,
           "description": "Nitrogen dioxide mixing ratio"
@@ -1391,13 +1461,9 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
           "description": "Number density of air"
         },
         "total_O3_loss": {
-          "type": "observed",
+          "type": "unknown",
           "units": "mol/mol/s",
-          "expression": {
-            "op": "*",
-            "args": ["k_NO_O3", "O3", "NO", "M"]
-          },
-          "description": "Total ozone chemical loss rate"
+          "description": "Total ozone chemical loss rate, defined by its equation below"
         }
       },
 
@@ -1427,6 +1493,10 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
               ]}
             ]
           }
+        },
+        {
+          "lhs": "total_O3_loss",
+          "rhs": { "op": "*", "args": ["k_NO_O3", "O3", "NO", "M"] }
         }
       ],
 
@@ -1442,13 +1512,13 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 | Field | Required | Description |
 |---|---|---|
 | `reference` | | Academic citation: `doi`, `citation`, `url`, `notes` |
-| `variables` | ✓ | All variables, keyed by name |
+| `variables` | ✓ | All variables, keyed by name. Each is an `unknown` or a `parameter` (§6.3). |
 | `equations` | ✓ | Array of `{lhs, rhs}` equation objects |
 | `discrete_events` | | Discrete events (see Section 5.3) |
 | `continuous_events` | | Continuous events (see Section 5.2) |
 | `initialization_equations` | | Equations that hold only at t=0, solved before time-stepping begins. Typical uses: aerosol equilibrium / plume-rise style models (`system_kind='nonlinear'`) that need extra constraints for initialization, and ODE models whose initial state is determined by solving an auxiliary system. |
 | `guesses` | | Initial-guess seeds for nonlinear solvers during initialization, keyed by variable name. Values are `Expression` graphs (numbers, strings, or nodes). |
-| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — brownian variables present), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses this to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
+| `system_kind` | | Discriminates the MTK system type: `"ode"` (default; time-stepped), `"nonlinear"` (algebraic-only equilibrium — no time derivative), `"sde"` (stochastic — at least one `wiener`-updated parameter), `"pde"` (spatial domain + differential operators). Each binding's MTK integration uses this to select between `System`, `NonlinearSystem`, `SDESystem`, and `PDESystem` constructors. A `"nonlinear"` model has NO time-derivative equations at all; its equation balance is unknowns-vs-equations and every algebraic LHS counts (§4.9.4). |
 | `subsystems` | | Named child models (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | Model-level default numerical tolerance used by tests (see Section 6.6). Object with optional `abs` and/or `rel` fields. |
 | `tests` | | Inline validation tests that exercise this model in isolation (see Section 6.6). |
@@ -1456,11 +1526,25 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 
 ### 6.3 Variable Types
 
+There are **two** declared types, and no third.
+
 | Type | Description |
 |---|---|
-| `state` | Time-dependent unknowns; appear on the LHS of ODEs as D(var, t) |
-| `parameter` | Values set externally or held constant during integration |
-| `observed` | Derived quantities; must include an `expression` field |
+| `unknown` | A quantity the solver solves for. Its behavior is stated by the model's `equations` and **nowhere else** — there is no `expression` field on a variable. |
+| `parameter` | A quantity supplied to the solver. Its value is `default` or a `distribution`, optionally refreshed by an `update` (§5.4). |
+
+Everything else a solver needs to know is **derived**, not declared. Which
+unknowns are ODE states follows from the equations; which parameters are
+Brownian follows from their updates. A checker or binding MUST NOT reintroduce
+the distinction as a declaration.
+
+Parameter value fields:
+
+| Field | Description |
+|---|---|
+| `default` | The parameter's constant value. Mutually exclusive with `distribution`. |
+| `distribution` | Draw the value from `normal`, `lognormal`, or `uniform` instead of fixing it. Univariate when the location parameter is a number, multivariate when it is an array — in which case `cov` gives the full covariance matrix and the parameter's `shape` must agree. With no `update`, the value is drawn **once at setup** (uncertainty quantification, ensembles); with `update.kind: "wiener"` it is redrawn **every step** with √dt scaling (a stochastic process). |
+| `update` | When the parameter refreshes and what from (§5.4). |
 
 Optional arrayed-variable fields:
 
@@ -1468,6 +1552,68 @@ Optional arrayed-variable fields:
 |---|---|
 | `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
+
+#### 6.3.1 Classification: what the solver needs, derived
+
+Because the format declares two types, every binding MUST expose the same
+functions to recover the finer categories a solver needs. They are pure
+functions of a model, spelled in each language's idiom (`ode_states` in Julia,
+Python, Rust, and Go; `odeStates` in TypeScript).
+
+**Unknowns.** These three sets **partition** the unknowns:
+
+| Function | Returns |
+|---|---|
+| `ode_states(model)` | unknowns appearing under `D(·, t)` on some equation LHS |
+| `observed_unknowns(model)` | unknowns defined by a bare-variable LHS (`y ~ f(…)`) — eliminable, materializable |
+| `algebraic_unknowns(model)` | unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`) |
+| `is_ode_state(model, name)` | membership test for the first |
+
+**Parameters.** These four sets **partition** the parameters:
+
+| Function | Returns |
+|---|---|
+| `brownian_parameters(model)` | `update.kind == "wiener"` — the SDE noise sources |
+| `discrete_parameters(model)` | any other `update` — piecewise-constant between refreshes |
+| `sampled_parameters(model)` | a `distribution` and no `update` — drawn once at setup |
+| `constant_parameters(model)` | neither — plain constants |
+
+**System kind.** `system_kind(model)` derives what the `system_kind` field
+declares: any Brownian parameter ⇒ `"sde"`; no time-derivative equation at all ⇒
+`"nonlinear"`; a spatial domain plus differential operators ⇒ `"pde"`; otherwise
+`"ode"`. A binding uses the derivation when the field is absent, and reports
+`system_kind_mismatch` when a present field contradicts it.
+
+These functions are the *only* sanctioned way to ask these questions. A site
+that used to branch on `variable.type == "state"` calls `is_ode_state`; one that
+used to branch on `"observed"` calls `observed_unknowns`. Reading a declared type
+to answer a derived question is precisely what 1.0.0 removes.
+
+##### Worked example
+
+```json
+{
+  "variables": {
+    "c":     { "type": "unknown",   "units": "kg" },
+    "v_dep": { "type": "unknown",   "units": "m/s" },
+    "SO4":   { "type": "unknown",   "units": "mol" },
+    "k":     { "type": "parameter", "units": "1/s", "default": 0.1 },
+    "eps":   { "type": "parameter", "units": "1/s^0.5",
+               "distribution": { "kind": "normal", "mean": 0.0, "std": 1.0 },
+               "update": { "kind": "wiener" } }
+  },
+  "equations": [
+    { "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+      "rhs": { "op": "*", "args": ["k", "c", "eps"] } },
+    { "lhs": "v_dep", "rhs": { "op": "/", "args": [1, "k"] } },
+    { "lhs": { "op": "*", "args": ["SO4", "SO4"] }, "rhs": "k" }
+  ]
+}
+```
+
+`ode_states` → `["c"]`; `observed_unknowns` → `["v_dep"]`; `algebraic_unknowns`
+→ `["SO4"]`; `brownian_parameters` → `["eps"]`; `constant_parameters` → `["k"]`;
+`system_kind` → `"sde"`.
 
 ### 6.4 Advection Model Example
 
@@ -1485,7 +1631,7 @@ Advection is a model like any other — fully specified:
     },
     "equations": [
       {
-        "_comment": "Applied to each coupled state variable via operator_compose",
+        "_comment": "Applied to each coupled ODE state via operator_compose",
         "lhs": { "op": "D", "args": ["_var"], "wrt": "t" },
         "rhs": {
           "op": "+",
@@ -1506,13 +1652,13 @@ Advection is a model like any other — fully specified:
 }
 ```
 
-The special variable `"_var"` is a placeholder used in operator-style models. When coupled via `operator_compose`, it is substituted with each matching state variable from the target system.
+The special variable `"_var"` is a placeholder used in operator-style models. When coupled via `operator_compose`, it is substituted with each matching **ODE state** of the target system — `ode_states` (§6.3.1), never an observed or algebraic unknown.
 
-`_var` is legal **wherever a state variable is legal** — not only on an equation LHS/RHS but also on the LHS of a continuous event's `affects` / `affect_neg`, and inside a `functional_affect`'s `read_vars` (a flux limiter that clamps whichever variable the operator is composed over is the ordinary use). It is implicitly declared (§4.9.1): a checker MUST NOT report it as `undefined_variable` or `event_var_undeclared`.
+`_var` is legal **wherever an ODE state is legal** — not only on an equation LHS/RHS but also on the LHS of a continuous event's `affects` / `affect_neg`, and inside a parameter update handler's `read_vars` (a flux limiter that clamps whichever variable the operator is composed over is the ordinary use). It is implicitly declared (§4.9.1): a checker MUST NOT report it as `undefined_variable` or `event_var_undeclared`.
 
 ### 6.5 Dry Deposition Model Example
 
-A model that computes deposition velocities from surface resistance parameters. This model is coupled to a chemistry system via `couple` to provide deposition loss terms; grid-level application of those losses is expressed via `grad`/`div`/`laplacian` PDE operators in the model equations, lowered by discretization rewrite rules (§9.6.8), not as an opaque registered operator.
+A model that computes deposition velocities from surface resistance parameters. `v_dep_O3` is an ordinary **unknown** whose bare-variable-LHS equation defines it — the shape every derived quantity takes in 1.0.0, and what `observed_unknowns` (§6.3.1) recovers. Note that the model's `equations` array is no longer empty: the definition moved there from the variable. This model is coupled to a chemistry system via `couple` to provide deposition loss terms; grid-level application of those losses is expressed via `grad`/`div`/`laplacian` PDE operators in the model equations, lowered by discretization rewrite rules (§9.6.8), not as an opaque registered operator.
 
 ```json
 {
@@ -1542,19 +1688,23 @@ A model that computes deposition velocities from surface resistance parameters. 
         "description": "Surface resistance for O3"
       },
       "v_dep_O3": {
-        "type": "observed",
+        "type": "unknown",
         "units": "m/s",
-        "expression": {
+        "description": "Dry deposition velocity for O3"
+      }
+    },
+    "equations": [
+      {
+        "lhs": "v_dep_O3",
+        "rhs": {
           "op": "/",
           "args": [
             1,
             { "op": "+", "args": ["r_a", "r_b", "r_c_O3"] }
           ]
-        },
-        "description": "Dry deposition velocity for O3"
+        }
       }
-    },
-    "equations": []
+    ]
   }
 }
 ```
@@ -1598,7 +1748,7 @@ Because a test lives inside its parent component, there is no `model_ref` field:
 |---|---|---|
 | `id` | ✓ | Identifier unique within this component's `tests` array. |
 | `description` | | Human-readable description of what this test verifies. |
-| `initial_conditions` | | Initial-value overrides for state variables, keyed by local variable name. Variables not listed fall back to their declared `default`. |
+| `initial_conditions` | | Initial-value overrides for unknowns, keyed by local variable name. Variables not listed fall back to their declared `default`. |
 | `parameter_overrides` | | Parameter value overrides, keyed by local parameter name. |
 | `time_span` | ✓ | `{start, end}` — simulation time interval in the component's time units. |
 | `tolerance` | | Test-level default tolerance; see Section 6.6.4. |
@@ -1681,7 +1831,7 @@ Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only
 - an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`; or
 - `{type: "from_file", path, format?}` pointing at a precomputed snapshot in the same shape as the field (resolved and validated per convention 3 above).
 
-**Build-time evaluation scope.** Every reference resolved *before* the simulation runs — an inline `Expression` `reference` (above), the analytic materialization of a directly-asserted state-free array observed, and a coordinate-expression `ic` (§11.4.1) — resolves the model's **parameters** as in-scope names, bound to their load-time constant values (`parameter_overrides`-or-default), in addition to the domain dimension names. Model **state** variables are NOT in scope (there is no trajectory value at build time); a build-time reference to a state variable is an error. Parameters are load-time constants, so binding them is deterministic and does not depend on the trajectory. This lets a parameter-dependent reference / observed / `ic` resolve directly — e.g. a free-name grid-geometry template `x0 + (i − 1/2)·dx` whose `x0`/`dx` are parameters — without declaring those scalars as constant-backed observeds.
+**Build-time evaluation scope.** Every reference resolved *before* the simulation runs — an inline `Expression` `reference` (above), the analytic materialization of a directly-asserted state-free array observed, and a coordinate-expression `ic` (§11.4.1) — resolves the model's **parameters** as in-scope names, bound to their load-time constant values (`parameter_overrides`-or-default), in addition to the domain dimension names. Model **unknowns** are NOT in scope (there is no trajectory value at build time); a build-time reference to an unknown is an error. Parameters are load-time constants, so binding them is deterministic and does not depend on the trajectory. This lets a parameter-dependent reference / observed / `ic` resolve directly — e.g. a free-name grid-geometry template `x0 + (i − 1/2)·dx` whose `x0`/`dx` are parameters — without declaring those scalars as constant-backed unknowns.
 
 Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x,0) = sin(π x)` and zero-Dirichlet BCs has analytic solution `u(x,t) = exp(−α π² t) · sin(π x)`. The corresponding L2-error assertion is:
 
@@ -1821,14 +1971,14 @@ Five plot types are defined:
 | `id` | ✓ | Identifier unique within this analysis's `plots` array. |
 | `type` | ✓ | `line`, `scatter`, `heatmap`, `field_slice`, or `field_snapshot`. |
 | `description` | | Human-readable description. |
-| `x` | ✓ | X-axis specification (`{variable, label?}`). For trajectory/sweep plots `variable` may be any state variable, observed variable, parameter name, or swept parameter; for `field_slice` and `field_snapshot`, `x` MUST name a domain spatial dimension. |
+| `x` | ✓ | X-axis specification (`{variable, label?}`). For trajectory/sweep plots `variable` may be any unknown, parameter name, or swept parameter; for `field_slice` and `field_snapshot`, `x` MUST name a domain spatial dimension. |
 | `y` | ✓ | Y-axis specification. May be a single `PlotAxis` (`{variable, label?}`) or, for `line`/`scatter` plots, an array of `PlotAxis` objects as an inline multi-series shorthand (see below). For `field_slice` and `field_snapshot`, `y` MUST be a single `PlotAxis` naming a domain spatial dimension. |
 | `value` | heatmap, field_snapshot | Color channel for `heatmap` (a `PlotValue`) and for `field_snapshot` (only `value.variable` is used; `at_time` and `reduce` are ignored — the field is sampled at the plot-level `at_time`). |
 | `series` | | For `line`/`scatter`: an array of `{name, variable}` pairs selecting multiple trajectories to overlay. Ignored for heatmap/field plots. |
 | `at_time` | field_slice, field_snapshot | Required for field plots: simulation time at which to extract the spatial field. Must lie within the analysis's `time_span`. |
 | `pinned_coords` | field plots, when domain has higher dimensionality than the plot | Map from each non-plotted spatial dimension name to a numeric coordinate. Required when the component domain has more spatial dimensions than the plot uses (1 axis for `field_slice`, 2 for `field_snapshot`). |
 
-**Plot axes are flexible.** Any state variable, observed variable, parameter, or swept-parameter name is allowed for `x`, `y`, and (for heatmaps) the `value.variable`. The independent variable of the simulation is typically spelled `"t"`.
+**Plot axes are flexible.** Any unknown, parameter, or swept-parameter name is allowed for `x`, `y`, and (for heatmaps) the `value.variable`. The independent variable of the simulation is typically spelled `"t"`.
 
 **Inline multi-series shorthand for `y`.** For `line` and `scatter` plots, `y` may be an array of `PlotAxis` objects instead of a single object. The first entry is the canonical y-axis; each entry is projected onto the `series` list using `label` as the series name (falling back to `variable` when `label` is absent). Using `y: [a, b, c]` is equivalent to writing `y: a` with `series: [{name: a.label || a.variable, variable: a.variable}, {name: b.label || b.variable, variable: b.variable}, {name: c.label || c.variable, variable: c.variable}]` explicitly. If an explicit `series` array is also present, it takes precedence over the inline array.
 
@@ -2103,7 +2253,7 @@ This section maps to Catalyst.jl's `ReactionSystem` but is fully self-contained.
 | `continuous_events` | | Continuous events (see Section 5.2) |
 | `subsystems` | | Named child reaction systems (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | System-level default numerical tolerance for tests. Same semantics as Section 6.6.4. |
-| `tests` | | Inline validation tests for this reaction system. Semantics, field shape, and tolerance resolution are identical to Section 6.6. Assertion `variable` names refer to species or observed quantities of this reaction system. |
+| `tests` | | Inline validation tests for this reaction system. Semantics, field shape, and tolerance resolution are identical to Section 6.6. Assertion `variable` names refer to species or derived quantities of this reaction system. |
 | `analyses` | | Inline illustrative analyses. Semantics, field shape, and plot/sweep rules are identical to Section 6.7. |
 
 ### 7.3 Reaction Fields
@@ -2147,29 +2297,75 @@ where `net_stoich_X = (stoich as product) − (stoich as substrate)`.
 
 ---
 
-## 8. Data Loaders
+## 8. Data Sources
 
-Data loaders are generic, runtime-agnostic descriptions of external data sources, reduced to a single responsibility: **locate, read, and slice** data from disk and **describe its native grid**. The schema carries enough information to locate files, map timestamps to files, and describe variable semantics and the native grid — **not** just a pointer at a runtime handler. A loader performs **no** reprojection and **no** regridding: transferring its native fields onto a consuming model's target grid (and the choice of method) is a **model** concern, selected per variable on the model that owns the loader as a subsystem (RFC pure-io-data-loaders §4.1).
+A `data_sources` entry is a generic, runtime-agnostic description of an external
+dataset, reduced to a single responsibility: **locate, read, decode, slice, and
+filter** bytes on disk. The schema carries enough to locate files and map
+timestamps to them — **not** just a pointer at a runtime handler. A source
+performs **no** reprojection and **no** regridding: transferring its native
+fields onto a consuming model's target grid (and the choice of method) is a
+**model** concern, expressed as an ordinary coupling expression (§8.6).
+
+**A data source is a registry entry, not a component.** This is the 1.0.0 change.
+It exposes no variables of its own; it cannot be a coupling endpoint, a
+subsystem, or a scoped-name path root. A model consumes one by declaring a
+**parameter** whose `update` names the source and binds one of its file variables
+(§5.4, §8.5):
+
+```json
+{
+  "variables": {
+    "T_air": {
+      "type": "parameter",
+      "units": "K",
+      "shape": ["cells"],
+      "update": {
+        "kind": "data",
+        "source": "GEOSFP",
+        "from": { "file_variable": "T2M" }
+      }
+    }
+  }
+}
+```
+
+The parameter *is* the loaded field. What used to be a loader variable plus a
+coupling edge that wired it into a model is now one declaration in the model that
+uses it.
 
 The shape is loosely modeled on a STAC catalog: it is usable for any gridded or point dataset (reanalysis, emissions inventories, static fields), not tied to any specific runtime or library.
 
 Authentication, credential management, and per-variable temporal availability constraints are **out of scope** for the schema. Those are runtime concerns.
 
-### 8.1 Data Loader Fields
+### 8.1 Data Source Fields
 
 | Field | Required | Description |
 |---|---|---|
-| `kind` | ✓ | Structural kind: `"grid"` (gridded array source), `"points"` (scattered point/station source), or `"static"` (time-invariant source). Any grid geometry the loader reads — coordinates, connectivity, metric arrays — is exposed as ordinary loader `variables` and consumed downstream by `aggregate` FAQs; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, …) is **not** schema-validated and belongs in `metadata.tags`. |
+| `kind` | ✓ | Structural kind: `"grid"` (gridded array source), `"points"` (scattered point/station source), or `"static"` (time-invariant source). Any grid geometry the source reads — coordinates, connectivity, metric arrays — arrives as ordinary parameters bound to its file variables and is consumed downstream by `aggregate` FAQs; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, …) is **not** schema-validated and belongs in `metadata.tags`. |
 | `source` | ✓ | File discovery object (see §8.2). |
-| `variables` | ✓ | Map of schema-level variable name → variable descriptor (see §8.5). At least one entry required. |
 | `temporal` | | Temporal coverage and record layout (see §8.3). |
 | `determinism` | | Reproducibility contract for binary formats — endian / float format / integer width. A binding that cannot honor the declared layout MUST reject the file at load rather than reinterpret bytes. |
 | `reader_options` | | Format-specific **decode** options handed to the format reader (see §8.9). |
-| `select` | | Per-axis selection of what the loader delivers, default for every variable (see §8.9.2). |
-| `record_filter` | | Which records of a `points` loader survive (see §8.9.3). |
+| `select` | | Per-axis selection of what the source delivers, default for every parameter drawing from it (see §8.9.2). |
+| `record_filter` | | Which records of a `points` source survive (see §8.9.3). |
 | `extent` | | Binds the delivered record count to a metaparameter (see §8.9.4). |
 | `reference` | | Data source citation. |
 | `metadata` | | Free-form metadata. The `tags` array is conventional for scientific role. |
+
+#### Why the shared spec stays here
+
+`select`, `record_filter`, and `extent` sit on the source rather than on each
+consuming parameter because their guarantees are **source-wide** and cannot be
+stated per-parameter:
+
+- `record_filter` computes the surviving-record mask **once** for the source and
+  applies it to every parameter drawing from it. That is what makes it impossible
+  for two columns of one points table to fall out of alignment.
+- `extent` binds **one** metaparameter from that single shared record count.
+
+A per-parameter spelling of either would let two columns of the same table
+disagree about which rows are real.
 
 ### 8.2 `source` — file discovery
 
@@ -2208,30 +2404,47 @@ Both **static declaration** (`records_per_file` + `frequency`) and **runtime dis
 
 ### 8.4 (Reserved)
 
-The former native-grid descriptor was removed in v0.8.0: a loader exposes any grid geometry it reads (coordinates, connectivity, metric arrays) as ordinary `variables` (§8.5), consumed downstream by `aggregate` FAQs. The subsection number is retained so §8.5–§8.8 references stay stable.
+The former native-grid descriptor was removed in v0.8.0: grid geometry a source reads (coordinates, connectivity, metric arrays) arrives as ordinary parameters (§8.5), consumed downstream by `aggregate` FAQs. The subsection number is retained so §8.5–§8.8 references stay stable.
 
-### 8.5 `variables` — variable mapping
+### 8.5 Binding a parameter to a source
+
+A parameter draws from a source through the `from` value form of a `data`
+update. This replaces the loader's `variables` map: the binding lives on the
+consumer, and the units are declared once — on the parameter — instead of twice.
 
 ```
-variables:
-  <schema_var_name>:
-    file_variable: string        # required; name in the source file
-    units: string                # required; units as exposed to the schema
-    unit_conversion: number | Expression   # optional
-    codes: DataLoaderCodes       # optional; text column -> numbers (§8.9.1)
-    select: DataLoaderSelect     # optional; per-axis selection (§8.9.2)
-    description: string
-    reference: Reference
+<param_name>:
+  type: parameter
+  units: string                    # required; units as seen by the model
+  shape: [index_set, ...]          # required for a data update (§5.4)
+  update:
+    kind: data
+    source: string                 # required; a data_sources key
+    from:
+      file_variable: string        # required; name in the source file
+      unit_conversion: number | Expression   # optional
+      codes: DataSourceCodes       # optional; text column -> numbers (§8.9.1)
+      select: DataSourceSelect     # optional; overrides the source default (§8.9.2)
+      description: string
+      reference: Reference
 ```
 
-`file_variable` lets the schema-level variable name differ from the on-disk name. `unit_conversion` is either a plain multiplicative factor or a full `Expression` AST (§4); the runtime applies it when producing values in the declared `units`.
+`file_variable` lets the parameter name differ from the on-disk name.
+`unit_conversion` is either a plain multiplicative factor or a full `Expression`
+AST (§4); the runtime applies it when producing values in the parameter's
+declared `units`.
 
-Two variables of one loader MAY name the **same** `file_variable` under different `select`s — that is how a full-grid field and a prefix of it are both declared, rather than one of them being sliced by the caller after the fact.
+Two parameters of one source MAY name the **same** `file_variable` under
+different `select`s — that is how a full-grid field and a prefix of it are both
+declared, rather than one of them being sliced by the caller after the fact.
+
+`update.source` MUST resolve to a `data_sources` key (`data_source_undefined`
+otherwise).
 
 ### 8.6 Regridding — a coupling expression
 
-A data loader is pure I/O and performs no regridding. There is no `regridding`
-block on the loader and no `Model.regrid` map: transferring a loaded field onto a
+A data source is pure I/O and performs no regridding. There is no `regridding`
+block on the source and no `Model.regrid` map: transferring a loaded field onto a
 consuming variable's grid is expressed like any other coupling, as an ordinary
 expression in the coupling relationship between the two variables (§10). Because
 the numeric core of every standard regridder is a Functional Aggregate Query —
@@ -2339,7 +2552,7 @@ closure — on every manifold.
 
 - **Authentication / credentials.** Env vars, API keys, S3 credentials, CDS API tokens — all runtime-side. The schema stores **no** credential information.
 - **Per-variable temporal availability windows** (e.g. "CEDS covers 1750–2023 for NOx but 1850–2023 for CH4"). Runtime validation concern.
-- **Reprojection and regridding.** A loader describes its native grid only; transforming onto a target grid is a model concern (§8.6).
+- **Reprojection and regridding.** A source describes its native grid only; transforming onto a target grid is a model concern (§8.6).
 
 ### 8.8 Worked examples
 
@@ -2359,12 +2572,6 @@ closure — on every manifold.
       "frequency":   "PT1H",
       "records_per_file": 1
     },
-    "variables": {
-      "u": { "file_variable": "U10M", "units": "m/s", "description": "10-m eastward wind" },
-      "v": { "file_variable": "V10M", "units": "m/s", "description": "10-m northward wind" },
-      "T": { "file_variable": "T2M",  "units": "K",   "description": "2-m temperature" },
-      "PBLH": { "file_variable": "PBLH", "units": "m", "description": "PBL height" }
-    },
     "reference": {
       "citation": "Global Modeling and Assimilation Office (GMAO), NASA GSFC",
       "url": "https://gmao.gsfc.nasa.gov/GEOS_systems/",
@@ -2374,6 +2581,35 @@ closure — on every manifold.
   }
 }
 ```
+
+The source says only where the bytes are. The model that wants them declares
+parameters bound to its file variables, each refreshing when GEOSFP advances a
+record:
+
+```json
+{
+  "variables": {
+    "u":    { "type": "parameter", "units": "m/s", "shape": ["cells"],
+              "update": { "kind": "data", "source": "GEOSFP_A1",
+                          "from": { "file_variable": "U10M" } },
+              "description": "10-m eastward wind" },
+    "v":    { "type": "parameter", "units": "m/s", "shape": ["cells"],
+              "update": { "kind": "data", "source": "GEOSFP_A1",
+                          "from": { "file_variable": "V10M" } },
+              "description": "10-m northward wind" },
+    "T":    { "type": "parameter", "units": "K", "shape": ["cells"],
+              "update": { "kind": "data", "source": "GEOSFP_A1",
+                          "from": { "file_variable": "T2M" } },
+              "description": "2-m temperature" },
+    "PBLH": { "type": "parameter", "units": "m", "shape": ["cells"],
+              "update": { "kind": "data", "source": "GEOSFP_A1",
+                          "from": { "file_variable": "PBLH" } },
+              "description": "PBL height" }
+  }
+}
+```
+
+The remaining examples show sources only; each is consumed the same way.
 
 #### CEDS emissions (per-species monthly files, multi-decade)
 
@@ -2394,18 +2630,6 @@ closure — on every manifold.
       "frequency":   "P1M",
       "records_per_file": 12,
       "time_variable": "time"
-    },
-    "variables": {
-      "emis_NOx": {
-        "file_variable": "NOx_em_anthro",
-        "units": "kg/m^2/s",
-        "description": "Anthropogenic NOx emissions (sum of sectors)"
-      },
-      "emis_CO": {
-        "file_variable": "CO_em_anthro",
-        "units": "kg/m^2/s",
-        "description": "Anthropogenic CO emissions"
-      }
     },
     "reference": {
       "citation": "Hoesly et al. (2018), CEDS historical emissions",
@@ -2433,23 +2657,6 @@ closure — on every manifold.
       "records_per_file": "auto",
       "time_variable": "time"
     },
-    "variables": {
-      "T": {
-        "file_variable": "t",
-        "units": "K",
-        "description": "Temperature on pressure levels"
-      },
-      "Q": {
-        "file_variable": "q",
-        "units": "kg/kg",
-        "description": "Specific humidity"
-      },
-      "Z": {
-        "file_variable": "z",
-        "units": "m^2/s^2",
-        "description": "Geopotential"
-      }
-    },
     "reference": {
       "citation": "Hersbach et al. (2020), ERA5",
       "doi": "10.1002/qj.3803"
@@ -2470,13 +2677,6 @@ closure — on every manifold.
     "source": {
       "url_template": "s3://prd-tnm/StagedProducts/Elevation/1/TIFF/USGS_Seamless_DEM_1.tif"
     },
-    "variables": {
-      "elevation": {
-        "file_variable": "Band1",
-        "units": "m",
-        "description": "Ground-surface elevation above geoid"
-      }
-    },
     "reference": {
       "citation": "USGS 3D Elevation Program (3DEP)",
       "url": "https://www.usgs.gov/3d-elevation-program"
@@ -2488,7 +2688,7 @@ closure — on every manifold.
 
 ### 8.9 Ingest: `reader_options`, `select`, `codes`, `record_filter`, `extent`
 
-A loader is pure I/O, but "pure I/O" still has to be **complete**: if the
+A source is pure I/O, but "pure I/O" still has to be **complete**: if the
 document cannot say how its bytes decode, which rows are real, and how many
 there are, then a caller supplies that imperatively and the document is not
 self-sufficient — a general-purpose runner cannot run the model, only a runner
@@ -2524,11 +2724,11 @@ codes:
 ```
 
 A model forcing must be numeric, so without `codes` a text column is a hard
-error at the loader boundary rather than a silent drop. `unmapped: "drop"`
-removes the whole **record** — from every variable of the loader — which is why
+error at the ingest boundary rather than a silent drop. `unmapped: "drop"`
+removes the whole **record** — from every parameter drawing on the source — which is why
 it composes with `record_filter` rather than being a per-column concern.
 
-#### 8.9.2 `select` — what the loader delivers
+#### 8.9.2 `select` — what the source delivers
 
 ```
 select:
@@ -2539,7 +2739,8 @@ select:
 ```
 
 One entry per **native** array dimension, in native dims order. Declared on the
-loader (the default for its variables) or on a variable (overriding it).
+source (the default for every parameter drawing from it) or on a single parameter's `from`
+binding (overriding it).
 
 - `range` bounds may be integers **or** the name of a `metaparameters` entry,
   resolving to its default — so a prefix is declared in the model's own terms
@@ -2551,7 +2752,7 @@ loader (the default for its variables) or on a variable (overriding it).
   projection-pushdown record uses, which is the point: one spelling, whether the
   author wrote the gate or the pushdown rewrite generated it.
 
-The selection is over the axis the loader **delivers**, so it follows
+The selection is over the axis the source **delivers**, so it follows
 `record_filter`: `range 0..200` on a filtered table is the first 200 *surviving*
 records. Whether a binding pushes the selection down to the reader (fetching only
 what it keeps) or applies it after the read is an optimization — the two **MUST**
@@ -2561,19 +2762,19 @@ agree exactly.
 
 ```
 record_filter:
-  require_finite: [<loader variable names>]
+  require_finite: [<file_variable names>]
 ```
 
 A record is dropped when any `require_finite` variable is non-finite at it, or
 when a `codes` map with `unmapped: "drop"` does not recognise its value. The
-surviving mask is computed **once for the loader** and applied to every variable,
-so its columns cannot fall out of alignment — the reason this is a loader-level
+surviving mask is computed **once for the source** and applied to every parameter
+drawing from it, so its columns cannot fall out of alignment — the reason this is a source-level
 field and not a per-variable one. A point with no coordinate cannot be placed and
 a row with no annual total cannot be weighted; saying so here is a statement
 about the source, where a NaN travelling into the model to surface as an empty
 result later is not.
 
-#### 8.9.4 `extent` — a loader that discovers its own size
+#### 8.9.4 `extent` — a source that discovers its own size
 
 ```
 extent:
@@ -2581,10 +2782,10 @@ extent:
 ```
 
 For a source whose size is not knowable until it is read. A binding samples such
-a loader **before** it closes metaparameters (§9.7.6 site 4), so an index set
+a source **before** it closes metaparameters (§9.7.6 site 4), so an index set
 declared `size: "N_REC"` is sized by the data itself. Declare the metaparameter
 with a `default` (conventionally 0) so the document still validates and loads
-standalone. Every variable of the loader must agree on the count; that agreement
+standalone. Every parameter drawing from the source must agree on the count; that agreement
 is also the alignment check, and disagreement is an error naming both variables.
 
 Without `extent` the count has to reach the engine some other way, and the only
@@ -2603,7 +2804,7 @@ A function belongs in the closed registry **only** when **all three** of the fol
 
 - Not expressible in finite closed form using the §4.2 AST ops (powers, polynomials, `min`/`max`/`ifelse`/`sign`, trig / exp / log / sqrt, comparisons, n-ary arithmetic).
 - Has well-defined cross-binding semantics that the proposer can pin (formula, edge cases, tolerance).
-- There is no cleaner `data_loaders` path: the function operates on inline scalars or small arrays passed via `const`, not on bulk gridded fields.
+- There is no cleaner `data_sources` path: the function operates on inline scalars or small arrays passed via `const`, not on bulk gridded fields.
 
 Anything that fails one of these tests does not belong here. The §1.1 authoring policy MUST be enforced at review time.
 
@@ -3134,8 +3335,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `template_import_not_library` | Import target is not a pure template-library file (§9.7.1). |
 | `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
 | `template_inject_target_unknown` | A `CouplingEntry.expression_template_imports` key (§9.7.10) names no system referenced by that entry. |
-| `template_inject_target_is_loader` | A coupling-entry injection key (§9.7.10) resolves to a data loader — pure I/O with no expression positions to rewrite. |
-| `template_inject_target_not_component` | A coupling-entry injection key (§9.7.10) resolves to something that is neither model, reaction system, nor loader. |
+| `template_inject_target_not_component` | A coupling-entry injection key (§9.7.10) resolves to something that is neither a model nor a reaction system. |
 | `subsystem_index_set_conflict` | A §4.7 subsystem ref's merged top-level `index_sets` name collides with a non-deep-equal definition in the importing document's registry (§4.7 "Index-set merge"; the subsystem-edge mirror of `template_import_index_set_conflict`). |
 | `template_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
 | `template_import_name_conflict` | Same template or metaparameter name reaches one scope with non-deep-equal definitions (§9.7.4). |
@@ -3300,7 +3500,7 @@ Nothing in this subsection changes what a document *means*. Two spellings of the
 **Prefer naming a discretization operator as the whole expression of an observed.**
 
 ```json
-"dqdlon": { "type": "observed", "shape": ["lon","lat","lev"],
+"dqdlon": { "type": "unknown", "shape": ["lon","lat","lev"],
             "expression": { "op": "D", "wrt": "lon", "args": ["q"] } }
 ```
 
@@ -3318,7 +3518,7 @@ This section makes `expression_templates` shareable across files and components,
 
 #### 9.7.1 Template-library files
 
-A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_loaders`, `coupling`, or `domain`. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`).
+A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`).
 
 #### 9.7.2 The `expression_template_imports` field
 
@@ -3430,7 +3630,7 @@ Each entry uses the §9.7.2 `TemplateImport` shape verbatim (`ref`, `only?`, `bi
 
 ## 10. Coupling
 
-The coupling section defines how models, reaction systems, and data loaders connect to form a `CoupledSystem`. Each entry maps to an EarthSciML composition mechanism.
+The coupling section defines how models and reaction systems connect to form a `CoupledSystem`. A `data_sources` entry is not a component and never appears as an endpoint; external data reaches a model through a parameter's `update` (§5.4). Each entry maps to an EarthSciML composition mechanism.
 
 ```json
 {
@@ -3438,7 +3638,7 @@ The coupling section defines how models, reaction systems, and data loaders conn
     {
       "type": "operator_compose",
       "systems": ["SuperFastReactions", "Advection"],
-      "description": "Add advection terms to all state variables in chemistry system"
+      "description": "Add advection terms to all ODE states in chemistry system"
     },
 
     {
@@ -3510,7 +3710,7 @@ Grid-level loss processes (dry deposition, below-cloud scavenging) that earlier 
 
 ### 10.2 The `translate` Field
 
-For `operator_compose`, `translate` specifies variable mappings when LHS variables don't have matching names. Keys and values use scoped references (`"System.var"`). Note that the `_var` placeholder (Section 6.4) is automatically expanded to all state variables in the target system, so `translate` is only needed when two non-placeholder systems have differently-named variables representing the same quantity:
+For `operator_compose`, `translate` specifies variable mappings when LHS variables don't have matching names. Keys and values use scoped references (`"System.var"`). Note that the `_var` placeholder (Section 6.4) is automatically expanded to all ODE states in the target system (§6.3.1), so `translate` is only needed when two non-placeholder systems have differently-named variables representing the same quantity:
 
 ```json
 "translate": {
@@ -3555,11 +3755,11 @@ Every `variable_map` transform performs a **replacement**: the target is bound t
 
 ### 10.5 Coupling across grids and dimensionality
 
-Coupled components may live on different index sets (resolutions), or differ in dimensionality (a 0-D box model feeding a spatial PDE), or read from a data loader whose native grid differs from the model's. The coupling entry handles the mismatch in one of two ways: a **regridding expression** (different grids/resolutions) or **lifting** (0-D ↔ spatial).
+Coupled components may live on different index sets (resolutions), or differ in dimensionality (a 0-D box model feeding a spatial PDE), or carry a data-fed parameter whose native grid differs from the model's. The coupling entry handles the mismatch in one of two ways: a **regridding expression** (different grids/resolutions) or **lifting** (0-D ↔ spatial).
 
 #### Regridding
 
-When a variable is mapped between two components on different index sets — or from a data loader's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `aggregate` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `aggregate` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight templates imported from a regridding library (§9.7), expanded at load per §9.6.4:
+When a variable is mapped between two components on different index sets — or from a data-fed parameter's native grid onto a model's grid — the coupling entry's `transform` is a **regridding expression**: an ordinary `aggregate` (FAQ) that maps the source field onto the target grid (overlap-area weighting, interpolation, or slicing a higher-dimensional field at a fixed level are all just `aggregate` index expressions; §8.6, RFC semiring-faq-unified-ir §A.8). There is no separate geometric-relationship declaration. This is the Expression form of `transform` (§10.4): the target parameter becomes a derived variable defined by the expression, whose scoped references reach the source field and the receiving component's build-once weight arrays. The expression is authored inline, or — the usual factoring — invokes overlap-weight templates imported from a regridding library (§9.7), expanded at load per §9.6.4:
 
 ```json
 {
@@ -3660,9 +3860,9 @@ A coupling entry mounts PDE components into an assembly, and — like a §4.7 su
 }
 ```
 
-Reads as: *compose these two, and discretize `Advection` with central differences.* The 0-D chemistry system `SimpleOzone` names no key and receives nothing. Unlike the subsystem-ref form the target is **explicit**, because a coupling entry references two or more systems and some (a data loader in a `variable_map`) cannot host rules.
+Reads as: *compose these two, and discretize `Advection` with central differences.* The 0-D chemistry system `SimpleOzone` names no key and receives nothing. Unlike the subsystem-ref form the target is **explicit**, because a coupling entry references two or more systems and not every referenced node can host rules.
 
-**Target resolution.** Each map key MUST name a system **referenced by that entry**: `operator_compose`/`couple` → a member of `systems`; `variable_map`/`callback`/`event` → a system named by that entry's reference fields (`variable_map` `from`/`to`; an `event`'s `conditions`/`affects` variable scopes). A key naming no such system is `template_inject_target_unknown` (§9.6.6). A key resolving to a data loader — pure I/O with no expression positions (§14) — is `template_inject_target_is_loader`; a key resolving to neither model, reaction system, nor loader is `template_inject_target_not_component`. Resolution follows §4.6 scoped-reference rules, so a subsystem path (`"Parent.RefSubsystem"`) is a valid key when the entry references a nested system.
+**Target resolution.** Each map key MUST name a system **referenced by that entry**: `operator_compose`/`couple` → a member of `systems`; `variable_map`/`callback`/`event` → a system named by that entry's reference fields (`variable_map` `from`/`to`; an `event`'s `conditions`/`affects` variable scopes). A key naming no such system is `template_inject_target_unknown` (§9.6.6). A key resolving to neither a model nor a reaction system is `template_inject_target_not_component`. Resolution follows §4.6 scoped-reference rules, so a subsystem path (`"Parent.RefSubsystem"`) is a valid key when the entry references a nested system.
 
 **Timing and round-trip** are the load-time-composition regime of §9.7.10: coupling-entry injections are collected after all `coupling`-named systems resolve (so an entry may target an inline-declared system as well as a referenced one), appended to the target's scope in the §9.7.10 merge order, and consumed by the §9.6.3 fixpoint before flattening; they do **not** survive `parse → emit`. Hanging the discretization on the entry that mounts a PDE component keeps the choice next to the wiring that makes it necessary and needs no new top-level section.
 
@@ -3686,7 +3886,7 @@ A coupling-library file is a valid ESM document (`esm`, `metadata`) whose payloa
   fields are written against **role names** as their top-level system segment (§10.10.2 enumerates
   every such site).
 
-A coupling-library file **MUST NOT** declare `models`, `reaction_systems`, `data_loaders`,
+A coupling-library file **MUST NOT** declare `models`, `reaction_systems`, `data_sources`,
 `domain`, `index_sets`, `metaparameters`, or `expression_templates` (`coupling_library_illegal_payload`).
 Purity keeps the three reference mechanisms disjoint: a §4.7 subsystem file is not importable as a
 coupling library, a template-library file is not importable as a coupling library, and a
@@ -3721,7 +3921,7 @@ to an already-lowered form; a transform template that would introduce a rewrite-
 (`grad` / `div` / spatial `D`) is rejected with `coupling_library_illegal_payload`.
 
 **Role-scoped reference resolution.** In an ordinary document a coupling edge's top-level segment
-must resolve to a top-level `models` / `reaction_systems` / `data_loaders` key (§4.6). A library
+must resolve to a top-level `models` / `reaction_systems` key (§4.6). A library
 file has no such systems, so that resolution is **suspended** when a coupling-library file is
 validated on its own: at every role-occurrence site (§10.10.2) the top-level segment must instead
 name a declared role (`coupling_edge_unknown_role` otherwise), and a role that appears in
@@ -3774,16 +3974,16 @@ explicit map** — there is no search, no inference, no auto-binding:
 2. **Every `bind` key MUST name a declared role.** A key that is not one of `R₁ … Rₙ` is
    `coupling_import_unknown_role`.
 3. **Every `bind` value MUST resolve to a component.** A value that does not resolve to a top-level
-   or nested `models` / `reaction_systems` / `data_loaders` component is
+   or nested `models` / `reaction_systems` component is
    `coupling_import_bind_not_a_component`.
 
 **Component-reference resolution (distinct from §4.6).** A `bind` value names a *component* all the
 way down, not a variable: split the value on `"."` into segments `[s₁, …, sₖ]`; `s₁` MUST name a
-top-level `models` / `reaction_systems` / `data_loaders` key, and each subsequent `sᵢ` MUST name a
-key in the preceding system's `subsystems` map. The whole path MUST terminate on a system or loader
+top-level `models` / `reaction_systems` key, and each subsequent `sᵢ` MUST name a
+key in the preceding system's `subsystems` map. The whole path MUST terminate on a system
 node — a path that bottoms out at (or passes through) a variable, parameter, or species is
-`coupling_import_bind_not_a_component`. Data loaders are bindable (a `Loader` role binds a
-`data_loaders` entry), consistent with §10 treating a loader as a coupling endpoint. This is the
+`coupling_import_bind_not_a_component`. A `data_sources` entry is NOT bindable: it is not a
+component and §10 no longer treats it as a coupling endpoint. This is the
 §4.6 hierarchy walk stopped one segment short of a variable.
 
 Because binding is total and explicit, it is unambiguous by construction: two components of the same
@@ -3815,12 +4015,10 @@ is rewritten, at exactly these sites of a library edge:
 | `conditions[]` | top-level segment of every scoped reference in each condition Expression | `event` |
 | `affects[]`, `affect_neg[]` | top-level segment of `.lhs` and of every scoped reference in `.rhs` | `event` |
 | `trigger.expression` | top-level segment of every scoped reference in the Expression (`condition` trigger form only) | `event` |
-| `functional_affect` | top-level segment of each entry of `read_vars`, `read_params`, `modified_params` | `event` |
-| `discrete_parameters[]` | top-level segment of each scoped-parameter reference | `event` |
 
 Non-reference fields (`transform` string values, `factor`, `lifting`, `description`, `event_type`,
 `name`, `handler_id`, `root_find`, `reinitialize`, literal Expression operands) copy unchanged. An
-opaque `config` bag (a `functional_affect`'s `config`) is copied verbatim and is **not** a
+opaque `config` bag (a parameter update handler's `config`) is copied verbatim and is **not** a
 substitution surface — a library MUST NOT hide a component reference there. `callback` entries and
 edge-level `expression_template_imports` never appear because §10.9 forbids them.
 
@@ -3874,7 +4072,7 @@ its own target rather than share one.
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`). |
 | `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file. |
 | `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file. |
-| `coupling_library_illegal_payload` | A coupling-library file declares `models` / `reaction_systems` / `data_loaders` / `domain` / `index_sets` / `metaparameters` / `expression_templates`; **or** contains a `callback` entry or a library edge carrying `expression_template_imports`; **or** carries a library edge whose transform template would expand to a rewrite-target operator; **or** (if the binding narrows the entry set) an entry type it does not permit. |
+| `coupling_library_illegal_payload` | A coupling-library file declares `models` / `reaction_systems` / `data_sources` / `domain` / `index_sets` / `metaparameters` / `expression_templates`; **or** contains a `callback` entry or a library edge carrying `expression_template_imports`; **or** carries a library edge whose transform template would expand to a rewrite-target operator; **or** (if the binding narrows the entry set) an entry type it does not permit. |
 | `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry. |
 | `coupling_edge_unknown_role` | A library edge's top-level system segment, at any occurrence site, is not a declared role. |
 | `coupling_role_unused` | A declared role appears at no occurrence site in any library edge. |
@@ -3891,7 +4089,7 @@ at flatten as the existing `unresolved_scoped_ref`.
 
 The `domain` is a **single** object giving the temporal extent and numeric representation shared by every component in the document. A document has at most one domain: all spatial models live on it, and a 0-D model simply has scalar-shaped variables (§11.2). There is no `domains` collection and no per-model domain selector.
 
-A domain does **not** carry spatial-grid geometry. The spatial axes a PDE iterates over are entries in the document-scoped `index_sets` registry (RFC semiring-faq-unified-ir §5.2); their physical coordinates, spacing, and CRS parameters are ordinary data — loaded from a `data_loaders` primitive or declared as variables/parameters. Initial conditions are `ic` equations (§11.4) and boundary conditions are baked into discretization rewrite rules (§9.6.8); neither is a domain field.
+A domain does **not** carry spatial-grid geometry. The spatial axes a PDE iterates over are entries in the document-scoped `index_sets` registry (RFC semiring-faq-unified-ir §5.2); their physical coordinates, spacing, and CRS parameters are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters. Initial conditions are `ic` equations (§11.4) and boundary conditions are baked into discretization rewrite rules (§9.6.8); neither is a domain field.
 
 ### 11.1 Schema
 
@@ -3915,11 +4113,11 @@ A domain does **not** carry spatial-grid geometry. The spatial axes a PDE iterat
 }
 ```
 
-The spatial axes a model iterates over (here `lon`, `lat`, `lev`) are `index_sets` entries; each state variable names them in its `shape`. Their coordinate arrays, spacing, and any CRS parameters are bound from a loader field or a coordinate expression — not from the domain.
+The spatial axes a model iterates over (here `lon`, `lat`, `lev`) are `index_sets` entries; each unknown names them in its `shape`. Their coordinate arrays, spacing, and any CRS parameters are bound from a data-fed parameter or a coordinate expression — not from the domain.
 
 ### 11.2 Model Dimensionality
 
-A model's dimensionality is the number of spatial `index_sets` its state variables are shaped over (via each variable's `shape`) — it is a property of the model, not the domain:
+A model's dimensionality is the number of spatial `index_sets` its unknowns are shaped over (via each variable's `shape`) — it is a property of the model, not the domain:
 
 | Dimensionality | Spatial index sets in variable `shape` | Example use cases |
 |---|---|---|
@@ -3928,7 +4126,7 @@ A model's dimensionality is the number of spatial `index_sets` its state variabl
 | **2D** | 2 | Surface fire spread, sea-ice extent, land surface models |
 | **3D** | 3 | Atmospheric dynamics, ocean circulation, subsurface flow |
 
-Models whose state variables carry no (or empty) `shape` are 0D. A 0D model has no spatial axes; when coupled to a spatial system, the lifting strategy (Section 10.5) determines how it maps onto the spatial index sets.
+Models whose unknowns carry no (or empty) `shape` are 0D. A 0D model has no spatial axes; when coupled to a spatial system, the lifting strategy (Section 10.5) determines how it maps onto the spatial index sets.
 
 ### 11.3 Domain Fields
 
@@ -3956,13 +4154,13 @@ The RHS is an ordinary Expression:
 - **closed-form field** → a coordinate expression whose free symbols are **spatial coordinate names** (`x`, `y`, `z`, `lon`, `lat`, `lev` — not necessarily the index-set key, which may be a bare index like `i`): `ic(u) ~ 0.2 * x`, evaluated at every grid point. Those symbols are implicitly declared and MUST NOT be reported as `undefined_variable` (§4.9.1).
 - **externally-supplied field** → a reference to a loaded variable.
 
-A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate expression. Every state variable SHOULD have exactly one `ic` equation; a missing one defaults to the variable's declared `default`.
+A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate expression. Every ODE state SHOULD have exactly one `ic` equation; a missing one defaults to the variable's declared `default`.
 
-**Run-time overrides.** A test or analysis MAY override the *scalar* initial value of a state variable for one run via `test.initial_conditions` / `analysis.initial_state` (a `{var: number}` map, §6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model.
+**Run-time overrides.** A test or analysis MAY override the *scalar* initial value of an unknown for one run via `test.initial_conditions` / `analysis.initial_state` (a `{var: number}` map, §6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model.
 
 #### 11.4.1 Scoped-reference ICs (reaction-system species and cross-component ICs)
 
-The `ic` argument MAY be a **scoped reference** (§4.6) to any state variable or species elsewhere in the document — `ic(Chemistry.O3) ~ …` — not only a variable of the enclosing model. The equation still lives in a **model's** `equations` array (ICs are model-hosted): a model whose sole purpose is to declare ICs for other components MAY have an empty `variables` map and carry only `ic` equations (a *dedicated IC model*).
+The `ic` argument MAY be a **scoped reference** (§4.6) to any unknown or species elsewhere in the document — `ic(Chemistry.O3) ~ …` — not only a variable of the enclosing model. The equation still lives in a **model's** `equations` array (ICs are model-hosted): a model whose sole purpose is to declare ICs for other components MAY have an empty `variables` map and carry only `ic` equations (a *dedicated IC model*).
 
 This is how a **reaction system** gets a non-scalar initial condition. A reaction system has no `equations` field, so it cannot host an `ic` equation of its own; a species' initial value is otherwise the scalar `species.default` (§7). When a species needs a coordinate-dependent, loaded-field, or otherwise non-constant IC — most commonly once the reaction system is spatially **lifted** onto a grid through coupling (§10.5) — declare it with a scoped-reference `ic` equation in a model: `ic(Chemistry.O3) ~ InitialFields.O3_field`.
 
@@ -3974,7 +4172,7 @@ An `ic` equation MUST NOT be placed inside a reaction system's `constraint_equat
 
 Boundary conditions are **not** a declarable construct — there is no `boundary_conditions` field and no boundary-condition op. A discretized spatial operator over a finite domain is inseparable from its boundary treatment, so the boundary condition lives **inside the discretization rewrite rule** that lowers `grad`/`div`/`laplacian` to an `aggregate` + `makearray` stencil: the interior region is the stencil, and the boundary-face `makearray` regions encode the BC (Dirichlet → fixed value; Neumann/zero-gradient → one-sided difference; Robin → the solved boundary expression; a seam shared with another variable → an `index` into that variable; periodic → the gather's periodic policy, no override). See §9.6.8. A boundary condition therefore cannot be specified anywhere outside its discretization rule.
 
-**BCs from data.** The boundary-face value may be an `index` into a **loaded variable** (a `data_loaders` field) exactly as it may index any other variable — so a Dirichlet or seam boundary value can be supplied from data (`index(BoundaryData.O3_boundary, …)` in the boundary region). This is the same index-into-another-variable mechanism, with the other variable being a loader field; it needs no special construct.
+**BCs from data.** The boundary-face value may be an `index` into a **data-fed parameter** (one whose `update` draws from a `data_sources` entry) exactly as it may index any other variable — so a Dirichlet or seam boundary value can be supplied from data (`index(O3_boundary, …)` in the boundary region). This is the same index-into-another-variable mechanism; it needs no special construct.
 
 ---
 
@@ -3992,7 +4190,7 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
 
 ```json
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "MinimalChemAdvection",
     "description": "O3-NO-NO2 chemistry with advection over a lon-lat grid and external meteorology",
@@ -4014,7 +4212,10 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
         "NO2": { "units": "mol/mol", "default": 1.0e-9, "description": "Nitrogen dioxide" }
       },
       "parameters": {
-        "T":    { "units": "K", "default": 298.15, "description": "Temperature" },
+        "T":    { "units": "K", "shape": [],
+                  "update": { "kind": "data", "source": "GEOSFP",
+                              "from": { "file_variable": "T2M" } },
+                  "description": "Temperature, from reanalysis" },
         "M":    { "units": "molec/cm^3", "default": 2.46e19, "description": "Air number density" },
         "jNO2": { "units": "1/s", "default": 0.005, "description": "NO2 photolysis rate" }
       },
@@ -4049,8 +4250,12 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
     "Advection": {
       "reference": { "notes": "First-order advection of each transported field over the lon-lat grid" },
       "variables": {
-        "u_wind": { "type": "parameter", "units": "m/s", "default": 0.0, "shape": ["lon", "lat"] },
-        "v_wind": { "type": "parameter", "units": "m/s", "default": 0.0, "shape": ["lon", "lat"] },
+        "u_wind": { "type": "parameter", "units": "m/s", "shape": ["lon", "lat"],
+                     "update": { "kind": "data", "source": "GEOSFP",
+                                 "from": { "file_variable": "U10M" } } },
+        "v_wind": { "type": "parameter", "units": "m/s", "shape": ["lon", "lat"],
+                     "update": { "kind": "data", "source": "GEOSFP",
+                                 "from": { "file_variable": "V10M" } } },
         "dx": { "type": "parameter", "units": "m", "default": 27750.0, "description": "Eastward grid spacing" },
         "dy": { "type": "parameter", "units": "m", "default": 27750.0, "description": "Northward grid spacing" }
       },
@@ -4120,7 +4325,7 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
     }
   },
 
-  "data_loaders": {
+  "data_sources": {
     "GEOSFP": {
       "kind": "grid",
       "source": {
@@ -4133,20 +4338,12 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
         "frequency":   "PT1H",
         "records_per_file": 1
       },
-      "variables": {
-        "u": { "file_variable": "U10M", "units": "m/s", "description": "Eastward wind" },
-        "v": { "file_variable": "V10M", "units": "m/s", "description": "Northward wind" },
-        "T": { "file_variable": "T2M",  "units": "K",   "description": "Temperature" }
-      },
       "metadata": { "tags": ["meteorology", "reanalysis"] }
     }
   },
 
   "coupling": [
-    { "type": "operator_compose", "systems": ["SimpleOzone", "Advection"] },
-    { "type": "variable_map", "from": "GEOSFP.T", "to": "SimpleOzone.T", "transform": "param_to_var" },
-    { "type": "variable_map", "from": "GEOSFP.u", "to": "Advection.u_wind", "transform": "param_to_var" },
-    { "type": "variable_map", "from": "GEOSFP.v", "to": "Advection.v_wind", "transform": "param_to_var" }
+    { "type": "operator_compose", "systems": ["SimpleOzone", "Advection"] }
   ],
 
   "domain": {
@@ -4156,7 +4353,7 @@ A minimal but complete `.esm` file representing atmospheric chemistry with advec
 }
 ```
 
-The spatial axes (`lon`, `lat`) are `index_sets`; the `Advection` model's variables are shaped over them, and `grad` is lowered by the in-file `central_grad_*_zero_grad_bc` rewrite rules (§9.6.8) — each a `makearray` that combines the interior central-difference `aggregate` with the two boundary-face regions encoding the zero-gradient condition. The boundary conditions live **inside** the discretization rule; there is no separate boundary-condition declaration. Wind and temperature come from the `GEOSFP` loader as ordinary variables.
+The spatial axes (`lon`, `lat`) are `index_sets`; the `Advection` model's variables are shaped over them, and `grad` is lowered by the in-file `central_grad_*_zero_grad_bc` rewrite rules (§9.6.8) — each a `makearray` that combines the interior central-difference `aggregate` with the two boundary-face regions encoding the zero-gradient condition. The boundary conditions live **inside** the discretization rule; there is no separate boundary-condition declaration. Wind and temperature come from the `GEOSFP` source as ordinary data-fed parameters — declared on the models that use them, with a `data` update naming the source. Note what is *absent* from the `coupling` block as a result: the three `variable_map` edges that used to wire loader fields into the two models are gone, because the parameter now *is* the loaded field.
 
 **Note:** Every component shares the single `domain`; there is no per-model domain field. A model is spatial if its variables are shaped over index sets, 0-D otherwise.
 
@@ -4171,9 +4368,15 @@ Every equation, species, reaction, parameter, and variable must be present in th
 - The format is **archival** — it remains meaningful years later even if packages change
 - **Diffs are meaningful** — every change to the science is visible in version control
 
-### Data loaders are the only externally-registered mechanism
+### Registration is confined to I/O and update handlers
 
-Data loaders are runtime-specific: they involve I/O, format adapters, and large external grids that cannot be meaningfully serialized as math. (A loader is pure I/O — it does not regrid; transferring its fields onto a model's target grid is a model concern, §8.) The `.esm` file declares *what* they provide and *what* they need, but delegates *how* to the runtime. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are drawn from the closed function registry (Section 9), whose entries are spec-pinned with fixed names, signatures, and tolerances.
+Two things are runtime-specific and cannot be meaningfully serialized as math:
+**data sources**, which involve I/O, format adapters, and large external grids;
+and **update handlers** (§5.5), which run control logic at update time. (A source
+is pure I/O — it does not regrid; transferring its fields onto a model's target
+grid is a model concern, §8.) The `.esm` file declares *what* they provide and
+*what* they need, but delegates *how* to the runtime. Everything else is math in
+the file. State-mutating numerical schemes (advection, diffusion stencils, deposition algorithms) are **not** an externally-registered mechanism: they are expressed via `grad`/`div`/`laplacian` PDE operators in model equations, lowered by discretization rewrite rules (§9.6.8). Pure callables embedded inside expressions are **not** an externally-registered mechanism either: they are drawn from the closed function registry (Section 9), whose entries are spec-pinned with fixed names, signatures, and tolerances.
 
 ### Expression AST over string math
 
@@ -4194,7 +4397,7 @@ The composition rules are arguably more important than the individual models, si
 
 ### Coupling across grids is a regridding expression
 
-Coupling between components on different grids (or from a loader's native grid onto a model's) carries its geometry in the coupling entry's `transform` — an `aggregate` regridding expression that maps the source field onto the target grid (slicing, overlap-area weighting, interpolation). There is no separate interface or geometry-relationship construct; the regridding is an ordinary FAQ over index sets, the same algebra as everything else in the format. This means:
+Coupling between components on different grids (or from a data-fed parameter's native grid onto a model's) carries its geometry in the coupling entry's `transform` — an `aggregate` regridding expression that maps the source field onto the target grid (slicing, overlap-area weighting, interpolation). There is no separate interface or geometry-relationship construct; the regridding is an ordinary FAQ over index sets, the same algebra as everything else in the format. This means:
 
 - Grid transfer is expressed with the same `aggregate` machinery as discretization and reductions — one mechanism, not a special geometry layer.
 - A reusable regridding rule can be factored as an `expression_templates` rewrite rule and shared across coupling entries.
@@ -4205,7 +4408,7 @@ Many physical parameterizations are algebraic or ODE systems with no intrinsic s
 
 ### Coupled systems flatten to a single equation system
 
-The composition of multiple models, reaction systems, and data loaders resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (MTK `ODESystem` or `PDESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
+The composition of multiple models and reaction systems resolves to a **single flat equation system** with dot-namespaced variables (`Atmosphere.Chemistry.O3`). This is not merely a convenience — it is the canonical intermediate representation that all downstream operations (simulation, validation, graph construction) consume. Dot-namespacing preserves provenance (you can always trace a variable back to its originating component) while producing a system that maps directly to a single solver object (MTK `ODESystem` or `PDESystem` in Julia, a single ODE integrator call in Python). The separation between modular component definitions (in the `.esm` file) and the unified flat system (produced by flattening) mirrors the distinction between source code and compiled output: the file is for humans and version control, the flattened system is for machines and solvers.
 
 ---
 
