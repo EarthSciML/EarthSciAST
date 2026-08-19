@@ -533,7 +533,7 @@ struct _ViJoinGate
     sym_r::String
     map_l::Union{Dict{Any,Any},Nothing}
     map_r::Union{Dict{Any,Any},Nothing}
-    candidates::Union{Set{Tuple{Int,Int}},Nothing}
+    candidates::Union{_OverlapIndex,Nothing}
 end
 
 # Envelope vectors for a value-invention OVERLAP gate: look each env-factor name
@@ -558,7 +558,7 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
             cands = _overlap_candidate_set(_vi_env_vectors(clause.src_env, ctx),
                                            _vi_env_vectors(clause.tgt_env, ctx);
                                            eps=clause.eps)
-            push!(gates, _ViJoinGate(sym_l, sym_r, nothing, nothing, cands))
+            push!(gates, _ViJoinGate(sym_l, sym_r, nothing, nothing, _OverlapIndex(cands)))
         else
             for pair in clause
                 lname, rname = String(pair[1]), String(pair[2])
@@ -585,25 +585,6 @@ function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
     return true
 end
 
-# Instrumentation: number of leaf bindings the enumerator VISITED (a tuple the
-# callback was invoked on). Reset by callers/tests; proves the overlap-gated
-# producer visits O(|candidates|·∏ungated) tuples, NOT the full O(∏ranges)
-# product (projection-pushdown Wall #1).
-const _VI_ENUM_VISITS = Ref{Int}(0)
-
-# The first OVERLAP join gate (the one carrying a prebuilt `(query_pos, cell_pos)`
-# candidate set) among the resolved gates, or `nothing` if none. This is the gate
-# whose candidate pairs DRIVE enumeration: an overlap gate resolves its entire
-# admissible pair set ONCE (`_vi_resolve_join`), so we can iterate those pairs
-# directly instead of testing every product tuple for membership.
-function _vi_overlap_driver(gates::Union{Vector{_ViJoinGate},Nothing})
-    gates === nothing && return nothing
-    for g in gates
-        g.candidates === nothing || return g
-    end
-    return nothing
-end
-
 # Enumerate an aggregate's `ranges`, DRIVING from an OVERLAP gate's prebuilt
 # candidate pairs when one is present (Wall #1 fix). Instead of building the full
 # `Iterators.product` over every range and membership-testing each tuple —
@@ -612,6 +593,11 @@ end
 # take the cartesian product with any OTHER (ungated) ranges. Cost drops to
 # O(|candidates|·∏ungated); with both gated symbols the only ranges (the ISRM
 # emis×cells producer) that is O(|candidates|).
+#
+# The DRIVE DECISION is `_overlap_drive_plan` (broad_phase.jl) — the same policy
+# the dense-aggregate expansion applies (`_foreach_aggregate_term`); only the loop
+# shape differs, because a value-invention range may be RAGGED and therefore
+# resolvable only against its parent binding.
 #
 # With NO overlap gate this is EXACTLY `_vi_enumerate` — byte-for-byte identical
 # enumeration order and leaf set (bin-equality / ungated producers are untouched).
@@ -623,22 +609,27 @@ end
 function _vi_enumerate_join(ranges, gates::Union{Vector{_ViJoinGate},Nothing},
                             ctx::_ViCtx, cb)
     counted = bindings -> (_VI_ENUM_VISITS[] += 1; cb(bindings))
-    ov = _vi_overlap_driver(gates)
-    if ov === nothing
-        _vi_enumerate(ranges, ctx, counted)   # full product — unchanged behaviour
+    ov = _overlap_driver(gates)
+    ov === nothing && return _vi_enumerate(ranges, ctx, counted)   # full product
+
+    # Every producer range symbol is FREE here (a producer binds nothing up
+    # front), in the SAME topological order the full product visits them (ragged
+    # `of` parents before children).
+    syms = _vi_order_syms(ranges)
+    bindings = Dict{String,Any}()
+    plan = _overlap_drive_plan(ov, syms, bindings,
+                               s -> _vi_range_values(ranges[s], ctx, bindings))
+    plan[1] === :reject && return
+    if plan[1] === :none
+        _vi_enumerate(ranges, ctx, counted)
         return
     end
-    sym_l, sym_r = ov.sym_l, ov.sym_r
-    # DETERMINISTIC (query_pos, cell_pos)-ascending drive order. The member set is
-    # canonicalised downstream (`distinct`/`rank`), but a sorted drive keeps any
-    # order-sensitive `⊕` reduction stable.
-    pairs = sort!(collect(ov.candidates))
-    # The remaining ungated symbols, in the SAME topological order the full product
-    # visits them (ragged `of` parents before children), minus the two driven
-    # symbols. Overlap-gated symbols index a 1-D buffer (interval/categorical), so
-    # they are never ragged `of` parents — pre-binding them is order-safe.
-    rest = filter(s -> s != sym_l && s != sym_r, _vi_order_syms(ranges))
-    bindings = Dict{String,Any}()
+
+    # The remaining ungated symbols, minus whatever the plan drives. Overlap-gated
+    # symbols index a 1-D buffer (interval/categorical), so they are never ragged
+    # `of` parents — pre-binding them is order-safe.
+    driven = plan[1] === :pairs ? (plan[2], plan[3]) : (plan[2],)
+    rest = filter(s -> !(s in driven), syms)
     function rec(k)
         if k > length(rest)
             counted(bindings)
@@ -651,14 +642,26 @@ function _vi_enumerate_join(ranges, gates::Union{Vector{_ViJoinGate},Nothing},
         end
         delete!(bindings, s)
     end
-    # A candidate pair holds 1-based range POSITIONS; for an interval/categorical
-    # range `_vi_range_values` binds position p to the value p, so binding the two
-    # gated symbols directly reproduces exactly the tuple the old product bound at
-    # those positions (and which `_vi_join_ok` admitted).
-    for (pl, pr) in pairs
-        bindings[sym_l] = pl
-        bindings[sym_r] = pr
-        rec(1)
+    if plan[1] === :pairs
+        # A candidate pair holds 1-based range POSITIONS; for an interval/categorical
+        # range `_vi_range_values` binds position p to the value p, so binding the two
+        # gated symbols directly reproduces exactly the tuple the old product bound at
+        # those positions (and which `_vi_join_ok` admitted). DETERMINISTIC
+        # (query_pos, cell_pos)-ascending drive order: the member set is canonicalised
+        # downstream (`distinct`/`rank`), but a sorted drive keeps any order-sensitive
+        # `⊕` reduction stable.
+        sym_l, sym_r = plan[2], plan[3]
+        for (pl, pr) in plan[4]
+            bindings[sym_l] = pl
+            bindings[sym_r] = pr
+            rec(1)
+        end
+    else                                    # (:restrict, sym, vals)
+        sym = plan[2]
+        for v in plan[3]
+            bindings[sym] = v
+            rec(1)
+        end
     end
     return
 end

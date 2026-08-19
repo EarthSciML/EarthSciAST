@@ -78,6 +78,33 @@ struct VarExpr <: ASTExpr
     name::String
 end
 
+# The broad-phase candidate set of an OVERLAP join gate (§5.5.6), together with
+# the DERIVED views the candidate-driven enumerator reads. Defined HERE — ahead
+# of `_JoinGate` — so both resolved gate types can name it; the views are built
+# in broad_phase.jl and consumed by BOTH enumeration paths.
+#
+#   * `pairs`  — the raw `(pos_src, pos_tgt)` membership set (the `in` test);
+#   * `sorted` — the same pairs ascending, the PAIR drive order;
+#   * `adj_l` / `adj_r` — one side's position ⇒ its SORTED partner positions on
+#     the other side, the drive order used when the aggregate has already bound
+#     one gated axis (a per-output-cell dense aggregate).
+#
+# The derived views are built LAZILY and cached on the gate. A gate is resolved
+# ONCE per node but consulted once per output cell, so rebuilding an adjacency
+# per cell would reinstate exactly the O(N_tgt·N_src) cost the driver removes.
+mutable struct _OverlapIndex
+    pairs::Set{Tuple{Int,Int}}
+    sorted::Union{Vector{Tuple{Int,Int}},Nothing}
+    adj_l::Union{Dict{Int,Vector{Int}},Nothing}
+    adj_r::Union{Dict{Int,Vector{Int}},Nothing}
+end
+_OverlapIndex(pairs::Set{Tuple{Int,Int}}) = _OverlapIndex(pairs, nothing, nothing, nothing)
+# Membership / cardinality forward to the raw pair set, so an `_OverlapIndex`
+# reads exactly like the `Set` it wraps at every existing use site.
+Base.in(p::Tuple{Int,Int}, oi::_OverlapIndex) = in(p, oi.pairs)
+Base.length(oi::_OverlapIndex) = length(oi.pairs)
+Base.isempty(oi::_OverlapIndex) = isempty(oi.pairs)
+
 # One resolved key-column pair of an aggregate `join` (RFC §5.3): the two range
 # symbols and, for each, a map from a range position (the loop-variable value)
 # to its bucket code. A bin-EQUALITY combination is admitted iff
@@ -88,17 +115,18 @@ end
 #
 # `candidates` distinguishes the two gate flavours (Phase 2a). When it is
 # `nothing` this is the classic bin-equality gate (compare `codes_l`/`codes_r`).
-# When it is a `Set{(pos_l,pos_r)}` this is an OVERLAP gate: the broad-phase
+# When it is an `_OverlapIndex` this is an OVERLAP gate: the broad-phase
 # candidate set built ONCE (`_overlap_candidate_set`) from two envelope factor
 # arrays via the Phase-3a primitive, and a combination is admitted iff
 # `(pos_l, pos_r) ∈ candidates` (envelope candidacy, NOT key equality). The
-# `codes_*` maps are empty for an overlap gate.
+# `codes_*` maps are empty for an overlap gate. The same index also DRIVES
+# enumeration (§5.5.6) — see `_overlap_drive_plan` in broad_phase.jl.
 struct _JoinGate
     sym_l::String
     sym_r::String
     codes_l::Dict{Int,Int}
     codes_r::Dict{Int,Int}
-    candidates::Union{Set{Tuple{Int,Int}},Nothing}
+    candidates::Union{_OverlapIndex,Nothing}
 end
 # Bin-equality gate convenience ctor (candidates ≡ nothing) — keeps the historic
 # 4-arg construction and any external callers working unchanged.

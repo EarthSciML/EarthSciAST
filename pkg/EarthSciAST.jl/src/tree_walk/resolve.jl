@@ -213,8 +213,28 @@ function _foreach_aggregate_term(emit!::F, body::ASTExpr,
     k_exprs = Dict{String,ASTExpr}()
     binding = gates === nothing ? nothing :
               (out_env === nothing ? Dict{String,Int}() : Dict{String,Int}(out_env))
-    for k_tuple in Iterators.product(contract_iters...)
+    # An OVERLAP gate can DRIVE this expansion instead of merely filtering it
+    # (§5.5.6 / Wall #1) — routed to `_foreach_aggregate_term_gated`. Everything
+    # else (no join, a bin-equality join) takes the untouched product below.
+    ov = gates === nothing ? nothing : _overlap_driver(gates)
+    ov === nothing || return _foreach_aggregate_term_gated(emit!, body,
+        contract_names, contract_iters, gates, filt, zerobar, binding, ov, k_exprs)
+    return _foreach_aggregate_product(emit!, body, contract_names, contract_iters,
+                                      gates, filt, zerobar, binding, k_exprs, Val(false))
+end
+
+# The shared unroll: `Iterators.product` over `iters` (which vary
+# `contract_names[1]` FASTEST), join-gate rejection, contracted-index
+# substitution, filter guard, emit. `COUNT` is a compile-time flag so the
+# `_VI_ENUM_VISITS` instrumentation exists ONLY in the overlap-gated
+# specialisation — the ungated expansion, the engine's hottest loop, keeps
+# exactly the instruction stream it had.
+function _foreach_aggregate_product(emit!::F, body::ASTExpr,
+        contract_names::Vector{String}, iters, gates, filt, zerobar::Float64,
+        binding, k_exprs::Dict{String,ASTExpr}, ::Val{COUNT}) where {F,COUNT}
+    for k_tuple in Iterators.product(iters...)
         if binding !== nothing
+            COUNT && (_VI_ENUM_VISITS[] += 1)
             for d in 1:length(contract_names)
                 binding[contract_names[d]] = k_tuple[d]
             end
@@ -222,6 +242,91 @@ function _foreach_aggregate_term(emit!::F, body::ASTExpr,
         end
         for d in 1:length(contract_names)
             k_exprs[contract_names[d]] = IntExpr(Int64(k_tuple[d]))
+        end
+        term = _sub_preserving(body, k_exprs)
+        if filt !== nothing
+            fsub = _sub_preserving(filt, k_exprs)
+            term = OpExpr("ifelse", ASTExpr[fsub, term, NumExpr(zerobar)])
+        end
+        emit!(term)
+    end
+    return nothing
+end
+
+# ---- OVERLAP-gate DRIVEN expansion (§5.5.6 "Join admission" / Wall #1) ------
+#
+# An overlap gate resolves its WHOLE admissible pair set once, so it can drive
+# enumeration rather than filter it. `_overlap_drive_plan` (broad_phase.jl) is
+# the shared decision — the value-invention producer (`_vi_enumerate_join`)
+# applies the identical policy, differing only in loop shape because its ranges
+# may be ragged and are therefore resolved lazily. Three shapes reach here:
+#
+#   `:restrict` — one gated axis is an OUTPUT index (already bound in `binding`)
+#     and the other is contracted. This is the ISRM binning aggregate
+#     `E[c] = Σ_r […]` and its record-output mirror `P[r] = Σ_c […]`: the
+#     contracted axis iterates only this output cell's candidate partners, so
+#     the aggregate costs O(|candidates|) in total rather than O(N_c·N_r).
+#   `:pairs` — both gated axes are contracted AND are the only two contracted
+#     axes (the scalar-reduction form); the candidate pairs bind both at once.
+#   `:reject` — both gated axes are already bound and the pair is not a
+#     candidate: no leaf is admitted at all.
+#
+# Anything else plans `:none` and falls through to the full product. In EVERY
+# shape `_join_admits` still runs per leaf, and the driven sequence is the exact
+# order-preserving SUBSEQUENCE of the product the gate would have admitted — so
+# the emitted terms, and hence the ⊕-reduction, are BIT-IDENTICAL to the
+# filtered full product. The driver removes work; it never changes an answer.
+#
+# UNVISITED OUTPUT POSITIONS. Driving means an output cell with no candidate
+# pair emits NO term. That is the correct answer, not a hole: the callers
+# combine an empty term list into the semiring identity 0̄
+# (`_combine_with_reducer`, and the explicit `rhs_zerobar` literal in
+# `_compile_arrayop_percell!`) — e.g. an emission record outside the grid sums
+# to 0 under `(+, 0)`.
+function _foreach_aggregate_term_gated(emit!::F, body::ASTExpr,
+        contract_names::Vector{String}, contract_iters, gates, filt,
+        zerobar::Float64, binding, ov, k_exprs::Dict{String,ASTExpr}) where {F}
+    plan = _overlap_drive_plan(ov, contract_names, binding,
+               s -> contract_iters[findfirst(==(s), contract_names)::Int])
+    kind = plan[1]
+    if kind === :reject
+        return nothing
+    elseif kind === :restrict
+        d = findfirst(==(plan[2]), contract_names)::Int
+        iters = Any[i == d ? plan[3] : contract_iters[i]
+                    for i in 1:length(contract_iters)]
+        return _foreach_aggregate_product(emit!, body, contract_names, iters,
+                    gates, filt, zerobar, binding, k_exprs, Val(true))
+    elseif kind === :pairs && length(contract_names) == 2
+        # `Iterators.product` varies `contract_names[1]` fastest, so the product
+        # ORDER over the surviving tuples is the pair list sorted by
+        # (contract_names[2] position, contract_names[1] position).
+        fast_is_l = plan[2] == contract_names[1]
+        prs = sort(plan[4]; by = fast_is_l ? (p -> (p[2], p[1])) : (p -> (p[1], p[2])))
+        cols = fast_is_l ? Any[Int[p[1] for p in prs], Int[p[2] for p in prs]] :
+                           Any[Int[p[2] for p in prs], Int[p[1] for p in prs]]
+        return _foreach_aggregate_pairs(emit!, body, contract_names, cols,
+                    gates, filt, zerobar, binding, k_exprs)
+    end
+    return _foreach_aggregate_product(emit!, body, contract_names, contract_iters,
+                gates, filt, zerobar, binding, k_exprs, Val(true))
+end
+
+# The `:pairs` drive shape: the two contracted symbols are bound TOGETHER from
+# the gate's candidate pairs (already reordered by the caller to match
+# `Iterators.product`'s slow/fast convention), so the emitted term sequence is
+# the exact subsequence the filtered full product emitted.
+function _foreach_aggregate_pairs(emit!::F, body::ASTExpr,
+        contract_names::Vector{String}, cols, gates, filt, zerobar::Float64,
+        binding, k_exprs::Dict{String,ASTExpr}) where {F}
+    for p in 1:length(cols[1])
+        _VI_ENUM_VISITS[] += 1
+        for d in 1:length(contract_names)
+            binding[contract_names[d]] = cols[d][p]
+        end
+        _join_admits(gates, binding) || continue
+        for d in 1:length(contract_names)
+            k_exprs[contract_names[d]] = IntExpr(Int64(cols[d][p]))
         end
         term = _sub_preserving(body, k_exprs)
         if filt !== nothing
