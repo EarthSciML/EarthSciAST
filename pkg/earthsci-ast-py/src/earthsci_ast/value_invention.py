@@ -653,7 +653,7 @@ class _ViJoinGate:
     sym_r: str
     map_l: Mapping[Any, Any] | None = None
     map_r: Mapping[Any, Any] | None = None
-    candidates: set[tuple[int, int]] | None = None
+    candidates: broad_phase.OverlapIndex | None = None
 
 
 def _vi_overlap_spec(clause: Any) -> Mapping[str, Any] | None:
@@ -707,10 +707,12 @@ def _vi_resolve_join(
                 )
             sym_l = _vi_join_index_sym(str(src_env[0]), producer_ranges, ctx)
             sym_r = _vi_join_index_sym(str(tgt_env[0]), producer_ranges, ctx)
-            cands = broad_phase.overlap_candidate_set(
-                broad_phase.envelope_vectors(src_env, ctx.const_arrays),
-                broad_phase.envelope_vectors(tgt_env, ctx.const_arrays),
-                eps=eps,
+            cands = broad_phase.OverlapIndex(
+                broad_phase.overlap_candidate_set(
+                    broad_phase.envelope_vectors(src_env, ctx.const_arrays),
+                    broad_phase.envelope_vectors(tgt_env, ctx.const_arrays),
+                    eps=eps,
+                )
             )
             gates.append(_ViJoinGate(sym_l, sym_r, candidates=cands))
             continue
@@ -743,22 +745,19 @@ def _vi_join_ok(gates: Sequence[_ViJoinGate], bindings: Mapping[str, Any]) -> bo
 
 # Instrumentation: number of leaf bindings the enumerator VISITED (a tuple the
 # callback was invoked on). Reset by callers / tests; this is what proves an
-# overlap-gated producer visits O(|candidates| * PROD ungated) tuples rather than
-# the full O(PROD ranges) product (projection-pushdown Wall #1).
-_VI_ENUM_VISITS = [0]
+# overlap-gated walk visits O(|candidates| * PROD ungated) tuples rather than the
+# full O(PROD ranges) product (projection-pushdown Wall #1).
+#
+# The SAME list object as :data:`broad_phase.ENUM_VISITS` — the counter is shared
+# with the dense-aggregate expansion (numpy_interpreter), which is gated by the
+# same policy; mirrors the Julia reference, where `_VI_ENUM_VISITS` moved into
+# broad_phase.jl for exactly this reason. Aliased (not re-exported) so the
+# existing `from earthsci_ast.value_invention import _VI_ENUM_VISITS` use sites
+# keep reading and resetting the one counter.
+_VI_ENUM_VISITS = broad_phase.ENUM_VISITS
 
-
-def _vi_overlap_driver(gates: Sequence[_ViJoinGate] | None) -> _ViJoinGate | None:
-    """The first OVERLAP gate among the resolved gates, or ``None``. This is the
-    gate whose candidate pairs DRIVE enumeration: it resolves its entire
-    admissible pair set once, so we iterate those pairs directly instead of
-    membership-testing every product tuple."""
-    if gates is None:
-        return None
-    for g in gates:
-        if g.candidates is not None:
-            return g
-    return None
+#: The first OVERLAP gate among the resolved gates — the shared policy helper.
+_vi_overlap_driver = broad_phase.overlap_driver
 
 
 def _vi_enumerate_join(
@@ -789,20 +788,30 @@ def _vi_enumerate_join(
         _VI_ENUM_VISITS[0] += 1
         cb(bindings)
 
-    ov = _vi_overlap_driver(gates)
+    ov = broad_phase.overlap_driver(gates)
     if ov is None:
         _vi_enumerate(ranges, ctx, counted)  # full product — unchanged behaviour
         return
-    # DETERMINISTIC (query_pos, cell_pos)-ascending drive order. The member set is
-    # canonicalised downstream (`distinct` / `rank`), but a sorted drive keeps any
-    # order-sensitive reduction stable.
-    pairs = sorted(ov.candidates)
-    # The remaining ungated symbols, in the SAME topological order the full product
-    # visits them (ragged `of` parents before children), minus the two driven
-    # symbols. Overlap-gated symbols index a 1-D buffer (interval / categorical),
-    # so they are never ragged `of` parents — pre-binding them is order-safe.
-    rest = [s for s in _vi_order_syms(ranges) if s not in (ov.sym_l, ov.sym_r)]
+
+    # Every producer range symbol is FREE here (a producer binds nothing up
+    # front), in the SAME topological order the full product visits them (ragged
+    # `of` parents before children).
+    syms = _vi_order_syms(ranges)
     bindings: dict[str, Any] = {}
+    plan = broad_phase.overlap_drive_plan(
+        ov, syms, bindings, lambda s: _vi_range_values(ranges[s], ctx, bindings)
+    )
+    if plan[0] == "reject":
+        return
+    if plan[0] == "none":
+        _vi_enumerate(ranges, ctx, counted)
+        return
+
+    # The remaining ungated symbols, minus whatever the plan drives. Overlap-gated
+    # symbols index a 1-D buffer (interval / categorical), so they are never ragged
+    # `of` parents — pre-binding them is order-safe.
+    driven = (plan[1], plan[2]) if plan[0] == "pairs" else (plan[1],)
+    rest = [s for s in syms if s not in driven]
 
     def rec(k: int) -> None:
         if k >= len(rest):
@@ -814,12 +823,27 @@ def _vi_enumerate_join(
             rec(k + 1)
         bindings.pop(s, None)
 
-    for pos_l, pos_r in pairs:
-        bindings[ov.sym_l] = pos_l
-        bindings[ov.sym_r] = pos_r
-        rec(0)
-    bindings.pop(ov.sym_l, None)
-    bindings.pop(ov.sym_r, None)
+    if plan[0] == "pairs":
+        # A candidate pair holds 1-based range POSITIONS; for an interval /
+        # categorical range `_vi_range_values` binds position p to the value p, so
+        # binding the two gated symbols directly reproduces exactly the tuple the
+        # full product bound at those positions (and which `_vi_join_ok` admitted).
+        # DETERMINISTIC (query_pos, cell_pos)-ascending drive order: the member set
+        # is canonicalised downstream (`distinct` / `rank`), but a sorted drive
+        # keeps any order-sensitive reduction stable.
+        sym_l, sym_r = plan[1], plan[2]
+        for pos_l, pos_r in plan[3]:
+            bindings[sym_l] = pos_l
+            bindings[sym_r] = pos_r
+            rec(0)
+        bindings.pop(sym_l, None)
+        bindings.pop(sym_r, None)
+    else:  # ("restrict", sym, vals)
+        sym = plan[1]
+        for v in plan[2]:
+            bindings[sym] = v
+            rec(0)
+        bindings.pop(sym, None)
 
 
 def _vi_argreduce(
