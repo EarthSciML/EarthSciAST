@@ -465,7 +465,7 @@ export const schema: AnySchemaObject = {
               },
               "overlap": {
                 "type": "object",
-                "description": "Spatial OVERLAP gate — the alternative to an `on` value-equality gate (CONFORMANCE_SPEC §5.5). Replaces uniform-grid bin-equality with envelope candidacy: a contracted (src_pos, tgt_pos) tuple is admitted iff the two range positions are in a broad-phase candidate set computed once from two envelope factor arrays. The narrow phase (exact rectangle / polygon test) stays as the aggregate's `filter`; this gate is ONLY the conservative broad phase, so the materialized result is identical to the full-product path.",
+                "description": "Spatial OVERLAP gate — the alternative to an `on` value-equality gate (CONFORMANCE_SPEC §5.5). Replaces uniform-grid bin-equality with envelope candidacy: a contracted (src_pos, tgt_pos) tuple is admitted iff the two range positions are in a broad-phase candidate set computed once from two envelope factor arrays. The narrow phase (exact rectangle / polygon test) stays as the aggregate's `filter`; this gate is ONLY the conservative broad phase, so the materialized result is identical to the full-product path. The candidate set also DRIVES enumeration of the aggregate it is attached to — ANY aggregate, an ordinary dense reduction as much as an index-set-producing `distinct` producer, and either side may be the skolemised/output one; an output position with no candidate pair is filled with the semiring identity (CONFORMANCE_SPEC §5.5.6 Join admission).",
                 "additionalProperties": false,
                 "required": [
                   "src_env",
@@ -3518,7 +3518,7 @@ export const schema: AnySchemaObject = {
         },
         "member_factor": {
           "type": "string",
-          "description": "derived: name of the buffer that receives the surviving member key per invented position (CONFORMANCE_SPEC §5.5, Hook 1) — fed back as a `const` factor so downstream aggregates gather on the compact derived axis. OPTIONAL, and only meaningful when kind is \"derived\" and `from_faq` names an overlap-gated `distinct` aggregate. Pairs with a provider axis marked `gated_by: \"<this set>\"`, which is DEFERRED past value-invention and then fetched with a Selection built from the materialised members in sorted order (the `gated_select` pushdown)."
+          "description": "derived: name of the buffer that receives the surviving member key per invented position (CONFORMANCE_SPEC §5.5, Hook 1) — fed back as a `const` factor so an aggregate ranging over the compact derived axis can gather the full-grid rows that axis selects. That is what downstream aggregates do; it is not a claim about ORIENTATION — an aggregate that reduces OVER the compact axis, and one whose overlap-gate envelope factors are themselves such gathers, gather exactly the same way (CONFORMANCE_SPEC §5.5.7). OPTIONAL, and only meaningful when kind is \"derived\" and `from_faq` names an overlap-gated `distinct` aggregate. Pairs with a provider axis marked `gated_by: \"<this set>\"`, which is DEFERRED past value-invention and then fetched with a Selection built from the materialised members in sorted order (the `gated_select` pushdown)."
         },
         "of": {
           "type": "array",
