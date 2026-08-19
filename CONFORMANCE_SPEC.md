@@ -1139,6 +1139,58 @@ The mirrored arm is a **rider, not a trigger**: mirrors are collected only after
 the forward pattern has fixed `C` and `R`. A document containing only mirrored
 binning aggregates is not rewritten.
 
+**Surviving template references (esm-spec §9.6.4).** Under Option B a
+`apply_expression_template` reference survives load, so the binning body handed
+to the desugar MAY be a reference rather than the containment `ifelse` itself.
+esm-spec §9.6.4 rule 4 — "patterns do not see through surviving references" —
+scopes to the §9.6.3 rewrite-rule ENGINE; this desugar is a different consumer
+and **rule 2 governs it**: a reference denotes its expansion. Normatively:
+
+> **Whether the pushdown fires MUST NOT depend on whether the author factored
+> the binning body through an `expression_templates` entry.** A binding
+> implementation MUST recognise a factored body exactly as it recognises the
+> body's expansion — matching on `Expand(tree)`, per node or wholly, is the
+> implementation's choice; agreeing with the expansion is not.
+
+Emission is separately constrained, and in the opposite direction. The rewrite
+MUST re-point the rect factors by editing the **call site** — the reference's
+`bindings`, and the aggregate's own `ranges` / `shape` / `args` / `join` — and
+MUST NOT edit the referenced template `body`. The body is shared across call
+sites (one of them being the generated producer `filter`, which keeps the
+FULL-GRID rect references) and is lowered once at the build boundary, which is
+what Option B exists for. Both binding spellings carry a rect factor and both
+MUST be re-pointed: the bare factor name (`{"xmin": "src_W"}`) and the
+subscripted expression (`{"lo_x": index(src_W, c)}`).
+
+Consequently a rect factor named **free** in a template body — reachable from
+neither the call site's `bindings` nor the aggregate's `args` — cannot be
+re-pointed, and leaving it would index the compact per-support cell gathers with
+full-grid positions. That is a wrong-numbers defect, so it MUST be rejected, with
+diagnostic `template_body_references_pushdown_rewritten_variable`. The remedy is
+the one §9.6.4's sibling guard `template_body_references_coupling_rewritten_variable`
+already prescribes: bind the value through the template's params.
+
+**Residual diagnostic.** The desugar MUST NOT decline silently on a document it
+can see is join-shaped. When an aggregate is the rank-1 factor of a `+`-semiring
+mat-vec against a provider-backed rank-2 parameter (the join position) AND is
+itself a `+`-aggregate over two 1-D index sets whose output axis is that
+parameter's first axis, but its containment predicate cannot be recovered, the
+implementation MUST emit a diagnostic naming the variable and stating the
+consequence — the provider-backed array is fetched WHOLESALE. The records are
+conformance-pinned by the `pushdown/unreadable_join` corpus fixture: `code`
+(`pushdown_join_unrecognised`), `variable`, `consumer`, `array`, `index_set`,
+`reason` (`predicate_unparsed` when a predicate was found but did not read as a
+rectangle containment; `surviving_template_reference` when the body carries a
+reference that could not be expanded for matching), `template` (the referenced
+template's name, or null) and `consequence`, sorted by
+`(variable, consumer, array)`. Human-readable text is not part of the contract.
+
+This is a diagnostic, **not** a rejection: the desugar's contract is that a
+document it does not recognise comes back byte-identical, and an aggregate with
+no containment predicate at all is a legitimately dense reduction, not a defect —
+"not a join" and "a join I could not read" MUST be kept apart, and only the
+latter is reported.
+
 **Soundness guard.** Every arm fires only when the reduction's semiring is the
 additive `(+, 0)` monoid. A `max_product` / `min_sum` / etc. aggregate of the
 same shape MUST be left untouched — the gate is conservative and the identity

@@ -3045,6 +3045,22 @@ special-case older versions to recover Option A matching. Motivation and measure
    parameters through nested references' `bindings`; the `name` field is never a substitution
    site; an eager reference introduced into the tree by instantiation expands as part of the
    same rewrite.
+
+   **Scope of this rule.** Rule 4 governs the §9.6.3 **rewrite-rule engine** and nothing else:
+   the `match`-pattern matcher, whose opacity keeps the fixpoint deterministic and
+   byte-identical across bindings. It does **not** govern other consumers of the loaded tree —
+   analyses, lowerings, evaluators and pre-build model transforms are governed by **rule 2**,
+   under which a reference denotes its expansion and every consumer MAY expand, wholly or per
+   node. A consumer whose *decisions* depend on the shape of an expression MUST therefore reach
+   those decisions on `Expand(tree)`, not on the reference-preserving tree, or its behavior
+   becomes a function of the author's factoring — which rule 2 forbids ("all observable
+   behavior MUST be as if evaluated on `Expand(tree)`"). The projection-pushdown desugar
+   (CONFORMANCE_SPEC §5.5.7) is the worked example: **whether the pushdown fires MUST NOT
+   depend on whether the author factored the binning body through a template.** Note that
+   expanding for a decision does not oblige a consumer to expand what it *emits*: a transform
+   MAY match on the expanded view and then edit the reference-preserving tree (a call site's
+   `bindings`), which is how a consumer stays rule-2-correct without giving up the single
+   lowering Option B exists for.
 5. **Round-trip emits the reference-preserving, self-contained form.** Surviving call sites
    emit verbatim (post-substitution, post-fold). Each component materializes into its own
    `expression_templates` block the transitive closure of templates its surviving references
