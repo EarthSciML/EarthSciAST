@@ -98,6 +98,7 @@ include("area_faq.jl")
 include("broad_phase.jl")
 # MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
 include("tree_walk.jl")
+include("unit_conversion.jl")
 include("data_refresh.jl")
 include("data_output.jl")
 include("simulate.jl")
@@ -122,6 +123,9 @@ export
     build_reference_graph, resolve_references,
     # Expression types
     ASTExpr, NumExpr, IntExpr, VarExpr, OpExpr,
+    # Data-loader unit conversion (esm-spec §8.5)
+    UnitConversionError, parse_unit_conversion,
+    apply_unit_conversion, apply_unit_conversion!,
     # Literal predicates (RFC §5.4.1 int/float distinction)
     is_literal, literal_value,
     # Equation types
