@@ -44,6 +44,7 @@ from .errors import EarthSciAstError, ParseError
 from .esm_types import (
     EXPR_WIRE_SPEC,
     AffectEquation,
+    Analysis,
     Assertion,
     CallbackCoupling,
     Connector,
@@ -65,7 +66,6 @@ from .esm_types import (
     Equation,
     EsmFile,
     EventCoupling,
-    Example,
     Expr,
     ExprNode,
     FunctionalAffect,
@@ -592,7 +592,7 @@ def _parse_parameter_sweep(data: dict[str, Any]) -> ParameterSweep:
     )
 
 
-def _parse_example(data: dict[str, Any]) -> Example:
+def _parse_analysis(data: dict[str, Any]) -> Analysis:
     # ``initial_state`` is a plain scalar-override map {var: number} (v0.8.0);
     # initial fields themselves are declared with `ic` op equations in the model.
     initial_state = None
@@ -601,7 +601,7 @@ def _parse_example(data: dict[str, Any]) -> Example:
     sweep = None
     if "parameter_sweep" in data:
         sweep = _parse_parameter_sweep(data["parameter_sweep"])
-    return Example(
+    return Analysis(
         id=data["id"],
         time_span=_parse_time_span(data["time_span"]),
         description=data.get("description"),
@@ -610,7 +610,7 @@ def _parse_example(data: dict[str, Any]) -> Example:
         parameter_sweep=sweep,
         plots=[_parse_plot(p) for p in data.get("plots", [])],
         # esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries naming the
-        # discretization this example runs under. Retained (not consumed at load)
+        # discretization this analysis runs under. Retained (not consumed at load)
         # so the field survives round-trip, mirroring _parse_test above.
         expression_template_imports=copy.deepcopy(
             data.get("expression_template_imports", []) or []
@@ -662,8 +662,8 @@ def _parse_model(model_data: dict[str, Any]) -> Model:
         model.tolerance = _parse_tolerance(model_data["tolerance"])
     if "tests" in model_data:
         model.tests = [_parse_test(t) for t in model_data["tests"]]
-    if "examples" in model_data:
-        model.examples = [_parse_example(e) for e in model_data["examples"]]
+    if "analyses" in model_data:
+        model.analyses = [_parse_analysis(a) for a in model_data["analyses"]]
 
     if (
         "initialization_equations" in model_data
@@ -808,8 +808,8 @@ def _parse_reaction_system(rs_data: dict[str, Any]) -> ReactionSystem:
         rs.tolerance = _parse_tolerance(rs_data["tolerance"])
     if "tests" in rs_data:
         rs.tests = [_parse_test(t) for t in rs_data["tests"]]
-    if "examples" in rs_data:
-        rs.examples = [_parse_example(e) for e in rs_data["examples"]]
+    if "analyses" in rs_data:
+        rs.analyses = [_parse_analysis(a) for a in rs_data["analyses"]]
 
     # Events are owned by the component that declares them; see _parse_model.
     if "continuous_events" in rs_data:

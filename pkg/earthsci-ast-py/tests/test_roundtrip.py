@@ -309,10 +309,10 @@ def test_roundtrip_normalizes_integral_floats_keeps_fractional():
     assert eqs[3]["rhs"]["args"] == [1, 2.5]
 
 
-def test_roundtrip_tests_and_examples_fixture():
-    """Round-trip the tests_examples_comprehensive fixture: inline Test/Assertion/
-    Example/Plot/ParameterSweep blocks must survive parse -> serialize (gt-krpg)."""
-    fixture_path = VALID_DIR / "tests_examples_comprehensive.esm"
+def test_roundtrip_tests_and_analyses_fixture():
+    """Round-trip the tests_analyses_comprehensive fixture: inline Test/Assertion/
+    Analysis/Plot/ParameterSweep blocks must survive parse -> serialize (gt-krpg)."""
+    fixture_path = VALID_DIR / "tests_analyses_comprehensive.esm"
     original = fixture_path.read_text()
     orig_obj = json.loads(original)
 
@@ -324,7 +324,7 @@ def test_roundtrip_tests_and_examples_fixture():
     # Idempotence under re-save (spec §2.1a).
     assert json.loads(dumped) == json.loads(dumped2)
 
-    # Every tests/examples block from the input survives to the output.
+    # Every tests/analyses block from the input survives to the output.
     out = json.loads(dumped)
     for comp_kind in ("models", "reaction_systems"):
         for comp_name, comp in orig_obj.get(comp_kind, {}).items():
@@ -332,27 +332,27 @@ def test_roundtrip_tests_and_examples_fixture():
                 assert out[comp_kind][comp_name]["tolerance"] == comp["tolerance"]
             if "tests" in comp:
                 assert len(out[comp_kind][comp_name]["tests"]) == len(comp["tests"])
-            if "examples" in comp:
-                assert len(out[comp_kind][comp_name]["examples"]) == len(comp["examples"])
+            if "analyses" in comp:
+                assert len(out[comp_kind][comp_name]["analyses"]) == len(comp["analyses"])
 
     # Spot-check full structure: heatmap-over-sweep assertion values.
-    sweep_example = next(
-        e for e in out["models"]["LogisticGrowth"]["examples"] if e["id"] == "rK_heatmap_sweep"
+    sweep_analysis = next(
+        e for e in out["models"]["LogisticGrowth"]["analyses"] if e["id"] == "rK_heatmap_sweep"
     )
-    assert len(sweep_example["parameter_sweep"]["dimensions"]) == 2
-    assert sweep_example["plots"][0]["value"] == {"variable": "N", "reduce": "final"}
-    assert sweep_example["plots"][2]["value"] == {"variable": "N", "at_time": 10.0}
+    assert len(sweep_analysis["parameter_sweep"]["dimensions"]) == 2
+    assert sweep_analysis["plots"][0]["value"] == {"variable": "N", "reduce": "final"}
+    assert sweep_analysis["plots"][2]["value"] == {"variable": "N", "at_time": 10.0}
 
     # PlotSeries survives (multi-series line plot on ReactionSystem).
-    rs_example = out["reaction_systems"]["SimpleDecay"]["examples"][0]
-    series = rs_example["plots"][0]["series"]
+    rs_analysis = out["reaction_systems"]["SimpleDecay"]["analyses"][0]
+    series = rs_analysis["plots"][0]["series"]
     assert [s["name"] for s in series] == ["A", "B"]
 
     # Inline array-form y (v0.5.0) is parsed and normalized to canonical form.
-    multi_y_example = next(
-        e for e in out["reaction_systems"]["SimpleDecay"]["examples"] if e["id"] == "multi_y_trace"
+    multi_y_analysis = next(
+        e for e in out["reaction_systems"]["SimpleDecay"]["analyses"] if e["id"] == "multi_y_trace"
     )
-    multi_plot = multi_y_example["plots"][0]
+    multi_plot = multi_y_analysis["plots"][0]
     # After normalization, y is the canonical single PlotAxis (first entry).
     assert multi_plot["y"] == {"variable": "A", "label": "A"}
     # Series is projected from the array.

@@ -536,13 +536,13 @@ fn test_fractional_stoichiometry_round_trip() {
     assert_eq!(substrates[0].coefficient, 2.0);
 }
 
-/// v0.5.0: tests_examples_comprehensive fixture (includes multi-series y array form) round-trips.
+/// v0.5.0: tests_analyses_comprehensive fixture (includes multi-series y array form) round-trips.
 #[test]
-fn test_tests_examples_comprehensive_round_trip() {
-    let fixture = include_str!("../../../tests/valid/tests_examples_comprehensive.esm");
+fn test_tests_analyses_comprehensive_round_trip() {
+    let fixture = include_str!("../../../tests/valid/tests_analyses_comprehensive.esm");
 
     let parsed: EsmFile = load(fixture)
-        .expect("tests_examples_comprehensive.esm must load (schema accepts array-form plots.y)");
+        .expect("tests_analyses_comprehensive.esm must load (schema accepts array-form plots.y)");
     let serialized = save(&parsed).expect("serialize comprehensive fixture");
     let reparsed: EsmFile = load(&serialized).expect("re-load serialized comprehensive fixture");
 
@@ -566,7 +566,7 @@ fn test_inline_multi_y_schema_validation() {
                     { "lhs": { "op": "D", "args": ["A"], "wrt": "t" }, "rhs": { "op": "*", "args": [-0.1, "A"] } },
                     { "lhs": { "op": "D", "args": ["B"], "wrt": "t" }, "rhs": { "op": "*", "args": [0.1, "A"] } }
                 ],
-                "examples": [
+                "analyses": [
                     {
                         "id": "ab_trace",
                         "time_span": { "start": 0.0, "end": 10.0 },

@@ -42,7 +42,7 @@ Nothing available today lifts this weld, in **any** of the three contexts where 
   rules are declared **inside** the `Advection` leaf model, next to its `grad` equations; the
   `coupling` block above selects and wires components but is structurally unable to say a word about
   discretization.
-- **Inline tests / examples.** A `Test` targets its enclosing component implicitly ("there is no
+- **Inline tests / analyses.** A `Test` targets its enclosing component implicitly ("there is no
   `model_ref` field: the target is implicit from document location", §6.6) and is
   `additionalProperties: false` — there is no slot to attach a discretization, so a PDE component's
   inline tests (§6.6.5 PDE-aware assertions) cannot be *run* against any concrete scheme. This is why
@@ -66,7 +66,7 @@ block), none touching the leaf file.
 |---|--------|--------|--------|-------|
 | A | **`SubsystemRef.expression_template_imports`** — ordered `TemplateImport[]` on a §4.7 subsystem-ref edge. | Implicit — the referenced component (edge mounts exactly one). | Load-time (consumed by the fixpoint) | schema `SubsystemRef` + §4.7 |
 | B | **`CouplingEntry.expression_template_imports`** — map `{ <target-system>: TemplateImport[] }` on any coupling entry; key MUST name a model/reaction-system the entry references. | Explicit — a coupling entry references two-plus systems. | Load-time (consumed by the fixpoint) | schema all `Coupling*` defs + §10 |
-| C | **`Test.expression_template_imports` / `Example.expression_template_imports`** — ordered `TemplateImport[]` on a `Test`/`Example` object. | Implicit — the enclosing component (§6.6 implicit target). | Execution-time (ephemeral per-run build) | schema `Test`/`Example` + §6.6/§6.7 |
+| C | **`Test.expression_template_imports` / `Analysis.expression_template_imports`** — ordered `TemplateImport[]` on a `Test`/`Analysis` object. | Implicit — the enclosing component (§6.6 implicit target). | Execution-time (ephemeral per-run build) | schema `Test`/`Analysis` + §6.6/§6.7 |
 | D | **Semantics (§9.7.10)** — every form *widens the target component's rule set* and nothing else: component-local scope preserved, §9.7.4 order/dedup/conflict verbatim. A/B resolve at load and do not survive `parse → emit`; C is authored per-run config and **does** survive. | — | — | §9.7.10 (new) + §9.7.4 |
 | E | **Diagnostics** — `template_inject_target_unknown`, `template_inject_target_is_loader`, `template_inject_target_not_component`; existing `template_import_*` codes fire unchanged for the import list. | — | — | §9.6.6 table |
 
@@ -152,9 +152,9 @@ subsystem path (`"Parent.RefSubsystem"`) is a valid key when the entry reference
 hanging the discretization on the entry that mounts a PDE component into the assembly keeps the
 choice next to the wiring that makes it necessary, and needs no new top-level section (§8.1).
 
-## 5. `Test` / `Example` injection (§6.6 / §6.7)
+## 5. `Test` / `Analysis` injection (§6.6 / §6.7)
 
-`Test` and `Example` each gain one optional field — an ordered `TemplateImport[]`, same shape as
+`Test` and `Analysis` each gain one optional field — an ordered `TemplateImport[]`, same shape as
 §9.7.2 — registered into the **enclosing** component's template scope for that run only:
 
 ```json
@@ -180,7 +180,7 @@ PDE-aware assertions runnable on a discretization-agnostic component: the inject
 component's `grad` in the per-test build, the resulting spatial field is collapsed to a scalar via
 `coords` or `reduce` at the assertion `time`, and the L2/Linf reference machinery (§6.6.5) checks it.
 
-**One suite, many schemes.** Because each `Test`/`Example` carries its own list and each runs as an
+**One suite, many schemes.** Because each `Test`/`Analysis` carries its own list and each runs as an
 independent ephemeral build (§6.1 of §9.7.10 below), a single component's suite may exercise it under
 central vs. upwind, or across a convergence sweep, by varying the injected `ref`/`bindings`
 per test — with no conflict between tests and no edit to the component. `bindings` close the
@@ -205,7 +205,7 @@ bindings) is untouched: injection only widens the rule set handed to the already
 **Merge order.** When one target receives imports from more than one source, they concatenate into
 its §9.7.4 effective declaration order in this fixed, structure-determined order: (1) the target's
 own `expression_template_imports`; (2) its subsystem-ref edge's injection (§3), if mounted by ref;
-(3) coupling-entry injections (§4) in `coupling`-array order; (4) for a test/example run, that
+(3) coupling-entry injections (§4) in `coupling`-array order; (4) for a test/analysis run, that
 test's injection (§5). Concatenation then feeds §9.7.4 unchanged — depth-first post-order, deep-equal
 diamond dedup at first occurrence, non-deep-equal same-name collision `template_import_name_conflict`.
 (Forms A/B and form C never mix in one build: A/B build the assembled document, C builds an ephemeral
@@ -226,7 +226,7 @@ constraint 6) never trips on it. A composition that mounts a PDE component **wit
 where the component imports nothing itself) still fails cleanly at evaluation with
 `unlowered_operator` naming the surviving op — the same failure as today, now with an obvious fix.
 
-**Form C (test/example) resolves at execution time, in an ephemeral build.** A test's injection must
+**Form C (test/analysis) resolves at execution time, in an ephemeral build.** A test's injection must
 **not** run at component load — doing so would lower the enclosing component's `grad` in the
 canonical document and prevent a sibling test from choosing a different scheme. Instead the inline
 runner (§6.6) constructs, per test, an ephemeral instance of the enclosing component with that test's
@@ -242,7 +242,7 @@ Injection fields share the round-trip fate of the *timing regime* they belong to
   assembled document with the mounted/target component's operators already lowered (Option A
   always-expanded, §9.6.4), and the injection field is gone — subsumed into that component's now-lowered
   scope, exactly as the subsystem ref/coupling edge it rode on is resolved.
-- **Form C survives `parse → emit` verbatim.** A `Test`/`Example` injection is authored per-run
+- **Form C survives `parse → emit` verbatim.** A `Test`/`Analysis` injection is authored per-run
   configuration, a peer of `parameter_overrides`, `initial_conditions`, and `tolerance`. The
   enclosing component round-trips with its `grad` **intact** (§9.6.3 constraint 6 — a file may
   round-trip carrying rewrite-targets), and the test's `expression_template_imports` is preserved so
@@ -267,7 +267,7 @@ sweep by re-binding.
 | `template_inject_target_is_loader` | A coupling-entry injection key resolves to a data loader (no expression positions to rewrite). |
 | `template_inject_target_not_component` | A coupling-entry injection key resolves to something that is neither model, reaction system, nor loader. |
 
-Subsystem-ref (§3) and test/example (§5) injections need no target-selector diagnostics — their
+Subsystem-ref (§3) and test/analysis (§5) injections need no target-selector diagnostics — their
 target is implicit. The import list *itself* reuses every existing §9.7 code unchanged:
 `template_import_unresolved` (bad `ref`), `template_import_not_library` (`ref` is a component file),
 `template_import_unknown_name` (bad `only`/`bindings` name), `template_import_cycle`, the
@@ -322,12 +322,12 @@ Each `Coupling*` def (`CouplingOperatorCompose`, `CouplingCouple`, `CouplingVari
 }
 ```
 
-`Test` and `Example` (add one property each; `additionalProperties` stays `false`):
+`Test` and `Analysis` (add one property each; `additionalProperties` stays `false`):
 
 ```json
 "expression_template_imports": {
   "type": "array",
-  "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests/examples run under an assembler-free, per-test discretization. Same entry shape as §9.7.2; target implicit. Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).",
+  "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.6) — lets a discretization-agnostic PDE component's inline tests/analyses run under an assembler-free, per-test discretization. Same entry shape as §9.7.2; target implicit. Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameter_overrides / tolerance).",
   "items": { "$ref": "#/$defs/TemplateImport" }
 }
 ```
@@ -367,7 +367,7 @@ The change is localized to two existing phases, and touches neither the rewrite 
 1. **Subsystem-resolution / coupling-assembly** (forms A/B): after loading a mounted component and
    before the fixpoint, splice the injected list into that component's effective scope in the §6.1
    order — the same list a component's own `expression_template_imports` already produces.
-2. **Inline-test/example runner** (form C, §6.6): before building a test's evaluator, append the
+2. **Inline-test/analysis runner** (form C, §6.6): before building a test's evaluator, append the
    test's imports to an ephemeral copy of the enclosing component's scope and run the fixpoint on that
    copy; never mutate the persisted component.
 

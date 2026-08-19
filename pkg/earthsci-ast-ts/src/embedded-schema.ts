@@ -1496,11 +1496,11 @@ export const schema: AnySchemaObject = {
             "$ref": "#/$defs/Test"
           }
         },
-        "examples": {
+        "analyses": {
           "type": "array",
-          "description": "Inline illustrative examples of how to run this model. Each example specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.",
+          "description": "Inline illustrative analyses of how to run this model. Each analysis specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.",
           "items": {
-            "$ref": "#/$defs/Example"
+            "$ref": "#/$defs/Analysis"
           }
         },
         "expression_templates": {
@@ -1754,11 +1754,11 @@ export const schema: AnySchemaObject = {
             "$ref": "#/$defs/Test"
           }
         },
-        "examples": {
+        "analyses": {
           "type": "array",
-          "description": "Inline illustrative examples of how to run this reaction system. Each example specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.",
+          "description": "Inline illustrative analyses of how to run this reaction system. Each analysis specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.",
           "items": {
-            "$ref": "#/$defs/Example"
+            "$ref": "#/$defs/Analysis"
           }
         },
         "expression_templates": {
@@ -2334,7 +2334,7 @@ export const schema: AnySchemaObject = {
     },
     "Plot": {
       "type": "object",
-      "description": "A plot specification associated with an example. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.",
+      "description": "A plot specification associated with an analysis. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.",
       "required": [
         "id",
         "type",
@@ -2345,7 +2345,7 @@ export const schema: AnySchemaObject = {
       "properties": {
         "id": {
           "type": "string",
-          "description": "Identifier unique within this example's plots array."
+          "description": "Identifier unique within this analysis's plots array."
         },
         "type": {
           "type": "string",
@@ -2391,7 +2391,7 @@ export const schema: AnySchemaObject = {
         },
         "at_time": {
           "type": "number",
-          "description": "Required for field_slice and field_snapshot: simulation time at which to extract the spatial field. Must lie within the example's time_span."
+          "description": "Required for field_slice and field_snapshot: simulation time at which to extract the spatial field. Must lie within the analysis's time_span."
         },
         "pinned_coords": {
           "type": "object",
@@ -2463,9 +2463,9 @@ export const schema: AnySchemaObject = {
         }
       ]
     },
-    "Example": {
+    "Analysis": {
       "type": "object",
-      "description": "An inline illustrative example of how to run the enclosing component. Defines the run configuration and one or more plots derived from the result.",
+      "description": "An inline illustrative analysis of how to run the enclosing component. Defines the run configuration and one or more plots derived from the result.",
       "required": [
         "id",
         "time_span"
@@ -2474,14 +2474,14 @@ export const schema: AnySchemaObject = {
       "properties": {
         "id": {
           "type": "string",
-          "description": "Identifier unique within this component's examples array."
+          "description": "Identifier unique within this component's analyses array."
         },
         "description": {
           "type": "string",
-          "description": "Human-readable description of what this example illustrates."
+          "description": "Human-readable description of what this analysis illustrates."
         },
         "initial_state": {
-          "description": "Initial state for this example run. Either (legacy) a flat map of scalar overrides keyed by state-variable name, or the esm-spec §11.4 discriminated union: {type:\"per_variable\", values:{name:number}} for scalar ICs, or {type:\"expression\", values:{name:<expression>}} for closed-form spatial FIELD initial conditions (per-cell coordinate expressions). Field ICs may also be declared with `ic` equations in the model.",
+          "description": "Initial state for this analysis run. Either (legacy) a flat map of scalar overrides keyed by state-variable name, or the esm-spec §11.4 discriminated union: {type:\"per_variable\", values:{name:number}} for scalar ICs, or {type:\"expression\", values:{name:<expression>}} for closed-form spatial FIELD initial conditions (per-cell coordinate expressions). Field ICs may also be declared with `ic` equations in the model.",
           "oneOf": [
             {
               "type": "object",
@@ -2525,18 +2525,18 @@ export const schema: AnySchemaObject = {
         },
         "parameter_sweep": {
           "$ref": "#/$defs/ParameterSweep",
-          "description": "Optional parameter sweep. When present, the example represents a family of runs (one per Cartesian combination) rather than a single trajectory."
+          "description": "Optional parameter sweep. When present, the analysis represents a family of runs (one per Cartesian combination) rather than a single trajectory."
         },
         "plots": {
           "type": "array",
-          "description": "Plot specifications derived from this example's run(s).",
+          "description": "Plot specifications derived from this analysis's run(s).",
           "items": {
             "$ref": "#/$defs/Plot"
           }
         },
         "expression_template_imports": {
           "type": "array",
-          "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline examples run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).",
+          "description": "Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline analyses run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).",
           "items": {
             "$ref": "#/$defs/TemplateImport"
           }

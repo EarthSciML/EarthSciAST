@@ -840,7 +840,7 @@ end
 """
     TimeSpan(start::Float64, stop::Float64)
 
-Simulation time interval for inline model tests and examples (§gt-cc1).
+Simulation time interval for inline model tests and analyses (§gt-cc1).
 """
 struct TimeSpan
     start::Float64

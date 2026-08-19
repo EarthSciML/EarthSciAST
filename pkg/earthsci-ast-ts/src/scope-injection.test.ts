@@ -3,7 +3,7 @@
  * (docs/content/rfcs/scoped-template-injection.md): the assembler- or
  * test-chosen discretization for a discretization-agnostic PDE leaf, via
  * `expression_template_imports` on a §4.7 subsystem-ref edge (form A), a §10
- * coupling entry (form B), or a §6.6/§6.7 test/example (form C). Drives the
+ * coupling entry (form B), or a §6.6/§6.7 test/analysis (form C). Drives the
  * shared conformance fixtures under tests/conformance/expression_templates/,
  * mirroring the Julia reference suite
  * (`EarthSciAST.jl/test/scope_injection_test.jl`).
@@ -85,7 +85,7 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     )
   })
 
-  it('form C — test/example injection (§6.6.6 / §9.7.10)', async () => {
+  it('form C — test/analysis injection (§6.6.6 / §9.7.10)', async () => {
     const f = loadPath(conf('inject_test_block', 'fixture.esm'))
     const adv = f.models.Advection
     // The enclosing component round-trips with its D INTACT (form C does not

@@ -2,7 +2,7 @@
 //! (docs/content/rfcs/scoped-template-injection.md): the assembler- or
 //! test-chosen discretization for a discretization-agnostic PDE leaf, via
 //! `expression_template_imports` on a §4.7 subsystem-ref edge (form A), a §10
-//! coupling entry (form B), or a §6.6/§6.7 test/example (form C). Mirrors the
+//! coupling entry (form B), or a §6.6/§6.7 test/analysis (form C). Mirrors the
 //! Julia reference suite
 //! (`EarthSciAST.jl/test/scope_injection_test.jl`), driving the shared
 //! conformance fixtures under `tests/conformance/expression_templates/` against
@@ -186,7 +186,7 @@ fn form_b_target_is_loader_diagnostic() {
 }
 
 // ---------------------------------------------------------------------------
-// Form C — test/example injection (§6.6.6 / §9.7.10)
+// Form C — test/analysis injection (§6.6.6 / §9.7.10)
 // ---------------------------------------------------------------------------
 
 #[test]

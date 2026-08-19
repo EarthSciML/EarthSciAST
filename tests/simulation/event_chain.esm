@@ -307,7 +307,7 @@
           ]
         }
       ],
-      "examples": [
+      "analyses": [
         {
           "id": "temperature_ramp",
           "description": "Illustrative run: a 500 s linear heating ramp at 0.1 K/s with the default reaction parameters. Plots temperature, concentration, and product on their own axes; rates are low enough that concentration looks flat, which is informative in itself.",

@@ -1597,7 +1597,7 @@ end
 # Scope-directed template injection (esm-spec §9.7.10)
 #
 # The consuming surface — a §4.7 subsystem-ref edge (form A), a §10 coupling
-# entry (form B), or a §6.6/§6.7 test/example (form C) — may register imports
+# entry (form B), or a §6.6/§6.7 test/analysis (form C) — may register imports
 # into a TARGET component's own scope without editing the leaf. Forms A/B are
 # applied here, at the raw-data level, BEFORE `resolve_template_machinery`: each
 # widens the target component's `expression_template_imports` in the §9.7.10

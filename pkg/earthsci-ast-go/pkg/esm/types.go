@@ -178,8 +178,8 @@ type Model struct {
 	Tolerance *Tolerance `json:"tolerance,omitempty"`
 	// Tests are inline validation tests for this model (esm-spec §6.6).
 	Tests []Test `json:"tests,omitempty"`
-	// Examples are inline illustrative runs + plot specs (esm-spec §6.7).
-	Examples []Example `json:"examples,omitempty"`
+	// Analyses are inline illustrative runs + plot specs (esm-spec §6.7).
+	Analyses []Analysis `json:"analyses,omitempty"`
 	// InitializationEquations hold only at t=0 (not dynamically time-stepped).
 	// Used by models that must solve an auxiliary system before the main
 	// time-stepping begins (e.g. aerosol equilibrium, plume rise). See gt-ebuq.
@@ -250,12 +250,12 @@ type ReactionSystem struct {
 	Tolerance *Tolerance `json:"tolerance,omitempty"`
 	// Tests are inline validation tests for this reaction system (esm-spec §6.6).
 	Tests []Test `json:"tests,omitempty"`
-	// Examples are inline illustrative runs + plot specs (esm-spec §6.7).
-	Examples []Example `json:"examples,omitempty"`
+	// Analyses are inline illustrative runs + plot specs (esm-spec §6.7).
+	Analyses []Analysis `json:"analyses,omitempty"`
 }
 
 // ========================================
-// 3b. Inline Tests, Examples, and Plots (esm-spec §6.6 / §6.7)
+// 3b. Inline Tests, Analyses, and Plots (esm-spec §6.6 / §6.7)
 // ========================================
 
 // Tolerance is a numerical comparison tolerance. Any of Abs/Rel may be set; an
@@ -331,7 +331,7 @@ type PlotSeries struct {
 	Variable string `json:"variable"`
 }
 
-// Plot is a plot specification associated with an Example.
+// Plot is a plot specification associated with an Analysis.
 type Plot struct {
 	ID          string       `json:"id"`
 	Type        string       `json:"type"` // "line" | "scatter" | "heatmap"
@@ -364,8 +364,8 @@ type ParameterSweep struct {
 	Dimensions []SweepDimension `json:"dimensions"`
 }
 
-// Example is an inline illustrative example of how to run a component.
-type Example struct {
+// Analysis is an inline illustrative analysis of how to run a component.
+type Analysis struct {
 	ID             string             `json:"id"`
 	Description    *string            `json:"description,omitempty"`
 	InitialState   map[string]float64 `json:"initial_state,omitempty"`
@@ -374,7 +374,7 @@ type Example struct {
 	ParameterSweep *ParameterSweep    `json:"parameter_sweep,omitempty"`
 	Plots          []Plot             `json:"plots,omitempty"`
 	// ExpressionTemplateImports are raw §9.7.2 import entries injected into the
-	// ENCLOSING component's template scope for THIS example's run only (esm-spec
+	// ENCLOSING component's template scope for THIS analysis's run only (esm-spec
 	// §9.7.10 form C / §6.7). Authored per-run config (a peer of Parameters), so
 	// it DOES survive parse → emit; consumed only by an ephemeral per-run build,
 	// which this binding does not perform.

@@ -328,7 +328,7 @@ Fields populated from the reactions:
 - `reactions` (id + substrates/products + rate expression)
 
 Placeholders filled in Phase 2: `description`, `version`, `reference`,
-`tests`, `examples`, `metadata.tags`, `metadata.source_ref`.
+`tests`, `analyses`, `metadata.tags`, `metadata.source_ref`.
 """
 function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
     gaps = GapReport[]
@@ -357,7 +357,7 @@ function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
         rs_dict["reference"] = Dict{String,Any}("notes" => join(ref_notes_lines, "\n"))
     end
     rs_dict["tests"] = Any[]
-    rs_dict["examples"] = Any[]
+    rs_dict["analyses"] = Any[]
 
     # Top-level EsmFile-shaped dict
     out = Dict{String,Any}(

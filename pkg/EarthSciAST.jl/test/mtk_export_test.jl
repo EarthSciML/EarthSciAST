@@ -97,10 +97,10 @@ end
 
     @test length(model_dict["equations"]) == 3
 
-    # Placeholders: tests/examples arrays, reference is omitted when
+    # Placeholders: tests/analyses arrays, reference is omitted when
     # there is nothing to say (default version, no gaps, no source_ref).
     @test model_dict["tests"] == []
-    @test model_dict["examples"] == []
+    @test model_dict["analyses"] == []
 end
 
 @testset "mtk2esm: metadata kwargs pass through" begin

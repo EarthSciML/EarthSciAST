@@ -1,8 +1,8 @@
 {
   "esm": "0.1.0",
   "metadata": {
-    "name": "PDETestsAndExamples",
-    "description": "PDE-aware tests and examples: spatial-point assertions, domain-reduce assertions, L2-error assertions against an analytic reference, expression-shaped initial conditions (v0.8.0: `ic` equations, §11.4), and field plot types (field_slice / field_snapshot). Exercises the §6.6.5, §6.7.4 and §11.4 extensions added under gt-vzwk.",
+    "name": "PDETestsAndAnalyses",
+    "description": "PDE-aware tests and analyses: spatial-point assertions, domain-reduce assertions, L2-error assertions against an analytic reference, expression-shaped initial conditions (v0.8.0: `ic` equations, §11.4), and field plot types (field_slice / field_snapshot). Exercises the §6.6.5, §6.7.4 and §11.4 extensions added under gt-vzwk.",
     "authors": ["ESM Test Suite"],
     "created": "2026-04-19T00:00:00Z",
     "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots"]
@@ -109,7 +109,7 @@
           ]
         }
       ],
-      "examples": [
+      "analyses": [
         {
           "id": "heat_decay_from_sine",
           "description": "(d) The expression initial condition u(x,0) = sin(pi x) is the model's ic(u) equation; (e) field_slice and field_snapshot plot types.",
@@ -165,7 +165,7 @@
           }
         }
       ],
-      "examples": [
+      "analyses": [
         {
           "id": "heat_decay_2d",
           "description": "Field snapshot at t=0.1 with both spatial axes plotted. IC u(x,y,0) = sin(pi x) sin(pi y) is the model's ic(u) equation.",

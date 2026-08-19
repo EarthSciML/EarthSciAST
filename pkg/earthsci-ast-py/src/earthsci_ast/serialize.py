@@ -13,6 +13,7 @@ from typing import Any
 
 from .esm_types import (
     EXPR_WIRE_SPEC,
+    Analysis,
     Assertion,
     CallbackCoupling,
     ContinuousEvent,
@@ -30,7 +31,6 @@ from .esm_types import (
     Equation,
     EsmFile,
     EventCoupling,
-    Example,
     Expr,
     ExprNode,
     FunctionalAffect,
@@ -461,7 +461,7 @@ def _serialize_parameter_sweep(ps: ParameterSweep) -> dict[str, Any]:
 # parameter_sweep, plots, expression_template_imports. ``initial_state`` is a
 # scalar override map {var: number} (v0.8.0); ``expression_template_imports``
 # (esm-spec §9.7.10 form C) survive parse → emit, deep-copied via JSON.
-_EXAMPLE_SPEC = (
+_ANALYSIS_SPEC = (
     ("id", "id", _KEEP, None),
     ("description", "description", _OMIT_NONE, None),
     ("initial_state", "initial_state", _OMIT_NONE, dict),
@@ -473,8 +473,8 @@ _EXAMPLE_SPEC = (
 )
 
 
-def _serialize_example(e: Example) -> dict[str, Any]:
-    return _serialize_by_spec(e, _EXAMPLE_SPEC)
+def _serialize_analysis(a: Analysis) -> dict[str, Any]:
+    return _serialize_by_spec(a, _ANALYSIS_SPEC)
 
 
 def _serialize_model(model: Model) -> dict[str, Any]:
@@ -497,15 +497,15 @@ def _serialize_model(model: Model) -> dict[str, Any]:
     # `boundary_conditions` field); they live in discretization rewrite rules
     # (esm-spec §9.6.8). Nothing to serialize here.
 
-    # Inline tests, examples, and model-level tolerance (esm-spec §6.6 / §6.7).
+    # Inline tests, analyses, and model-level tolerance (esm-spec §6.6 / §6.7).
     if model.tolerance is not None:
         tol = _serialize_tolerance(model.tolerance)
         if tol:
             result["tolerance"] = tol
     if model.tests:
         result["tests"] = [_serialize_test(t) for t in model.tests]
-    if model.examples:
-        result["examples"] = [_serialize_example(e) for e in model.examples]
+    if model.analyses:
+        result["analyses"] = [_serialize_analysis(a) for a in model.analyses]
 
     # Initialization-only equations and solver guesses (gt-ebuq).
     if model.initialization_equations:
@@ -647,15 +647,15 @@ def _serialize_reaction_system(rs: ReactionSystem) -> dict[str, Any]:
     if rs.constraint_equations:
         result["constraint_equations"] = [_serialize_equation(eq) for eq in rs.constraint_equations]
 
-    # Inline tests, examples, and component-level tolerance (esm-spec §6.6 / §6.7).
+    # Inline tests, analyses, and component-level tolerance (esm-spec §6.6 / §6.7).
     if rs.tolerance is not None:
         tol = _serialize_tolerance(rs.tolerance)
         if tol:
             result["tolerance"] = tol
     if rs.tests:
         result["tests"] = [_serialize_test(t) for t in rs.tests]
-    if rs.examples:
-        result["examples"] = [_serialize_example(e) for e in rs.examples]
+    if rs.analyses:
+        result["analyses"] = [_serialize_analysis(a) for a in rs.analyses]
 
     # Component-owned events (the schema nests events inside components).
     if rs.continuous_events:

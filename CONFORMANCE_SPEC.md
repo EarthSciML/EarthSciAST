@@ -194,7 +194,7 @@ These semantics are exercised by:
 
 Simulation tests are carried **inline** inside each `Model` and `ReactionSystem` under a `tests` array field. Reference trajectories are no longer stored as a parallel filesystem hierarchy — each test is a small run specification plus a handful of scalar `(variable, time, expected)` assertion points that travel with the model in the `.esm` document itself.
 
-See `esm-spec.md` Sections 6.6 (tests) and 6.7 (examples) for the full schema.
+See `esm-spec.md` Sections 6.6 (tests) and 6.7 (analyses) for the full schema.
 
 **Structure:**
 - Component-level tests live at `models.<name>.tests[]` and `reaction_systems.<name>.tests[]`.
@@ -236,7 +236,7 @@ See `esm-spec.md` Sections 6.6 (tests) and 6.7 (examples) for the full schema.
 
 **Runtime tolerance default:** when no `tolerance` is given at the assertion, test, or component level, conforming runtimes should use `rel = 1e-6` and no `abs` bound. If both `abs` and `rel` are given, passing either bound counts as a pass (standard numerical convention).
 
-**Inline examples.** Alongside `tests`, each `Model` and `ReactionSystem` may carry an `examples` array — illustrative run configurations (optionally including Cartesian parameter sweeps) paired with structural plot specifications (line, scatter, heatmap). Examples produce trajectories and plots, not pass/fail outcomes. See `esm-spec.md` Section 6.7.
+**Inline analyses.** Alongside `tests`, each `Model` and `ReactionSystem` may carry an `analyses` array — illustrative run configurations (optionally including Cartesian parameter sweeps) paired with structural plot specifications (line, scatter, heatmap). Analyses produce trajectories and plots, not pass/fail outcomes. See `esm-spec.md` Section 6.7.
 
 > **Note:** Earlier versions of this document described filesystem-based simulation tests (`tests/simulation/*.esm` + `tests/simulation/expected/*.csv`). That convention has been retired. The existing `tests/simulation/*.esm` fixtures now carry their reference behavior inline as `tests[]` arrays; the `expected/` CSV directory has been removed. Validation-error fixtures under `tests/invalid/` are unrelated to simulation tests and are unaffected by this change.
 

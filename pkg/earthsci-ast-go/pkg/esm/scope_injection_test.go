@@ -4,7 +4,7 @@ package esm
 // (docs/content/rfcs/scoped-template-injection.md): the assembler- or
 // test-chosen discretization for a discretization-agnostic PDE leaf, via
 // `expression_template_imports` on a §4.7 subsystem-ref edge (form A), a §10
-// coupling entry (form B), or a §6.6/§6.7 test/example (form C). Drives the
+// coupling entry (form B), or a §6.6/§6.7 test/analysis (form C). Drives the
 // shared conformance fixtures under tests/conformance/expression_templates/,
 // mirroring the Julia reference testset
 // EarthSciAST.jl/test/scope_injection_test.jl.
@@ -217,7 +217,7 @@ func TestScopeInjection_FormB_CouplingEntry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Form C — test/example injection (§6.6.6 / §9.7.10)
+// Form C — test/analysis injection (§6.6.6 / §9.7.10)
 // ---------------------------------------------------------------------------
 
 func TestScopeInjection_FormC_TestBlock(t *testing.T) {

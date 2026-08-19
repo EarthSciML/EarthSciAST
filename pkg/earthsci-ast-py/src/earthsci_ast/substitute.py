@@ -110,7 +110,7 @@ def substitute_in_model(model, bindings: dict[str, Expr]):
         for eq in model.equations
     ]
 
-    # ``replace`` carries subsystems, tests, examples, initialization_equations,
+    # ``replace`` carries subsystems, tests, analyses, initialization_equations,
     # guesses, system_kind, continuous_events/discrete_events (and any future
     # Model field) — the previous hand-listed Model(...) rebuild dropped them.
     return replace(
@@ -181,7 +181,7 @@ def substitute_in_reaction_system(system, bindings: dict[str, Expr]):
         )
 
     # ``replace`` carries constraint_equations, subsystems, tolerance, tests,
-    # examples, continuous_events/discrete_events (and any future field) —
+    # analyses, continuous_events/discrete_events (and any future field) —
     # the previous hand-listed ReactionSystem(...) rebuild dropped them.
     return replace(
         system,

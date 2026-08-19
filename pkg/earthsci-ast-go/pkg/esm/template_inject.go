@@ -10,7 +10,7 @@ import (
 // Scope-directed template injection (esm-spec §9.7.10)
 //
 // The consuming surface — a §4.7 subsystem-ref edge (form A), a §10 coupling
-// entry (form B), or a §6.6/§6.7 test/example (form C) — may register imports
+// entry (form B), or a §6.6/§6.7 test/analysis (form C) — may register imports
 // into a TARGET component's own scope without editing the leaf. Forms A/B are
 // applied at the raw-view level BEFORE resolveTemplateMachinery: each widens
 // the target component's `expression_template_imports` in the §9.7.10 merge
@@ -18,7 +18,7 @@ import (
 // ordinary import resolver + §9.6.3 fixpoint lower the target's rewrite-targets
 // with no engine change. Form A is threaded through subsystem-ref resolution
 // (subsystem_ref.go); form B runs on the root view inside resolveAndLowerJSON.
-// Form C survives parse → emit as authored per-run config (the Test / Example
+// Form C survives parse → emit as authored per-run config (the Test / Analysis
 // typed field) and is consumed only by an ephemeral per-run build — which this
 // binding does not perform (no numeric PDE solver). Mirrors the Julia reference
 // EarthSciAST.jl/src/template_imports.jl.
