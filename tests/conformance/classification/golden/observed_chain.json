@@ -1,0 +1,15 @@
+{
+  "models": {
+    "M": {
+      "ode_states": ["x"],
+      "observed_unknowns": ["y", "z"],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["a"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "models": {
+    "Parent": {
+      "ode_states": ["p"],
+      "observed_unknowns": ["p_obs"],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["gain"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    },
+    "Parent.Child": {
+      "ode_states": ["q"],
+      "observed_unknowns": ["q_obs"],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["decay"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    }
+  }
+}

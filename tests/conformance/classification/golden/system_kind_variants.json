@@ -1,0 +1,48 @@
+{
+  "models": {
+    "Ode": {
+      "ode_states": ["u"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["r"],
+      "system_kind": "ode",
+      "declared_system_kind": null
+    },
+    "Sde": {
+      "ode_states": ["u"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": ["w"],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["r", "s"],
+      "system_kind": "sde",
+      "declared_system_kind": null
+    },
+    "Nonlinear": {
+      "ode_states": [],
+      "observed_unknowns": ["H"],
+      "algebraic_unknowns": ["SO4"],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["Ksp"],
+      "system_kind": "nonlinear",
+      "declared_system_kind": null
+    },
+    "Declared": {
+      "ode_states": ["u"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["r"],
+      "system_kind": "ode",
+      "declared_system_kind": "ode"
+    }
+  }
+}

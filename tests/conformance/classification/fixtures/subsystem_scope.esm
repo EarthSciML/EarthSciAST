@@ -1,0 +1,67 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClassificationSubsystemScope",
+    "description": "Classification is PER MODEL NODE, not per document. The child's equations classify the child's variables and the parent's classify the parent's, even though the parent references the child by dot notation. A binding that flattens first and classifies once returns a different answer here than one that classifies each node in its own scope."
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 3 }
+  },
+  "models": {
+    "Parent": {
+      "variables": {
+        "p": {
+          "type": "unknown",
+          "units": "kg",
+          "shape": ["cells"],
+          "description": "arrayed ODE state of the parent"
+        },
+        "p_obs": {
+          "type": "unknown",
+          "units": "kg",
+          "shape": ["cells"],
+          "description": "arrayed observed of the parent"
+        },
+        "gain": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "subsystems": {
+        "Child": {
+          "variables": {
+            "q": {
+              "type": "unknown",
+              "units": "kg",
+              "default": 2.0,
+              "description": "scalar ODE state of the child"
+            },
+            "q_obs": {
+              "type": "unknown",
+              "units": "kg",
+              "description": "scalar observed of the child"
+            },
+            "decay": { "type": "parameter", "units": "1/s", "default": 0.25 }
+          },
+          "equations": [
+            {
+              "lhs": { "op": "D", "args": ["q"], "wrt": "t" },
+              "rhs": { "op": "*", "args": [{ "op": "-", "args": ["decay"] }, "q"] }
+            },
+            {
+              "lhs": "q_obs",
+              "rhs": { "op": "*", "args": ["q", 2.0] }
+            }
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["p"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["gain"] }, "p"] }
+        },
+        {
+          "lhs": "p_obs",
+          "rhs": { "op": "*", "args": ["p", "Child.q_obs"] }
+        }
+      ]
+    }
+  }
+}

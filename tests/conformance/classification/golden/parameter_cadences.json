@@ -1,0 +1,23 @@
+{
+  "models": {
+    "M": {
+      "ode_states": ["c"],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": ["p_wiener"],
+      "discrete_parameters": [
+        "p_cond",
+        "p_cross",
+        "p_data",
+        "p_handler",
+        "p_preset",
+        "p_remesh",
+        "p_sched"
+      ],
+      "sampled_parameters": ["p_sampled", "p_uniform_sampled"],
+      "constant_parameters": ["p_const"],
+      "system_kind": "sde",
+      "declared_system_kind": null
+    }
+  }
+}

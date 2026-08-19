@@ -1,0 +1,151 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClassificationParameterCadences",
+    "description": "Every parameter category and every update kind in one model. The four parameter sets partition: brownian is exactly update.kind == wiener, discrete is any OTHER update, sampled is a distribution with no update, constant is neither. All six update kinds appear so that a binding cannot pass by recognising only the common ones."
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 4 }
+  },
+  "data_sources": {
+    "MET": {
+      "kind": "grid",
+      "source": { "url_template": "file:///data/met/{date:%Y%m%d}.nc" },
+      "temporal": {
+        "start": "2024-01-01T00:00:00Z",
+        "end": "2024-12-31T23:00:00Z",
+        "file_period": "P1D",
+        "frequency": "PT1H",
+        "records_per_file": 24
+      }
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "kg",
+          "default": 1.0
+        },
+        "p_const": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "description": "constant: neither distribution nor update"
+        },
+        "p_sampled": {
+          "type": "parameter",
+          "units": "1",
+          "distribution": { "kind": "lognormal", "mu": 0.0, "sigma": 0.5 },
+          "description": "sampled: a distribution drawn ONCE at setup"
+        },
+        "p_wiener": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "distribution": { "kind": "normal", "mean": 0.0, "std": 1.0 },
+          "update": { "kind": "wiener" },
+          "description": "brownian: resampled every step with sqrt(dt) scaling"
+        },
+        "p_uniform_sampled": {
+          "type": "parameter",
+          "units": "1",
+          "distribution": { "kind": "uniform", "low": 0.0, "high": 1.0 },
+          "description": "sampled: the third closed distribution kind"
+        },
+        "p_sched": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [],
+          "default": 1.0,
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "expression": { "op": "*", "args": [{ "op": "Pre", "args": ["p_sched"] }, 0.95] }
+          },
+          "description": "discrete: periodic schedule"
+        },
+        "p_preset": {
+          "type": "parameter",
+          "units": "1",
+          "shape": [],
+          "default": 0.0,
+          "update": {
+            "kind": "schedule",
+            "times": [100.0, 200.0, 300.0],
+            "expression": { "op": "+", "args": [{ "op": "Pre", "args": ["p_preset"] }, 1.0] }
+          },
+          "description": "discrete: preset-times schedule"
+        },
+        "p_data": {
+          "type": "parameter",
+          "units": "K",
+          "shape": ["cells"],
+          "update": {
+            "kind": "data",
+            "source": "MET",
+            "from": { "file_variable": "T2M" }
+          },
+          "description": "discrete: refreshed when MET advances a record"
+        },
+        "p_cond": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "update": {
+            "kind": "condition",
+            "when": { "op": ">", "args": ["c", 10.0] },
+            "expression": 0.5
+          },
+          "description": "discrete: boolean condition at end of step. No shape required."
+        },
+        "p_cross": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "update": {
+            "kind": "crossing",
+            "when": { "op": "-", "args": ["c", 5.0] },
+            "direction": "up",
+            "expression": 0.25
+          },
+          "description": "discrete: zero crossing located by root-finding. No shape required."
+        },
+        "p_remesh": {
+          "type": "parameter",
+          "units": "m^2",
+          "shape": ["cells"],
+          "update": {
+            "kind": "remesh",
+            "hook": "amr_refine",
+            "expression": 1.0
+          },
+          "description": "discrete: recomputed on a mesh-topology change"
+        },
+        "p_handler": {
+          "type": "parameter",
+          "units": "W",
+          "shape": [],
+          "default": 0.0,
+          "update": {
+            "kind": "schedule",
+            "interval": 60.0,
+            "handler": {
+              "handler_id": "PIDController",
+              "read_vars": ["c"],
+              "read_params": ["p_const"],
+              "config": { "anti_windup": true }
+            }
+          },
+          "description": "discrete: the handler value form, which replaces the event functional_affect"
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["p_const"] }, "c"] }
+        }
+      ]
+    }
+  }
+}

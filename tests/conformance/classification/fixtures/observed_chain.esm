@@ -1,0 +1,44 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClassificationObservedChain",
+    "description": "Observed unknowns defined in terms of one another, DECLARED and EQUATED out of dependency order. Classification is a property of the equation set, not of declaration or equation order, so a binding that classifies by walking equations in order — or that stops at the first definition it finds — gets a different answer here than one that does it correctly."
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "z": {
+          "type": "unknown",
+          "units": "1",
+          "description": "observed, defined from y — declared FIRST but resolved LAST"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "observed, defined from x"
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "the only ODE state"
+        },
+        "a": { "type": "parameter", "units": "1/s", "default": 2.0 }
+      },
+      "equations": [
+        {
+          "lhs": "z",
+          "rhs": { "op": "*", "args": ["y", 2.0] }
+        },
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["a"] }, "x"] }
+        },
+        {
+          "lhs": "y",
+          "rhs": { "op": "+", "args": ["x", 1.0] }
+        }
+      ]
+    }
+  }
+}

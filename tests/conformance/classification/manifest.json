@@ -1,0 +1,60 @@
+{
+  "category": "classification",
+  "version": "1.0",
+  "description": "Cross-language conformance for the esm 1.0.0 classification API (esm-spec §6.3.1). The format declares two variable types, `unknown` and `parameter`; everything a solver needs beyond that is DERIVED. Five bindings deriving it independently is five chances to disagree, so these fixtures pin one answer. Each golden lists, per model node, the three unknown sets (which partition the unknowns), the four parameter sets (which partition the parameters), and the derived system_kind. Every list is sorted lexicographically by UTF-8 code point so the comparison is order-independent across languages.",
+  "reference_binding": "authored",
+  "bindings_required": ["julia", "typescript", "python", "rust", "go"],
+  "bindings_optional": [],
+  "contract": {
+    "functions": [
+      "ode_states(model)          - unknowns appearing under D(.,t) on some equation LHS",
+      "observed_unknowns(model)   - unknowns defined by a bare-variable LHS (y ~ f(...))",
+      "algebraic_unknowns(model)  - unknowns constrained only implicitly (H*H*SO4 ~ Ksp)",
+      "is_ode_state(model, name)  - membership test for ode_states",
+      "brownian_parameters(model) - update.kind == 'wiener'",
+      "discrete_parameters(model) - any OTHER update block",
+      "sampled_parameters(model)  - a distribution and no update",
+      "constant_parameters(model) - neither a distribution nor an update",
+      "system_kind(model)         - derived: sde | nonlinear | pde | ode"
+    ],
+    "partitions": [
+      "ode_states + observed_unknowns + algebraic_unknowns == the model's unknowns, disjointly",
+      "brownian + discrete + sampled + constant == the model's parameters, disjointly"
+    ],
+    "naming": "Each binding spells these in its own idiom: snake_case in Julia, Python, Rust and Go; camelCase (odeStates, isOdeState, ...) in TypeScript.",
+    "model_keys": "A golden's model keys are dot-paths from the document root, so a subsystem is 'Parent.Child'. Names inside each list are LOCAL to that model and are NOT namespaced.",
+    "declared_system_kind": "The model's explicit `system_kind` field, or null when absent. A binding MUST report system_kind from the DERIVATION, and MUST raise `system_kind_mismatch` when a non-null declared_system_kind disagrees with it."
+  },
+  "fixtures": [
+    {
+      "id": "basic_partition",
+      "fixture": "fixtures/basic_partition.esm",
+      "golden": "golden/basic_partition.json",
+      "pins": "All three unknown categories and a Brownian parameter in one model — the esm-spec §6.3.1 worked example. A binding that treats every bare-variable LHS as observed without distinguishing an EXPRESSION LHS misclassifies SO4."
+    },
+    {
+      "id": "parameter_cadences",
+      "fixture": "fixtures/parameter_cadences.esm",
+      "golden": "golden/parameter_cadences.json",
+      "pins": "All six update kinds and all three distributions. Discriminates the two easy mistakes: treating any parameter with a distribution as Brownian (p_sampled and p_uniform_sampled are NOT), and treating any parameter with an update as Brownian (only p_wiener is). Also pins that the handler and `from` value forms classify the same as `expression`."
+    },
+    {
+      "id": "observed_chain",
+      "fixture": "fixtures/observed_chain.esm",
+      "golden": "golden/observed_chain.json",
+      "pins": "Observed unknowns declared and equated OUT of dependency order. Classification is a property of the equation set, not of traversal order."
+    },
+    {
+      "id": "system_kind_variants",
+      "fixture": "fixtures/system_kind_variants.esm",
+      "golden": "golden/system_kind_variants.json",
+      "pins": "system_kind derived from equations and parameter updates alone. Sde has no `system_kind` field and must still derive 'sde' from one wiener parameter; Nonlinear must derive 'nonlinear' from the absence of any time-derivative equation; Declared carries an agreeing field, pinning that a present field does not override the derivation."
+    },
+    {
+      "id": "subsystem_scope",
+      "fixture": "fixtures/subsystem_scope.esm",
+      "golden": "golden/subsystem_scope.json",
+      "pins": "Classification is per MODEL NODE. A binding that flattens the document first and classifies once returns a single merged answer here instead of two scoped ones."
+    }
+  ]
+}

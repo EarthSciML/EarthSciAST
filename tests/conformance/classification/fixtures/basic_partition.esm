@@ -1,0 +1,69 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClassificationBasicPartition",
+    "description": "The esm-spec §6.3.1 worked example: one ODE state, one observed unknown, one algebraic unknown, one Brownian parameter and two constants, so that a binding's classification functions are pinned against every category at once."
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "kg",
+          "default": 1.0,
+          "description": "ODE state: appears under D(.,t) on an equation LHS"
+        },
+        "v_dep": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Observed: defined by a bare-variable-LHS equation"
+        },
+        "SO4": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 0.5,
+          "description": "Algebraic: constrained only by an expression-LHS equation"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "description": "Constant: no distribution, no update"
+        },
+        "sigma": {
+          "type": "parameter",
+          "units": "kg/s^0.5",
+          "default": 0.2,
+          "description": "Constant: the noise intensity multiplying the Wiener process"
+        },
+        "eps": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "distribution": { "kind": "normal", "mean": 0.0, "std": 1.0 },
+          "update": { "kind": "wiener" },
+          "description": "Brownian: a wiener update makes the enclosing model an SDE"
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": {
+            "op": "+",
+            "args": [
+              { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "c"] },
+              { "op": "*", "args": ["sigma", "eps"] }
+            ]
+          }
+        },
+        {
+          "lhs": "v_dep",
+          "rhs": { "op": "/", "args": [1.0, { "op": "*", "args": ["k", 1.0] }] }
+        },
+        {
+          "lhs": { "op": "*", "args": ["SO4", "SO4"] },
+          "rhs": { "op": "*", "args": ["k", 1.0] }
+        }
+      ]
+    }
+  }
+}

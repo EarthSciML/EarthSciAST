@@ -1,0 +1,76 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClassificationSystemKindVariants",
+    "description": "system_kind derived rather than declared. Ode omits the field and must derive 'ode'; Sde omits it and must derive 'sde' from the presence of a wiener parameter alone; Nonlinear omits it and must derive 'nonlinear' from having no time-derivative equation at all; Declared carries an explicit field that AGREES with its derivation, pinning that a present field does not change the answer."
+  },
+  "models": {
+    "Ode": {
+      "variables": {
+        "u": { "type": "unknown", "units": "1", "default": 1.0 },
+        "r": { "type": "parameter", "units": "1/s", "default": 1.0 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["r"] }, "u"] }
+        }
+      ]
+    },
+    "Sde": {
+      "variables": {
+        "u": { "type": "unknown", "units": "1", "default": 1.0 },
+        "r": { "type": "parameter", "units": "1/s", "default": 1.0 },
+        "s": { "type": "parameter", "units": "1/s^0.5", "default": 0.1 },
+        "w": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "distribution": { "kind": "normal", "mean": 0.0, "std": 1.0 },
+          "update": { "kind": "wiener" }
+        }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "rhs": {
+            "op": "+",
+            "args": [
+              { "op": "*", "args": [{ "op": "-", "args": ["r"] }, "u"] },
+              { "op": "*", "args": ["s", "w"] }
+            ]
+          }
+        }
+      ]
+    },
+    "Nonlinear": {
+      "variables": {
+        "H": { "type": "unknown", "units": "mol", "default": 1.0 },
+        "SO4": { "type": "unknown", "units": "mol", "default": 1.0 },
+        "Ksp": { "type": "parameter", "units": "mol^3", "default": 4.0 }
+      },
+      "equations": [
+        {
+          "lhs": "H",
+          "rhs": { "op": "*", "args": ["SO4", 2.0] }
+        },
+        {
+          "lhs": { "op": "*", "args": ["H", "H", "SO4"] },
+          "rhs": "Ksp"
+        }
+      ]
+    },
+    "Declared": {
+      "system_kind": "ode",
+      "variables": {
+        "u": { "type": "unknown", "units": "1", "default": 1.0 },
+        "r": { "type": "parameter", "units": "1/s", "default": 1.0 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["r"] }, "u"] }
+        }
+      ]
+    }
+  }
+}

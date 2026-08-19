@@ -1,0 +1,15 @@
+{
+  "models": {
+    "M": {
+      "ode_states": ["c"],
+      "observed_unknowns": ["v_dep"],
+      "algebraic_unknowns": ["SO4"],
+      "brownian_parameters": ["eps"],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": ["k", "sigma"],
+      "system_kind": "sde",
+      "declared_system_kind": null
+    }
+  }
+}
