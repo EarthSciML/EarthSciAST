@@ -1151,7 +1151,20 @@ pub fn prepare(
     }
 
     // ---- observed definitions + the join-free partition ---------------------
-    let defs = observed_defs(&model);
+    // Resolve each OVERLAP gate's two range symbols while the ranges still
+    // carry their `{ "from": <index set> }` linkage (`eval_observed` resolves
+    // ranges on its own clone, which erases it). Without this the dense
+    // evaluator cannot tell which loop symbol each envelope side runs over and
+    // declines to let the gate drive — correct, but back at `O(∏ranges)`.
+    // Infallible: an unresolvable gate simply stays undriven.
+    let mut defs = observed_defs(&model);
+    {
+        let var_shapes = crate::join::declared_var_shapes(&model);
+        for e in defs.values_mut() {
+            crate::join::resolve_overlap_syms_expr(e, &var_shapes);
+        }
+    }
+    let defs = defs;
     let join_free: HashSet<String> = defs
         .iter()
         .filter(|(_, e)| match e {

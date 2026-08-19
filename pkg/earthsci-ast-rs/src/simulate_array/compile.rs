@@ -1835,7 +1835,12 @@ pub(super) fn strip_vi_joins(expr: &mut Expr, vi_cols: &HashSet<String>) {
                 .on
                 .retain(|pair| !pair.iter().any(|c| vi_cols.contains(c)));
         }
-        joins.retain(|clause| !clause.on.is_empty());
+        // An OVERLAP clause carries no `on` pairs at all and is kept: it names
+        // const-array envelope FACTORS, not value-invention id columns, and it
+        // DRIVES the dense enumeration (CONFORMANCE_SPEC §5.5.6). Only a
+        // bin-equality clause whose every pair referenced a dropped column is
+        // now empty and inert.
+        joins.retain(|clause| !clause.on.is_empty() || clause.overlap.is_some());
         if joins.is_empty() {
             node.join = None;
         }

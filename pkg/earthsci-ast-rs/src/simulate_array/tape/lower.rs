@@ -1085,6 +1085,11 @@ impl<'m> TapeBuilder<'m> {
         if spec.ranges.is_empty() {
             bail_tape!("aggregate: rank-0 output (scalar reduction)");
         }
+        // See the same guard in `eval_vec_nested_aggregate`: an overlap gate
+        // drives the contraction, and the tape lowering has no driven form.
+        if spec.has_drivable_overlap() {
+            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
+        }
         if let Some(name) = nested_aggregate_capture(&spec, bx.syms.iter().chain(bx.cnames.iter()))
         {
             bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
@@ -1505,6 +1510,9 @@ impl<'m> TapeBuilder<'m> {
         let Some(spec) = arrayop_spec(node) else {
             return Ok(LV::Lit(f64::NAN)); // eval_arrayop's missing-body sentinel
         };
+        if spec.has_drivable_overlap() {
+            bail_tape!("aggregate: carries an overlap join gate that drives enumeration");
+        }
         let static_ranges = static_contract_ranges(&spec.contract_dims);
         if let Some(scan) = detect_prefix_scan(
             spec.idx_names,

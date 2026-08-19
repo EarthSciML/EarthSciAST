@@ -1047,6 +1047,12 @@ fn eval_vec_nested_aggregate<'a>(
     if spec.ranges.is_empty() {
         bail_vec!("aggregate: rank-0 output (scalar reduction)");
     }
+    // An OVERLAP gate DRIVES the per-cell contraction (CONFORMANCE_SPEC §5.5.6);
+    // the overlay would fold the FULL product as shifted whole-array slices —
+    // bit-identical, but exactly the `O(∏ranges)` cost the gate removes.
+    if spec.has_drivable_overlap() {
+        bail_vec!("aggregate: carries an overlap join gate that drives enumeration");
+    }
     if let Some(name) = nested_aggregate_capture(
         &spec,
         bx.syms
