@@ -246,7 +246,8 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
             # the same provider forced onto the post-read path
             EXT = Base.get_extension(EarthSciAST, :EarthSciASTEarthSciIOExt)
             engine = EXT.DeclaredProvider(src.key, src.varname, src.inner, src.table,
-                                          src.column, src.select, false, src.extent_mp)
+                                          src.column, src.select, false, src.extent_mp,
+                                          src.unit_conversion)
             @test Float64.(EA_LIS.provider_sample(engine, 0.0)) == pushed
         end
     end

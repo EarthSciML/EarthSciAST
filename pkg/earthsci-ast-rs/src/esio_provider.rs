@@ -47,6 +47,8 @@ use time::OffsetDateTime;
 
 use crate::provider::{CadenceProvider, NativeField, ProviderError};
 use crate::pushdown_rewrite::GateAxis;
+use crate::types::UnitConversion;
+use crate::unit_conversion::{apply_unit_conversion, parse_unit_conversion};
 
 fn err(msg: impl Into<String>) -> ProviderError {
     crate::error::MessageError(msg.into())
@@ -111,6 +113,9 @@ struct ColumnSpec {
     /// The on-disk column.
     file_variable: String,
     codes: Option<CodeMap>,
+    /// The declared `unit_conversion` (esm-spec §8.5), parsed; `None` when the
+    /// variable declares none.
+    unit_conversion: Option<UnitConversion>,
 }
 
 /// Convert one EarthSciIO native field to the ESS-side [`NativeField`].
@@ -503,6 +508,7 @@ pub struct EsioProviderBuilder {
     declared: Option<Vec<GateAxis>>,
     table: Option<(Arc<RecordTable>, String)>,
     extent_mp: Option<String>,
+    unit_conversion: Option<UnitConversion>,
 }
 
 impl EsioProviderBuilder {
@@ -563,6 +569,15 @@ impl EsioProviderBuilder {
         self
     }
 
+    /// The variable's declared `unit_conversion` (esm-spec §8.5) — the factor
+    /// or Expression that turns the raw on-disk column into the declared
+    /// `units`. Applied at DELIVERY, after decode / codes / record filter /
+    /// select; see [`EsioProvider::convert_units`].
+    pub fn unit_conversion(mut self, conversion: UnitConversion) -> Self {
+        self.unit_conversion = Some(conversion);
+        self
+    }
+
     /// Construct the provider, resolving the reader now so an unknown format
     /// fails here rather than mid-solve.
     pub fn build(self) -> Result<EsioProvider, ProviderError> {
@@ -608,6 +623,7 @@ impl EsioProviderBuilder {
             applied,
             table,
             extent_mp: self.extent_mp,
+            unit_conversion: self.unit_conversion,
         })
     }
 }
@@ -623,6 +639,8 @@ pub struct EsioProvider {
     table: Option<(Arc<RecordTable>, String)>,
     /// The metaparameter this provider's extent binds (`extent`).
     extent_mp: Option<String>,
+    /// The variable's declared `unit_conversion` (esm-spec §8.5), if any.
+    unit_conversion: Option<UnitConversion>,
 }
 
 impl EsioProvider {
@@ -637,6 +655,7 @@ impl EsioProvider {
             declared: None,
             table: None,
             extent_mp: None,
+            unit_conversion: None,
         }
     }
 
@@ -849,6 +868,11 @@ mod prepare_impl {
                 .materialize_with_select(Some(&sel))
                 .map_err(|e| perr(format!("EarthSciIO gated materialize failed: {e}")))?;
             let fields = self.convert(fields).map_err(|e| perr(e.to_string()))?;
+            // The gate IS the whole selection for this fetch, so the declared
+            // select is not applied again — but the declared unit_conversion
+            // still is: it is a property of the VALUES, not of which of them
+            // were fetched.
+            let fields = self.convert_units(fields).map_err(|e| perr(e.to_string()))?;
             single_field(fields)
         }
 
@@ -985,6 +1009,11 @@ mod prepare_impl {
                     name: vname.clone(),
                     file_variable: fv.to_string(),
                     codes: parse_codes(&format!("data_loaders.{lname}.variables.{vname}"), vd)?,
+                    unit_conversion: parse_unit_conversion(
+                        vd.get("unit_conversion"),
+                        &format!("{lname}.{vname}"),
+                    )
+                    .map_err(|e| perr(e.to_string()))?,
                 });
             }
             // A record filter or a code map makes the loader a TABLE: one
@@ -1027,6 +1056,9 @@ mod prepare_impl {
                 }
                 if let Some(t) = &table {
                     builder = builder.record_column(t.clone(), spec.name.clone());
+                }
+                if let Some(uc) = &spec.unit_conversion {
+                    builder = builder.unit_conversion(uc.clone());
                 }
                 if let Some(mp) = &extent_mp {
                     builder = builder.extent_metaparameter(mp.clone());
@@ -1094,6 +1126,46 @@ impl EsioProvider {
     }
 }
 
+impl EsioProvider {
+    /// Produce the values in the variable's DECLARED `units` (esm-spec §8.5).
+    ///
+    /// Applied at DELIVERY — after the loader's decode, `codes`, `record_filter`
+    /// and `select` — so the filter still reasons about the raw column (a
+    /// conversion cannot turn a dropped record into a kept one) and every
+    /// delivered array is converted exactly once, whether it arrived through the
+    /// record table, a reader-pushed select, or the engine's gated fetch.
+    ///
+    /// A variable with no declared conversion returns the fields untouched:
+    /// this is a no-op for every document that does not declare one.
+    fn convert_units(
+        &self,
+        mut fields: HashMap<String, NativeField>,
+    ) -> Result<HashMap<String, NativeField>, ProviderError> {
+        let Some(conversion) = &self.unit_conversion else {
+            return Ok(fields);
+        };
+        for (key, f) in fields.iter_mut() {
+            let values = f
+                .array
+                .as_slice_mut()
+                .ok_or_else(|| err(format!("provider {key}: array is not contiguous")))?;
+            apply_unit_conversion(values, conversion, key)
+                .map_err(|e| err(format!("provider {key}: {e}")))?;
+        }
+        Ok(fields)
+    }
+
+    /// The declared `select` and then the declared `unit_conversion` — the one
+    /// funnel every delivery goes through.
+    fn deliver(
+        &self,
+        fields: HashMap<String, NativeField>,
+    ) -> Result<HashMap<String, NativeField>, ProviderError> {
+        let fields = self.apply_select(fields)?;
+        self.convert_units(fields)
+    }
+}
+
 impl CadenceProvider for EsioProvider {
     fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
         // A record-table loader serves its columns from ONE shared decode.
@@ -1108,14 +1180,14 @@ impl CadenceProvider for EsioProvider {
                 array: table.column(column)?,
                 coords: IndexMap::new(),
             };
-            return self.apply_select(HashMap::from([(model_name, field)]));
+            return self.deliver(HashMap::from([(model_name, field)]));
         }
         let fields = self
             .inner
             .materialize_with_select(self.select.as_ref())
             .map_err(|e| err(format!("EarthSciIO materialize failed: {e}")))?;
         let fields = self.convert(fields)?;
-        self.apply_select(fields)
+        self.deliver(fields)
     }
 
     fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
@@ -1135,7 +1207,7 @@ impl CadenceProvider for EsioProvider {
         // re-emitting an identical buffer.
         match fields {
             None => Ok(None),
-            Some(f) => self.convert(f).and_then(|f| self.apply_select(f)).map(Some),
+            Some(f) => self.convert(f).and_then(|f| self.deliver(f)).map(Some),
         }
     }
 
