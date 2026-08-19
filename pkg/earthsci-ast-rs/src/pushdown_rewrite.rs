@@ -411,6 +411,227 @@ fn pd_detect_binning(ev: &Value, out_set: &str) -> Option<Binning> {
     })
 }
 
+// --------------------------------------------------------------------------- //
+// Detection-time template-reference expansion (esm-spec §9.6.4 rule 2).
+//
+// Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
+// references: they ride to the build boundary, where they are expanded ONCE with
+// site recording (the ~50x node-lowering win). `prepare` therefore hands
+// `desugar_pushdown` a document whose binning body may be a surviving reference
+// rather than the containment `ifelse` the recogniser looks for.
+//
+// §9.6.4 rule 4 ("patterns do not see through surviving references") governs the
+// §9.6.3 REWRITE-RULE ENGINE. This desugar is a different consumer and rule 2
+// governs it: a reference DENOTES its expansion. So whether the pushdown fires
+// MUST NOT depend on whether the author factored the body through a template —
+// detection runs on the EXPANDED view.
+//
+// EMISSION does not: `pd_apply` edits the call site's `bindings` (and the
+// aggregate's own `ranges` / `args` / `shape` / `join`), never the shared
+// template body, so the body stays shared and singly-lowered and Option B
+// survives the rewrite. `pd_assert_rects_rebound` is the post-condition.
+// --------------------------------------------------------------------------- //
+
+/// The op name of a surviving expression-template reference.
+const APPLY_OP: &str = "apply_expression_template";
+
+/// The component template registry of `model`, or `None`.
+///
+/// Only the component-level `expression_templates` block is consulted, which is
+/// what the Julia reference reads (`coerce_esm_file` fills `component_templates`
+/// from exactly these blocks) — a top-level authored registry is a DECLARATION
+/// that load materialises into the components, so on the `prepare` input form
+/// the per-component block is the registry.
+fn pd_templates(model: &Value) -> Option<&Map<String, Value>> {
+    model
+        .get("expression_templates")
+        .and_then(Value::as_object)
+        .filter(|m| !m.is_empty())
+}
+
+/// Does `node` carry a surviving `apply_expression_template` reference?
+/// Descends every object value, `bindings` included.
+fn pd_has_apply(node: &Value) -> bool {
+    match node {
+        Value::Object(m) => {
+            m.get("op").and_then(Value::as_str) == Some(APPLY_OP)
+                || m.values().any(pd_has_apply)
+        }
+        Value::Array(xs) => xs.iter().any(pd_has_apply),
+        _ => false,
+    }
+}
+
+/// The `name` of the first surviving reference in `node` (pre-order), for the
+/// residual diagnostic; `None` when it carries none.
+fn pd_first_apply_name(node: &Value) -> Option<String> {
+    match node {
+        Value::Object(m) => {
+            if m.get("op").and_then(Value::as_str) == Some(APPLY_OP) {
+                return m.get("name").and_then(Value::as_str).map(str::to_string);
+            }
+            m.values().find_map(pd_first_apply_name)
+        }
+        Value::Array(xs) => xs.iter().find_map(pd_first_apply_name),
+        _ => None,
+    }
+}
+
+/// `Expand(node)` against `templates` — DETECTION ONLY; nothing of the result is
+/// emitted. Returns `None` when there is nothing to expand, and `None` when
+/// expansion FAILS: the pass's contract is to leave a document it cannot
+/// recognise alone, and an unexpandable reference is then reported by
+/// [`pd_binning_refusal`] if the variable is join-shaped.
+fn pd_expand_for_detection(node: &Value, templates: Option<&Map<String, Value>>) -> Option<Value> {
+    let templates = templates?;
+    if !pd_has_apply(node) {
+        return None;
+    }
+    crate::lower_expression_templates::expand_against_registry(node, templates, "pushdown_rewrite")
+        .ok()
+}
+
+/// `model["variables"]` with every surviving `apply_expression_template`
+/// reference in a variable's `expression` expanded — the `Expand(tree)` view the
+/// pattern matcher must see. `None` means "use the model's own variables map
+/// unchanged": there is no registry, or no reference to expand, so a
+/// template-free document takes the byte-identical pre-existing path.
+fn pd_detection_variables(model: &Value) -> Option<Map<String, Value>> {
+    let variables = model.get("variables")?.as_object()?;
+    let templates = pd_templates(model)?;
+    if !variables
+        .values()
+        .any(|v| v.get("expression").map(pd_has_apply).unwrap_or(false))
+    {
+        return None;
+    }
+    let mut out = variables.clone();
+    for (name, v) in variables {
+        let Some(ex) = v.get("expression") else {
+            continue;
+        };
+        if !pd_has_apply(ex) {
+            continue;
+        }
+        let Some(expanded) =
+            pd_expand_for_detection(ex, Some(templates))
+        else {
+            continue;
+        };
+        if let Some(slot) = out.get_mut(name).and_then(Value::as_object_mut) {
+            slot.insert("expression".to_string(), expanded);
+        }
+    }
+    Some(out)
+}
+
+// --------------------------------------------------------------------------- //
+// Residual diagnostics.
+//
+// A pattern recogniser that declines SILENTLY is indistinguishable from one that
+// fired — until, hours later, an ungated provider fetch runs the machine out of
+// memory. These keep the two cases apart:
+//
+//   NOT A JOIN           — a `+`-aggregate with no containment predicate is a
+//                          legitimately dense factor. Nothing to gate, no
+//                          diagnostic.
+//   A JOIN I CANNOT READ — the aggregate bins records into cells of the SAME set
+//                          that indexes a provider-backed rank-2 array it feeds,
+//                          but the containment could not be recovered. Reported.
+//
+// WARNING, not error: the pass's contract (CONFORMANCE_SPEC §5.5.7) is that an
+// unrecognised document comes back unchanged, and the residue is a PERFORMANCE
+// defect — the numbers stay right, the fetch gets big. The one hard error in
+// this pass is `pd_assert_rects_rebound`, where the rewrite HAS fired and a rect
+// factor could not be re-pointed: wrong numbers, not slow ones.
+// --------------------------------------------------------------------------- //
+
+/// The fixed, cross-binding `consequence` string of a residual diagnostic.
+pub const PD_UNGATED_CONSEQUENCE: &str =
+    "the provider-backed array is fetched WHOLESALE — no derived support set \
+is produced and no gate is emitted";
+
+/// Why [`pd_detect_binning`] refused `ev`, for a caller that has ALREADY
+/// established `ev` sits in the join position.
+///
+/// `None` ⇒ `ev` is simply not join-shaped (no diagnostic warranted). Otherwise
+/// `(reason, template)`: `("surviving_template_reference", Some(name))` when the
+/// body carries a reference that could not be expanded for matching,
+/// `("predicate_unparsed", None)` when a containment `ifelse` was found but did
+/// not read as a rectangle containment in either orientation.
+fn pd_binning_refusal(ev: &Value, out_set: &str) -> Option<(&'static str, Option<String>)> {
+    if ev.get("type").and_then(Value::as_str) != Some("observed") {
+        return None;
+    }
+    let shape = ev.get("shape")?.as_array()?;
+    if shape.len() != 1 || shape[0].as_str() != Some(out_set) {
+        return None;
+    }
+    let agg = ev.get("expression")?;
+    if !is_aggregate_op(op_of(agg)) {
+        return None;
+    }
+    let (oplus, ident) = pd_oplus(agg)?;
+    if !(oplus == "+" && ident == 0.0) {
+        return None;
+    }
+    let oi = agg.get("output_idx")?.as_array()?;
+    if oi.len() != 1 {
+        return None;
+    }
+    let out_sym = oi[0].as_str()?;
+    let ranges = ranges_of(agg)?;
+    if ranges.len() != 2 || range_from(ranges.get(out_sym)) != Some(out_set) {
+        return None;
+    }
+    let in_sym = ranges.keys().find(|k| k.as_str() != out_sym)?;
+    range_from(ranges.get(in_sym))?;
+    let body = agg.get("expr")?;
+    if !body.is_object() {
+        return None;
+    }
+    if pd_find_ifelse_cond(body).is_none() {
+        // No predicate at all ⇒ genuinely dense, unless a surviving reference
+        // is hiding one.
+        let tname = pd_first_apply_name(body)?;
+        return Some(("surviving_template_reference", Some(tname)));
+    }
+    Some(("predicate_unparsed", None))
+}
+
+/// The human-readable rendering of one diagnostic record: what was recognised,
+/// what could not be read, and what it costs.
+pub fn pd_diagnostic_message(d: &Value) -> String {
+    let g = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or("");
+    let why = if g("reason") == "surviving_template_reference" {
+        let tpl = d.get("template").and_then(Value::as_str);
+        format!(
+            "its body carries a surviving `apply_expression_template` reference{} \
+that could not be expanded for matching",
+            match tpl {
+                Some(t) => format!(" to '{t}'"),
+                None => String::new(),
+            }
+        )
+    } else {
+        "its containment predicate did not read as a rectangle containment between \
+four cell-indexed rect bounds and two record-indexed point coordinates"
+            .to_string()
+    };
+    format!(
+        "projection-pushdown desugar: '{}' is join-shaped — it bins records into the \
+cells of index set '{}' and feeds the provider-backed array '{}' through '{}' — but \
+{}, so the rewrite does NOT fire for it and {}. Bind the containment's factors \
+through the template's params, or write the predicate longhand.",
+        g("variable"),
+        g("index_set"),
+        g("array"),
+        g("consumer"),
+        why,
+        PD_UNGATED_CONSEQUENCE
+    )
+}
+
 /// The MIRRORED-orientation binning aggregates of a model: per-RECORD observeds
 /// `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)] · …` over the plan's cell set
 /// `c_set` and record set `r_set`. Returned as `(name, src_env, tgt_env)`
@@ -474,10 +695,17 @@ struct Plan {
     rep_rsym: String,
 }
 
-/// Detect the pushdown pattern across a model's observeds. Returns the plan,
-/// or `None` when nothing matches / the semiring guard fails.
-fn pd_detect(model: &Value) -> Option<Plan> {
-    let variables = model.get("variables")?.as_object()?;
+/// Detect the pushdown pattern across a model's observeds.
+///
+/// `variables` is the DETECTION view ([`pd_detection_variables`]): the model's
+/// variables with surviving template references expanded, so a binning body
+/// factored through a template matches exactly as its expansion would.
+///
+/// Returns `(plan, diagnostics)` — `plan` `None` when nothing matches / the
+/// semiring guard fails, `diagnostics` the residual "a join I could not read"
+/// records (see [`pd_binning_refusal`]).
+fn pd_detect(variables: &Map<String, Value>) -> (Option<Plan>, Vec<Value>) {
+    let mut diags: Vec<Value> = Vec::new();
     let mut conc_specs: Vec<(String, String)> = Vec::new();
     let mut a_names: Vec<String> = Vec::new();
     let mut e_specs: Vec<(String, String, [String; 2], [String; 4])> = Vec::new();
@@ -550,6 +778,25 @@ fn pd_detect(model: &Value) -> Option<Plan> {
             continue;
         };
         let Some(bind) = pd_detect_binning(ev, c_set) else {
+            // `ev` is the rank-1 factor of a `+`-mat-vec against a
+            // provider-backed `[c_set, r_set]` array: the join position. If it
+            // is ALSO binning-shaped but unreadable, say so — silence here is
+            // the ungated whole-array fetch that surfaces hours later.
+            if let Some((reason, template)) = pd_binning_refusal(ev, c_set) {
+                diags.push(json!({
+                    "code": "pushdown_join_unrecognised",
+                    "variable": ename,
+                    "consumer": cname,
+                    "array": aname,
+                    "index_set": c_set,
+                    "reason": reason,
+                    "template": match template {
+                        Some(t) => Value::String(t),
+                        None => Value::Null,
+                    },
+                    "consequence": PD_UNGATED_CONSEQUENCE,
+                }));
+            }
             continue;
         };
         if !bind.out_is_cell {
@@ -586,9 +833,27 @@ fn pd_detect(model: &Value) -> Option<Plan> {
             e_specs.push((ename, bind.c_sym, bind.src_env, bind.tgt_env));
         }
     }
-    let mut plan = plan?;
+    // Deterministic, deduplicated diagnostic order: `variables` is a
+    // key-ordered map but the same E can be reached from several `conc`
+    // consumers.
+    diags.sort_by(|a, b| {
+        let k = |v: &Value| {
+            (
+                v["variable"].as_str().unwrap_or("").to_string(),
+                v["consumer"].as_str().unwrap_or("").to_string(),
+                v["array"].as_str().unwrap_or("").to_string(),
+            )
+        };
+        k(a).cmp(&k(b))
+    });
+    diags.dedup_by(|a, b| {
+        a["variable"] == b["variable"] && a["consumer"] == b["consumer"] && a["array"] == b["array"]
+    });
+    let Some(mut plan) = plan else {
+        return (None, diags);
+    };
     if conc_specs.is_empty() {
-        return None;
+        return (None, diags);
     }
     // Deterministic plan order (mirrors the Julia `sort!(A_names)`).
     a_names.sort();
@@ -602,7 +867,7 @@ fn pd_detect(model: &Value) -> Option<Plan> {
     plan.conc_specs = conc_specs;
     plan.a_names = a_names;
     plan.e_specs = e_specs;
-    Some(plan)
+    (Some(plan), diags)
 }
 
 // --------------------------------------------------------------------------- //
@@ -611,6 +876,18 @@ fn pd_detect(model: &Value) -> Option<Plan> {
 
 /// In-place: rewrite every `index(F, …)` whose factor `F` is a key of
 /// `rectmap` to `index(rectmap[F], …)` throughout a raw AST subtree.
+///
+/// This walk descends EVERY object value, `bindings` included, so a rect factor
+/// that reaches the binning body through an `apply_expression_template` call
+/// site is reached AT THE CALL SITE — which is exactly where the rewrite must
+/// land, so the shared template body stays untouched and singly-lowered
+/// (esm-spec §9.6.4 Option B). Two binding spellings carry a rect factor and
+/// both are handled: a subscripted binding (`{"F": index(src_W, "c")}`) by the
+/// `index` arm, and a BARE FACTOR-NAME binding (`{"F": "src_W"}`, substituted
+/// into the body's own `index(F, c)`) by the `bindings` arm. A bare string is
+/// rewritten ONLY inside `bindings` — elsewhere a string is an `output_idx`
+/// entry, a range key, a scalar field or a template `name`, none of which are
+/// variable references.
 fn pd_rewrite_rects(node: &mut Value, rectmap: &HashMap<String, String>) {
     match node {
         Value::Object(m) => {
@@ -621,6 +898,15 @@ fn pd_rewrite_rects(node: &mut Value, rectmap: &HashMap<String, String>) {
                 && let Some(g) = rectmap.get(f)
             {
                 *first = Value::String(g.clone());
+            }
+            if m.get("op").and_then(Value::as_str) == Some(APPLY_OP)
+                && let Some(b) = m.get_mut("bindings").and_then(Value::as_object_mut)
+            {
+                for v in b.values_mut() {
+                    if let Some(g) = v.as_str().and_then(|sv| rectmap.get(sv)) {
+                        *v = Value::String(g.clone());
+                    }
+                }
             }
             for v in m.values_mut() {
                 pd_rewrite_rects(v, rectmap);
@@ -653,7 +939,78 @@ fn pd_overlap_clause(src_env: &[String], tgt_env: &[String]) -> Value {
     })
 }
 
-fn pd_apply(esm: &Value, mname: &str, plan: &Plan) -> Result<Value, PushdownRewriteError> {
+/// Collect every factor name in `rectmap` that still appears in an
+/// `index(F, …)` position — every occurrence [`pd_rewrite_rects`] targets but
+/// did not reach.
+fn pd_collect_stale_rects(
+    node: &Value,
+    rectmap: &HashMap<String, String>,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    match node {
+        Value::Object(m) => {
+            if m.get("op").and_then(Value::as_str) == Some("index")
+                && let Some(f) = m.get("args").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str)
+                && rectmap.contains_key(f)
+            {
+                out.insert(f.to_string());
+            }
+            for v in m.values() {
+                pd_collect_stale_rects(v, rectmap, out);
+            }
+        }
+        Value::Array(xs) => {
+            for x in xs {
+                pd_collect_stale_rects(x, rectmap, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// POST-CONDITION of the forward arm's rect re-pointing, discharged on the
+/// EXPANDED form of the rewritten aggregate (esm-spec §9.6.4 rule 2: what the
+/// evaluator sees is `Expand(tree)`).
+///
+/// `E`'s reduction axis now ranges over the COMPACT derived support set, so
+/// every rect reference in its body must have become the corresponding
+/// `pd_cell__*` gather. The rewrite achieves that by editing the CALL SITE,
+/// which is what keeps the shared template body untouched. A rect factor named
+/// FREE inside a template body is therefore unreachable: rewriting it would mean
+/// rewriting the shared body, corrupting every other call site (the generated
+/// producer `filter` among them, which must keep full-grid references). Left
+/// alone it would index a compact per-support gather with full-grid positions —
+/// WRONG NUMBERS, silently. Hence a hard error, whose remedy is the one the
+/// template machinery already prescribes: bind the value through the params.
+fn pd_assert_rects_rebound(
+    expr: &Value,
+    ename: &str,
+    rectmap: &HashMap<String, String>,
+    templates: Option<&Map<String, Value>>,
+) -> Result<(), PushdownRewriteError> {
+    if rectmap.is_empty() {
+        return Ok(());
+    }
+    let expanded = pd_expand_for_detection(expr, templates);
+    let view = expanded.as_ref().unwrap_or(expr);
+    let mut stale = std::collections::BTreeSet::new();
+    pd_collect_stale_rects(view, rectmap, &mut stale);
+    if stale.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<&str> = stale.iter().map(String::as_str).collect();
+    Err(PushdownRewriteError(format!(
+        "[template_body_references_pushdown_rewritten_variable] projection-pushdown desugar: the binning aggregate '{ename}' still reads '{}' after its reduction axis was re-pointed onto the generated derived support set. Those references live in an expression-template BODY, not in the call site's `bindings`, so the rewrite — which edits call sites only, to keep the template body shared and singly-lowered (esm-spec §9.6.4 Option B) — cannot re-point them, and they would index the compact per-support cell gathers with full-grid positions. Bind the value through the template's params, or write the binning body longhand.",
+        names.join("', '")
+    )))
+}
+
+fn pd_apply(
+    esm: &Value,
+    mname: &str,
+    plan: &Plan,
+    templates: Option<&Map<String, Value>>,
+) -> Result<Value, PushdownRewriteError> {
     let mut d = esm.clone(); // fresh, mutable (input purity)
     let c = &plan.c_set;
     let setname = format!("pd_support__{c}");
@@ -707,9 +1064,18 @@ fn pd_apply(esm: &Value, mname: &str, plan: &Plan) -> Result<Value, PushdownRewr
         .get(&plan.rep_ename)
         .and_then(|v| v.get("expression"))
         .ok_or_else(|| PushdownRewriteError("representative E lost its expression".into()))?;
+    // When the call site hides the predicate behind a template reference, read it
+    // off the EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID
+    // rect references, which is exactly what the pre-rewrite expansion yields.
+    // The expansion is a scratch value: nothing of it is emitted except these
+    // comparisons, so the document's template block and call sites are untouched.
+    // A template-free document never builds one, so its emitted filter is
+    // byte-identical to before.
+    let rep_expanded = repexpr.get("expr").and_then(|e| pd_expand_for_detection(e, templates));
     let ifcond = repexpr
         .get("expr")
         .and_then(pd_find_ifelse_cond)
+        .or_else(|| rep_expanded.as_ref().and_then(pd_find_ifelse_cond))
         .ok_or_else(|| {
             PushdownRewriteError(
                 "pushdown desugar: representative E lost its containment ifelse".into(),
@@ -804,9 +1170,11 @@ fn pd_apply(esm: &Value, mname: &str, plan: &Plan) -> Result<Value, PushdownRewr
                 Value::Array(vec![pd_overlap_clause(e_src, &gathered)]),
             );
         }
+        let expr_snapshot = expr.clone();
         if let Some(evo) = mv.get_mut(ename).and_then(Value::as_object_mut) {
             evo.insert("shape".to_string(), json!([setname.clone()]));
         }
+        pd_assert_rects_rebound(&expr_snapshot, ename, &rectmap, templates)?;
     }
 
     // --- MIRRORED orientation: gate only ---
@@ -945,10 +1313,62 @@ pub fn desugar_pushdown<'a>(
     if !model.is_object() {
         return Ok(Cow::Borrowed(esm));
     }
-    let Some(plan) = pd_detect(model) else {
+    let Some((plan, diags, templates)) = pd_analyze(model) else {
         return Ok(Cow::Borrowed(esm));
     };
-    pd_apply(esm, &mname, &plan).map(Cow::Owned)
+    // RESIDUAL DIAGNOSTICS (CONFORMANCE_SPEC §5.5.7): a join-shaped aggregate the
+    // recogniser could NOT read is reported here, not swallowed. See
+    // `pd_binning_refusal` for the "not a join" / "a join I could not read"
+    // split, and `pushdown_diagnostics` for the inspectable form.
+    for d in &diags {
+        eprintln!("warning: {}", pd_diagnostic_message(d));
+    }
+    let Some(plan) = plan else {
+        return Ok(Cow::Borrowed(esm));
+    };
+    pd_apply(esm, &mname, &plan, templates.as_ref()).map(Cow::Owned)
+}
+
+/// The residual diagnostics [`desugar_pushdown`] would emit for `esm`.
+///
+/// One record per aggregate that IS join-shaped (it bins records into the cells
+/// of an index set and feeds a provider-backed rank-2 array through a
+/// `+`-semiring mat-vec) but whose containment predicate the recogniser could
+/// not read, so the rewrite does not fire for it and that array is fetched
+/// WHOLESALE.
+///
+/// Inspectable, side-effect-free counterpart of the warning stream: same
+/// records, same order (sorted by `variable`/`consumer`/`array`), stable field
+/// set (`code`, `variable`, `consumer`, `array`, `index_set`, `reason`,
+/// `template`, `consequence`), pinned across bindings by the
+/// `tests/conformance/pushdown/` corpus. Empty for a document that already
+/// carries the rewrite record, for one with no model selected, and —
+/// deliberately — for one that simply is NOT join-shaped: "no join here" is not
+/// a defect.
+pub fn pushdown_diagnostics(esm: &Value, model_name: Option<&str>) -> Vec<Value> {
+    if !esm.is_object() || pushdown_record(esm).is_some() {
+        return Vec::new();
+    }
+    let Some(mname) = pd_model_name(esm, model_name) else {
+        return Vec::new();
+    };
+    let Some(model) = esm.get("models").and_then(|m| m.get(&mname)) else {
+        return Vec::new();
+    };
+    pd_analyze(model).map(|(_, d, _)| d).unwrap_or_default()
+}
+
+/// The ONE detection entry point shared by [`desugar_pushdown`] (which then
+/// emits) and [`pushdown_diagnostics`] (which only reports): run the matcher on
+/// the EXPANDED view and hand back the plan (`None` ⇒ the pattern did not
+/// match), the residual diagnostics, and the component template registry the
+/// emission side needs.
+#[allow(clippy::type_complexity)]
+fn pd_analyze(model: &Value) -> Option<(Option<Plan>, Vec<Value>, Option<Map<String, Value>>)> {
+    let own = model.get("variables")?.as_object()?;
+    let expanded = pd_detection_variables(model);
+    let (plan, diags) = pd_detect(expanded.as_ref().unwrap_or(own));
+    Some((plan, diags, pd_templates(model).cloned()))
 }
 
 // --------------------------------------------------------------------------- //

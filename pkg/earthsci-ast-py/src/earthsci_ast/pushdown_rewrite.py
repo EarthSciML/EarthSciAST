@@ -38,10 +38,15 @@ from __future__ import annotations
 
 import copy
 import math
+import warnings
 from typing import Any
+
+from .error_handling import TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE
+from .json_walk import APPLY_OP, ExpressionTemplateError
 
 __all__ = [
     "desugar_pushdown",
+    "pushdown_diagnostics",
     "PushdownRewriteError",
     "parse_select_axis",
     "parse_select_axes",
@@ -425,6 +430,213 @@ def _pd_detect_binning(ev: Any, out_set: str):
     }
 
 
+# --------------------------------------------------------------------------- #
+# Detection-time template-reference expansion (esm-spec §9.6.4 rule 2).
+#
+# Under Option B (§9.6.4) ``load`` PRESERVES ``apply_expression_template``
+# references: they ride to the build boundary, where they are expanded ONCE with
+# site recording (the ~50x node-lowering win). ``prepare`` therefore hands
+# ``desugar_pushdown`` a document whose binning body may be a surviving reference
+# rather than the containment ``ifelse`` the recogniser looks for.
+#
+# §9.6.4 rule 4 ("patterns do not see through surviving references") governs the
+# §9.6.3 REWRITE-RULE ENGINE. This desugar is a different consumer and rule 2
+# governs it: a reference DENOTES its expansion, and observable behavior must be
+# as if evaluated on ``Expand(tree)``. So whether the pushdown fires MUST NOT
+# depend on whether the author factored the body through a template — detection
+# runs on the EXPANDED view.
+#
+# EMISSION does not: ``_pd_apply`` edits the call site's ``bindings`` (and the
+# aggregate's own ``ranges`` / ``args`` / ``shape`` / ``join``), never the shared
+# template body, so the body stays shared and singly-lowered and Option B
+# survives the rewrite. ``_pd_assert_rects_rebound`` is the post-condition that
+# proves it.
+# --------------------------------------------------------------------------- #
+
+
+def _pd_templates(model: dict) -> dict | None:
+    """The component template registry of ``model``, or ``None``.
+
+    Only the component-level ``expression_templates`` block is consulted, which
+    is what the Julia reference reads (``coerce_esm_file`` fills
+    ``component_templates`` from exactly these blocks) — a top-level authored
+    registry is a DECLARATION that load materialises into the components, so on
+    the ``prepare`` input form the per-component block is the registry.
+    """
+    tpl = model.get("expression_templates")
+    return tpl if isinstance(tpl, dict) and tpl else None
+
+
+def _pd_has_apply(node: Any) -> bool:
+    """Does ``node`` carry a surviving ``apply_expression_template`` reference?
+    Descends every dict value, ``bindings`` included."""
+    if isinstance(node, dict):
+        if node.get("op") == APPLY_OP:
+            return True
+        return any(_pd_has_apply(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_pd_has_apply(x) for x in node)
+    return False
+
+
+def _pd_first_apply_name(node: Any) -> str | None:
+    """The ``name`` of the first surviving reference in ``node`` (pre-order),
+    for the residual diagnostic; ``None`` when it carries none."""
+    if isinstance(node, dict):
+        if node.get("op") == APPLY_OP:
+            n = node.get("name")
+            return str(n) if isinstance(n, str) else None
+        for v in node.values():
+            r = _pd_first_apply_name(v)
+            if r is not None:
+                return r
+    elif isinstance(node, list):
+        for x in node:
+            r = _pd_first_apply_name(x)
+            if r is not None:
+                return r
+    return None
+
+
+def _pd_expand_for_detection(node: Any, templates: dict | None) -> Any:
+    """``Expand(node)`` against ``templates`` — DETECTION ONLY; nothing of the
+    result is emitted. Returns ``node`` itself when there is nothing to expand,
+    and returns it UNCHANGED (rather than raising) when expansion fails: the
+    pass's contract is to leave a document it cannot recognise alone, and an
+    unexpandable reference is then reported by :func:`_pd_binning_refusal` if the
+    variable is join-shaped."""
+    if templates is None or not _pd_has_apply(node):
+        return node
+    from .lower_expression_templates import _expand_all  # local: avoid a cycle
+
+    try:
+        return _expand_all(copy.deepcopy(node), templates, "pushdown_rewrite")
+    except Exception:  # unresolvable reference, malformed bindings, …
+        return node
+
+
+def _pd_detection_variables(model: dict) -> dict:
+    """``model["variables"]`` with every surviving ``apply_expression_template``
+    reference in a variable's ``expression`` expanded — the ``Expand(tree)`` view
+    the pattern matcher must see. Returns the variables dict ITSELF (no copy)
+    when there is no registry or no reference, so a template-free document takes
+    the byte-identical pre-existing path."""
+    variables = model.get("variables")
+    if not isinstance(variables, dict):
+        return {}
+    templates = _pd_templates(model)
+    if templates is None:
+        return variables
+    if not any(
+        isinstance(v, dict) and _pd_has_apply(v.get("expression"))
+        for v in variables.values()
+    ):
+        return variables
+    out = dict(variables)
+    for name, v in variables.items():
+        if not (isinstance(v, dict) and _pd_has_apply(v.get("expression"))):
+            continue
+        ex = _pd_expand_for_detection(v["expression"], templates)
+        if ex is not v["expression"]:
+            nv = dict(v)
+            nv["expression"] = ex
+            out[name] = nv
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Residual diagnostics.
+#
+# A pattern recogniser that declines SILENTLY is indistinguishable from one that
+# fired — until, hours later, an ungated provider fetch runs the machine out of
+# memory. These keep the two cases apart:
+#
+#   NOT A JOIN           — a ``+``-aggregate with no containment predicate is a
+#                          legitimately dense factor. Nothing to gate, no
+#                          diagnostic.
+#   A JOIN I CANNOT READ — the aggregate bins records into cells of the SAME set
+#                          that indexes a provider-backed rank-2 array it feeds,
+#                          but the containment could not be recovered. Reported.
+#
+# WARNING, not error: the pass's contract (CONFORMANCE_SPEC §5.5.7) is that an
+# unrecognised document comes back unchanged, and the residue is a PERFORMANCE
+# defect — the numbers stay right, the fetch gets big. The one hard error in this
+# pass is :func:`_pd_assert_rects_rebound`, where the rewrite HAS fired and a
+# rect factor could not be re-pointed: wrong numbers, not slow ones.
+# --------------------------------------------------------------------------- #
+
+PD_UNGATED_CONSEQUENCE = (
+    "the provider-backed array is fetched WHOLESALE — no derived support set "
+    "is produced and no gate is emitted"
+)
+
+
+def _pd_binning_refusal(ev: Any, out_set: str) -> tuple[str, str | None] | None:
+    """Why :func:`_pd_detect_binning` refused ``ev``, for a caller that has
+    ALREADY established ``ev`` sits in the join position.
+
+    ``None`` ⇒ ``ev`` is simply not join-shaped (no diagnostic warranted).
+    Otherwise ``(reason, template)``: ``("surviving_template_reference", name)``
+    when the body carries a reference that could not be expanded for matching,
+    ``("predicate_unparsed", None)`` when a containment ``ifelse`` was found but
+    did not read as a rectangle containment in either orientation."""
+    if not (isinstance(ev, dict) and ev.get("type") == "observed"):
+        return None
+    shape = ev.get("shape")
+    if not (isinstance(shape, list) and len(shape) == 1 and shape[0] == out_set):
+        return None
+    agg = ev.get("expression")
+    if not (isinstance(agg, dict) and _is_aggregate_op(agg.get("op"))):
+        return None
+    if _pd_oplus(agg) != ("+", 0.0):
+        return None
+    oi = agg.get("output_idx")
+    if not (isinstance(oi, list) and len(oi) == 1 and isinstance(oi[0], str)):
+        return None
+    out_sym = oi[0]
+    ranges = _ranges_of(agg)
+    if len(ranges) != 2 or _range_from(ranges.get(out_sym)) != out_set:
+        return None
+    in_sym = next((k for k in ranges if k != out_sym), None)
+    if in_sym is None or _range_from(ranges[in_sym]) is None:
+        return None
+    body = agg.get("expr")
+    if not isinstance(body, dict):
+        return None
+    if _pd_find_ifelse_cond(body) is None:
+        tname = _pd_first_apply_name(body)
+        if tname is None:
+            return None  # no predicate at all ⇒ genuinely dense
+        return ("surviving_template_reference", tname)
+    return ("predicate_unparsed", None)
+
+
+def _pd_diagnostic_message(d: dict) -> str:
+    """The human-readable rendering of one diagnostic record: what was
+    recognised, what could not be read, and what it costs."""
+    if d.get("reason") == "surviving_template_reference":
+        tpl = d.get("template")
+        why = (
+            "its body carries a surviving `apply_expression_template` reference"
+            + ("" if tpl is None else f" to '{tpl}'")
+            + " that could not be expanded for matching"
+        )
+    else:
+        why = (
+            "its containment predicate did not read as a rectangle containment "
+            "between four cell-indexed rect bounds and two record-indexed point "
+            "coordinates"
+        )
+    return (
+        f"projection-pushdown desugar: '{d['variable']}' is join-shaped — it bins "
+        f"records into the cells of index set '{d['index_set']}' and feeds the "
+        f"provider-backed array '{d['array']}' through '{d['consumer']}' — but "
+        f"{why}, so the rewrite does NOT fire for it and {PD_UNGATED_CONSEQUENCE}. "
+        "Bind the containment's factors through the template's params, or write "
+        "the predicate longhand."
+    )
+
+
 def _pd_mirror_specs(
     variables: dict, C: str, R: str, forward_names: set
 ) -> list[tuple[str, list[str], list[str]]]:
@@ -457,11 +669,19 @@ def _pd_mirror_specs(
 
 
 def _pd_detect(model: dict, index_sets: Any):
-    """Detect the pushdown pattern across a model's observeds. Returns a plan
-    dict, or ``None`` when nothing matches / the semiring guard fails."""
-    variables = model.get("variables")
-    if not isinstance(variables, dict):
-        return None
+    """Detect the pushdown pattern across a model's observeds.
+
+    Matching runs on the DETECTION view (:func:`_pd_detection_variables`): the
+    model's variables with surviving template references expanded, so a binning
+    body factored through a template matches exactly as its expansion would.
+
+    Returns ``(plan, diagnostics)`` — ``plan`` ``None`` when nothing matches /
+    the semiring guard fails, ``diagnostics`` the residual "a join I could not
+    read" records (see :func:`_pd_binning_refusal`)."""
+    variables = _pd_detection_variables(model)
+    diags: list[dict] = []
+    if not variables:
+        return None, diags
     conc_specs: list[tuple[str, str]] = []
     a_names: list[str] = []
     # (E name, cell output symbol, gate src_env, gate tgt_env)
@@ -512,6 +732,25 @@ def _pd_detect(model: dict, index_sets: Any):
             continue
         bind = _pd_detect_binning(ev, c_set)
         if bind is None or not bind["out_is_cell"]:  # FORWARD arm only
+            # `ev` is the rank-1 factor of a `+`-mat-vec against a
+            # provider-backed `[c_set, r_set]` array: the join position. If it is
+            # ALSO binning-shaped but unreadable, say so — silence here is the
+            # ungated whole-array fetch that surfaces hours later.
+            if bind is None:
+                why = _pd_binning_refusal(ev, c_set)
+                if why is not None:
+                    diags.append(
+                        {
+                            "code": "pushdown_join_unrecognised",
+                            "variable": ename,
+                            "consumer": cname,
+                            "array": aname,
+                            "index_set": c_set,
+                            "reason": why[0],
+                            "template": why[1],
+                            "consequence": PD_UNGATED_CONSEQUENCE,
+                        }
+                    )
             continue
 
         if C is None:
@@ -525,8 +764,20 @@ def _pd_detect(model: dict, index_sets: Any):
             a_names.append(aname)
         if not any(e[0] == ename for e in e_specs):
             e_specs.append((ename, bind["c_sym"], bind["src_env"], bind["tgt_env"]))
+    # Deterministic, deduplicated diagnostic order: the same E can be reached
+    # from several `conc` consumers.
+    diags.sort(key=lambda d: (d["variable"], d["consumer"], d["array"]))
+    _seen: set = set()
+    diags = [
+        d
+        for d in diags
+        if not (
+            (d["variable"], d["consumer"], d["array"]) in _seen
+            or _seen.add((d["variable"], d["consumer"], d["array"]))
+        )
+    ]
     if not conc_specs:
-        return None
+        return None, diags
     # Deterministic plan order (mirrors the Julia `sort!(A_names)`): the one
     # collection-order-dependent list that leaks into the emitted document
     # (`gated_select.applies_to`) is sorted so all bindings agree.
@@ -548,7 +799,7 @@ def _pd_detect(model: dict, index_sets: Any):
         "rep_ename": rep_ename,
         "rep_csym": rep_csym,
         "rep_rsym": rep_rsym,
-    }
+    }, diags
 
 
 # --------------------------------------------------------------------------- #
@@ -558,12 +809,30 @@ def _pd_detect(model: dict, index_sets: Any):
 
 def _pd_rewrite_rects(node: Any, rectmap: dict[str, str]) -> Any:
     """In-place: rewrite every ``index(F, …)`` whose factor ``F`` is a key of
-    ``rectmap`` to ``index(rectmap[F], …)`` throughout a raw AST subtree."""
+    ``rectmap`` to ``index(rectmap[F], …)`` throughout a raw AST subtree.
+
+    This walk descends EVERY dict value, ``bindings`` included, so a rect factor
+    that reaches the binning body through an ``apply_expression_template`` call
+    site is reached AT THE CALL SITE — which is exactly where the rewrite must
+    land, so the shared template body stays untouched and singly-lowered
+    (esm-spec §9.6.4 Option B). Two binding spellings carry a rect factor and
+    both are handled: a subscripted binding (``{"F": index(src_W, "c")}``) by the
+    ``index`` arm above, and a BARE FACTOR-NAME binding (``{"F": "src_W"}``,
+    substituted into the body's own ``index(F, c)``) by the ``bindings`` arm
+    below. A bare string is rewritten ONLY inside ``bindings`` — elsewhere a
+    string is an ``output_idx`` entry, a range key, a scalar field or a template
+    ``name``, none of which are variable references."""
     if isinstance(node, dict):
         if node.get("op") == "index":
             a = node.get("args")
             if isinstance(a, list) and a and isinstance(a[0], str) and a[0] in rectmap:
                 a[0] = rectmap[a[0]]
+        if node.get("op") == APPLY_OP:
+            b = node.get("bindings")
+            if isinstance(b, dict):
+                for k, v in list(b.items()):
+                    if isinstance(v, str) and v in rectmap:
+                        b[k] = rectmap[v]
         for v in node.values():
             _pd_rewrite_rects(v, rectmap)
     elif isinstance(node, list):
@@ -590,7 +859,61 @@ def _pd_overlap_clause(src_env: Any, tgt_env: Any) -> dict:
     }
 
 
-def _pd_apply(esm: dict, mname: str, plan: dict) -> dict:
+def _pd_collect_stale_rects(node: Any, rectmap: dict[str, str], out: set) -> set:
+    """Collect every factor name in ``rectmap`` that still appears in an
+    ``index(F, …)`` position — every occurrence :func:`_pd_rewrite_rects`
+    targets but did not reach."""
+    if isinstance(node, dict):
+        if node.get("op") == "index":
+            a = node.get("args")
+            if isinstance(a, list) and a and isinstance(a[0], str) and a[0] in rectmap:
+                out.add(a[0])
+        for v in node.values():
+            _pd_collect_stale_rects(v, rectmap, out)
+    elif isinstance(node, list):
+        for x in node:
+            _pd_collect_stale_rects(x, rectmap, out)
+    return out
+
+
+def _pd_assert_rects_rebound(
+    expr: Any, ename: str, rectmap: dict[str, str], templates: dict | None
+) -> None:
+    """POST-CONDITION of the forward arm's rect re-pointing, discharged on the
+    EXPANDED form of the rewritten aggregate (esm-spec §9.6.4 rule 2: what the
+    evaluator sees is ``Expand(tree)``).
+
+    ``E``'s reduction axis now ranges over the COMPACT derived support set, so
+    every rect reference in its body must have become the corresponding
+    ``pd_cell__*`` gather. The rewrite achieves that by editing the CALL SITE,
+    which is what keeps the shared template body untouched. A rect factor named
+    FREE inside a template body is therefore unreachable: rewriting it would mean
+    rewriting the shared body, corrupting every other call site (the generated
+    producer ``filter`` among them, which must keep full-grid references). Left
+    alone it would index a compact per-support gather with full-grid positions —
+    WRONG NUMBERS, silently. Hence a hard error, whose remedy is the one the
+    template machinery already prescribes: bind the value through the params."""
+    if not rectmap:
+        return
+    view = _pd_expand_for_detection(expr, templates)
+    stale = _pd_collect_stale_rects(view, rectmap, set())
+    if not stale:
+        return
+    names = "', '".join(sorted(stale))
+    raise ExpressionTemplateError(
+        TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
+        f"projection-pushdown desugar: the binning aggregate '{ename}' still reads "
+        f"'{names}' after its reduction axis was re-pointed onto the generated "
+        "derived support set. Those references live in an expression-template BODY, "
+        "not in the call site's `bindings`, so the rewrite — which edits call sites "
+        "only, to keep the template body shared and singly-lowered (esm-spec §9.6.4 "
+        "Option B) — cannot re-point them, and they would index the compact "
+        "per-support cell gathers with full-grid positions. Bind the value through "
+        "the template's params, or write the binning body longhand.",
+    )
+
+
+def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) -> dict:
     d = copy.deepcopy(esm)  # fresh, mutable
     C = plan["C"]
     setname = "pd_support__" + C
@@ -620,6 +943,17 @@ def _pd_apply(esm: dict, mname: str, plan: dict) -> dict:
     #     BEFORE E is rewritten (they must keep full-grid rect factor refs) ---
     repexpr = mv[plan["rep_ename"]]["expression"]
     ifcond = _pd_find_ifelse_cond(repexpr.get("expr"))
+    if ifcond is None:
+        # The body is factored through a template. Read the predicate off the
+        # EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID rect
+        # references, which is exactly what the pre-rewrite expansion yields. The
+        # expansion is a scratch value: nothing of it is emitted except these
+        # comparisons, so the document's template block and call sites are
+        # untouched. A template-free document never reaches this branch, so its
+        # emitted filter is byte-identical to before.
+        ifcond = _pd_find_ifelse_cond(
+            _pd_expand_for_detection(repexpr.get("expr"), templates)
+        )
     if ifcond is None:
         raise PushdownRewriteError(
             "pushdown desugar: representative E lost its containment ifelse"
@@ -679,6 +1013,7 @@ def _pd_apply(esm: dict, mname: str, plan: dict) -> dict:
             expr["join"] = [
                 _pd_overlap_clause(e_src, [rectmap.get(f, f) for f in e_tgt])
             ]
+        _pd_assert_rects_rebound(expr, ename, rectmap, templates)
 
     # --- MIRRORED orientation: gate only ---
     # A per-record binning aggregate `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)]·…`
@@ -773,19 +1108,61 @@ def desugar_pushdown(esm: dict, model_name: str | None = None) -> dict:
     ``pd_support__pd_support__…`` layer."""
     if not isinstance(esm, dict) or _pushdown_record(esm) is not None:
         return esm
-    models = esm.get("models")
-    if not isinstance(models, dict):
+    an = _pd_analyze(esm, model_name)
+    if an is None:
         return esm
-    mname = _pd_model_name(esm, model_name)
-    if mname is None or mname not in models:
-        return esm
-    m = models[mname]
-    if not isinstance(m, dict):
-        return esm
-    plan = _pd_detect(m, esm.get("index_sets"))
+    plan, diags, mname, templates = an
+    # RESIDUAL DIAGNOSTICS (CONFORMANCE_SPEC §5.5.7): a join-shaped aggregate the
+    # recogniser could NOT read is reported here, not swallowed. See
+    # `_pd_binning_refusal` for the "not a join" / "a join I could not read"
+    # split, and `pushdown_diagnostics` for the inspectable form.
+    for d in diags:
+        warnings.warn(_pd_diagnostic_message(d), UserWarning, stacklevel=2)
     if plan is None:
         return esm
-    return _pd_apply(esm, mname, plan)
+    return _pd_apply(esm, mname, plan, templates)
+
+
+def pushdown_diagnostics(esm: dict, model_name: str | None = None) -> list[dict]:
+    """The residual diagnostics :func:`desugar_pushdown` would emit for ``esm``.
+
+    One record per aggregate that IS join-shaped (it bins records into the cells
+    of an index set and feeds a provider-backed rank-2 array through a
+    ``+``-semiring mat-vec) but whose containment predicate the recogniser could
+    not read, so the rewrite does not fire for it and that array is fetched
+    WHOLESALE.
+
+    Inspectable, side-effect-free counterpart of the warning stream: same
+    records, same order (sorted by ``variable``/``consumer``/``array``), stable
+    field set (``code``, ``variable``, ``consumer``, ``array``, ``index_set``,
+    ``reason``, ``template``, ``consequence``), pinned across bindings by the
+    ``tests/conformance/pushdown/`` corpus. Empty for a document that already
+    carries the rewrite record, for one with no model selected, and —
+    deliberately — for one that simply is NOT join-shaped: "no join here" is not
+    a defect."""
+    if not isinstance(esm, dict) or _pushdown_record(esm) is not None:
+        return []
+    an = _pd_analyze(esm, model_name)
+    return [] if an is None else an[1]
+
+
+def _pd_analyze(esm: dict, model_name: str | None):
+    """The ONE detection entry point shared by :func:`desugar_pushdown` (which
+    then emits) and :func:`pushdown_diagnostics` (which only reports). ``None``
+    when no model is selected; otherwise
+    ``(plan, diagnostics, model_name, templates)`` — ``plan`` ``None`` meaning
+    the pattern did not match."""
+    models = esm.get("models")
+    if not isinstance(models, dict):
+        return None
+    mname = _pd_model_name(esm, model_name)
+    if mname is None or mname not in models:
+        return None
+    m = models[mname]
+    if not isinstance(m, dict):
+        return None
+    plan, diags = _pd_detect(m, esm.get("index_sets"))
+    return plan, diags, mname, _pd_templates(m)
 
 
 # --------------------------------------------------------------------------- #

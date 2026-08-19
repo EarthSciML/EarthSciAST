@@ -264,7 +264,7 @@ try:
         observed_field,
         prepare,
     )
-    from .pushdown_rewrite import desugar_pushdown  # noqa: F401
+    from .pushdown_rewrite import desugar_pushdown, pushdown_diagnostics  # noqa: F401
 
     _has_prepare = True
 except ImportError:
@@ -553,5 +553,6 @@ if _has_prepare:
             "PreparedModel",
             "observed_field",
             "desugar_pushdown",
+            "pushdown_diagnostics",
         ]
     )

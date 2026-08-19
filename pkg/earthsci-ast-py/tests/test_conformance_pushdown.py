@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import copy
 import json
+import warnings
 from pathlib import Path
 
 import pytest
 
-from earthsci_ast.pushdown_rewrite import desugar_pushdown
+from earthsci_ast.pushdown_rewrite import desugar_pushdown, pushdown_diagnostics
 
 _TESTS_DIR = Path(__file__).resolve().parents[3] / "tests"
 _MANIFEST = _TESTS_DIR / "conformance" / "pushdown" / "manifest.json"
@@ -60,20 +61,36 @@ def _fixtures():
 @pytest.mark.parametrize("fixture", _fixtures())
 def test_pushdown_rewrite_matches_golden(fixture):
     input_path = _TESTS_DIR / fixture["input"]
-    golden_path = _TESTS_DIR / fixture["golden"]
     doc = json.loads(input_path.read_text())
     pristine = copy.deepcopy(doc)
-    golden = json.loads(golden_path.read_text())
+    mn = fixture.get("model_name")
+    # A fixture either carries a rewrite `golden` (the pattern fires) or declares
+    # `fires: false` and pins the residual `diagnostics` instead.
+    fires = fixture.get("fires", True) is not False
 
-    rewritten = desugar_pushdown(doc, model_name=fixture.get("model_name"))
-    assert rewritten is not doc, "the pattern must fire on the input fixture"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")   # the residual diagnostic is a warning
+        rewritten = desugar_pushdown(doc, model_name=mn)
 
-    diffs = _deep_eq(rewritten, golden)
-    assert not diffs, "rewritten document differs from golden:\n" + "\n".join(diffs[:40])
+        if fires:
+            golden = json.loads((_TESTS_DIR / fixture["golden"]).read_text())
+            assert rewritten is not doc, "the pattern must fire on the input fixture"
+            diffs = _deep_eq(rewritten, golden)
+            assert not diffs, "rewritten document differs from golden:\n" + "\n".join(
+                diffs[:40]
+            )
+            # Idempotency: the golden (and our own output) never re-desugars.
+            assert desugar_pushdown(rewritten) is rewritten
+            assert desugar_pushdown(golden) is golden
+        else:
+            # A `fires: false` fixture is NOT rewritten — and says why.
+            assert rewritten is doc, "the pattern must NOT fire on this fixture"
 
-    # Idempotency: the golden (and our own output) never re-desugars.
-    assert desugar_pushdown(rewritten) is rewritten
-    assert desugar_pushdown(golden) is golden
+        dg = fixture.get("diagnostics")
+        if dg is not None:
+            golden_dg = json.loads((_TESTS_DIR / dg).read_text())
+            diffs = _deep_eq(pushdown_diagnostics(doc, model_name=mn), golden_dg)
+            assert not diffs, "diagnostics differ from golden:\n" + "\n".join(diffs[:40])
 
     # Input purity: the rewrite returned a fresh document.
     assert not _deep_eq(doc, pristine)

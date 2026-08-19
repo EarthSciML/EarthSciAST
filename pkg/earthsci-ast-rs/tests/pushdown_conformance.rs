@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use earthsci_ast::pushdown_rewrite::desugar_pushdown;
+use earthsci_ast::pushdown_rewrite::{desugar_pushdown, pushdown_diagnostics};
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -90,31 +90,50 @@ fn pushdown_goldens_match_and_rewrite_is_idempotent_and_pure() {
         let id = fx["id"].as_str().unwrap();
         // Manifest paths are repo-root-tests-relative ("conformance/pushdown/…").
         let input_path = dir.join("../..").join(fx["input"].as_str().unwrap());
-        let golden_path = dir.join("../..").join(fx["golden"].as_str().unwrap());
         let model_name = fx["model_name"].as_str();
+        // A fixture either carries a rewrite `golden` (the pattern fires) or
+        // declares `fires: false` and pins the residual `diagnostics` instead.
+        let fires = fx.get("fires").and_then(Value::as_bool).unwrap_or(true);
 
         let input = read_json(&input_path);
         let input_snapshot = input.clone();
-        let golden = read_json(&golden_path);
 
-        // 2–3: rewrite fires and matches the golden by value.
         let out = desugar_pushdown(&input, model_name).unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert!(
-            matches!(out, Cow::Owned(_)),
-            "{id}: desugar_pushdown did not fire on the input document"
-        );
-        if let Err(diff) = deep_equal(&out, &golden, "") {
-            panic!("{id}: rewritten document differs from the golden at {diff}");
+        if fires {
+            let golden = read_json(&dir.join("../..").join(fx["golden"].as_str().unwrap()));
+            // 2–3: rewrite fires and matches the golden by value.
+            assert!(
+                matches!(out, Cow::Owned(_)),
+                "{id}: desugar_pushdown did not fire on the input document"
+            );
+            if let Err(diff) = deep_equal(&out, &golden, "") {
+                panic!("{id}: rewritten document differs from the golden at {diff}");
+            }
+
+            // 4: idempotency — the golden (record-carrying) document is returned
+            // unchanged, borrowed.
+            let again =
+                desugar_pushdown(&golden, model_name).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert!(
+                matches!(again, Cow::Borrowed(_)),
+                "{id}: desugaring the golden re-fired (idempotency guard broken)"
+            );
+        } else {
+            // A `fires: false` fixture is NOT rewritten — and says why.
+            assert!(
+                matches!(out, Cow::Borrowed(_)),
+                "{id}: desugar_pushdown fired on a fixture that must not be rewritten"
+            );
         }
 
-        // 4: idempotency — the golden (record-carrying) document is returned
-        // unchanged, borrowed.
-        let again =
-            desugar_pushdown(&golden, model_name).unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert!(
-            matches!(again, Cow::Borrowed(_)),
-            "{id}: desugaring the golden re-fired (idempotency guard broken)"
-        );
+        // 4b: the residual diagnostics, when the fixture pins them.
+        if let Some(dg) = fx.get("diagnostics").and_then(Value::as_str) {
+            let golden_dg = read_json(&dir.join("../..").join(dg));
+            let got = Value::Array(pushdown_diagnostics(&input, model_name));
+            if let Err(diff) = deep_equal(&got, &golden_dg, "") {
+                panic!("{id}: diagnostics differ from the golden at {diff}");
+            }
+        }
 
         // 5: input purity — byte-level: the rewrite never mutates its input.
         assert_eq!(input, input_snapshot, "{id}: input document was mutated");

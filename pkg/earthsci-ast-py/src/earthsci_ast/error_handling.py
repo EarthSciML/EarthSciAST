@@ -129,6 +129,14 @@ REWRITE_RULE_NONTERMINATING = "rewrite_rule_nonterminating"
 TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET = "template_constraint_unknown_index_set"
 GEOMETRY_MANIFOLD_INVALID = "geometry_manifold_invalid"
 MAKEARRAY_REGION_INVERTED = "makearray_region_inverted"
+# Projection-pushdown desugar post-condition (``pushdown_rewrite.py``,
+# CONFORMANCE_SPEC §5.5.7): a rect factor the rewrite must re-point onto the
+# generated per-support cell gathers is named FREE in a template body instead of
+# bound at the call site, so the call-site-only rewrite cannot reach it
+# (esm-spec §9.6.4 Option B).
+TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
+    "template_body_references_pushdown_rewritten_variable"
+)
 
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as

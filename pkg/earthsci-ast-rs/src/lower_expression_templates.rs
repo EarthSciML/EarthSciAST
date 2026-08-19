@@ -1755,6 +1755,32 @@ fn build_named(templates: &Map<String, Value>) -> Named {
         .collect()
 }
 
+/// `Expand(node)` (esm-spec §9.6.4 rule 2) against ONE component
+/// `expression_templates` registry: fully expand every surviving
+/// `apply_expression_template` reference in `node` by pure substitution to a
+/// fixpoint, and return the expanded tree.
+///
+/// This is the entry point for a NON-ENGINE consumer that must reach its
+/// decisions on the expanded form — rule 4's pattern opacity scopes to the
+/// §9.6.3 rewrite-rule engine, while every other consumer is governed by rule 2
+/// (a reference denotes its expansion; every consumer MAY expand). The
+/// projection-pushdown desugar (`pushdown_rewrite.rs`) is the caller: it matches
+/// on the expanded view and then edits the reference-preserving call site, so
+/// the shared template body stays singly-lowered.
+///
+/// `templates` is the component's `expression_templates` object. Deterministic
+/// and sharing-preserving; the returned tree is a fresh owned `Value`.
+pub fn expand_against_registry(
+    node: &Value,
+    templates: &Map<String, Value>,
+    scope: &str,
+) -> Result<Value, ExpressionTemplateError> {
+    let named = build_named(templates);
+    let mut memo = PtrMemo::default();
+    let out = expand_all(&to_shared(node), &named, scope, &mut memo)?;
+    Ok(to_value(&out))
+}
+
 /// True if `value` either declares any non-empty `expression_templates` block
 /// (component-level or top-level) or contains any `apply_expression_template`
 /// op anywhere. Mirrors the Julia reference `_has_template_machinery`.
