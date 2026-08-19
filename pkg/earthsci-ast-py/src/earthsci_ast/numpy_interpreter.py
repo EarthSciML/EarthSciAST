@@ -634,7 +634,31 @@ def _apply_mul(vals: list[Any]) -> Any:
 
 
 def _apply_div(a: Any, b: Any) -> Any:
-    return a / b
+    """``a / b`` with IEEE-754 semantics for a zero denominator.
+
+    CONFORMANCE_SPEC §5.7 rule 6 is explicit: "division is IEEE, never an
+    exception, so every binding agrees" — `x/0` is `±Inf`, `0/0` is `NaN`. Every
+    other evaluator in this repo already honours that: numpy does it on any
+    array operand, and this binding's OWN value-invention evaluator
+    (``value_invention._vi_eval``) spells it out in the same words. Only the
+    PYTHON-scalar operand pair reached Python's `/`, which raises
+    ``ZeroDivisionError`` — so one document expression evaluated to `Inf` under
+    the relational engine and aborted the build under the interpreter, and to
+    `Inf` on an array and aborted on a scalar. The interpreter's ``ifelse`` is
+    EAGER, so it aborted even from a branch the model never selects: the regrid
+    normalisation idiom `ifelse(A_j > 0, x/A_j, 0)` runs in Julia and Rust and
+    could not be evaluated here.
+
+    The fallback fires ONLY where the plain `/` already raised, so nothing that
+    evaluates today changes, and it produces exactly the value ``_vi_eval``
+    produces (``np.float64`` is the same IEEE double the other bindings use, so
+    finite results stay bit-identical).
+    """
+    try:
+        return a / b
+    except ZeroDivisionError:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return float(np.float64(a) / np.float64(b))
 
 
 def _apply_pow(a: Any, b: Any) -> Any:

@@ -135,3 +135,39 @@ def test_array_operand_keeps_numpy_nan_semantics():
     got = observed_field(prep, "y")
     assert np.isnan(got[0]) and np.isnan(got[2])
     assert got[1] == pytest.approx(2.0, rel=1e-8)
+
+
+# --------------------------------------------------------------------------- #
+# IEEE division — CONFORMANCE_SPEC §5.7 rule 6
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "num,den,want",
+    [(1.0, 0.0, np.inf), (-1.0, 0.0, -np.inf), (0.0, 0.0, np.nan)],
+)
+def test_scalar_division_by_zero_is_ieee_not_an_exception(num, den, want):
+    """CONFORMANCE_SPEC §5.7 rule 6: "division is IEEE, never an exception, so
+    every binding agrees". Numpy already did this on any array operand, and this
+    binding's own `value_invention._vi_eval` already did it for scalars; only
+    the numpy interpreter's scalar `/` raised `ZeroDivisionError`."""
+    prep = prepare(_doc({"op": "/", "args": [num, den]}), model_name="M")
+    got = observed_field(prep, "y")
+    assert np.isnan(got) if np.isnan(want) else got == want
+
+
+def test_untaken_eager_ifelse_branch_may_divide_by_zero():
+    """`ifelse(false, x/0, 1)` — the shape of the regrid normalisation idiom
+    `ifelse(A_j > 0, x/A_j, 0)`. `ifelse` is EAGER, so before this the untaken
+    branch aborted the whole build with `ZeroDivisionError` while Julia and Rust
+    returned the taken branch."""
+    prep = prepare(
+        _doc(
+            {
+                "op": "ifelse",
+                "args": [{"op": "false", "args": []}, {"op": "/", "args": [1.0, 0.0]}, 1.0],
+            }
+        ),
+        model_name="M",
+    )
+    assert observed_field(prep, "y") == 1.0
