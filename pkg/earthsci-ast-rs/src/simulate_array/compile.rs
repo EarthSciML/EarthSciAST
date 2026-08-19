@@ -605,6 +605,23 @@ impl ArrayCompiled {
         // numerically inert there (see `strip_value_invention`). A no-op unless a
         // `skolem` op or a derived-set-shaped variable is present.
         strip_value_invention(&mut model_owned, index_sets)?;
+        // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
+        // `const`-literal factor variables — Fornberg weights, mesh
+        // connectivity, a geometry table — that [`collect_const_factor_arrays`]
+        // already identifies as the Rust analogue of the Julia reference's
+        // `const_arrays`. Captured HERE, before stage (6) MOVES each observed
+        // body out of the variable registry. A gather on one of these resolves
+        // an out-of-range index by its declared boundary policy instead of the
+        // state gather's zero ghost, which §5.5.5 says is never a const array's.
+        let const_scope = Rc::new(ConstArrayScope::from_names(
+            model_owned
+                .variables
+                .iter()
+                .filter(|(_, v)| {
+                    matches!(v.expression.as_ref(), Some(Expr::Operator(n)) if n.op == "const")
+                })
+                .map(|(n, _)| n.clone()),
+        ));
         // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
         // aggregate range still carries its `{ "from": <index set> }` linkage so
         // the join key columns' member values can be read. A join whose key
@@ -714,6 +731,7 @@ impl ArrayCompiled {
             field_ics,
             index_sets: index_sets.clone(),
             namespace: None,
+            const_scope,
         })
     }
 }

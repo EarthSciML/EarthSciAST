@@ -184,6 +184,14 @@ pub(crate) struct TapeBuilder<'m> {
     param_names: &'m [String],
     /// Per-name observed cadence tier (from the driver's classifiers).
     obs_tier: FxHashMap<String, Cadence>,
+    /// The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5). A gather on
+    /// one of these may not compile to this module's ghost-0 fill: an
+    /// out-of-range const-array index resolves by the factor's declared
+    /// boundary policy, and with no declared policy it is
+    /// `E_TREEWALK_CONSTARRAY_OOB`. Each out-of-range arm therefore BAILS to
+    /// the per-cell oracle fallback when the base is one; an in-range gather
+    /// compiles exactly as before.
+    const_arrays: &'m ConstArrayScope,
 
     // Program under construction -------------------------------------------
     slots: Vec<SlotDesc>,
@@ -232,6 +240,7 @@ impl<'m> TapeBuilder<'m> {
         var_shapes: &'m IndexMap<String, VarShape>,
         param_names: &'m [String],
         obs_tier: FxHashMap<String, Cadence>,
+        const_arrays: &'m ConstArrayScope,
     ) -> Self {
         let mut state_vars = Vec::with_capacity(var_shapes.len());
         let mut state_ix = FxHashMap::default();
@@ -248,6 +257,7 @@ impl<'m> TapeBuilder<'m> {
             var_shapes,
             param_names,
             obs_tier,
+            const_arrays,
             slots: Vec::new(),
             plans: Vec::new(),
             regions: Vec::new(),
@@ -825,6 +835,10 @@ impl<'m> TapeBuilder<'m> {
         if node.args.is_empty() {
             bail_tape!("index: no arguments");
         }
+        // See the same guard in `eval_vec_index`: a const-array gather may not
+        // use the ghost-0 fill (§5.5.5).
+        let const_base =
+            matches!(&node.args[0], Expr::Variable(v) if self.const_arrays.is_const(v));
         let arg0 = self.lower_expr(&node.args[0], bx)?;
         let n = node.args.len() - 1;
         let Some((src_shape, src_origin)) = self.lv_box(&arg0) else {
@@ -870,6 +884,9 @@ impl<'m> TapeBuilder<'m> {
 
         // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
         if any_fixed_oob {
+            if const_base {
+                bail_tape!("index: const-array gather with an out-of-range fixed axis (§5.5.5)");
+            }
             return Ok(if n_mapped == 0 {
                 LV::Lit(0.0)
             } else {
@@ -912,7 +929,17 @@ impl<'m> TapeBuilder<'m> {
                     let hi_p = (so + ssz - bx.lo[a] - k).min(bx.shape[a] as i64); // exclusive
                     if lo_p >= hi_p {
                         // Entirely out of bounds ⇒ the whole result is ghost-0.
+                        if const_base {
+                            bail_tape!(
+                                "index: const-array gather entirely out of range on an axis (§5.5.5)"
+                            );
+                        }
                         return Ok(self.emit_zero_array(&bx.shape, &bx.lo));
+                    }
+                    if const_base && (lo_p != 0 || hi_p != bx.shape[a] as i64) {
+                        bail_tape!(
+                            "index: const-array gather partially out of range on an axis (§5.5.5)"
+                        );
                     }
                     let mut segs = SmallVec::new();
                     segs.push((
@@ -1457,6 +1484,7 @@ impl<'m> TapeBuilder<'m> {
         let Some((base, idx_args)) = node.args.split_first() else {
             return Ok(LV::Lit(f64::NAN));
         };
+        let const_base = matches!(base, Expr::Variable(v) if self.const_arrays.is_const(v));
         let basev = self.lower_wholesale(base)?;
         let Some((shape, origin)) = self.lv_box(&basev) else {
             // Scalar base: identity with 0 index args, NaN otherwise.
@@ -1492,6 +1520,9 @@ impl<'m> TapeBuilder<'m> {
             idx.push((one_based - 1).max(0) as usize);
         }
         if !in_bounds {
+            if const_base {
+                bail_tape!("index: const-array gather out of range (§5.5.5)");
+            }
             return Ok(LV::Lit(0.0));
         }
         let cad = self.lv_cadence(&basev);
@@ -1807,6 +1838,7 @@ pub(super) fn build_tape_program(
     param_names: &[String],
     const_names: &HashSet<String>,
     seg_invariant_names: &HashSet<String>,
+    const_arrays: &ConstArrayScope,
     // Step 4: run the kernel-fusion post-pass with the given superop
     // configuration (`None` = the unfused program, bitwise-identical
     // results — the `ESS_TAPE_FUSE_DISABLE` arm).
@@ -1829,7 +1861,7 @@ pub(super) fn build_tape_program(
         obs_tier.insert(name.clone(), tier);
     }
 
-    let mut b = TapeBuilder::new(var_shapes, param_names, obs_tier);
+    let mut b = TapeBuilder::new(var_shapes, param_names, obs_tier, const_arrays);
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {

@@ -343,6 +343,9 @@ struct Env<'a> {
     state_rm: &'a [f64],
     params: &'a [f64],
     t: f64,
+    /// The model's const-array registry (§5.5.5), for the fallback arms that
+    /// re-enter the per-cell oracle.
+    const_arrays: &'a ConstArrayScope,
 }
 
 /// `bind_params`-style parameter-vector generation hash (bit-exact).
@@ -374,6 +377,7 @@ pub(in crate::simulate_array) fn run_tape_call(
     t: f64,
     dy: &mut [f64],
     stats: &mut RhsStats,
+    const_arrays: &ConstArrayScope,
 ) {
     // Parameter epoch: bit-exact generation hash of the params slice → epoch
     // bump on change (the negative-control test in `tests/tape_exec.rs`
@@ -423,6 +427,7 @@ pub(in crate::simulate_array) fn run_tape_call(
         state_rm: &state_rm,
         params,
         t,
+        const_arrays,
     };
 
     // Section invalidation: two integer compares per steady-state call.
@@ -2262,6 +2267,7 @@ fn run_range(
                             false,
                             stats,
                             None,
+                            env.const_arrays,
                         );
                     }
                     RuleKind::Rhs(i) => {
@@ -2276,6 +2282,7 @@ fn run_range(
                             env.derived_rings,
                             env.forcing,
                             dy,
+                            env.const_arrays,
                         );
                     }
                 }
@@ -2368,6 +2375,7 @@ pub(super) fn run_rhs_oracle(
     derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
     dy: &mut [f64],
+    const_arrays: &ConstArrayScope,
 ) {
     let mut ctx = EvalCtx {
         state_arrays,
@@ -2380,6 +2388,7 @@ pub(super) fn run_rhs_oracle(
         derived_extents: empty_derived_extents(),
         forcing,
         cse: None,
+        const_arrays,
     };
     match rule {
         RhsRule::Scalar { slot, body } | RhsRule::IndexedScalar { slot, body } => {

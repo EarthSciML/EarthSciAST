@@ -220,6 +220,7 @@ pub(super) fn run_reference(
                             false,
                             &mut RhsStats::default(),
                             None,
+                            &compiled.const_scope,
                         );
                     }
                     RuleKind::Rhs(i) => {
@@ -234,6 +235,7 @@ pub(super) fn run_reference(
                             &derived_rings,
                             &compiled.forcing,
                             dy,
+                            &compiled.const_scope,
                         );
                     }
                 }

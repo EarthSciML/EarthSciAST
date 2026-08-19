@@ -1386,6 +1386,7 @@ fn export_demotion_skips_unread_publishes() {
             0.0,
             dy,
             &mut stats,
+            &compiled.const_scope,
         );
     };
 

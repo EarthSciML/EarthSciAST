@@ -1040,19 +1040,104 @@ pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a A
     None
 }
 
-/// Sample `arr` at the 1-based `raw` indices (out-of-bounds ⇒ 0.0, homogeneous
-/// Dirichlet ghost cells; fewer indices than the rank ⇒ a fixed-leading-axes
-/// sub-array). `in_bounds` seeds the bound flag (`false` if an index expression
-/// was non-scalar). Shared by the borrowing fast path and the general path.
-pub(super) fn index_into(arr: &ArrayD<f64>, raw: &[i64], mut in_bounds: bool) -> Value {
+thread_local! {
+    /// First `E_TREEWALK_CONSTARRAY_OOB` raised during the current evaluation.
+    ///
+    /// The tree walk returns a bare [`Value`] with no error channel, so an
+    /// out-of-range CONST-ARRAY gather latches its diagnostic here and yields
+    /// `NaN`; the public entry points ([`eval_expression_with_extents_and_consts`])
+    /// drain the latch and report it. This is the same "fail closed, do not
+    /// silently substitute a number" contract the Julia reference gets from
+    /// `throw` and Python from raising.
+    static CONST_OOB: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Take (and clear) the pending const-array out-of-range diagnostic, if any.
+pub fn take_const_array_oob() -> Option<String> {
+    CONST_OOB.with(|c| c.borrow_mut().take())
+}
+
+/// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
+fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
+    CONST_OOB.with(|c| {
+        let mut slot = c.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(format!(
+                "E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {one_based} out of range \
+                 1..{n} in dim {d} (CONFORMANCE_SPEC.md §5.5.5: the zero-ghost convention is \
+                 never applied to a const-array gather; declare a per-dimension boundary policy \
+                 to resolve it as `periodic` or `clamp`)"
+            ));
+        }
+    });
+}
+
+/// The out-of-range boundary policy of the gather being resolved
+/// (CONFORMANCE_SPEC §5.5.5).
+///
+/// Splitting the OOB branch by PROVENANCE is the whole point: the
+/// homogeneous-Dirichlet zero ghost is the STATE-variable gather's boundary
+/// default (a stencil may read `u[i-1]` at `i = 1`), and §5.5.5 says it is
+/// **never** applied to a const-array gather, where an out-of-range index into a
+/// Fornberg weight table or a connectivity array is a bug, not a boundary.
+#[derive(Clone, Copy)]
+pub(super) enum GatherKind<'a> {
+    /// State / observed gather: out-of-range ⇒ `0.0`.
+    ZeroGhost,
+    /// Const-array gather: out-of-range ⇒ the factor's declared per-dimension
+    /// policy, defaulting to `E_TREEWALK_CONSTARRAY_OOB`.
+    ConstArray {
+        /// The factor's name, for the diagnostic.
+        name: &'a str,
+        /// The registry carrying its declared per-dimension policies.
+        scope: &'a ConstArrayScope,
+    },
+}
+
+/// Sample `arr` at the 1-based `raw` indices (fewer indices than the rank ⇒ a
+/// fixed-leading-axes sub-array). `in_bounds` seeds the bound flag (`false` if
+/// an index expression was non-scalar).
+///
+/// An out-of-range index resolves per `kind` (CONFORMANCE_SPEC §5.5.5):
+/// [`GatherKind::ZeroGhost`] yields `0.0` (homogeneous Dirichlet ghost cells),
+/// while [`GatherKind::ConstArray`] wraps (`periodic`), edge-extends (`clamp`),
+/// or fails closed with `E_TREEWALK_CONSTARRAY_OOB`.
+///
+/// Shared by the borrowing fast path and the general path.
+pub(super) fn index_into(
+    arr: &ArrayD<f64>,
+    raw: &[i64],
+    mut in_bounds: bool,
+    kind: GatherKind<'_>,
+) -> Value {
     // Stack-inlined index buffer (array rank ≤ 4) — no per-node heap allocation.
     let mut indices: DimU = SmallVec::with_capacity(raw.len());
     for (d, &one_based) in raw.iter().enumerate() {
         let dim_size = arr.shape().get(d).copied().unwrap_or(0) as i64;
+        let mut resolved = one_based;
         if one_based < 1 || one_based > dim_size {
-            in_bounds = false;
+            match kind {
+                GatherKind::ZeroGhost => in_bounds = false,
+                GatherKind::ConstArray { name, scope } => {
+                    // An empty dimension can never be wrapped or clamped into a
+                    // valid 1-based index — always the error, whatever the policy.
+                    match (dim_size >= 1).then(|| scope.boundary(name, d)) {
+                        // 1-based periodic wrap == Julia `mod1(i, n)`.
+                        Some(BoundaryKind::Periodic) => {
+                            resolved = (one_based - 1).rem_euclid(dim_size) + 1;
+                        }
+                        Some(BoundaryKind::Clamp) => {
+                            resolved = one_based.clamp(1, dim_size);
+                        }
+                        Some(BoundaryKind::Error) | None => {
+                            latch_const_oob(name, one_based, dim_size, d);
+                            return Value::Scalar(f64::NAN);
+                        }
+                    }
+                }
+            }
         }
-        indices.push((one_based - 1).max(0) as usize);
+        indices.push((resolved - 1).max(0) as usize);
     }
     if !in_bounds {
         return Value::Scalar(0.0);
@@ -1119,10 +1204,17 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         && lookup_array_ref(name, ctx).is_some()
     {
         let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+        let kind = gather_kind(name, ctx);
         if let Some(arr) = lookup_array_ref(name, ctx) {
-            return index_into(arr, &raw, in_bounds);
+            return index_into(arr, &raw, in_bounds, kind);
         }
     }
+    // The gather's PROVENANCE is decided by the operand's NAME, so a computed
+    // array operand (`index(reshape(...), i)`) is never a const-array gather.
+    let const_kind = match &node.args[0] {
+        Expr::Variable(name) => gather_kind(name, ctx),
+        _ => GatherKind::ZeroGhost,
+    };
     let array_val = eval(&node.args[0], ctx);
     let arr = match array_val {
         Value::Array(a) => a,
@@ -1133,7 +1225,23 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // semantics: a discretized PDE's stencil can reference u[i-1] when i=1
     // (ghost cell at i=0) and the boundary condition is u=0.
     let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
-    index_into(&arr, &raw, in_bounds)
+    index_into(&arr, &raw, in_bounds, const_kind)
+}
+
+/// Which boundary convention a gather on `name` obeys: the const-array policy
+/// when the evaluation's registry lists it, else the state gather's zero ghost.
+///
+/// The borrow is tied to `ctx`, not to the (later, mutable) array borrow, so
+/// this is resolved before either `lookup_array_ref` or `eval` is called.
+fn gather_kind<'a>(name: &'a str, ctx: &EvalCtx<'a>) -> GatherKind<'a> {
+    if ctx.const_arrays.is_const(name) {
+        GatherKind::ConstArray {
+            name,
+            scope: ctx.const_arrays,
+        }
+    } else {
+        GatherKind::ZeroGhost
+    }
 }
 
 /// Evaluate a `const` op: the inline literal in the node's `value` field. A JSON
@@ -1422,6 +1530,35 @@ pub fn eval_expression_with_extents(
     t: f64,
     derived_extents: &HashMap<String, i64>,
 ) -> Result<Value, CompileError> {
+    eval_expression_with_extents_and_consts(
+        expr,
+        inputs,
+        params,
+        param_names,
+        t,
+        derived_extents,
+        ConstArrayScope::empty(),
+    )
+}
+
+/// [`eval_expression_with_extents`] with an explicit CONST-ARRAY registry
+/// (CONFORMANCE_SPEC §5.5.5).
+///
+/// A gather whose target is named in `const_arrays` is a const-array gather: an
+/// out-of-range index resolves by that factor's declared per-dimension boundary
+/// policy, and — with no declared policy — raises `E_TREEWALK_CONSTARRAY_OOB`
+/// instead of silently reading the state gather's zero ghost. Every other
+/// gather keeps the zero-ghost convention, so passing
+/// [`ConstArrayScope::empty`] is byte-identical to the pre-§5.5.5 evaluator.
+pub fn eval_expression_with_extents_and_consts(
+    expr: &Expr,
+    inputs: &HashMap<String, ArrayD<f64>>,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    derived_extents: &HashMap<String, i64>,
+    const_arrays: &ConstArrayScope,
+) -> Result<Value, CompileError> {
     check_evaluable(expr)?;
     let empty: ArrMap = ArrMap::default();
     // Cold public boundary: the standalone evaluator's `inputs` arrive as a std
@@ -1448,8 +1585,14 @@ pub fn eval_expression_with_extents(
         // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
         // structural analysis over), so this path is unchanged.
         cse: None,
+        const_arrays,
     };
-    Ok(eval(expr, &mut ctx))
+    take_const_array_oob(); // discard any latch left by an earlier failed call
+    let v = eval(expr, &mut ctx);
+    match take_const_array_oob() {
+        Some(details) => Err(CompileError::InterpreterBuildError { details }),
+        None => Ok(v),
+    }
 }
 
 /// The output-index box of the aggregate currently being evaluated: the index

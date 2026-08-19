@@ -74,7 +74,10 @@ use crate::parse::LoadOptions;
 use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
-use crate::simulate_array::{Value as EvalValue, eval_expression_with_extents, run_value_invention};
+use crate::simulate_array::{
+    ConstArrayScope, Value as EvalValue, eval_expression_with_extents_and_consts,
+    run_value_invention,
+};
 use crate::types::{Expr, IndexSet, Model, VariableType};
 
 /// What a [`PrepareOptions::progress`] observer wants [`prepare`] to do next —
@@ -672,6 +675,7 @@ fn producer_seed_closure(
 }
 
 /// Evaluate one observed through the full evaluator; returns the dense field.
+#[allow(clippy::too_many_arguments)]
 fn eval_observed(
     name: &str,
     def: &Expr,
@@ -680,12 +684,21 @@ fn eval_observed(
     param_names: &[String],
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
+    const_arrays: &ConstArrayScope,
 ) -> Result<ArrayD<f64>, PrepareError> {
     let mut expr = def.clone();
     resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
         .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;
-    let val = eval_expression_with_extents(&expr, arrays, param_vals, param_names, 0.0, extents)
-        .map_err(|e| err(format!("evaluate {name}: {e}")))?;
+    let val = eval_expression_with_extents_and_consts(
+        &expr,
+        arrays,
+        param_vals,
+        param_names,
+        0.0,
+        extents,
+        const_arrays,
+    )
+    .map_err(|e| err(format!("evaluate {name}: {e}")))?;
     Ok(match val {
         EvalValue::Array(a) => *a,
         EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(&[1]), s),
@@ -1150,6 +1163,19 @@ pub fn prepare(
         inject_aliases(&mut arrays, &pd_coupling);
     }
 
+    // ---- the CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5) -----------------
+    // Everything in `arrays` at THIS point is build-time factor data: the
+    // caller's `const_arrays`, the materialized const providers, and the
+    // pushdown coupling aliases. That is exactly the Julia reference's
+    // `const_arrays` registry, so a gather on one of these names is a
+    // CONST-ARRAY gather — an out-of-range index raises
+    // `E_TREEWALK_CONSTARRAY_OOB` rather than silently reading the state
+    // gather's zero ghost, which §5.5.5 says is never a const array's. The
+    // observeds this function evaluates below are inserted into `arrays` as it
+    // goes and are deliberately NOT in the registry: they are observed gathers
+    // and keep the zero-ghost convention.
+    let const_scope = ConstArrayScope::from_names(arrays.keys().cloned());
+
     // ---- observed definitions + the join-free partition ---------------------
     // Resolve each OVERLAP gate's two range symbols while the ranges still
     // carry their `{ "from": <index set> }` linkage (`eval_observed` resolves
@@ -1209,6 +1235,7 @@ pub fn prepare(
                 &param_names,
                 &index_sets,
                 &no_extents,
+                &const_scope,
             ) {
                 Ok(a) => {
                     log(&format!(
@@ -1372,6 +1399,7 @@ pub fn prepare(
             &param_names,
             &index_sets,
             &extents,
+            &const_scope,
         )?;
         log(&format!(
             "  [prepare] {name:<24} shape={:?}  {:>7.1} s",

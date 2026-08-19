@@ -209,6 +209,7 @@ impl ArrayCompiled {
             &self.param_names,
             &const_names,
             &seg_names,
+            &self.const_scope,
             fuse,
         );
         let report = make_report(&prog, vn_hits);

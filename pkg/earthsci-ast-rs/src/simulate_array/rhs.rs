@@ -56,6 +56,13 @@ pub struct RhsScratch {
     /// default, and the state of every debug/oracle/Jacobian scratch) means
     /// [`evaluate_rhs_with_scratch`] runs the legacy interpreter path.
     tape: Option<TapeCtx>,
+    /// The model's CONST-ARRAY provenance (CONFORMANCE_SPEC §5.5.5), installed
+    /// by [`Self::set_const_arrays`]. Carried on the scratch rather than passed
+    /// per call because it is a property of the compiled MODEL, not of a step;
+    /// it reaches every [`EvalCtx`] the RHS builds. Empty by default, so a
+    /// scratch nobody configures reads byte-identically to the pre-§5.5.5
+    /// evaluator.
+    const_arrays: Rc<ConstArrayScope>,
 }
 
 impl RhsScratch {
@@ -74,7 +81,20 @@ impl RhsScratch {
             cse: CseRt::default(),
             static_keys: HashSet::new(),
             tape: None,
+            const_arrays: Rc::new(ConstArrayScope::default()),
         }
+    }
+
+    /// Install the compiled model's const-array registry (§5.5.5), so a gather
+    /// on one of those factors resolves an out-of-range index by its declared
+    /// boundary policy instead of the state gather's zero ghost.
+    pub(super) fn set_const_arrays(&mut self, scope: Rc<ConstArrayScope>) {
+        self.const_arrays = scope;
+    }
+
+    /// The installed const-array registry.
+    pub(super) fn const_arrays(&self) -> &Rc<ConstArrayScope> {
+        &self.const_arrays
     }
 
     /// Install a compiled tape program (Step 3b). Called by the driver on the
@@ -314,6 +334,7 @@ pub(super) fn materialize_observeds(
     t: f64,
     derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
+    const_arrays: &ConstArrayScope,
 ) -> ArrMap {
     let mut observed_arrays: ArrMap = ArrMap::default();
     materialize_observeds_into(
@@ -325,6 +346,7 @@ pub(super) fn materialize_observeds(
         t,
         derived_rings,
         forcing,
+        const_arrays,
     );
     observed_arrays
 }
@@ -345,6 +367,7 @@ pub(super) fn materialize_observeds_into(
     t: f64,
     derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
+    const_arrays: &ConstArrayScope,
 ) {
     dst.clear();
     materialize_observeds_append(
@@ -361,6 +384,7 @@ pub(super) fn materialize_observeds_into(
         false,
         &mut RhsStats::default(),
         None,
+        const_arrays,
     );
 }
 
@@ -394,6 +418,10 @@ pub(super) fn materialize_observeds_append(
     // one-shot materialization paths, which run once and so have nothing to
     // amortize the structural analysis over.
     cse: Option<&CseRt>,
+    // Which of the arrays in scope are CONST-ARRAY factors (§5.5.5), so an
+    // out-of-range gather on one raises `E_TREEWALK_CONSTARRAY_OOB` instead of
+    // silently reading the state gather's zero ghost.
+    const_arrays: &ConstArrayScope,
 ) {
     for rule in observed_rules {
         match rule {
@@ -428,6 +456,7 @@ pub(super) fn materialize_observeds_append(
                     derived_extents: empty_derived_extents(),
                     forcing,
                     cse,
+                    const_arrays,
                 };
                 let arr = match eval(body, &mut ctx) {
                     Value::Array(a) => *a,
@@ -505,6 +534,7 @@ pub(super) fn materialize_observeds_append(
                             derived_extents: empty_derived_extents(),
                             forcing,
                             cse,
+                            const_arrays,
                         };
                         // The THREAD's persistent pool, not a fresh one per
                         // observed: a model with dozens of array observeds
@@ -572,6 +602,7 @@ pub(super) fn materialize_observeds_append(
                         derived_extents: empty_derived_extents(),
                         forcing,
                         cse: None,
+                        const_arrays,
                     };
                     let mut tuples = CartesianTuples::new(output_ranges);
                     while let Some(tuple) = tuples.next() {
@@ -665,6 +696,7 @@ pub(super) fn evaluate_rhs_with_scratch(
     if tape.exec.n_fallback > 0 {
         refill_state_arrays(&mut scratch.state_arrays, var_shapes, state);
     }
+    let const_scope = Rc::clone(&scratch.const_arrays);
     run_tape_call(
         &mut tape,
         rhs_rules,
@@ -677,6 +709,7 @@ pub(super) fn evaluate_rhs_with_scratch(
         t,
         dy,
         stats,
+        &const_scope,
     );
 
     if tape.check_remaining > 0 {
@@ -733,6 +766,11 @@ fn evaluate_rhs_legacy(
     // (a) Refill the persistent per-variable state arrays in place from the
     //     flat state vector (no per-call allocation).
     refill_state_arrays(&mut scratch.state_arrays, var_shapes, state);
+
+    // The model's const-array registry (§5.5.5) — cloned `Rc` so it outlives the
+    // disjoint field borrows of `scratch` taken below.
+    let const_scope = Rc::clone(scratch.const_arrays());
+    let const_arrays: &ConstArrayScope = &const_scope;
 
     // ess-cse: bind the CSE class table to THIS rule set. Its keys are AST node
     // addresses, so handing the same scratch a different rule set must discard
@@ -838,6 +876,7 @@ fn evaluate_rhs_legacy(
             // ess-cse: the observed bodies are where the expanded discretization
             // subtrees live, so this is the memo's main beneficiary.
             Some(&*cse),
+            const_arrays,
         );
     }
 
@@ -865,6 +904,7 @@ fn evaluate_rhs_legacy(
                     derived_extents: empty_derived_extents(),
                     forcing,
                     cse,
+                    const_arrays,
                 };
                 let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
                 dy[*slot] = v;
@@ -881,6 +921,7 @@ fn evaluate_rhs_legacy(
                     derived_extents: empty_derived_extents(),
                     forcing,
                     cse,
+                    const_arrays,
                 };
                 let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
                 dy[*slot] = v;
@@ -936,6 +977,7 @@ fn evaluate_rhs_legacy(
                             derived_extents: empty_derived_extents(),
                             forcing,
                             cse,
+                            const_arrays,
                         };
                         if let Some((val, ops)) = try_eval_arrayop_vectorized(
                             output_idx_names,
@@ -1011,6 +1053,7 @@ fn evaluate_rhs_legacy(
                     derived_extents: empty_derived_extents(),
                     forcing,
                     cse: None,
+                    const_arrays,
                 };
                 // ---- Forward prefix scan (O(N) instead of the O(N²) triangle)
                 // A cumulative reduction (esm-spec §4.3.1) is a triangular double
