@@ -105,6 +105,12 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     # body references a variable a coupling `variable_map` rewrote in the
     # flattened equations (esm-spec §9.6.4 / §10.4).
     "template_body_references_coupling_rewritten_variable",
+    # Projection-pushdown desugar post-condition (pushdown_rewrite.jl): a rect
+    # factor the rewrite must re-point onto the generated per-support cell
+    # gathers is named FREE in a template body instead of bound at the call
+    # site, so the call-site-only rewrite cannot reach it (esm-spec §9.6.4
+    # Option B / CONFORMANCE_SPEC §5.5.7).
+    "template_body_references_pushdown_rewritten_variable",
     # esm-spec §9.7 template-library imports + metaparameters
     # (template_imports.jl).
     "template_import_version_too_old",

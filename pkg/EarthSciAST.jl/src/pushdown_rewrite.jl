@@ -51,14 +51,56 @@ function desugar_pushdown(esm::AbstractDict; model_name=nothing)
     # from BOTH `prepare` (which must run it before flattening/provider
     # classification) and the `build_evaluator` front door.
     _pushdown_record(esm) === nothing || return esm
+    an = _pd_analyze(esm, model_name)
+    an === nothing && return esm
+    # RESIDUAL DIAGNOSTICS (CONFORMANCE_SPEC §5.5.7 "residual diagnostic"): a
+    # join-shaped aggregate the recogniser could NOT read is reported here, not
+    # swallowed. See `_pd_binning_refusal` for the "not a join" / "a join I could
+    # not read" split, and `pushdown_diagnostics` for the inspectable form.
+    for d in an.diagnostics
+        @warn _pd_diagnostic_message(d)
+    end
+    an.plan === nothing && return esm
+    return _pd_apply(esm, an.mname, an.plan, an.registry)
+end
+
+"""
+    pushdown_diagnostics(esm::AbstractDict; model_name=nothing) -> Vector{Dict{String,Any}}
+
+The residual diagnostics [`desugar_pushdown`](@ref) would emit for `esm` — one
+record per aggregate that IS join-shaped (it bins records into the cells of an
+index set and feeds a provider-backed rank-2 array through a `+`-semiring
+mat-vec) but whose containment predicate the recogniser could not read, so the
+rewrite does not fire for it and that array is fetched WHOLESALE.
+
+Inspectable, side-effect-free counterpart of the `@warn` stream: same records,
+same order (sorted by `variable` then `consumer`), stable field set
+(`code`, `variable`, `consumer`, `array`, `index_set`, `reason`, `template`,
+`consequence`), pinned across bindings by the `tests/conformance/pushdown/`
+corpus. Empty for a document that already carries the rewrite record, for one
+with no model selected, and — deliberately — for one that simply is NOT
+join-shaped: "no join here" is not a defect.
+"""
+function pushdown_diagnostics(esm::AbstractDict; model_name=nothing)
+    _pushdown_record(esm) === nothing || return Dict{String,Any}[]
+    an = _pd_analyze(esm, model_name)
+    return an === nothing ? Dict{String,Any}[] : an.diagnostics
+end
+
+# The ONE detection entry point shared by `desugar_pushdown` (which then emits)
+# and `pushdown_diagnostics` (which only reports). Returns `nothing` when no
+# model is selected; otherwise the plan (`nothing` ⇒ the pattern did not match),
+# the residual diagnostics, the model name, and the component template registry
+# the emission side needs to expand references with.
+function _pd_analyze(esm::AbstractDict, model_name)
     file = coerce_esm_file(esm)
     m = _select_model_or_nothing(file, model_name)
-    m === nothing && return esm
+    m === nothing && return nothing
     mname = _pd_model_name(file, model_name)
-    mname === nothing && return esm
-    plan = _pd_detect(m, file.index_sets)
-    plan === nothing && return esm
-    return _pd_apply(esm, mname, plan)
+    mname === nothing && return nothing
+    reg = _pd_registry(file, mname)
+    plan, diags = _pd_detect(_pd_detection_vars(m, reg), file.index_sets)
+    return (plan = plan, diagnostics = diags, mname = mname, registry = reg)
 end
 
 """
@@ -81,6 +123,98 @@ end
 _pd_model_name(file, model_name) = model_name !== nothing ? String(model_name) :
     (file.models !== nothing && length(file.models) == 1 ?
      String(first(keys(file.models))) : nothing)
+
+# ---- detection-time template-reference expansion (esm-spec §9.6.4 rule 2) --
+#
+# Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
+# references: they ride to the build boundary where `_build_evaluator_impl`
+# expands them with site recording (the ~50x node-lowering win, simulate.jl).
+# `prepare` therefore hands `desugar_pushdown` a document whose binning body may
+# be a surviving reference rather than the containment `ifelse` the recogniser
+# looks for.
+#
+# §9.6.4 rule 4 ("patterns do not see through surviving references") governs the
+# §9.6.3 REWRITE-RULE ENGINE. `desugar_pushdown` is a different consumer, and
+# rule 2 governs it: a reference DENOTES its expansion, every consumer MAY
+# expand, and observable behavior must be as if evaluated on `Expand(tree)`.
+# Whether the pushdown fires MUST NOT depend on whether the author factored the
+# binning body through a template — so detection runs on the EXPANDED view.
+#
+# Emission does NOT: `_pd_apply` edits the call site's `bindings` (and the
+# aggregate's own `ranges`/`args`/`shape`/`join`), never the shared template
+# body, so the body stays shared and singly-lowered and Option B survives the
+# rewrite. `_pd_assert_rects_rebound` is the post-condition that proves it.
+
+# The component template registry for `mname`, or `nothing` when the document
+# carries no surviving references (`coerce_esm_file` fills `component_templates`
+# from each component's materialized `expression_templates` block).
+_pd_registry(file::EsmFile, mname::AbstractString) =
+    file.component_templates === nothing ? nothing :
+    get(file.component_templates, "models." * String(mname), nothing)
+
+# Does `e` carry a surviving `apply_expression_template` reference? `child_exprs`
+# traverses `bindings` VALUES too, so a reference nested in another reference's
+# bindings counts.
+function _pd_has_apply(e)::Bool
+    e isa OpExpr || return false
+    e.op == APPLY_EXPRESSION_TEMPLATE_OP && return true
+    for c in child_exprs(e)
+        _pd_has_apply(c) && return true
+    end
+    return false
+end
+
+# The `name` of the first surviving reference in `e` (pre-order), for the
+# residual diagnostic; `nothing` when `e` carries none.
+function _pd_first_apply_name(e)
+    e isa OpExpr || return nothing
+    e.op == APPLY_EXPRESSION_TEMPLATE_OP && return e.name
+    for c in child_exprs(e)
+        r = _pd_first_apply_name(c)
+        r === nothing || return r
+    end
+    return nothing
+end
+
+"""
+    _pd_detection_vars(model, reg) -> Dict{String,ModelVariable}
+
+`model.variables` with every surviving `apply_expression_template` reference in
+a variable's `expression` EXPANDED against `reg` — the `Expand(tree)` view the
+pattern matcher must see (§9.6.4 rule 2). Returns `model.variables` ITSELF
+(no copy, no allocation) when there is no registry or no reference to expand, so
+a template-free document takes the byte-identical pre-existing path.
+
+Expansion is DETECTION-ONLY: the returned variables are never emitted. A
+reference that fails to expand (an unresolvable template — `desugar_pushdown` is
+callable on a raw document that never went through `load`'s §9.6.9 call-site
+checks) is left in place rather than raised: the pass's contract is to leave a
+document it cannot recognise unchanged, and the surviving reference is then
+reported by `_pd_binning_refusal` if the variable is join-shaped.
+"""
+function _pd_detection_vars(model::Model, reg)
+    reg === nothing && return model.variables
+    any(v -> v.expression !== nothing && _pd_has_apply(v.expression),
+        values(model.variables)) || return model.variables
+    out = Dict{String,ModelVariable}(model.variables)
+    # Shared expansion memo: two sites with the same (template, bindings) reuse
+    # one expansion. Rule 2 requires exactly that they be structurally identical
+    # with bit-equal constants, and this walk is read-only, so the sharing is
+    # unobservable — the same guarantee `_expand_model_refs!` relies on.
+    memo = _expand_memo_disabled() ? nothing : Dict{Tuple{String,String},OpExpr}()
+    for (name, var) in model.variables
+        ex = var.expression
+        (ex === nothing || !_pd_has_apply(ex)) && continue
+        lowered = try
+            _expand_expr_refs(ex, reg, nothing, memo)
+        catch err
+            err isa ExpressionTemplateError || rethrow()
+            continue
+        end
+        lowered === ex || _replace_var_expression!(out, name, var, lowered)
+    end
+    return out
+end
 
 # ---- typed-IR leaf helpers -------------------------------------------------
 _pd_varname(e) = e isa VarExpr ? e.name : nothing
@@ -250,6 +384,105 @@ function _pd_detect_binning(ev::ModelVariable, out_set::AbstractString)
             out_is_cell = false, src_env = env.src_env, tgt_env = env.tgt_env)
 end
 
+# ---- residual diagnostics --------------------------------------------------
+#
+# A pattern recogniser that declines SILENTLY is indistinguishable from one that
+# fired — until, hours later, an ungated provider fetch runs the machine out of
+# memory. These helpers make the residue loud, while keeping the two cases apart:
+#
+#   NOT A JOIN            — a `+`-aggregate with no containment predicate is a
+#                           legitimately dense factor. Nothing to gate, no
+#                           diagnostic. Firing here would cry wolf on every
+#                           ordinary reduction in every document.
+#   A JOIN I CANNOT READ  — the aggregate bins records into cells of the SAME
+#                           set that indexes a provider-backed rank-2 array it
+#                           feeds, but the containment predicate could not be
+#                           recovered. THAT is reported.
+#
+# WARNING, not error, and deliberately so. `desugar_pushdown`'s contract — spelled
+# in CONFORMANCE_SPEC §5.5.7 and asserted by the conformance adapters — is that a
+# document it does not recognise comes back byte-identical; it is an OPTIMISATION
+# pass that `prepare` runs over whole documents it does not own. Promoting "I did
+# not recognise this" to a hard error would make an unrecognised-but-correct
+# document unrunnable, and the recogniser is narrow enough (2-D rectangles, one
+# cell set) that honest near-misses exist. The residue is a PERFORMANCE defect:
+# the numbers stay right, the fetch gets big. A warning names it at the moment it
+# is decided instead of at the memory failure.
+#
+# The one hard ERROR in this pass is `_pd_assert_rects_rebound`: there the rewrite
+# HAS fired and a rect factor could not be re-pointed, which would make the
+# gathered cell factors read full-grid positions — wrong NUMBERS, not slow ones.
+
+const _PD_UNGATED_CONSEQUENCE =
+    "the provider-backed array is fetched WHOLESALE — no derived support set " *
+    "is produced and no gate is emitted"
+
+"""
+    _pd_binning_refusal(ev, out_set) -> Union{Nothing,Tuple{String,Union{Nothing,String}}}
+
+Why [`_pd_detect_binning`](@ref) refused `ev`, for a caller that has ALREADY
+established `ev` sits in the join position (it is the rank-1 factor of a
+`+`-semiring mat-vec against a provider-backed `[out_set, …]` array).
+
+`nothing` means `ev` is simply not join-shaped — no diagnostic is warranted.
+Otherwise `(reason, template)`:
+
+  * `("surviving_template_reference", name)` — the body carries no containment
+    `ifelse` because it is (or hides) a surviving `apply_expression_template`
+    reference that could not be expanded for matching;
+  * `("predicate_unparsed", nothing)` — a containment `ifelse` was found but it
+    did not read as a rectangle containment in EITHER orientation.
+"""
+function _pd_binning_refusal(ev::ModelVariable, out_set::AbstractString)
+    ev.type == ObservedVariable || return nothing
+    (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
+    agg = ev.expression
+    (agg isa OpExpr && _is_aggregate_op(agg.op)) || return nothing
+    oz = _pd_oplus(agg); oz === nothing && return nothing
+    (oz[1] == "+" && oz[2] == 0.0) || return nothing
+    oi = agg.output_idx
+    (oi !== nothing && length(oi) == 1) || return nothing
+    out_sym = String(oi[1])
+    ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
+    length(ranges) == 2 || return nothing
+    (haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
+     ranges[out_sym].from == out_set) || return nothing
+    in_sym = nothing
+    for k in keys(ranges); k == out_sym && continue; in_sym = k; end
+    (in_sym !== nothing && ranges[in_sym] isa IndexSetRef) || return nothing
+    body = agg.expr_body
+    body isa OpExpr || return nothing
+    pred = _pd_find_ifelse_cond(body)
+    if pred === nothing
+        tname = _pd_first_apply_name(body)
+        tname === nothing && return nothing        # no predicate at all ⇒ dense
+        return ("surviving_template_reference", String(tname))
+    end
+    return ("predicate_unparsed", nothing)
+end
+
+"""
+    _pd_diagnostic_message(d) -> String
+
+The human-readable rendering of one `pushdown_diagnostics` record: what was
+recognised, what could not be read, and what it costs.
+"""
+function _pd_diagnostic_message(d::AbstractDict)
+    tpl = get(d, "template", nothing)
+    why = get(d, "reason", "") == "surviving_template_reference" ?
+        "its body carries a surviving `apply_expression_template` reference" *
+        (tpl === nothing ? "" : " to '$(tpl)'") *
+        " that could not be expanded for matching" :
+        "its containment predicate did not read as a rectangle containment " *
+        "between four cell-indexed rect bounds and two record-indexed point coordinates"
+    return "projection-pushdown desugar: '$(d["variable"])' is join-shaped — it bins " *
+           "records into the cells of index set '$(d["index_set"])' and feeds the " *
+           "provider-backed array '$(d["array"])' through '$(d["consumer"])' — but " *
+           why * ", so the rewrite does NOT fire for it and " *
+           _PD_UNGATED_CONSEQUENCE * ". Bind the containment's factors through the " *
+           "template's params, or write the predicate longhand."
+end
+
 # The MIRRORED-orientation binning aggregates of a model: per-RECORD observeds
 # `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)] · …` over the plan's cell set `C` and
 # record set `R`. Returned as `(name, src_env, tgt_env)` triples, sorted by name
@@ -258,10 +491,10 @@ end
 # A mirror needs NOTHING but the gate — see the note on the mirrored arm in
 # `_pd_apply`. Its cell axis stays the FULL `C`, so its envelope factors are the
 # document's own const-array rects, unrewritten.
-function _pd_mirror_specs(model::Model, C::AbstractString, R::AbstractString,
+function _pd_mirror_specs(vars::AbstractDict, C::AbstractString, R::AbstractString,
                           forward_names)
     out = Tuple{String,Vector{String},Vector{String}}[]
-    for (name, v) in model.variables
+    for (name, v) in vars
         name in forward_names && continue
         bind = _pd_detect_binning(v, R)
         bind === nothing && continue
@@ -274,10 +507,14 @@ function _pd_mirror_specs(model::Model, C::AbstractString, R::AbstractString,
     return out
 end
 
-# Detect the pushdown pattern across a model's observeds. Returns a plan
-# NamedTuple, or `nothing` when nothing matches / the semiring guard fails.
-function _pd_detect(model::Model, index_sets::AbstractDict)
-    vars = model.variables
+# Detect the pushdown pattern across a model's observeds. `vars` is the
+# DETECTION view (`_pd_detection_vars`): the model's variables with surviving
+# template references expanded, so a binning body factored through a template
+# matches exactly as its expansion would. Returns `(plan, diagnostics)` — `plan`
+# `nothing` when nothing matches / the semiring guard fails, `diagnostics` the
+# residual "a join I could not read" records (see `_pd_binning_refusal`).
+function _pd_detect(vars::AbstractDict, index_sets::AbstractDict)
+    diags = Dict{String,Any}[]
     conc_specs = Tuple{String,String}[]        # (conc name, reduction symbol)
     A_names = String[]                          # provider-backed arrays to gate
     # (E name, cell output symbol, gate src_env, gate tgt_env)
@@ -311,7 +548,22 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
          length(av.shape) == 2 && av.shape[1] == c_set && av.shape[2] == r_set) || continue
         ev = get(vars, Ename, nothing); ev === nothing && continue
         bind = _pd_detect_binning(ev, c_set)
-        (bind === nothing || !bind.out_is_cell) && continue       # FORWARD arm only
+        if bind === nothing || !bind.out_is_cell                  # FORWARD arm only
+            # `ev` is the rank-1 factor of a `+`-mat-vec against a
+            # provider-backed `[c_set, r_set]` array: the join position. If it is
+            # ALSO binning-shaped but unreadable, say so — silence here is the
+            # 330 GB fetch that surfaces hours later as a memory failure.
+            if bind === nothing
+                why = _pd_binning_refusal(ev, String(c_set))
+                why === nothing || push!(diags, Dict{String,Any}(
+                    "code" => "pushdown_join_unrecognised",
+                    "variable" => String(Ename), "consumer" => String(cname),
+                    "array" => String(Aname), "index_set" => String(c_set),
+                    "reason" => why[1], "template" => why[2],
+                    "consequence" => _PD_UNGATED_CONSEQUENCE))
+            end
+            continue
+        end
 
         if C === nothing
             C = c_set; rcv_set = r_set; R = bind.R
@@ -325,7 +577,11 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
         any(e -> e[1] == Ename, E_specs) ||
             push!(E_specs, (Ename, bind.c_sym, bind.src_env, bind.tgt_env))
     end
-    isempty(conc_specs) && return nothing
+    # Deterministic, deduplicated diagnostic order: `vars` is a hash-ordered
+    # Dict, and the same E can be reached from several `conc` consumers.
+    sort!(diags; by = d -> (d["variable"], d["consumer"], d["array"]))
+    unique!(d -> (d["variable"], d["consumer"], d["array"]), diags)
+    isempty(conc_specs) && return (nothing, diags)
     # Deterministic plan order (Phase 3, cross-language goldens): `vars` is a
     # hash-ordered Dict, so the collection order of `A_names` above is a Julia
     # implementation detail. It leaks into the emitted document only through
@@ -338,17 +594,28 @@ function _pd_detect(model::Model, index_sets::AbstractDict)
     # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
     # cell/record sets. They are collected only once the forward pattern has
     # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
-    mirror_specs = _pd_mirror_specs(model, C, R, Set{String}(e[1] for e in E_specs))
-    return (C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
-            A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
-            src_env = src_env, tgt_env = tgt_env,
-            rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym)
+    mirror_specs = _pd_mirror_specs(vars, C, R, Set{String}(e[1] for e in E_specs))
+    return ((C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
+             A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
+             src_env = src_env, tgt_env = tgt_env,
+             rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym), diags)
 end
 
 # ---- dict-form emission ----------------------------------------------------
 
 # In-place: rewrite every `index(F, …)` whose factor `F` is a key of `rectmap`
 # to `index(rectmap[F], …)` throughout a dict-form AST subtree.
+#
+# This walk descends EVERY dict value, `bindings` included, so a rect factor that
+# reaches the binning body through an `apply_expression_template` call site is
+# reached at the CALL SITE — which is exactly where the rewrite must land, so the
+# shared template body stays untouched and singly-lowered (esm-spec §9.6.4
+# Option B). Two binding spellings carry a rect factor and both are handled:
+# a subscripted binding (`{"F": index(src_W, "c")}`) by the `index` arm above,
+# and a BARE FACTOR-NAME binding (`{"F": "src_W"}`, substituted into the body's
+# own `index(F, c)`) by the `bindings` arm below. A bare string is rewritten ONLY
+# inside `bindings` — elsewhere a string is an `output_idx` entry, a range key, a
+# scalar field or a template `name`, none of which are variable references.
 function _pd_rewrite_rects!(node, rectmap::AbstractDict)
     if node isa AbstractDict
         if get(node, "op", nothing) == "index"
@@ -356,6 +623,15 @@ function _pd_rewrite_rects!(node, rectmap::AbstractDict)
             if a isa AbstractVector && !isempty(a) && a[1] isa AbstractString &&
                haskey(rectmap, a[1])
                 a[1] = rectmap[a[1]]
+            end
+        end
+        if get(node, "op", nothing) == APPLY_EXPRESSION_TEMPLATE_OP
+            b = get(node, "bindings", nothing)
+            if b isa AbstractDict
+                for k in collect(keys(b))
+                    v = b[k]
+                    v isa AbstractString && haskey(rectmap, v) && (b[k] = rectmap[v])
+                end
             end
         end
         for (_, v) in node
@@ -400,8 +676,75 @@ _pd_overlap_clause(src_env, tgt_env) =
         "tgt_env" => Any[String(f) for f in tgt_env],
         "eps" => 0.0))
 
+# Collect into `out` every factor name `F ∈ keys(rectmap)` that still appears in
+# an `index(F, …)` position of a dict-form subtree — i.e. every occurrence
+# `_pd_rewrite_rects!` targets but did not reach.
+function _pd_collect_stale_rects!(node, rectmap::AbstractDict, out::Set{String})
+    if node isa AbstractDict
+        if get(node, "op", nothing) == "index"
+            a = get(node, "args", nothing)
+            if a isa AbstractVector && !isempty(a) && a[1] isa AbstractString &&
+               haskey(rectmap, a[1])
+                push!(out, String(a[1]))
+            end
+        end
+        for (_, v) in node
+            _pd_collect_stale_rects!(v, rectmap, out)
+        end
+    elseif node isa AbstractVector
+        for x in node
+            _pd_collect_stale_rects!(x, rectmap, out)
+        end
+    end
+    return out
+end
+
+"""
+    _pd_assert_rects_rebound(expr, Ename, rectmap, reg)
+
+POST-CONDITION of the forward arm's rect re-pointing, discharged on the EXPANDED
+form of the rewritten aggregate `expr` (esm-spec §9.6.4 rule 2: what the
+evaluator sees is `Expand(tree)`).
+
+`E`'s reduction axis now ranges over the COMPACT derived support set, so every
+rect reference in its body must have become the corresponding `pd_cell__*`
+gather. The rewrite achieves that by editing the call site — `index` factors and
+`bindings` values — which is what keeps the shared template body untouched. A
+rect factor named FREE inside a template body is therefore unreachable: rewriting
+it would mean rewriting the shared body, corrupting every other call site
+(the generated producer `filter` among them, which must keep full-grid
+references). Left alone it would index a compact per-support gather with
+full-grid positions — WRONG NUMBERS, silently. So this is a hard error, and its
+remedy is the one `flatten.jl`'s
+`template_body_references_coupling_rewritten_variable` already prescribes: bind
+the value through the template's params.
+"""
+function _pd_assert_rects_rebound(expr, Ename::AbstractString,
+                                  rectmap::AbstractDict, reg)
+    isempty(rectmap) && return
+    view = reg === nothing ? expr :
+        _expand_all(_to_ordered(deepcopy(expr)), reg, "pushdown_rewrite")
+    stale = _pd_collect_stale_rects!(view, rectmap, Set{String}())
+    isempty(stale) && return
+    names = sort!(collect(stale))
+    throw(ExpressionTemplateError(
+        "template_body_references_pushdown_rewritten_variable",
+        "projection-pushdown desugar: the binning aggregate '$(Ename)' still reads " *
+        "'$(join(names, "', '"))' after its reduction axis was re-pointed onto the " *
+        "generated derived support set. Those references live in an expression-template " *
+        "BODY, not in the call site's `bindings`, so the rewrite — which edits call " *
+        "sites only, to keep the template body shared and singly-lowered " *
+        "(esm-spec §9.6.4 Option B) — cannot re-point them, and they would index the " *
+        "compact per-support cell gathers with full-grid positions. Bind the value " *
+        "through the template's params, or write the binning body longhand."))
+end
+
 # Apply the desugar to the raw document, returning a NEW mutable dict tree.
-function _pd_apply(esm, mname::AbstractString, plan)
+# `reg` is the component template registry (`nothing` when the document carries
+# no surviving `apply_expression_template` references) — needed to read the
+# containment predicate out of a body that was factored through a template, and
+# to discharge the `_pd_assert_rects_rebound` post-condition.
+function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     d = _to_ordered(esm)                        # fresh, mutable, string-keyed
     C = plan.C
     setname = "pd_support__" * C
@@ -425,6 +768,18 @@ function _pd_apply(esm, mname::AbstractString, plan)
     #     BEFORE E is rewritten (they must keep full-grid rect factor refs) ---
     repexpr = mv[plan.rep_ename]["expression"]
     ifcond = _pd_dict_find_ifelse_cond(get(repexpr, "expr", nothing))
+    if ifcond === nothing
+        # The body is factored through a template. Read the predicate off the
+        # EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID rect
+        # references, which is exactly what the pre-rewrite expansion yields. The
+        # expansion is a scratch value: nothing of it is emitted except these
+        # comparisons, so the document's template block and call sites are
+        # untouched. Template-free documents never reach this branch, so their
+        # emitted filter is byte-identical to before.
+        ifcond = reg === nothing ? nothing :
+            _pd_dict_find_ifelse_cond(_expand_all(_to_ordered(deepcopy(get(repexpr, "expr", nothing))),
+                                                  reg, "pushdown_rewrite"))
+    end
     ifcond === nothing && error("pushdown desugar: representative E lost its containment ifelse")
     comps = get(ifcond, "op", nothing) in ("and", "*") ? ifcond["args"] : Any[ifcond]
     prod_filter = Dict{String,Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
@@ -476,6 +831,7 @@ function _pd_apply(esm, mname::AbstractString, plan)
         mv[Ename]["shape"] = Any[setname]
         haskey(expr, "join") || (expr["join"] = Any[_pd_overlap_clause(
             e_src, String[get(rectmap, F, F) for F in e_tgt])])
+        _pd_assert_rects_rebound(expr, Ename, rectmap, reg)
     end
 
     # --- MIRRORED orientation: gate only ---
