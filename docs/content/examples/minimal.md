@@ -8,7 +8,7 @@ Save this as `minimal.esm`:
 
 ```json
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Minimal Example",
     "description": "The simplest valid ESM file",
@@ -21,7 +21,7 @@ Save this as `minimal.esm`:
       "variables": [
         {
           "name": "x",
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "description": "State variable",
           "initial_value": "1.0"
@@ -48,7 +48,7 @@ Save this as `minimal.esm`:
 
 ```json
 {
-  "esm": "0.1.0",          // Format version (required)
+  "esm": "1.0.0",          // Format version (required)
   "metadata": { ... },      // Model information (required)
   "models": { ... }         // Model definitions (at least one section required)
 }
@@ -82,7 +82,7 @@ Save this as `minimal.esm`:
 ```json
 {
   "name": "x",                         // Variable name (required)
-  "type": "state",                     // Variable type (required)
+  "type": "unknown",                     // Variable type (required)
   "units": "dimensionless",            // Physical units (recommended)
   "description": "State variable",      // What it represents (recommended)
   "initial_value": "1.0"              // Starting value (optional)
@@ -246,7 +246,7 @@ The same `.esm` file works identically across:
       "variables": [
         {
           "name": "x",
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "initial_value": "1.0"
         }
@@ -283,13 +283,13 @@ The same `.esm` file works identically across:
       "variables": [
         {
           "name": "x",
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "initial_value": "1.0"
         },
         {
           "name": "y",
-          "type": "state",
+          "type": "unknown",
           "units": "dimensionless",
           "initial_value": "0.0"
         }
@@ -324,7 +324,7 @@ Now that you understand the basic structure:
 ❌ **Missing required fields**
 ```json
 {
-  "esm": "0.1.0"
+  "esm": "1.0.0"
   // Missing metadata - will fail validation
 }
 ```

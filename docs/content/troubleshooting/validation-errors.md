@@ -14,12 +14,12 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 ```json
 // ❌ Missing required metadata field
 {
-  "esm": "0.1.0"
+  "esm": "1.0.0"
 }
 
 // ✅ Add required metadata
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "My Model",
     "description": "Model description"
@@ -81,7 +81,7 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
   "variables": [
     {
       "name": "x",
-      "type": "state"
+      "type": "unknown"
     }
   ]
 }
@@ -104,7 +104,7 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 // ❌ 'y' referenced but not defined
 {
   "variables": [
-    {"name": "x", "type": "state"}
+    {"name": "x", "type": "unknown"}
   ],
   "equations": [
     {
@@ -117,8 +117,8 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 // ✅ Define all referenced variables
 {
   "variables": [
-    {"name": "x", "type": "state"},
-    {"name": "y", "type": "state"}
+    {"name": "x", "type": "unknown"},
+    {"name": "y", "type": "unknown"}
   ],
   "equations": [
     {
@@ -198,7 +198,7 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 // ❌ Unit mismatch
 {
   "variables": [
-    {"name": "mass", "type": "state", "units": "kg"},
+    {"name": "mass", "type": "unknown", "units": "kg"},
     {"name": "rate", "type": "parameter", "units": "kg/s"}
   ],
   "equations": [
@@ -212,7 +212,7 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 // ✅ Add time dimension or fix units
 {
   "variables": [
-    {"name": "mass", "type": "state", "units": "kg"},
+    {"name": "mass", "type": "unknown", "units": "kg"},
     {"name": "rate", "type": "parameter", "units": "kg/s"},
     {"name": "dt", "type": "parameter", "units": "s"}
   ],
@@ -265,8 +265,8 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 // ❌ State variable without equation
 {
   "variables": [
-    {"name": "x", "type": "state"},
-    {"name": "y", "type": "state"}
+    {"name": "x", "type": "unknown"},
+    {"name": "y", "type": "unknown"}
   ],
   "equations": [
     {
@@ -280,8 +280,8 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 // ✅ Add equation for every state variable
 {
   "variables": [
-    {"name": "x", "type": "state"},
-    {"name": "y", "type": "state"}
+    {"name": "x", "type": "unknown"},
+    {"name": "y", "type": "unknown"}
   ],
   "equations": [
     {
@@ -320,7 +320,7 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
 // ✅ Remove equation or change variable type
 {
   "variables": [
-    {"name": "k", "type": "state", "initial_value": "1.0"}
+    {"name": "k", "type": "unknown", "initial_value": "1.0"}
   ],
   "equations": [
     {
@@ -392,7 +392,7 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
   "models": {
     "atmosphere": {
       "variables": [
-        {"name": "pressure", "type": "state"}
+        {"name": "pressure", "type": "unknown"}
       ]
     }
   },
@@ -409,8 +409,8 @@ This guide helps you diagnose and fix the most common ESM validation errors. Eac
   "models": {
     "atmosphere": {
       "variables": [
-        {"name": "pressure", "type": "state"},
-        {"name": "temperature", "type": "state"}
+        {"name": "pressure", "type": "unknown"},
+        {"name": "temperature", "type": "unknown"}
       ]
     }
   },
@@ -432,13 +432,13 @@ Start with a minimal model and add complexity gradually:
 ```json
 // Start minimal
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {"name": "Test"}
 }
 
 // Add one model
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {"name": "Test"},
   "models": {
     "simple": {
@@ -502,7 +502,7 @@ esm validate model.esm --schema schema.json
 {"name": "x"}
 
 // After
-{"name": "x", "type": "state", "units": "dimensionless"}
+{"name": "x", "type": "unknown", "units": "dimensionless"}
 ```
 
 **Pattern 2: Fix types**

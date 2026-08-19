@@ -145,11 +145,11 @@ The following structural error codes are covered by test fixtures in `/tests/inv
 - Reaction with empty or missing substrates and products arrays
 - Invalid chemical reaction that doesn't consume or produce anything
 
-### 10. missing_observed_expr
+### 10. event_affects_parameter
 
-**Error Code**: `missing_observed_expr`
+**Error Code**: `event_affects_parameter`
 
-**Description**: Occurs when a variable is declared with type "observed" but is missing its required expression field.
+**Description**: Occurs when an event's `affects` LHS names a parameter. From esm 1.0.0 an event may write UNKNOWNS only; a parameter that changes during a run declares an `update` block on itself (esm-spec §5.4). The former `missing_observed_expr` check is gone with the `observed` type — an unknown's defining expression is an ordinary equation, and a missing one is an `equation_count_mismatch`, not a missing field.
 
 **Test Fixtures**:
 - `missing_observed_expr.esm` - Single observed variable without expression
@@ -157,9 +157,9 @@ The following structural error codes are covered by test fixtures in `/tests/inv
 - `missing_observed_expr_multiple.esm` - Multiple observed variables without expressions
 
 **Triggering Conditions**:
-- Variable with `"type": "observed"` missing `"expression"` field
+- An event `affects` entry whose `lhs` names a `parameter`
 - Observed variable with null or empty expression
-- Required field omitted for observed variable type
+- Parameter mutation written as an event affect instead of a parameter `update`
 
 ### 11. event_var_undeclared
 

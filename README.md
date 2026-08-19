@@ -93,7 +93,7 @@ The ESM format supports:
 
 ```json
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "SimpleChemistry",
     "description": "Basic atmospheric chemistry model",

@@ -15,7 +15,7 @@ Let's create a simple atmospheric chemistry model. Save this as `simple-model.es
 
 ```json
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Simple Atmospheric Chemistry",
     "description": "Basic ozone photolysis example",
@@ -28,19 +28,19 @@ Let's create a simple atmospheric chemistry model. Save this as `simple-model.es
       "variables": [
         {
           "name": "O3",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Ozone concentration"
         },
         {
           "name": "O2",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Oxygen concentration"
         },
         {
           "name": "O",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Atomic oxygen concentration"
         }
@@ -157,7 +157,7 @@ Now that you have your first ESM file working:
 ```json
 {
   "name": "NO2",
-  "type": "state",
+  "type": "unknown",
   "units": "molec/cm^3",
   "description": "Nitrogen dioxide concentration",
   "initial_value": "1e12"

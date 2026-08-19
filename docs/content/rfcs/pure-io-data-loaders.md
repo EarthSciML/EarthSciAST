@@ -3,6 +3,16 @@ title: "Pure-I/O data loaders: separating read-from-disk from regridding and rep
 description: "Strip the data loader down to a single responsibility — read/update a slice of data from disk — by moving regridding (value transfer) and reprojection (coordinate transform) out of the loader and into a model component built from existing ESD pieces. The loader's native grid is expressed once, in the shared GDD Grid format; its variables seed the cadence partition as discrete (or const). A pure-I/O loader is then a model subsystem and a single-component file becomes externally referenceable, closing the loader-reuse gap (ESS issue #24)."
 ---
 
+> **esm 1.0.0 update.** The pure-I/O principle survives; the *component* does
+> not. A data source is now a document-scoped REGISTRY entry with no `variables`
+> of its own: it cannot be mounted as a subsystem (§4.3 below), cannot be a
+> coupling endpoint, and does not appear in a scoped reference. A model consumes
+> one through a **parameter** whose `update` is `{"kind": "data", "source": …,
+> "from": {"file_variable": …}}` — which is what both the subsystem mount and the
+> coupling edge lowered to anyway. The seeding rule this RFC established is
+> unchanged: a source WITH `temporal` seeds its consumers DISCRETE, one without
+> seeds them CONST. See `unified-variable-model.md`.
+
 > **v0.8.0 update.** The pure-I/O principle here is retained: a `DataLoader`
 > only locates, reads, and slices bytes. But the surrounding mechanism described
 > below is superseded — there is no `DataLoader.grid` / GDD `Grid` descriptor and

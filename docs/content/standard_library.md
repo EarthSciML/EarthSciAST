@@ -52,7 +52,7 @@ either a new `lib/` file or a new §9 entry, apply the table above.
 ### `lib/calendar.esm`
 
 A thin AST veneer over the §9.2 `datetime.*` registry: each calendar field is
-exposed as an observed variable so that consumers can scope-reference
+exposed as an unknown defined by its own equation, so that consumers can scope-reference
 `Calendar.day_of_year`, `Calendar.hour`, etc. via §4.6 dot notation. Two
 helpers are defined as compositions:
 
@@ -86,19 +86,22 @@ To use:
 
 ```json
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "models": {
     "MyChem": {
       "subsystems": {
         "Solar": { "ref": "../lib/solar.esm" }
       },
       "variables": {
-        "j_NO2": { "type": "observed", "units": "1/s",
-                   "expression": { "op": "*", "args": [
-                     "k_NO2",
-                     { "op": "cos", "args": ["Solar.solar_zenith_angle"] }
-                   ] } }
-      }
+        "j_NO2": { "type": "unknown", "units": "1/s" }
+      },
+      "equations": [
+        { "lhs": "j_NO2",
+          "rhs": { "op": "*", "args": [
+            "k_NO2",
+            { "op": "cos", "args": ["Solar.solar_zenith_angle"] }
+          ] } }
+      ]
     }
   }
 }
@@ -143,7 +146,7 @@ primitives and inherit their tolerance contracts.
    atmospheric standard-pressure profile, saturation vapor pressure) and is
    expressible in AST + the §9.2 registry.
 2. Author `lib/<name>.esm` as a single self-contained subsystem, with
-   parameter-typed inputs and observed-typed outputs.
+   parameter inputs and unknown outputs defined by equations.
 3. Document it in this file, including units, references, and the
    composition's algebraic form.
 4. Add a fixture under `tests/valid/lib_<name>_inclusion.esm` exercising

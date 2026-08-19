@@ -6,7 +6,7 @@
 # Test that load function throws SchemaValidationError on invalid schema
         invalid_json = """
         {
-            "esm": "0.1.0"
+            "esm": "1.0.0"
         }
         """
 

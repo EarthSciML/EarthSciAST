@@ -6,7 +6,7 @@
 # Test with IO streams
         test_json = """
         {
-          "esm": "0.1.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "stream_test",
             "authors": ["Stream Author"]

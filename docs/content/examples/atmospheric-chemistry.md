@@ -17,7 +17,7 @@ Save this as `atmospheric_chemistry.esm`:
 
 ```json
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "Atmospheric Chemistry Model",
     "description": "Basic ozone photochemistry with NOx cycling",
@@ -36,35 +36,35 @@ Save this as `atmospheric_chemistry.esm`:
       "variables": [
         {
           "name": "O3",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Ozone concentration",
           "initial_value": "1e12"
         },
         {
           "name": "O2",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Oxygen concentration",
           "initial_value": "5e18"
         },
         {
           "name": "O",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Atomic oxygen concentration",
           "initial_value": "1e6"
         },
         {
           "name": "NO",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Nitric oxide concentration",
           "initial_value": "1e10"
         },
         {
           "name": "NO2",
-          "type": "state",
+          "type": "unknown",
           "units": "molec/cm^3",
           "description": "Nitrogen dioxide concentration",
           "initial_value": "5e10"
@@ -593,13 +593,13 @@ This cycling is much faster than NOₓ removal processes.
 ```json
 {
   "name": "HO2",
-  "type": "state",
+  "type": "unknown",
   "units": "molec/cm^3",
   "description": "Hydroperoxy radical"
 },
 {
   "name": "OH",
-  "type": "state",
+  "type": "unknown",
   "units": "molec/cm^3",
   "description": "Hydroxyl radical"
 }

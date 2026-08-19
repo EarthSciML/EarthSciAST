@@ -67,7 +67,7 @@ using EarthSciAST
 println("EarthSciAST.jl installed successfully!")
 
 # Test basic functionality
-esm_data = """{"esm": "0.1.0", "metadata": {"name": "Test"}}"""
+esm_data = """{"esm": "1.0.0", "metadata": {"name": "Test"}}"""
 esm_file = parse_esm(esm_data)
 println("Loaded test model: ", esm_file.metadata.name)
 ```
@@ -109,7 +109,7 @@ const { load, validate } = require('@earthsciml/ast');
 import { load, validate } from '@earthsciml/ast';
 
 // Test functionality
-const esmData = '{"esm": "0.1.0", "metadata": {"name": "Test"}}';
+const esmData = '{"esm": "1.0.0", "metadata": {"name": "Test"}}';
 const esmFile = load(esmData);
 console.log('Loaded test model:', esmFile.metadata.name);
 ```
@@ -170,7 +170,7 @@ import earthsci_ast
 print("earthsci-ast installed successfully!")
 
 # Test basic functionality
-esm_data = '{"esm": "0.1.0", "metadata": {"name": "Test"}}'
+esm_data = '{"esm": "1.0.0", "metadata": {"name": "Test"}}'
 esm_file = earthsci_ast.load_esm(esm_data)
 print(f"Loaded test model: {esm_file.metadata.name}")
 ```
@@ -219,7 +219,7 @@ esm --version
 esm validate --help
 
 # Test functionality
-echo '{"esm": "0.1.0", "metadata": {"name": "Test"}}' > test.esm
+echo '{"esm": "1.0.0", "metadata": {"name": "Test"}}' > test.esm
 esm validate test.esm
 ```
 
@@ -228,7 +228,7 @@ esm validate test.esm
 use earthsci_ast::{load, validate};
 
 fn main() {
-    let esm_data = r#"{"esm": "0.1.0", "metadata": {"name": "Test"}}"#;
+    let esm_data = r#"{"esm": "1.0.0", "metadata": {"name": "Test"}}"#;
     let esm_file = load(esm_data).unwrap();
     println!("Loaded test model: {}", esm_file.metadata.name);
 }

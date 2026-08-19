@@ -6,7 +6,7 @@
 # Create a minimal ESM file
         test_json = """
         {
-          "esm": "0.1.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "test_model",
             "description": "Test model",
@@ -16,7 +16,7 @@
             "simple": {
               "variables": {
                 "x": {
-                  "type": "state",
+                  "type": "unknown",
                   "default": 1.0,
                   "description": "State variable x"
                 }

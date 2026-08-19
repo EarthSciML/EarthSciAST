@@ -7,7 +7,7 @@
         @test_throws ParseError load(IOBuffer("invalid json"))
 
         # Test missing required fields
-        invalid_esm = """{"esm": "0.1.0"}"""  # Missing metadata
+        invalid_esm = """{"esm": "1.0.0"}"""  # Missing metadata
         @test_throws SchemaValidationError load(IOBuffer(invalid_esm))
 
         # Test invalid expression format

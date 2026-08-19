@@ -1,5 +1,12 @@
 # ESM Format Conformance Test Specification
 
+> **esm 1.0.0.** This document is written against the unified variable model:
+> two declared types (`unknown`, `parameter`), with ODE-state-ness, observed-ness,
+> noise, and refresh cadence all DERIVED via the classification functions in
+> esm-spec §6.3.1. Where the text below says "observed", it means the derived
+> category — an unknown defined by a bare-variable-LHS equation — not a declared
+> type. See `docs/content/rfcs/unified-variable-model.md`.
+
 **Version 1.0 — Test Fixture Format and Execution Protocol**
 
 This document specifies the structure, format, and execution model for ESM Format conformance test fixtures. It defines how test cases are organized, what outputs are expected, and how cross-language consistency is verified.
@@ -1371,15 +1378,17 @@ declared class: a `CONST`/`DISCRETE` leaf whose bytes are inline folds at
 **compile**; one loaded from an external resource (NetCDF mesh/met) folds at
 **bind**. Same algebra, same propagation.
 
-**Loader-seeded refinement (RFC `pure-io-data-loaders` §4.6).** When a
-`discrete` variable's `refresh` is a `data_ingest` trigger, its `source` names a
-`DataLoader` in the document's top-level `data_loaders`. The loader's `temporal`
-block is what makes its outputs time-varying, and it is the loader — not the
-variable's own declaration — that fixes the seed:
+**Source-seeded refinement (RFC `pure-io-data-loaders` §4.6).** When a parameter's
+`update` is the `data` kind, its `source` names a `DataSource` in the document's
+top-level `data_sources`. The source's `temporal` block is what makes its outputs
+time-varying, and it is the source — not the parameter's own declaration — that
+fixes the seed (the rule is unchanged from 0.x; only the spelling is, since a
+`discrete` variable with a `data_ingest` refresh is now a parameter with a `data`
+update):
 
-- a loader **with** `temporal` keeps the variable `DISCRETE` (its refresh trigger
-  is the loader's update times) and folds it at **bind**;
-- a loader **without** `temporal` describes non-time-varying data (`temporal` is
+- a source **with** `temporal` keeps the parameter `DISCRETE` (its refresh cadence
+  is the source's update times) and folds it at **bind**;
+- a source **without** `temporal` describes non-time-varying data (`temporal` is
   optional; absence ⇒ non-time-varying), so the same variable is refined down to
   `CONST` — loaded once, still folding at **bind**.
 
@@ -1813,10 +1822,10 @@ Go and TypeScript are **out of scope** (no array simulator / refresh executor).
 #### 5.10.1 What is compared
 
 For each fixture, every in-scope binding loads the shared `.esm` in two views —
-the **classifier view** (raw, for the cadence partition + loader binding) and the
-**simulate view** (loader-fed `discrete` vars + the `data_loaders` block stripped,
+the **classifier view** (raw, for the cadence partition + source binding) and the
+**simulate view** (data-fed parameters + the `data_sources` block stripped,
 so the RHS compiler resolves `F_src`/`scale_src` as forcing names; see the set's
-`README.md`) — seeds one provider per loader **offline** from the golden's
+`README.md`) — seeds one provider per source **offline** from the golden's
 `native_fields`, and reports two quantities:
 
 1. **Regridded arrays** — the in-model regridded observeds `F_tgt` (per DISCRETE
@@ -1870,13 +1879,24 @@ golden, **failing loudly** on any divergence: **Julia** —
 regrid is an in-model coupling every simulation binding already evaluates, so no
 regrid seam or source change is needed to consume it.
 
-### 5.11 Subsystem-Mounted Loader Consumption (normative)
+### 5.11 Direct Source Consumption (normative)
 
-§5.10 governs **top-level** `data_loaders` fed to a model through a coupling
-edge. This section governs a pure-I/O data loader **mounted as a model
-subsystem** (RFC `pure-io-data-loaders` §4.3 — `models.X.subsystems.raw =
-<DataLoader>`) and consumed by the **owning model's own equations** by the
-existing dot-notation (`raw.field`, lowered to the observed `<owner>.raw.field`).
+> **Superseded spelling, retained requirement (esm 1.0.0).** Both mechanisms this
+> section and §5.10 were built on are gone: a data source can no longer be
+> mounted as a subsystem, and it can no longer be a coupling endpoint. There is
+> now exactly ONE way a model consumes external data — a parameter of that model
+> whose `update` is `{"kind": "data", "source": …, "from": {"file_variable": …}}`
+> — which is what both §5.10's coupling edge and §5.11's subsystem mount lowered
+> to anyway. The NUMERIC requirements below are unchanged and still binding; the
+> dot-notation `raw.field` and the lowered `<owner>.raw.field` names simply
+> become the parameter's own name. Fixtures under
+> `tests/conformance/subsystem_loader/` need re-deriving against the new
+> spelling.
+
+§5.10 governs a source consumed by a model whose parameters draw from it. This
+section governs the same consumption where the fields were previously reached
+through a mounted-loader subsystem, and are now ordinary parameters of the
+**owning model's own equations**.
 The two simulation bindings that support it — **Python, Julia** — must agree, on
 a **numeric-tolerance** basis, on the resulting trajectory. The shared **offline**
 fixture lives in `tests/conformance/subsystem_loader/`.
@@ -2445,7 +2465,7 @@ ever emitted it, and the code had zero real coverage.
 | `unresolved_subsystem_ref` | Structural | A §4.7 subsystem `ref` does not resolve — the target file does not exist, or is not reachable. **Canonical spelling.** (Formerly also spelled `ref_not_found`; see §7.1.3.) |
 | `ambiguous_subsystem_ref` | Structural | A §4.7 subsystem `ref` resolves to a file containing zero, or more than one, top-level model/reaction system, so the mount target is not unique. **Canonical spelling.** (Formerly `ref_ambiguous_system`; see §7.1.3.) |
 | `null_reaction` | Structural | Reaction with both null substrates and products |
-| `missing_observed_expr` | Structural | Observed variable missing expression |
+| `event_affects_parameter` | Structural | An event `affects` LHS names a parameter; parameter mutation belongs in the parameter's own `update` (esm-spec §5.4) |
 | `event_var_undeclared` | Structural | Event affects undeclared variable. NOT emitted for `_var` (esm-spec §6.4, §4.9.1) or for the independent variable. |
 | `equation_count_mismatch` (see above) | Structural | Unknowns vs equations. Algebraic and expression-LHS equations COUNT (esm-spec §4.9.4). |
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
@@ -2499,7 +2519,7 @@ A binding MUST NOT "fix" a rejection by editing the fixture.
 | # | Rule | Normative | Fixture that pins it |
 |---|---|---|---|
 | a | The **independent variable** (`domain.independent_variable`, default `"t"`) and **spatial coordinate names** (`x`, `y`, `lon`, …) are IMPLICITLY DECLARED — never `undefined_variable`. | §4.9.1, §11.3, §11.4 | `tests/valid/cadence/pure_pointwise.esm`, `tests/valid/initial_conditions/expression_ignition_front_1d.esm` |
-| b | **`_var`** is legal wherever a state variable is legal, including a continuous event's `affects`/`affect_neg` LHS and a `functional_affect`'s `read_vars`, in any operator-composed or coupled model — never `event_var_undeclared`. | §4.9.1, §6.4 | `tests/valid/full_coupled.esm` |
+| b | **`_var`** is legal wherever an ODE state is legal, including a continuous event's `affects`/`affect_neg` LHS and a parameter update handler's `read_vars`, in any operator-composed or coupled model — never `event_var_undeclared`. It ranges over `ode_states` (esm-spec §6.3.1), never the observed or algebraic unknowns. | §4.9.1, §6.4 | `tests/valid/full_coupled.esm` |
 | c | **Scoped references are ARBITRARY DEPTH** (`A.B.c`, `A.B.C.d`). A resolver walks every segment; it MUST NOT split on `"."` and take `[0]` as the system and `[1]` as the variable. Applies to the `systems`/`from`/`to` of a coupling entry too. | §4.6, §4.9.2 | `tests/valid/scoped_refs_coupling.esm`, `tests/scoping/*.esm` |
 | d | A **reaction `rate` MAY contain scoped references** into other systems. | §4.9.3, §7.3 | `tests/valid/events_cross_system.esm` |
 | e | **`equation_count_mismatch` balances UNKNOWNS vs EQUATIONS.** A non-derivative (algebraic) LHS — bare-variable *or* expression — is a credited equation. For `system_kind: "nonlinear"` there are no derivative equations at all. | §4.9.4 | `tests/valid/nonlinear_isorropia_shape.esm` |
@@ -2507,7 +2527,7 @@ A binding MUST NOT "fix" a rejection by editing the fixture.
 | i | **A VALID fixture MUST be asserted `is_valid == true`, not merely round-tripped — and a valid fixture can NEVER, on its own, prove a checker checks anything.** Mutation-testing `tests/valid/units_registry_grammar.esm` (corrupt each observed variable in turn; every corruption still passed) exposed two distinct vacuities. In **Python**, nothing compared a variable's DECLARED units against the dimension its EXPRESSION computes, so the assertion was empty. In **TypeScript**, the valid-corpus conformance test only calls `load`/`emit` — `it.each(validFiles)('should round-trip …')` — and **never calls `validate()`**, so "it validates clean" meant "it was never validated". A valid fixture can only ever prove a checker does not FALSELY REJECT; proving it actually CHECKS requires an INVALID fixture whose sole defect is a violation of the rule. Every discriminator rule therefore needs BOTH halves. This is §9 ("Tests that assert nothing") reappearing inside the conformance harness itself. | §4.8, §9 | `tests/valid/units_registry_grammar.esm` (positive half), `tests/invalid/units_discriminator_*.esm` (9, negative half) |
 | j | **`details.variable` is the ONE spelling** for the offending name in a structural error's `details` object — NOT `variable_name`. Two spellings for one thing is the drift this audit exists to kill. `variable` is the incumbent (34 pins) and is what TS already emits. | §7.1 | `tests/invalid/expected_errors.json` |
 | k | **Reference integrity needs the COMPLETE set of declaration sites, or (h) turns into false REJECTS.** Two sites are easy to miss, and the (h) sweep hit both. (1) **`coupling[i].config.callback_variables[j].name` IS a declaration site** — a callback injects those names into the target system, and `tests/coupling/callback_examples.esm` legitimately references them from `equations`; a checker that consults only `models[M].variables` falsely rejects it. (2) There are **NO bare/undeclared names**: a forcing delivered by the host at runtime MUST still be declared (`type: "discrete"` is the established spelling, §5.10.1). An undeclared forcing name is indistinguishable from a TYPO, which is precisely the false-negative (h) closes — so the escape hatch cannot survive (h) and had to go. `discrete_materialize_contraction.esm` used to carry `src` as a deliberately bare name; it now declares it, with no change to its cadence semantics. | §4.9.5, §5.10.1 | `tests/coupling/callback_examples.esm`, `tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm` |
-| h | **Reference integrity applies to EVERY expression-bearing field**, not only `equations`. THIRTEEN fields carry an Expression and ELEVEN were unchecked in every binding: an undefined name in an observed variable's `expression`, in `guesses`, in an `initialization_equations` RHS, in an event condition / trigger / affect RHS, in an assertion `reference`, in a loader's `unit_conversion`, or in a coupling connector `expression` / `transform` was INVISIBLE to all five. Within an Expression the walk must also descend `expr`/`filter`/`key`/`lower`/`upper`/`values`/`axes`/`bindings`, not just `args`. | §4.9.5 | `tests/invalid/undefined_variable_in_*.esm` (18), `tests/invalid/unresolved_scoped_ref_in_*.esm` (2) |
+| h | **Reference integrity applies to EVERY expression-bearing field**, not only `equations`. THIRTEEN fields carry an Expression and ELEVEN were unchecked in every binding: an undefined name in a parameter `update`'s `when` / `expression`, in `guesses`, in an `initialization_equations` RHS, in an event condition / trigger / affect RHS, in an assertion `reference`, in an `update.from`'s `unit_conversion`, or in a coupling connector `expression` / `transform` was INVISIBLE to all five. Within an Expression the walk must also descend `expr`/`filter`/`key`/`lower`/`upper`/`values`/`axes`/`bindings`, not just `args`. | §4.9.5 | `tests/invalid/undefined_variable_in_*.esm` (18), `tests/invalid/unresolved_scoped_ref_in_*.esm` (2) |
 
 ### 7.1.2 The `tests/invalid/expected_errors.json` pin contract
 
@@ -2527,7 +2547,7 @@ a claim about *why* the file is invalid, not merely *that* it is:
   not `/models/M`; `/coupling/0/from`, not `/coupling/0`. Three corollaries, each of which
   bit a real pin (audit 2026-07-14):
   - **The pointer names where the defect IS, not where the old walkers happened to REACH.**
-    Now that observed `expression` is a first-class checked site (§4.9.5), a declared unit that
+    Now that every equation RHS is a first-class checked site (§4.9.5), a declared unit that
     contradicts the dimension its own expression computes belongs at the **variable**
     (`/models/M/variables/v`), not at some equation that merely mentions it.
   - **A defect with no single carrier is pinned at the smallest node that CONTAINS it.** A

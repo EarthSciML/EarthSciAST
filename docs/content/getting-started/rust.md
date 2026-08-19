@@ -347,7 +347,7 @@ async function main() {
     await init();
 
     // Use Rust functions from JavaScript
-    const esmData = '{"esm": "0.1.0", "metadata": {"name": "Test"}}';
+    const esmData = '{"esm": "1.0.0", "metadata": {"name": "Test"}}';
 
     try {
         const esmFile = load(esmData);
@@ -521,7 +521,7 @@ mod tests {
     fn test_valid_esm_loads() {
         let esm_data = r#"
         {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "Test Model"
             }
@@ -535,7 +535,7 @@ mod tests {
     fn test_validation_catches_errors() {
         let invalid_esm = r#"
         {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "Test"
             },

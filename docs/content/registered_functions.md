@@ -80,13 +80,18 @@ recoverable from `searchsorted` + `index` + AST arithmetic.
 
 ```json
 {
-  "esm": "0.3.0",
+  "esm": "1.0.0",
   "metadata": { "name": "PhotolysisDriver" },
   "models": {
     "Photo": {
       "variables": {
-        "doy":      { "type": "observed", "expression": { "op": "fn", "name": "datetime.day_of_year", "args": ["t"] } },
-        "j_o3":     { "type": "observed", "expression": {
+        "doy":  { "type": "unknown" },
+        "j_o3": { "type": "unknown" }
+      },
+      "equations": [
+        { "lhs": "doy",
+          "rhs": { "op": "fn", "name": "datetime.day_of_year", "args": ["t"] } },
+        { "lhs": "j_o3", "rhs": {
           "op": "index",
           "args": [
             { "op": "const", "args": [], "value": [1.0e-2, 9.0e-3, 7.8e-3, 4.0e-3, 0.0] },
@@ -100,8 +105,7 @@ recoverable from `searchsorted` + `index` + AST arithmetic.
             }
           ]
         }}
-      },
-      "equations": []
+      ]
     }
   }
 }

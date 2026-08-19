@@ -1,5 +1,14 @@
 # ESM Library Specification
 
+> **esm 1.0.0.** Two changes here matter for tooling. (1) Variables have two
+> declared types, `unknown` and `parameter`; ODE-state-ness and observed-ness are
+> DERIVED (esm-spec §6.3.1). (2) A data source is no longer a COMPONENT — it has
+> no variables, is not a coupling endpoint or subsystem, and is therefore not a
+> node in `component_graph()`. External data reaches a model as a parameter whose
+> `update` draws from a `data_sources` entry. Editor and graph surfaces that
+> modelled loaders as nodes need updating accordingly. See
+> `docs/content/rfcs/unified-variable-model.md`.
+
 **Companion Libraries for the EarthSciML Serialization Format — Version 0.1.0 Draft**
 
 ## 1. Overview
@@ -102,7 +111,7 @@ Template imports resolve in the same load phase as subsystem references, with th
 1. Collect `expression_template_imports` arrays: on every `model` / `reaction_system`, and at the top level of a library file being imported.
 2. For each entry, in array order:
    a. Load `ref` exactly as in §2.1b step 2a-b (URL vs relative path; shared visited set for cycle detection → `template_import_cycle`).
-   b. Verify the target is a pure template-library file — top-level `expression_templates` present; no `models` / `reaction_systems` / `data_loaders` / `coupling` / `domain` (`template_import_not_library`).
+   b. Verify the target is a pure template-library file — top-level `expression_templates` present; no `models` / `reaction_systems` / `data_sources` / `coupling` / `domain` (`template_import_not_library`).
    c. Recurse into the target's own `expression_template_imports` (depth-first).
    d. Instantiate the target with the edge's metaparameter `bindings` (esm-spec §9.7.6): close the named metaparameters, re-export the rest into the importer's metaparameter scope, fold structural integer sites, substitute expression-position occurrences.
    e. Apply `only` filtering (`template_import_unknown_name` for unknown names).
@@ -134,7 +143,7 @@ Every library must define typed representations for:
 | Continuous event | `ContinuousEvent` | Conditions, affects, affect_neg |
 | Discrete event | `DiscreteEvent` | Trigger, affects, discrete_parameters |
 | Functional affect | `FunctionalAffect` | Handler reference |
-| Data loader | `DataLoader` | STAC-like description: `kind`, `source`, `temporal`, `spatial`, `variables`, `regridding` |
+| Data source | `DataSource` | STAC-like ingest description: `kind`, `source`, `temporal`, `select`, `record_filter`, `extent`. NOT a component — it exposes no variables and is consumed by a parameter's `update` (esm-spec §8). |
 | Operator | `Operator` | Registered by ID |
 | Coupling entry | `CouplingEntry` | Discriminated union on `type` |
 | Domain | `Domain` | Temporal, spatial, BCs, ICs |
@@ -283,7 +292,7 @@ For each reaction system:
 - Every variable name referenced in an equation exists in the model's `variables` (or in a subsystem's variables, if using a scoped reference).
 - Every scoped reference in coupling entries resolves to an actual variable by walking the subsystem hierarchy. A reference like `"A.B.C"` must resolve as: `A` is a top-level system, `B` is a subsystem of `A`, and `C` is a variable/species/parameter in `B`. The last dot-separated segment is always the variable name; all preceding segments form the system path. See the ESM format spec Section 4.3 for the full resolution algorithm.
 - Every `discrete_parameters` entry in an event matches a declared parameter.
-- Every `from`/`to` in coupling entries references an existing model, reaction system, data loader, or operator (including subsystems nested at any depth).
+- Every `from`/`to` in coupling entries references an existing model, reaction system, or operator (including subsystems nested at any depth). A `data_sources` entry is NOT a valid endpoint.
 - Every `operator` in `operator_apply` coupling entries exists in the `operators` section.
 
 #### 3.2.3 Event Consistency
@@ -375,14 +384,14 @@ UnitWarning:
 | `undefined_variable` | Variable referenced in an equation is not declared |
 | `undefined_species` | Species referenced in a reaction is not declared |
 | `undefined_parameter` | Parameter referenced in a rate expression is not declared |
-| `undefined_system` | Coupling entry references a nonexistent model, reaction system, data loader, or operator |
+| `undefined_system` | Coupling entry references a nonexistent model, reaction system, or operator |
 | `undefined_operator` | `operator_apply` references a nonexistent operator |
 | `unresolved_scoped_ref` | Scoped reference (e.g., `"Model.Subsystem.var"`) cannot be resolved — a segment in the system path does not exist or the final variable is not declared. Also raised at flatten for an edge produced by a `coupling_import` expansion whose bound component lacks a referenced variable (esm-spec §10.10.3) |
 | `coupling_import_unresolved` | A `coupling_import` `ref` failed to load or parse (esm-spec §10.11) |
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
 | `subsystem_ref_is_coupling_library` | A §4.7 subsystem `ref` targets a coupling-library file |
 | `template_import_is_coupling_library` | A §9.7.2 template import targets a coupling-library file |
-| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_loaders`/`domain`/`index_sets`/`metaparameters`/`expression_templates`), contains a `callback` entry or an edge-level `expression_template_imports` map, or carries a transform template that would expand to a rewrite-target operator (esm-spec §10.9) |
+| `coupling_library_illegal_payload` | A coupling-library file declares a forbidden payload (`models`/`reaction_systems`/`data_sources`/`domain`/`index_sets`/`metaparameters`/`expression_templates`), contains a `callback` entry or an edge-level `expression_template_imports` map, or carries a transform template that would expand to a rewrite-target operator (esm-spec §10.9) |
 | `coupling_library_nested_import` | A coupling-library file contains a `coupling_import` entry |
 | `coupling_edge_unknown_role` | A library edge's top-level system segment, at an occurrence site, is not a declared role |
 | `coupling_role_unused` | A declared role appears at no occurrence site in any library edge |
@@ -505,7 +514,7 @@ The `connector.equations` array contains the complete coupling specification, ex
 
 #### 4.7.3 `variable_map` Resolution
 
-`variable_map` replaces a parameter in one system with a variable provided by another system (typically a data loader).
+`variable_map` replaces a parameter in one system with a variable provided by another system. (Before 1.0.0 the typical case was a data loader; external data now arrives directly as a parameter with a `data` update, so no coupling edge is involved.)
 
 1. Resolve the `from` scoped reference to the source system and variable.
 2. Resolve the `to` scoped reference to the target system and parameter.
@@ -537,7 +546,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
 
 1. **Derive ODEs from reaction systems.** For each reaction system in the file, generate the equivalent ODE equations using the stoichiometry and rate laws (as specified in Section 4.6 `derive_odes`). This converts reaction systems into a uniform equation-based representation.
 
-2. **Namespace all variables.** For each component system (model, derived ODE system from reaction systems, data loader):
+2. **Namespace all variables.** For each component system (model, or derived ODE system from a reaction system):
    - Prefix every variable, parameter, and species name with the system name and a dot.
    - Rewrite all equations so that variable references use the dot-namespaced names.
    - For nested subsystems, the prefix is the full path: `Parent.Child.variable`.
@@ -621,7 +630,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      component view (the `flatten_template_registries` conformance surface); such a function
      implements step 4 only, and a caller that goes on to namespace MUST compose it with step 2.
 
-**Example:** Given an ESM file with `SimpleOzone` (reaction system with O₃, NO, NO₂), `Advection` (model with `_var` placeholder), and `GEOSFP` (data loader providing T, u, v), coupled via `operator_compose` and `variable_map`, the flattened system contains:
+**Example:** Given an ESM file with `SimpleOzone` (reaction system with O₃, NO, NO₂) and `Advection` (model with `_var` placeholder), where T, u, and v are parameters drawing from the `GEOSFP` data source, coupled via `operator_compose`, the flattened system contains:
 
 ```
 State variables: SimpleOzone.O3, SimpleOzone.NO, SimpleOzone.NO2
@@ -738,7 +747,7 @@ Every library must be able to produce two distinct graph representations of an `
 
 #### 4.8.1 System Graph (Component-Level)
 
-A directed graph where **nodes are model components** (models, reaction systems, data loaders, operators) and **edges are coupling rules**.
+A directed graph where **nodes are model components** (models, reaction systems, operators) and **edges are coupling rules**. A `data_sources` entry is not a component and is NOT a node: from 1.0.0 external data is a parameter of the consuming model, so it is an attribute of an existing node rather than a node of its own.
 
 ```
 component_graph(file: EsmFile) → Graph<ComponentNode, CouplingEdge>
@@ -750,7 +759,6 @@ component_graph(file: EsmFile) → Graph<ComponentNode, CouplingEdge>
 |---|---|
 | `model` | Each key in `models` |
 | `reaction_system` | Each key in `reaction_systems` |
-| `data_loader` | Each key in `data_loaders` |
 | `operator` | Each key in `operators` |
 
 Each node carries its name, type, and summary metadata (variable count, equation count, species count, etc.).
@@ -773,7 +781,7 @@ Each edge carries the coupling type, a human-readable label (e.g., `"T"` for a t
 **Example output** for the MinimalChemAdvection file:
 
 ```
-Nodes: [SimpleOzone (reaction_system), Advection (model), GEOSFP (data_loader)]
+Nodes: [SimpleOzone (reaction_system), Advection (model)]
 Edges:
   SimpleOzone ←operator_compose→ Advection
   GEOSFP —[T]→ SimpleOzone          (variable_map)
@@ -1562,7 +1570,7 @@ Code generation does **not** need to handle (these are emitted as TODO comments)
 
 - Coupling resolution (the generated code defines individual systems; the user composes them).
 - Domain setup (emitted as commented-out boilerplate with values from the file).
-- Data loaders and operators (runtime-specific; emitted as placeholder comments with the loader/operator ID).
+- Data sources, update handlers, and operators (runtime-specific; emitted as placeholder comments with the source / `handler_id` / operator ID).
 
 ```typescript
 import { toJuliaCode, toPythonCode } from '@earthsciml/ast';

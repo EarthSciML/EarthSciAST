@@ -38,7 +38,7 @@ esm_file = load_esm("model.esm")
 println("Loaded: ", esm_file.metadata.name)
 
 # Load from string
-json_str = """{"esm": "0.1.0", "metadata": {...}}"""
+json_str = """{"esm": "1.0.0", "metadata": {...}}"""
 esm_file = parse_esm(json_str)
 
 # Validate structure and semantics

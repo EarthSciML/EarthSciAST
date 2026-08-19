@@ -52,7 +52,7 @@ esm_file = load_esm('model.esm')
 print(f"Loaded: {esm_file.metadata.name}")
 
 # Load from string
-json_string = '''{"esm": "0.1.0", "metadata": {"name": "Test"}}'''
+json_string = '''{"esm": "1.0.0", "metadata": {"name": "Test"}}'''
 esm_file = load_esm(json_string)
 
 # Load from dictionary
