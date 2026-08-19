@@ -100,8 +100,13 @@ mutable struct _OverlapIndex
 end
 _OverlapIndex(pairs::Set{Tuple{Int,Int}}) = _OverlapIndex(pairs, nothing, nothing, nothing)
 # Membership / cardinality forward to the raw pair set, so an `_OverlapIndex`
-# reads exactly like the `Set` it wraps at every existing use site.
-Base.in(p::Tuple{Int,Int}, oi::_OverlapIndex) = in(p, oi.pairs)
+# reads exactly like the `Set` it wraps at every existing use site. `in` is
+# deliberately UNTYPED in its first argument: `_vi_join_ok` builds its probe from
+# a `Dict{String,Any}` binding, so a categorical range would hand it a
+# non-`Tuple{Int,Int}`. A `Set` answers `false` for such a probe; a narrowly
+# typed method would raise `MethodError` instead, turning a rejected binding into
+# a crash.
+Base.in(p, oi::_OverlapIndex) = in(p, oi.pairs)
 Base.length(oi::_OverlapIndex) = length(oi.pairs)
 Base.isempty(oi::_OverlapIndex) = isempty(oi.pairs)
 
