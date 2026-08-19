@@ -74,7 +74,7 @@ mat-vec) but whose containment predicate the recogniser could not read, so the
 rewrite does not fire for it and that array is fetched WHOLESALE.
 
 Inspectable, side-effect-free counterpart of the `@warn` stream: same records,
-same order (sorted by `variable` then `consumer`), stable field set
+same order (sorted by `variable`, `consumer`, `array`), stable field set
 (`code`, `variable`, `consumer`, `array`, `index_set`, `reason`, `template`,
 `consequence`), pinned across bindings by the `tests/conformance/pushdown/`
 corpus. Empty for a document that already carries the rewrite record, for one

@@ -324,6 +324,86 @@ end
     @test EA.observed_field(prep, insp, "deathsK") ≈ oracle_deaths(RR_K)
     @test EA.observed_field(prep, insp, "deathsL") ≈ oracle_deaths(RR_L)
     @test_throws EA.SimulateError EA.observed_field(prep, insp, "no_such_observed")
+
+    # ---- the SAME run, with the binning bodies factored through a template --
+    # esm-spec §9.6.4 Option B preserves `apply_expression_template` references
+    # through `load`, so `prepare` runs the desugar on a document whose binning
+    # body may be a reference rather than the containment `ifelse`. Whether the
+    # pushdown fires MUST NOT depend on that (CONFORMANCE_SPEC §5.5.7), and this
+    # is the numeric discharge of the claim: same gated selections, same fetched
+    # slabs, same observed values — through the same public `prepare` surface.
+    #
+    # The template body names ONLY its own params. `emis_annual` and the `is_*`
+    # masks are COUPLING-FED (`MockPts.annual → ISRM.emis_annual`), so naming them
+    # in the body would trip flatten's
+    # `template_body_references_coupling_rewritten_variable`; they ride as
+    # bindings, which is exactly what that diagnostic tells authors to do.
+    @testset "same run with the E bodies factored through a template" begin
+        tdoc = deepcopy(doc)
+        tm = tdoc["models"]["ISRM"]
+        tpl_contain = _op("and",
+            _op("<=", _ix("xmin", "c"), _ix("ptx", "r")),
+            _op("<",  _ix("ptx", "r"),  _ix("xmax", "c")),
+            _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
+            _op("<",  _ix("pty", "r"),  _ix("ymax", "c")))
+        tm["expression_templates"] = Dict{String,Any}(
+            "bin_emissions" => Dict{String,Any}(
+                "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "tot", "frac"],
+                "body" => _op("*", _op("ifelse", tpl_contain, 1.0, 0.0),
+                                   _op("*", _ix("tot", "r"), _ix("frac", "r")))))
+        for (Ename, isp) in (("E_VOC", "is_VOC"), ("E_NOx", "is_NOx"),
+                             ("E_NH3", "is_NH3"), ("E_SOx", "is_SOx"),
+                             ("E_PM25", "is_PM25"))
+            tm["variables"][Ename]["expression"]["expr"] = Dict{String,Any}(
+                "op" => "apply_expression_template", "args" => Any[],
+                "name" => "bin_emissions",
+                "bindings" => Dict{String,Any}(
+                    "xmin" => "src_W", "ymin" => "src_S",
+                    "xmax" => "src_E", "ymax" => "src_N",
+                    "ptx" => "X", "pty" => "Y",
+                    "tot" => "emis_annual", "frac" => isp))
+        end
+        tpl_before = deepcopy(tm["expression_templates"])
+
+        trd = EA.desugar_pushdown(tdoc; model_name="ISRM")
+        @test trd !== tdoc                                     # it fired
+        @test trd["metadata"]["x_esd"]["pushdown"]["gated_select"]["gated_by"] == SET
+        # the SHARED body is not edited — Option B's single lowering survives
+        @test trd["models"]["ISRM"]["expression_templates"] == tpl_before
+        # the CALL SITES are: each E now gathers the compact per-support rects
+        for Ename in ("E_VOC", "E_NOx", "E_NH3", "E_SOx", "E_PM25")
+            b = trd["models"]["ISRM"]["variables"][Ename]["expression"]["expr"]["bindings"]
+            @test b["xmin"] == "pd_cell__src_cells__src_W"
+            @test b["ymax"] == "pd_cell__src_cells__src_N"
+            @test b["ptx"] == "X"                              # record side untouched
+        end
+
+        gmocks2 = Dict(v => MockGatedP1(fullSR[v], Any[]) for v in LVARS)
+        providers2 = Dict{String,Any}(k => v for (k, v) in providers)
+        for v in LVARS
+            providers2["MockSR.$v"] = gmocks2[v]
+        end
+        insp2 = EA.BuildInspection()
+        prep2 = EA.prepare(tdoc; providers=providers2,
+                           const_arrays=Dict{String,Any}("src_W"=>W, "src_S"=>Sv,
+                                                         "src_E"=>Ev, "src_N"=>Nv),
+                           inspect=insp2, pushdown_rewrite=true)
+        @test prep2 isa EA.PreparedModel
+        for v in LVARS
+            sel = [c for c in gmocks2[v].calls if c[1] == :selection]
+            @test isempty([c for c in gmocks2[v].calls if c[1] == :wholesale])
+            @test length(sel) == 1
+            @test sel[1][2][1] == 1
+            @test sel[1][2][2] == MEMBERS                      # the same derived gate
+            @test sel[1][2][3] === Colon()
+        end
+        @test EA.observed_field(prep2, insp2, "E_VOC")  ≈ oracle_E(is_VOC)
+        @test EA.observed_field(prep2, insp2, "ISRM.E_PM25") ≈ oracle_E(is_PM25)
+        @test EA.observed_field(prep2, insp2, "conc_SOA") ≈ oracle_conc("SOA")
+        @test EA.observed_field(prep2, insp2, "TotalPM25") ≈ oracle_TotalPM25
+        @test EA.observed_field(prep2, insp2, "deathsK") ≈ oracle_deaths(RR_K)
+        @test EA.observed_field(prep2, insp2, "deathsL") ≈ oracle_deaths(RR_L)
+    end
 end
 
 end # module PreparePushdownRecordGateTests
