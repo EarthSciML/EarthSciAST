@@ -1187,6 +1187,10 @@ fn namespace_join_names(
                 src_env: ov.src_env.iter().map(&ns).collect(),
                 tgt_env: ov.tgt_env.iter().map(&ns).collect(),
                 eps: ov.eps,
+                // Range symbols the node itself binds, not variable references
+                // — namespacing must leave them alone.
+                sym_src: ov.sym_src.clone(),
+                sym_tgt: ov.sym_tgt.clone(),
             }),
         })
         .collect();
@@ -1780,6 +1784,10 @@ fn rename_join_names_in(expr: &Expr, to: &str, from: &str) -> Expr {
                         src_env: ov.src_env.iter().map(&ren).collect(),
                         tgt_env: ov.tgt_env.iter().map(&ren).collect(),
                         eps: ov.eps,
+                        // Range symbols the node itself binds, not variable
+                        // references — renaming must leave them alone.
+                        sym_src: ov.sym_src.clone(),
+                        sym_tgt: ov.sym_tgt.clone(),
                     }),
                 })
                 .collect(),
