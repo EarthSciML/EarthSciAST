@@ -1145,12 +1145,21 @@ impl EsioProvider {
             return Ok(fields);
         };
         for (key, f) in fields.iter_mut() {
-            let values = f
-                .array
+            // A selected array can carry a non-standard layout, which has no
+            // backing slice; standardising it first keeps the conversion one
+            // pass over contiguous memory rather than an error path.
+            let arr = std::mem::replace(&mut f.array, ArrayD::zeros(IxDyn(&[0])));
+            let mut arr = if arr.is_standard_layout() {
+                arr
+            } else {
+                arr.as_standard_layout().into_owned()
+            };
+            let values = arr
                 .as_slice_mut()
-                .ok_or_else(|| err(format!("provider {key}: array is not contiguous")))?;
+                .expect("a standard-layout array is contiguous");
             apply_unit_conversion(values, conversion, key)
                 .map_err(|e| err(format!("provider {key}: {e}")))?;
+            f.array = arr;
         }
         Ok(fields)
     }
