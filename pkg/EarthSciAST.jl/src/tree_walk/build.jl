@@ -4407,6 +4407,26 @@ function build_evaluator(esm::AbstractDict;
         end
     end
 
+    # ---- Phase 2b Hook 1b: OVERLAP env factors on a DERIVED axis ----
+    # §5.5.6 requires an `join.overlap` gate's envelope factors to be const-array
+    # data — the broad phase runs ONCE at build time. The pushdown rewrite gates
+    # each rewritten binning aggregate on the generated `pd_cell__*` gathers,
+    # which live on the compact derived axis and so cannot exist until the axis
+    # is sized (value invention) and its member factor is fed back (Hook 1
+    # above). Derive them here, immediately after. No-op (byte-identical) for a
+    # document whose overlap-gate factors are already const arrays — which is
+    # every document that predates the rewrite's forward gate.
+    if model !== nothing
+        _envf = _with_param_reads(_preads) do
+            _derive_overlap_env_factors(model, file.index_sets, _ca, _params,
+                (_vi === nothing ? Dict{String,Int}() : _vi.extents), _regfns)
+        end
+        if !isempty(_envf)
+            merge!(_ca, _envf)
+            kwd[:const_arrays] = _ca
+        end
+    end
+
     # ---- Phase 2b Hook 2: gated-provider deferral → post-VI selective fetch ----
     # A GATED provider (its `.esm` data_loader declares a `gated_select`; the
     # runner reports it via `provider_gate_spec`) was SKIPPED by the eager const
