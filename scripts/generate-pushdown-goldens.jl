@@ -3,7 +3,7 @@
 # generate-pushdown-goldens.jl — emit the shared pushdown-rewrite conformance
 # corpus (tests/conformance/pushdown/) from the Julia reference implementation.
 #
-# Two input/golden pairs:
+# Four input/golden pairs (see each builder for what its golden pins):
 #   * pushdown_l1  — the reusable 9-cell isrm-SHAPED L1 fixture (the document
 #     built by test/prepare_pushdown_record_gate_test.jl, frozen here);
 #   * isrm         — the real isrm.esm (point the ISRM_ESM env var at a
@@ -312,6 +312,90 @@ function build_mirror_doc()
 end
 
 # ---------------------------------------------------------------------------
+# TEMPLATE-FACTORED forward fixture — the ACCEPTANCE case.
+#
+# Byte-for-byte the same math as `pushdown_gated_dense`, but the binning body is
+# factored through an `expression_templates` entry with the four rect factors and
+# the two point coordinates passed as BINDINGS. Under esm-spec §9.6.4 Option B
+# that reference SURVIVES load and reaches `desugar_pushdown` unexpanded; §9.6.4
+# rule 2 (a reference denotes its expansion) governs this consumer, so the
+# rewrite MUST fire exactly as it does on the longhand form.
+#
+# What the golden pins, beyond "it fired":
+#
+#   * the derived set, producer, member factor, cell gathers, gate and
+#     `gated_select` record are IDENTICAL to the longhand golden — whether the
+#     pushdown fires does not depend on how the author factored the body;
+#   * the template BODY is untouched — the rewrite re-points the CALL SITE's
+#     `bindings` onto the generated `pd_cell__*` gathers, so the body stays
+#     shared and singly-lowered (that is the ~50x node-lowering win Option B
+#     exists for);
+#   * the generated producer `filter` still carries the FULL-GRID rect
+#     references, read off the expanded body before the call site is rewritten.
+#
+# This is the shape `flatten.jl`'s `template_body_references_coupling_rewritten_variable`
+# tells authors to write ("Bind the value through the template's params"): it now
+# both flattens AND is recognised by the pushdown.
+# ---------------------------------------------------------------------------
+function build_template_body_doc()
+    d = build_gated_dense_doc()
+    d["metadata"]["name"] = "pushdown_template_body"
+    m = d["models"]["Binned"]
+    # The body names ONLY its own params; every geometry factor arrives as a
+    # binding. `r` and `c` are the call site's own range symbols.
+    tpl_contain = _op("and",
+        _op("<=", _ix("xmin", "c"), _ix("ptx", "r")),
+        _op("<",  _ix("ptx", "r"),  _ix("xmax", "c")),
+        _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
+        _op("<",  _ix("pty", "r"),  _ix("ymax", "c")))
+    m["expression_templates"] = Dict{String,Any}(
+        "bin_into_cell" => Dict{String,Any}(
+            "params" => Any["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
+            "body" => _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r"))))
+    m["variables"]["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        Dict{String,Any}("op" => "apply_expression_template", "args" => Any[],
+                         "name" => "bin_into_cell",
+                         "bindings" => Dict{String,Any}(
+                             "xmin"=>"src_W", "ymin"=>"src_S",
+                             "xmax"=>"src_E", "ymax"=>"src_N",
+                             "ptx"=>"px", "pty"=>"py", "wgt"=>"emis_annual"));
+        reduce="+", args=["src_W","src_S","src_E","src_N","px","py","emis_annual"]))
+    return d
+end
+
+# ---------------------------------------------------------------------------
+# RESIDUAL-DIAGNOSTIC fixture — "a join I could not read".
+#
+# `E_PM25` bins records into `src_cells` with a THREE-dimensional box
+# containment and feeds the provider-backed `SR_PM25` through `conc_PM25`: the
+# join position, unmistakably. The recogniser handles 2-D rectangles only, so
+# `_pd_parse_containment` refuses and the rewrite does not fire — which used to
+# be entirely silent and surfaced as an ungated whole-array fetch hours later.
+#
+# The golden here is the DIAGNOSTIC list, not a rewritten document: this fixture
+# asserts that the rewrite leaves the document alone AND says why.
+# ---------------------------------------------------------------------------
+function build_unreadable_join_doc()
+    d = build_gated_dense_doc()
+    d["metadata"]["name"] = "pushdown_unreadable_join"
+    v = d["models"]["Binned"]["variables"]
+    v["pz"]    = _pd_param(["emis_records"])
+    v["src_B"] = _pd_param(["src_cells"])
+    v["src_T"] = _pd_param(["src_cells"])
+    v["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        _op("*", _op("ifelse", _op("and",
+            _op("<=", _ix("src_W","c"), _ix("px","r")), _op("<", _ix("px","r"), _ix("src_E","c")),
+            _op("<=", _ix("src_S","c"), _ix("py","r")), _op("<", _ix("py","r"), _ix("src_N","c")),
+            _op("<=", _ix("src_B","c"), _ix("pz","r")), _op("<", _ix("pz","r"), _ix("src_T","c"))),
+            1.0, 0.0), _ix("emis_annual", "r"));
+        reduce="+", args=["src_W","src_S","src_E","src_N","src_B","src_T",
+                          "px","py","pz","emis_annual"]))
+    return d
+end
+
+# ---------------------------------------------------------------------------
 function main()
     println("emitting pushdown conformance corpus under $OUTDIR")
 
@@ -335,6 +419,23 @@ function main()
     EA.desugar_pushdown(mrr) === mrr || error("mirror golden re-desugars (idempotency broken)")
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_mirror.esm"), mr)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_mirror.rewritten.json"), mrr)
+
+    tb = build_template_body_doc()
+    tbr = EA.desugar_pushdown(tb; model_name="Binned")
+    tbr === tb && error("template-body fixture: desugar_pushdown did not fire")
+    EA.desugar_pushdown(tbr) === tbr || error("template-body golden re-desugars (idempotency broken)")
+    EA.load(tb)          # the fixture must be a VALID document, not just a dict
+    write_canon(joinpath(OUTDIR, "fixtures", "pushdown_template_body.esm"), tb)
+    write_canon(joinpath(OUTDIR, "golden", "pushdown_template_body.rewritten.json"), tbr)
+
+    uj = build_unreadable_join_doc()
+    ujr = EA.desugar_pushdown(uj; model_name="Binned")
+    ujr === uj || error("unreadable-join fixture: desugar_pushdown fired but must not")
+    ujd = EA.pushdown_diagnostics(uj; model_name="Binned")
+    isempty(ujd) && error("unreadable-join fixture: no residual diagnostic emitted")
+    EA.load(uj)          # the fixture must be a VALID document, not just a dict
+    write_canon(joinpath(OUTDIR, "fixtures", "pushdown_unreadable_join.esm"), uj)
+    write_canon(joinpath(OUTDIR, "golden", "pushdown_unreadable_join.diagnostics.json"), ujd)
 
     # The isrm pair regenerates from the COMMITTED input fixture by default: the
     # upstream isrm.esm keeps evolving, and the frozen fixture — not whatever the

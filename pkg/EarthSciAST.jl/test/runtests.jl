@@ -202,6 +202,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("vi_overlap_scaling_test.jl")         # projection-pushdown Wall #1 (candidate-driven)
     include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
     include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
+    include("pushdown_template_ref_test.jl")      # the desugar THROUGH surviving template refs (§9.6.4 Option B)
     include("phase5_clean_auto_test.jl")          # projection-pushdown Phase 5 (LCC@build + fully-automatic)
     include("prepare_pushdown_record_gate_test.jl") # Phase 1 consolidation (public prepare + record-derived gating)
     include("prepare_pushdown_single_member_test.jl") # n=1 support-set pin (cross-language scalarisation footgun)

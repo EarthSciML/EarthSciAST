@@ -24,6 +24,26 @@ is **deep-equal as parsed JSON** to the committed golden.
   ONLY a gate, over the document's own full-grid rect factors; no second derived
   set, producer, member factor or `gated_select` entry is emitted for them, and
   their `shape` / `output_idx` / `ranges` are untouched.
+- `fixtures/pushdown_template_body.esm` — the SAME math as
+  `pushdown_gated_dense`, but the binning body is factored through an
+  `expression_templates` entry with the four rect factors and the two point
+  coordinates passed as **bindings**. Under esm-spec §9.6.4 Option B that
+  reference SURVIVES load and reaches `desugar_pushdown` unexpanded. Its golden
+  pins the invariant that whether the pushdown fires MUST NOT depend on how the
+  author factored the body: the derived set, producer, member factor, cell
+  gathers, gate and `gated_select` record are IDENTICAL to the longhand golden —
+  the two goldens differ in `E_PM25` and nothing else — while the template
+  **body is byte-identical to the input's**. The rewrite re-points the CALL
+  SITE's `bindings` onto the generated `pd_cell__*` gathers, never the shared
+  body, so Option B's single lowering survives the rewrite. (The generated
+  producer `filter` still carries the FULL-GRID rect references, read off the
+  expanded body before the call site is rewritten.)
+- `fixtures/pushdown_unreadable_join.esm` — a `fires: false` fixture: `E_PM25`
+  bins records into `src_cells` with a THREE-dimensional box containment and
+  feeds the provider-backed `SR_PM25`, so it is unmistakably in the join
+  position, but the recogniser handles 2-D rectangles only. The rewrite MUST
+  leave the document unchanged AND MUST report why — its golden is the
+  `pushdown_diagnostics` list, not a rewritten document.
 - `fixtures/isrm.esm` — the real `isrm.esm` (from the isrm.esm repo), loaded
   with its metaparameter defaults and re-emitted via `serialize_esm_file` so
   the committed input is self-contained (no open metaparameters). FROZEN: see
@@ -56,14 +76,28 @@ For each manifest fixture, a binding adapter MUST:
    document→document transform).
 2. Run its `desugar_pushdown` (passing `model_name` when the manifest sets
    one; `null` means single-model auto-selection).
-3. Assert the output **deep-equals** the parsed `golden` — comparison on
+3. When the fixture carries a `golden` (the default — `fires` absent or true):
+   assert the output **deep-equals** the parsed `golden` — comparison on
    parsed JSON values: object key order is free, numbers compare by value
-   (`0` == `0.0`), lists compare element-wise in order.
-4. Assert **idempotency**: running `desugar_pushdown` on the golden returns
-   it UNCHANGED (the provenance-record guard; no
-   `pd_support__pd_support__…` second layer).
+   (`0` == `0.0`), lists compare element-wise in order — and assert
+   **idempotency**: running `desugar_pushdown` on the golden returns it
+   UNCHANGED (the provenance-record guard; no `pd_support__pd_support__…`
+   second layer).
+   When the fixture declares `"fires": false`: assert the rewrite returned the
+   input document UNCHANGED (same object / borrowed, per the binding's
+   convention).
+4. When the fixture carries a `diagnostics` path: assert the binding's
+   `pushdown_diagnostics` returns a list deep-equal to that golden. Records
+   carry `code`, `variable`, `consumer`, `array`, `index_set`, `reason`
+   (`predicate_unparsed` | `surviving_template_reference`), `template` (the
+   template name, or `null`) and `consequence`, sorted by
+   `(variable, consumer, array)`. The human-readable warning text a binding
+   also emits is NOT part of the contract; this record set is.
 5. Assert **input purity**: the input document is not mutated by the rewrite
    (the rewrite returns a fresh document).
+
+New fixtures need no adapter code: the manifest drives the loop, and the two
+optional keys above (`fires`, `diagnostics`) are the whole vocabulary.
 
 Byte-level equality is deliberately NOT asserted across bindings — the
 committed files are canonical JSON (recursively sorted keys, 2-space indent,

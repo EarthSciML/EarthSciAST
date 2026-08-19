@@ -1,0 +1,12 @@
+[
+  {
+    "array": "SR_PM25",
+    "code": "pushdown_join_unrecognised",
+    "consequence": "the provider-backed array is fetched WHOLESALE — no derived support set is produced and no gate is emitted",
+    "consumer": "conc_PM25",
+    "index_set": "src_cells",
+    "reason": "predicate_unparsed",
+    "template": null,
+    "variable": "E_PM25"
+  }
+]

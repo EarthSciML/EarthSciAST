@@ -36,20 +36,37 @@ _deep_eq(a, b) = isequal(a, b)
     for fixture in manifest["fixtures"]
         id = String(fixture["id"])
         input_path = joinpath(_TESTS_DIR, String(fixture["input"]))
-        golden_path = joinpath(_TESTS_DIR, String(fixture["golden"]))
+        # A fixture either carries a rewrite `golden` (the pattern fires) or
+        # declares `fires: false` and pins the residual `diagnostics` instead.
+        fires = get(fixture, "fires", true) !== false
+        golden_path = fires ? joinpath(_TESTS_DIR, String(fixture["golden"])) : ""
+        dg = get(fixture, "diagnostics", nothing)
+        diag_path = dg === nothing ? nothing : joinpath(_TESTS_DIR, String(dg))
         mn = get(fixture, "model_name", nothing)
 
         @testset "$(id)" begin
-            @test isfile(input_path) && isfile(golden_path)
+            @test isfile(input_path)
             input = JSON.parsefile(input_path)
             pristine = JSON.parsefile(input_path)
-            golden = JSON.parsefile(golden_path)
 
             rewritten = mn === nothing ? EA.desugar_pushdown(input) :
                         EA.desugar_pushdown(input; model_name=String(mn))
-            @test rewritten !== input                 # the pattern fired
-            @test _deep_eq(rewritten, golden)         # matches the golden
-            @test EA.desugar_pushdown(rewritten) === rewritten   # idempotent
+            if fires
+                @test isfile(golden_path)
+                golden = JSON.parsefile(golden_path)
+                @test rewritten !== input                 # the pattern fired
+                @test _deep_eq(rewritten, golden)         # matches the golden
+                @test EA.desugar_pushdown(rewritten) === rewritten   # idempotent
+            else
+                # A `fires: false` fixture is NOT rewritten — and says why.
+                @test rewritten === input
+            end
+            if diag_path !== nothing
+                @test isfile(diag_path)
+                diags = mn === nothing ? EA.pushdown_diagnostics(input) :
+                        EA.pushdown_diagnostics(input; model_name=String(mn))
+                @test _deep_eq(diags, JSON.parsefile(diag_path))
+            end
             @test _deep_eq(input, pristine)           # input not mutated
         end
     end
