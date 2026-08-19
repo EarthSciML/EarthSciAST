@@ -155,6 +155,45 @@ def test_gated_fetch_malformed_axis_and_missing_set():
         _fetch_gated_providers({"L.SR": (prov, gate)}, _IDX, {"faq1": [1]}, {}, 0.0, [])
 
 
+def test_gated_fetch_sibling_loaders_do_not_overwrite_each_other():
+    """Sibling loaders exposing the SAME variable name are DIFFERENT slabs.
+
+    ``isrm.esm`` states plume rise by fetching one zarr array at three emission
+    layers through three sibling loaders — ``ISRM_SR_L0.SOA``,
+    ``ISRM_SR_L1.SOA``, ``ISRM_SR_L2.SOA`` — differing in nothing but the
+    ``{"fixed": [layer]}`` axis of their ``gated_select``. Publishing each
+    fetched slab under every same-TAIL alias made all three providers claim all
+    three keys, so whichever was written last silently won for all of them and
+    every layer of the model was contracted against one arbitrary sibling's
+    slab. Measured on isrm.esm at ISRM_FIRSTN=200 that moved sum(deathsK) 6.6%.
+    """
+    full = _full(n_layer=3, n_src=6, n_rcv=3)
+    names = [f"SR_L{L}.SOA" for L in range(3)]
+    provs = {L: _GatedMock(full) for L in range(3)}
+    gated = {
+        f"SR_L{L}.SOA": (
+            provs[L],
+            {
+                "axes": [{"fixed": [L]}, {"gated_by": "supp"}, "all"],
+                "applies_to": ["SOA"],
+            },
+        )
+        for L in range(3)
+    }
+    out = _fetch_gated_providers(
+        gated, _IDX, {"faq1": [2, 4, 6]}, {"faq1": 3}, 0.0, names
+    )
+    for L in range(3):
+        np.testing.assert_array_equal(out[f"SR_L{L}.SOA"], full[L][[1, 3, 5], :])
+    # the three slabs really do differ, so no overwrite could hide in an
+    # accidental equality
+    assert not np.array_equal(out["SR_L0.SOA"], out["SR_L1.SOA"])
+    assert not np.array_equal(out["SR_L1.SOA"], out["SR_L2.SOA"])
+    # the bare tail is claimed by all three and owned by none: left unwritten
+    # rather than arbitrarily assigned
+    assert "SOA" not in out
+
+
 def test_neutral_selection_to_native():
     assert _neutral_selection_to_native(["all", [0, 2], [1]]) == {
         "axes": ["all", {"indices": [0, 2]}, {"indices": [1]}]

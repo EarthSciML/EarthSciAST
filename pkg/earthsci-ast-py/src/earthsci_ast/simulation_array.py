@@ -1363,6 +1363,70 @@ def _const_factor_alias_names(all_var_names: Any, bare: str) -> set[str]:
     return keys_out
 
 
+def _gated_alias_claims(gated: dict[str, Any], all_var_names: Any) -> dict[str, set[str]]:
+    """How many gated providers resolve to each const-array key.
+
+    :func:`_const_factor_alias_names` resolves a bare authored name against
+    EVERY variable whose final dotted segment matches it. That is exactly what a
+    document-scoped ``member_factor`` wants, and it is WRONG for a gated
+    provider: sibling loaders may expose the SAME variable name —
+    ``ISRM_SR_L0.SOA``, ``ISRM_SR_L1.SOA`` and ``ISRM_SR_L2.SOA`` are three
+    DIFFERENT slabs of one zarr store, told apart only by which loader they came
+    from — so tail-matching makes each of those providers claim all three
+    aliases, and whichever one is written last silently wins for all of them.
+    Counting the claims up front is what lets a provider tell "mine" from
+    "a sibling's"."""
+    claims: dict[str, set[str]] = {}
+    for key, entry in gated.items():
+        gate = _unbundle_gated_gate(entry)
+        if gate is None:
+            continue
+        for name in gate.get("applies_to") or ():
+            for a in _const_factor_alias_names(all_var_names, str(name)):
+                claims.setdefault(a, set()).add(str(key))
+    return claims
+
+
+def _unbundle_gated_gate(entry: Any) -> Any:
+    """The gate dict of a stashed gated entry, in the three accepted shapes."""
+    if isinstance(entry, dict) and "prov" in entry:
+        gate = entry.get("gate")
+        return gate if gate is not None else getattr(entry["prov"], "gate_spec", None)
+    if isinstance(entry, tuple) and len(entry) == 2:
+        prov, gate = entry
+        return gate if gate is not None else getattr(prov, "gate_spec", None)
+    return getattr(entry, "gate_spec", None)
+
+
+def _gated_const_keys(
+    claims: dict[str, set[str]], all_var_names: Any, key: str, nm: str
+) -> list[str]:
+    """The const-array keys ONE gated provider may publish ``nm`` under.
+
+    A provider claims an alias when it is the SOLE claimant, or when the alias
+    IS its own provider key — the post-flatten ``"<Loader>.<var>"`` spelling of
+    exactly that provider's variable, which no sibling can also be. An alias
+    several providers claim and none owns is AMBIGUOUS and is left unwritten: a
+    missing const array is a loud failure at gather time, an arbitrarily chosen
+    one is a silently wrong answer."""
+    aliases = _const_factor_alias_names(all_var_names, nm)
+    ks = [
+        a
+        for a in sorted(aliases)
+        if len(claims.get(a, {key})) == 1 or a == key
+    ]
+    if not ks:
+        raise SimulationError(
+            f"gated provider '{key}' variable '{nm}': every const-array key it "
+            f"resolves to ({sorted(aliases)}) is also claimed by another gated "
+            f"provider, so the fetched slab has no unambiguous name to be "
+            f'published under. Key the provider "<Loader>.<var>" so its own '
+            f"spelling can win, or give the sibling loaders' variables distinct "
+            f"names"
+        )
+    return ks
+
+
 def _feed_back_vi_members(
     index_sets: dict[str, Any],
     vi_members: dict[str, list],
@@ -1472,6 +1536,9 @@ def _fetch_gated_providers(
     out: dict[str, np.ndarray] = {}
     if not gated:
         return out
+    # Who may publish under which const-array key — computed over ALL the gates
+    # up front, because "am I the only claimant?" is not a per-provider question.
+    alias_claims = _gated_alias_claims(gated, all_var_names)
     set_to_faq = {
         str(sname): str(is_["from_faq"])
         for sname, is_ in (index_sets or {}).items()
@@ -1583,7 +1650,9 @@ def _fetch_gated_providers(
                 f"{arr.shape[gated_pos_out]} but the gating set extent is {gated_extent}"
             )
         for name in applies:
-            for k in _const_factor_alias_names(all_var_names, str(name)):
+            for k in _gated_const_keys(
+                alias_claims, all_var_names, str(key), str(name)
+            ):
                 out[k] = arr
     return out
 

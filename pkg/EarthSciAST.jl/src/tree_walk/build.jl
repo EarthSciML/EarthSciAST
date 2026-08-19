@@ -4134,6 +4134,58 @@ function _const_factor_aliases(model, bare::AbstractString)
     return keys_out
 end
 
+# The const-array keys ONE GATED PROVIDER may publish its fetched variable `nm`
+# under, given every gate issued in the same fetch.
+#
+# `_const_factor_aliases` resolves a bare authored name against EVERY model
+# variable whose final dotted segment matches it. That is exactly what a
+# document-scoped `member_factor` wants, and it is WRONG for a gated provider:
+# sibling loaders may expose the SAME variable name — `ISRM_SR_L0.SOA`,
+# `ISRM_SR_L1.SOA` and `ISRM_SR_L2.SOA` are three DIFFERENT slabs of one zarr
+# store, told apart only by which loader they came from — so tail-matching makes
+# each of those three providers claim all three aliases. Whichever provider the
+# `gated` collection happens to visit last then silently wins for all of them,
+# and every model array is contracted against one arbitrary sibling's slab. The
+# collection is a `Dict`, so which sibling wins is hash order: a wrong answer
+# that is stable within a run, differs per variable name, and raises nothing.
+#
+# A provider claims an alias when it is the SOLE claimant, or when the alias IS
+# its own provider key — the post-flatten `"<Loader>.<var>"` spelling of exactly
+# that provider's variable, which no sibling can also be. An alias that several
+# providers claim and none owns is AMBIGUOUS and is left unwritten: a missing
+# const array is a loud failure at gather time, an arbitrarily chosen one is
+# this bug.
+function _gated_alias_claims(gated::AbstractDict, model)
+    claims = Dict{String,Set{String}}()      # alias => the provider keys claiming it
+    for (key, entry) in gated
+        _, gate = _unbundle_gated(entry)
+        gate === nothing && continue
+        applies = get(gate, "applies_to", nothing)
+        applies === nothing && continue
+        for name in applies
+            for a in _const_factor_aliases(model, String(name))
+                push!(get!(claims, a, Set{String}()), String(key))
+            end
+        end
+    end
+    return claims
+end
+
+function _gated_const_keys(claims::AbstractDict, model, key::AbstractString,
+                           nm::AbstractString)
+    aliases = _const_factor_aliases(model, nm)
+    ks = String[a for a in aliases
+                if length(get(claims, a, Set{String}([String(key)]))) == 1 ||
+                   a == String(key)]
+    isempty(ks) && throw(RefreshError(
+        "gated provider '$key' variable '$nm': every const-array key it resolves " *
+        "to ($(sort!(collect(aliases)))) is also claimed by another gated " *
+        "provider, so the fetched slab has no unambiguous name to be published " *
+        "under. Key the provider \"<Loader>.<var>\" so its own spelling can win, " *
+        "or give the sibling loaders' variables distinct names"))
+    return ks
+end
+
 # ---- Phase 2b Hook 1 helper: members-fed-back-as-const-factor ----------------
 # Scan the document index-set registry for `kind:"derived"` sets that name a
 # `member_factor`; for each, surface its value-invention MEMBERS (the invented,
@@ -4193,6 +4245,9 @@ end
 function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64, model)
     out = Dict{String,Any}()
     (vi === nothing) && isempty(gated) && return out
+    # Who may publish under which const-array key — computed over ALL the gates
+    # up front, because "am I the only claimant?" is not a per-provider question.
+    alias_claims = _gated_alias_claims(gated, model)
     # derived set name → its producer faq id (for `gated_by` resolution).
     set_to_faq = Dict{String,String}()
     if index_sets !== nothing
@@ -4274,7 +4329,7 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
                 size(arr, gated_pos_out) == gated_extent || throw(RefreshError(
                     "gated provider '$key' variable '$nm': fetched compact axis is " *
                     "$(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"))
-                for k in _const_factor_aliases(model, nm)
+                for k in _gated_const_keys(alias_claims, model, key, nm)
                     out[k] = arr
                 end
             end
@@ -4293,7 +4348,7 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
                 size(arr, gated_pos_out) == gated_extent || throw(RefreshError(
                     "gated provider '$key' variable '$nm' (fallback slice): compact axis " *
                     "is $(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"))
-                for k in _const_factor_aliases(model, nm)
+                for k in _gated_const_keys(alias_claims, model, key, nm)
                     out[k] = arr
                 end
             end

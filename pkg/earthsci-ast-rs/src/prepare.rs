@@ -1362,8 +1362,18 @@ pub fn prepare(
         }
         // Surface the compact slab under the MODEL variable the coupling routes
         // this provider onto (its local tail — the authored spelling), falling
-        // back to the gate's loader-variable tail. ONE registry entry per slab:
-        // the SR slabs are hundreds of MB and aliasing would deep-copy.
+        // back to the gate's loader-variable tail. ONE registry entry per slab,
+        // and it must be THIS provider's own: the SR slabs are hundreds of MB so
+        // aliasing would deep-copy, and — load-bearing for CORRECTNESS, not only
+        // for memory — sibling loaders may expose the SAME variable name.
+        // `isrm.esm` fetches one zarr array at three emission layers through
+        // `ISRM_SR_L0.SOA` / `ISRM_SR_L1.SOA` / `ISRM_SR_L2.SOA`, which differ in
+        // nothing but the `{"fixed": [layer]}` axis of their `gated_select`.
+        // Publishing a slab under every key with the same dotted TAIL (as the
+        // Julia and Python hooks once did) makes all three providers claim all
+        // three keys, so whichever is written last silently wins for all of them
+        // and every layer is contracted against one arbitrary sibling's slab.
+        // Keep this a per-provider lookup by `key`; never a name-tail expansion.
         let target = pd_coupling
             .iter()
             .find(|(frm, _)| frm == &key)
