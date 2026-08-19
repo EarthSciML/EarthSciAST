@@ -4087,6 +4087,29 @@ function _component_template_reg(file::EsmFile, model_name)
     return get(ct, "models.$name", nothing)
 end
 
+"""
+    expanded_model(file::EsmFile, model_name=nothing) -> Model
+
+A deep copy of the selected model with every surviving Option-B
+`apply_expression_template` reference (esm-spec §9.6.4) expanded against the
+document's `component_templates` — the same expansion `build_evaluator`
+performs before compiling, exposed as a public seam so downstream tools
+(e.g. EarthSciASTDiff, which differentiates the tree) analyze the SAME tree
+the evaluator compiles. `file` is not mutated.
+
+Model selection matches [`build_evaluator`](@ref): `model_name = nothing`
+selects the document's only model, or throws `E_TREEWALK_AMBIGUOUS_MODEL`
+when there are several; an unknown name throws `E_TREEWALK_NO_MODEL`.
+A document with no surviving references returns the plain copy.
+"""
+function expanded_model(file::EsmFile,
+                        model_name::Union{Nothing,AbstractString}=nothing)::Model
+    model = deepcopy(_select_model(file, model_name))
+    reg = _component_template_reg(file, model_name)
+    reg === nothing || _expand_model_refs!(model, reg)
+    return model
+end
+
 # Value-invention materialisation runs only through the AbstractDict
 # front-door (which owns the document-scoped index-set registry the pass
 # needs); default the internal extents/vars to empty here so a direct
