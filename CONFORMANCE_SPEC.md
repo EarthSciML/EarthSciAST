@@ -1139,7 +1139,7 @@ The mirrored arm is a **rider, not a trigger**: mirrors are collected only after
 the forward pattern has fixed `C` and `R`. A document containing only mirrored
 binning aggregates is not rewritten.
 
-**Surviving template references (esm-spec §9.6.4).** Under Option B a
+**Surviving template references (esm-spec §9.6.4).** Under Option B an
 `apply_expression_template` reference survives load, so the binning body handed
 to the desugar MAY be a reference rather than the containment `ifelse` itself.
 esm-spec §9.6.4 rule 4 — "patterns do not see through surviving references" —
