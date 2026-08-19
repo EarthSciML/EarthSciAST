@@ -281,6 +281,26 @@ Semantics are defined by the image: **a reference denotes exactly what its expan
 Every consumer MAY expand — wholly, per node, or not at all — but observable behavior MUST be
 as if it evaluated `Expand(tree)`: numeric results bit-identical, diagnostics per §8.
 
+*This binds DECISIONS, not just values (added 2026-08-19).* §7.3's opacity is a property of the
+**rewrite engine**; every other consumer lives here, under §7.4. A consumer whose control flow
+turns on the *shape* of an expression — a pattern recogniser, a cost model, a pushdown — is
+observably different on `tree` and on `Expand(tree)` if it reads the reference-preserving form,
+even when the numbers it eventually produces are identical. That is exactly what happened to the
+projection-pushdown desugar (`pushdown_rewrite.*`, CONFORMANCE_SPEC §5.5.7): it looks for a
+containment `ifelse` inside a binning aggregate, an author factored that body through a
+template, the `ifelse` became invisible, the rewrite silently declined, and the provider array it
+would have gated was fetched **wholesale** — a 330 GB fetch on `isrm.esm` surfacing hours later
+as a memory failure, with every number still correct. §7.3's "the sharpest failure mode is
+silent, not loud" generalises past the engine.
+
+Two lessons are now spec text (esm-spec §9.6.4 rule 4 "Scope of this rule", CONFORMANCE_SPEC
+§5.5.7). First: such a consumer MUST decide on `Expand(tree)`. Second: deciding on the expanded
+view does **not** oblige it to expand what it EMITS — the pushdown matches on the expansion and
+then rewrites the reference-preserving CALL SITE (the `bindings` values), so the shared body
+stays singly-lowered and the ~50× win this RFC exists for is untouched. A consumer that cannot
+express its edit at the call site (a rect factor named *free* in a template body) must reject
+rather than half-apply.
+
 ### 7.5 The emitted form
 
 `parse → emit` produces a **self-contained, reference-preserving** document:
