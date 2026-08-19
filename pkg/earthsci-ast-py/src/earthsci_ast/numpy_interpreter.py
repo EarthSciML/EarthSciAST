@@ -213,6 +213,21 @@ class NumpyInterpreterError(EarthSciAstError):
     """Raised when an expression cannot be evaluated by the NumPy interpreter."""
 
 
+class ComplexValueError(EarthSciAstError):
+    """An expression left the reals where the evaluable core requires a real
+    value (esm-spec §4.3.4) — see :func:`_require_real`.
+
+    Deliberately NOT a :class:`NumpyInterpreterError`. Half the interpreter is
+    built out of fast paths that ``except NumpyInterpreterError`` in order to
+    DECLINE to a slower path, and the tolerant build-time observed hoist catches
+    the same class in order to SKIP an observed whose inputs are not yet bound.
+    Neither reaction is right for a value that left the reals: there is no
+    slower path that would produce a real answer, and the observed is not
+    unresolved — it is wrong. Raising outside that hierarchy makes the
+    diagnostic propagate to the caller intact.
+    """
+
+
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
     """Raised when an unlowered rewrite-target operator reaches the simulator's
     RHS evaluator — a spatial/right-hand-side ``D``, one of the open-tier sugar
@@ -624,6 +639,47 @@ def _apply_div(a: Any, b: Any) -> Any:
 
 def _apply_pow(a: Any, b: Any) -> Any:
     return a**b
+
+
+def _require_real(value: Any, where: str) -> Any:
+    """Reject a COMPLEX evaluation result at the point where it would otherwise
+    be cast to a real (esm-spec §4.3.4 — the evaluable core is real-valued).
+
+    ``^`` with a NEGATIVE base and a FRACTIONAL exponent leaves the reals. On a
+    numpy array operand numpy already answers ``nan``, matching the Rust
+    binding; but on a PYTHON scalar operand Python's own ``**`` answers a
+    ``complex``, and casting that to a float either raises an unnamed
+    ``TypeError`` or — on a numpy scalar, under ``astype``/``np.asarray`` —
+    silently DISCARDS the imaginary part behind a ``ComplexWarning`` nothing
+    escalates, yielding a plausible wrong number. Measured on
+    ``x^0.333333333`` with ``x = -2.5``: Julia raises ``DomainError``, Rust
+    gives ``NaN``, and the discarded-imaginary cast gives 0.6786044051723126 —
+    the worst of the three outcomes, because it looks like an answer.
+
+    Checked HERE, at the cast, rather than inside :func:`_apply_pow`, so an
+    ``ifelse`` branch that is evaluated but not SELECTED (the interpreter's
+    ``ifelse`` is eager) cannot fail a model whose taken branch is perfectly
+    real — the complex value has to actually escape as a result.
+    """
+    # A complex DTYPE with an all-zero imaginary part discards NOTHING, and is
+    # routinely how an EAGER `ifelse` returns: both branches are evaluated and
+    # promoted to a common dtype, so an untaken complex branch leaves the taken
+    # real one spelled `1+0j`. Only a NONZERO imaginary part is the bug; a zero
+    # one is projected back onto the reals, which is what keeps a model whose
+    # TAKEN branch is perfectly real from failing on a branch it never selects.
+    if not np.iscomplexobj(value):
+        return value
+    if not bool(np.any(np.imag(value) != 0)):
+        real = np.real(value)
+        return real if isinstance(value, np.ndarray) else float(real)
+    raise ComplexValueError(
+            f"{where}: expression evaluated to a COMPLEX value ({value!r}); the "
+            f"evaluable core is real-valued (esm-spec §4.3.4). This is what '^' "
+            f"with a negative base and a fractional exponent produces on a scalar "
+            f"operand — casting it to a real would silently discard the imaginary "
+            f"part and return a plausible wrong number"
+        )
+    return value
 
 
 def _apply_atan2(a: Any, b: Any) -> Any:
@@ -1621,7 +1677,9 @@ def _materialize_map(
 
         with _bound_index_box(ctx, out_syms, out_ranges_exp):
             val = _compile_expr(body)(ctx)
-        res = np.asarray(val, dtype=float)
+        # `np.asarray(..., dtype=float)` / `.astype(float)` below would DISCARD
+        # an imaginary part behind a ComplexWarning; refuse instead.
+        res = np.asarray(_require_real(val, "arrayop map body"), dtype=float)
         if res.shape == tuple(out_shape):
             return res
         return np.broadcast_to(res, tuple(out_shape)).astype(float)
@@ -2525,7 +2583,7 @@ def _join_admits(gates: list[_JoinGate], binding: dict[str, int]) -> bool:
 
 def _filter_admits(filter_expr: Expr, ctx: EvalContext) -> bool:
     """Evaluate a scalar boolean filter predicate for the current binding."""
-    val = np.asarray(eval_expr(filter_expr, ctx))
+    val = np.asarray(_require_real(eval_expr(filter_expr, ctx), "aggregate filter"))
     if val.size != 1:
         raise NumpyInterpreterError(
             "aggregate 'filter' predicate must evaluate to a scalar for each "
@@ -2796,7 +2854,10 @@ def _eval_arrayop_reduce_vectorized(
             # value is immediately discarded by the mask, so silence the transient
             # divide/invalid warnings (mirrors the batched-leaf kernel).
             with np.errstate(divide="ignore", invalid="ignore"):
-                term = np.asarray(_compile_expr(expr.expr)(ctx), dtype=float)
+                term = np.asarray(
+                    _require_real(_compile_expr(expr.expr)(ctx), "aggregate body"),
+                    dtype=float,
+                )
                 term = np.broadcast_to(term, combined_shape)
                 if filter_expr is not None:
                     mask = np.asarray(_compile_expr(filter_expr)(ctx))
@@ -3138,7 +3199,7 @@ def _reduce_over_gated(
                 ctx.locals[s] = v
             if filter_expr is not None and not _filter_admits(filter_expr, ctx):
                 continue
-            val = float(eval_expr(body, ctx))
+            val = float(_require_real(eval_expr(body, ctx), "aggregate body"))
             acc = _reduce_step(reducer, acc, val)
     finally:
         ctx.locals = prev
@@ -3181,7 +3242,7 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
 
     out = np.zeros(tuple(shape), dtype=float)
     for region, value_expr in zip(regions, values):
-        v = eval_expr(value_expr, ctx)
+        v = _require_real(eval_expr(value_expr, ctx), "makearray region value")
         slicer = tuple(slice(int(lo) - 1, int(hi)) for lo, hi in region)
         if isinstance(v, np.ndarray):
             out[slicer] = v

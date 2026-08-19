@@ -32,6 +32,7 @@ from .numpy_interpreter import (
     EvalContext,
     NumpyInterpreterError,
     _RaggedRange,
+    _require_real,
     _resolve_range_spec,
     eval_expr,
     ragged_factor_scope,
@@ -705,6 +706,10 @@ def _materialize_observeds(
                 file=_sys.stderr,
                 flush=True,
             )
+        # A COMPLEX result (a `^` with a negative base and a fractional exponent
+        # on a scalar operand) must not be cast to a real here — see
+        # `numpy_interpreter._require_real`.
+        val = _require_real(val, f"observed '{name}'")
         if isinstance(val, np.ndarray) and val.ndim > 0:
             ctx.derived_rings[name] = val
         else:
