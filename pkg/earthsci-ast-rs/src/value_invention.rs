@@ -40,6 +40,7 @@ use crate::aggregate::{ReduceKind, effective_reduce_kind};
 use crate::cadence::{self, Cadence};
 use crate::relational::{self, Key, Num, SemiringOp, group_aggregate};
 use crate::types::{Expr, IndexSet, Model};
+use crate::broad_phase::OverlapIndex;
 
 /// A value-invention build-time materialisation error (the Rust analog of
 /// Julia's `TreeWalkError` value-invention codes).
@@ -979,11 +980,14 @@ enum ViJoinGate {
     /// sym_r)` iff the `(pos_l, pos_r)` range positions (1-based, matching the
     /// enumeration bindings) are in the prebuilt broad-phase candidate set — the
     /// envelope candidacy computed ONCE from the const-array envelope factors via
-    /// [`crate::broad_phase`].
+    /// [`crate::broad_phase`]. The same index also DRIVES enumeration
+    /// ([`vi_enumerate_join`]), through the policy
+    /// [`crate::broad_phase::overlap_drive_plan`] shared with the dense
+    /// aggregate expansion.
     Overlap {
         sym_l: String,
         sym_r: String,
-        candidates: HashSet<(i64, i64)>,
+        index: OverlapIndex,
     },
 }
 
@@ -998,7 +1002,7 @@ fn overlap_candidate_set(
     tgt_env: &[String],
     ctx: &ViCtx,
     eps: f64,
-) -> Result<HashSet<(i64, i64)>, ValueInventionError> {
+) -> Result<OverlapIndex, ValueInventionError> {
     let src_envs =
         crate::broad_phase::envelope_vectors(src_env, ctx.const_arrays).map_err(ValueInventionError)?;
     let tgt_envs =
@@ -1006,11 +1010,8 @@ fn overlap_candidate_set(
     let pairs = crate::broad_phase::broad_phase_candidates(&src_envs, &tgt_envs, eps);
     // Broad-phase pairs are 0-based positions; the enumeration bindings are
     // 1-based (`vi_range_values` binds interval/categorical position p to p), so
-    // shift to 1-based to match.
-    Ok(pairs
-        .into_iter()
-        .map(|(q, c)| ((q as i64) + 1, (c as i64) + 1))
-        .collect())
+    // the index shifts them to 1-based to match.
+    Ok(OverlapIndex::from_zero_based(&pairs))
 }
 
 /// Structural arity check on an overlap-clause env-factor list (1 rings /
@@ -1057,11 +1058,11 @@ fn vi_resolve_join(
             // All factors of one side share that index set, so the first names it.
             let sym_l = vi_join_index_sym(&src_env[0], producer_ranges, ctx)?;
             let sym_r = vi_join_index_sym(&tgt_env[0], producer_ranges, ctx)?;
-            let candidates = overlap_candidate_set(&src_env, &tgt_env, ctx, eps)?;
+            let index = overlap_candidate_set(&src_env, &tgt_env, ctx, eps)?;
             gates.push(ViJoinGate::Overlap {
                 sym_l,
                 sym_r,
-                candidates,
+                index,
             });
         } else if let Some(on) = clause.get("on").and_then(|v| v.as_array()) {
             for pair in on {
@@ -1118,11 +1119,11 @@ fn vi_join_ok(
             ViJoinGate::Overlap {
                 sym_l,
                 sym_r,
-                candidates,
+                index,
             } => {
                 let l = *bindings.get(sym_l).ok_or_else(|| unbound(sym_l))?;
                 let r = *bindings.get(sym_r).ok_or_else(|| unbound(sym_r))?;
-                if !candidates.contains(&(l, r)) {
+                if !index.contains(l, r) {
                     return Ok(false);
                 }
             }
@@ -1160,21 +1161,36 @@ where
         ViJoinGate::Overlap {
             sym_l,
             sym_r,
-            candidates,
-        } => Some((sym_l, sym_r, candidates)),
+            index,
+        } => Some((sym_l, sym_r, index)),
         _ => None,
     });
-    let Some((sym_l, sym_r, candidates)) = driver else {
+    let Some((sym_l, sym_r, index)) = driver else {
         return vi_enumerate(ranges, ctx, visit); // full product — unchanged behaviour
     };
+    // Every producer range symbol is FREE here (a producer binds nothing up
+    // front), so the SHARED policy — the same
+    // [`crate::broad_phase::overlap_drive_plan`] the dense aggregate expansion
+    // applies, differing only in loop shape because a value-invention range may
+    // be ragged and is therefore resolved lazily — plans the PAIR drive. A gate
+    // whose symbols are not this node's range symbols cannot be driven at all
+    // and falls back to the untouched full product.
+    let syms = vi_order_syms(ranges)?;
+    let free = |s: &String| syms.iter().any(|x| x == s);
+    if !(free(sym_l) && free(sym_r)) {
+        return vi_enumerate(ranges, ctx, visit);
+    }
+    let plan = crate::broad_phase::overlap_drive_plan(index, None, None, None);
+    if !matches!(plan, crate::broad_phase::DrivePlan::Pairs) {
+        return vi_enumerate(ranges, ctx, visit);
+    }
     // DETERMINISTIC (pos_l, pos_r)-ascending drive order (member set is
     // canonicalised downstream, but a sorted drive keeps any order-sensitive
     // reduction stable).
-    let mut pairs: Vec<(i64, i64)> = candidates.iter().copied().collect();
-    pairs.sort_unstable();
+    let pairs = index.sorted_pairs().to_vec();
     // The remaining ungated symbols, in the topological order the full product
     // visits them, minus the two driven symbols.
-    let rest: Vec<String> = vi_order_syms(ranges)?
+    let rest: Vec<String> = syms
         .into_iter()
         .filter(|s| s != sym_l && s != sym_r)
         .collect();
