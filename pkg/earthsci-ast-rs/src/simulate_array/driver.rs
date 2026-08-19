@@ -82,6 +82,7 @@ impl ArrayCompiled {
         let mut dy = vec![0.0f64; self.n_states];
         let mut stats = RhsStats::default();
         let mut scratch = RhsScratch::new(&self.var_shapes);
+        scratch.set_const_arrays(Rc::clone(&self.const_scope));
         evaluate_rhs_with_scratch(
             &self.rhs_rules,
             &self.observed_rules,
@@ -105,7 +106,9 @@ impl ArrayCompiled {
     /// steady-state vectorized RHS allocates nothing.
     #[doc(hidden)]
     pub fn debug_new_scratch(&self) -> RhsScratch {
-        RhsScratch::new(&self.var_shapes)
+        let mut s = RhsScratch::new(&self.var_shapes);
+        s.set_const_arrays(Rc::clone(&self.const_scope));
+        s
     }
 
     /// Build a scratch with the compiled tape installed (Step 3b) — what the
@@ -118,6 +121,7 @@ impl ArrayCompiled {
     #[doc(hidden)]
     pub fn debug_new_scratch_taped(&self) -> RhsScratch {
         let mut s = RhsScratch::new(&self.var_shapes);
+        s.set_const_arrays(Rc::clone(&self.const_scope));
         if !tape_disabled() && !vec_disabled() {
             let (prog, _report) = self.build_tape(&HashSet::new());
             s.install_tape(Rc::new(prog), Rc::new(self.observed_rules.clone()));
@@ -388,6 +392,12 @@ impl ArrayCompiled {
         // Validate the override names and build the positional param vector
         // and the initial state vector `u0` (loaded-field / coordinate
         // `ic`s folded in — see [`Self::build_initial_state`]).
+        // §5.5.5: the per-cell oracle LATCHES an out-of-range const-array gather
+        // rather than raising (the tree walk returns a bare `Value`). Clear the
+        // latch before the solve and drain it at every exit below, so a
+        // trajectory built on a const-array bug fails loudly instead of carrying
+        // the `NaN` the gather substituted.
+        crate::simulate_array::take_const_array_oob();
         let param_vec = self.build_param_vec(&params_owned)?;
         let ic_vec = self.build_initial_state(&ics_owned, &param_vec)?;
 
@@ -465,6 +475,7 @@ impl ArrayCompiled {
             // static ring, and each RHS eval starts from empty `derived_rings`.
             &static_rings_cell,
             &self.forcing,
+            &self.const_scope,
         );
         drop(static_rings_cell);
 
@@ -495,6 +506,7 @@ impl ArrayCompiled {
                     false,
                     &mut RhsStats::default(),
                     None,
+                    &self.const_scope,
                 );
                 for rule in &varying_rules {
                     let name = observed_rule_var(rule);
@@ -560,6 +572,9 @@ impl ArrayCompiled {
                 &static_obs,
                 &varying_rules,
             );
+            if let Some(details) = crate::simulate_array::take_const_array_oob() {
+                return Err(crate::compile_error::CompileError::InterpreterBuildError { details }.into());
+            }
             return Ok(Solution {
                 time,
                 state,
@@ -680,6 +695,9 @@ impl ArrayCompiled {
             &varying_rules,
         );
 
+        if let Some(details) = crate::simulate_array::take_const_array_oob() {
+            return Err(crate::compile_error::CompileError::InterpreterBuildError { details }.into());
+        }
         Ok(Solution {
             time,
             state,
@@ -755,6 +773,7 @@ impl ArrayCompiled {
                 false,
                 &mut RhsStats::default(),
                 None,
+                &self.const_scope,
             );
             seed
         };
@@ -766,6 +785,7 @@ impl ArrayCompiled {
         // requires; the Jacobian closure carries its own so the two never alias.
         let seg_seed = Rc::new(seg_seed);
         let mut rhs_scratch_val = RhsScratch::new(&var_shapes);
+        rhs_scratch_val.set_const_arrays(Rc::clone(&self.const_scope));
         rhs_scratch_val.set_static((*seg_seed).clone());
         // Step 3b: the production RHS closure's scratch gets the compiled
         // tape (fresh slab per segment; CONST/SEGMENT sections prime on the
@@ -783,6 +803,7 @@ impl ArrayCompiled {
         // (BDF/SDIRK) build it on their first Jacobian evaluation instead;
         // construction is deterministic, so results are bit-identical either way.
         let jac_seed = Rc::clone(&seg_seed);
+        let const_scope_jac = Rc::clone(&self.const_scope);
         let jac_scratch: RefCell<Option<RhsScratch>> = RefCell::new(None);
 
         // External forcing channel (PR-1, ess-14f.7): clone the `Rc` handle into
@@ -844,6 +865,7 @@ impl ArrayCompiled {
             let mut scratch_slot = jac_scratch.borrow_mut();
             let mut scratch = scratch_slot.get_or_insert_with(|| {
                 let mut s = RhsScratch::new(&var_shapes_jac);
+                s.set_const_arrays(Rc::clone(&const_scope_jac));
                 s.set_static((*jac_seed).clone());
                 s
             });
@@ -1070,6 +1092,7 @@ impl ArrayCompiled {
                 false,
                 &mut RhsStats::default(),
                 Some(&cse),
+                &self.const_scope,
             );
         }
         // A name the probe did not materialize is, by construction, either
@@ -1141,6 +1164,7 @@ impl ArrayCompiled {
                     false,
                     &mut RhsStats::default(),
                     Some(&cse),
+                    &self.const_scope,
                 );
                 record(&obs, &mut rows);
             }

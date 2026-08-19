@@ -7,7 +7,7 @@
 use super::*;
 use crate::aggregate::effective_reduce_kind;
 use crate::compile_error::CompileError;
-use crate::types::ExpressionNode;
+use crate::types::{ExpressionNode, JoinClause};
 
 /// Stack-inlined per-axis `(lo, hi)` range list, the same rank≤4 argument
 /// [`DimI`]/[`DimU`] rest on. Used where a range list is rebuilt on every RHS
@@ -1040,19 +1040,104 @@ pub(super) fn lookup_array_ref<'a>(name: &str, ctx: &'a EvalCtx) -> Option<&'a A
     None
 }
 
-/// Sample `arr` at the 1-based `raw` indices (out-of-bounds ⇒ 0.0, homogeneous
-/// Dirichlet ghost cells; fewer indices than the rank ⇒ a fixed-leading-axes
-/// sub-array). `in_bounds` seeds the bound flag (`false` if an index expression
-/// was non-scalar). Shared by the borrowing fast path and the general path.
-pub(super) fn index_into(arr: &ArrayD<f64>, raw: &[i64], mut in_bounds: bool) -> Value {
+thread_local! {
+    /// First `E_TREEWALK_CONSTARRAY_OOB` raised during the current evaluation.
+    ///
+    /// The tree walk returns a bare [`Value`] with no error channel, so an
+    /// out-of-range CONST-ARRAY gather latches its diagnostic here and yields
+    /// `NaN`; the public entry points ([`eval_expression_with_extents_and_consts`])
+    /// drain the latch and report it. This is the same "fail closed, do not
+    /// silently substitute a number" contract the Julia reference gets from
+    /// `throw` and Python from raising.
+    static CONST_OOB: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Take (and clear) the pending const-array out-of-range diagnostic, if any.
+pub fn take_const_array_oob() -> Option<String> {
+    CONST_OOB.with(|c| c.borrow_mut().take())
+}
+
+/// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
+fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
+    CONST_OOB.with(|c| {
+        let mut slot = c.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(format!(
+                "E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {one_based} out of range \
+                 1..{n} in dim {d} (CONFORMANCE_SPEC.md §5.5.5: the zero-ghost convention is \
+                 never applied to a const-array gather; declare a per-dimension boundary policy \
+                 to resolve it as `periodic` or `clamp`)"
+            ));
+        }
+    });
+}
+
+/// The out-of-range boundary policy of the gather being resolved
+/// (CONFORMANCE_SPEC §5.5.5).
+///
+/// Splitting the OOB branch by PROVENANCE is the whole point: the
+/// homogeneous-Dirichlet zero ghost is the STATE-variable gather's boundary
+/// default (a stencil may read `u[i-1]` at `i = 1`), and §5.5.5 says it is
+/// **never** applied to a const-array gather, where an out-of-range index into a
+/// Fornberg weight table or a connectivity array is a bug, not a boundary.
+#[derive(Clone, Copy)]
+pub(super) enum GatherKind<'a> {
+    /// State / observed gather: out-of-range ⇒ `0.0`.
+    ZeroGhost,
+    /// Const-array gather: out-of-range ⇒ the factor's declared per-dimension
+    /// policy, defaulting to `E_TREEWALK_CONSTARRAY_OOB`.
+    ConstArray {
+        /// The factor's name, for the diagnostic.
+        name: &'a str,
+        /// The registry carrying its declared per-dimension policies.
+        scope: &'a ConstArrayScope,
+    },
+}
+
+/// Sample `arr` at the 1-based `raw` indices (fewer indices than the rank ⇒ a
+/// fixed-leading-axes sub-array). `in_bounds` seeds the bound flag (`false` if
+/// an index expression was non-scalar).
+///
+/// An out-of-range index resolves per `kind` (CONFORMANCE_SPEC §5.5.5):
+/// [`GatherKind::ZeroGhost`] yields `0.0` (homogeneous Dirichlet ghost cells),
+/// while [`GatherKind::ConstArray`] wraps (`periodic`), edge-extends (`clamp`),
+/// or fails closed with `E_TREEWALK_CONSTARRAY_OOB`.
+///
+/// Shared by the borrowing fast path and the general path.
+pub(super) fn index_into(
+    arr: &ArrayD<f64>,
+    raw: &[i64],
+    mut in_bounds: bool,
+    kind: GatherKind<'_>,
+) -> Value {
     // Stack-inlined index buffer (array rank ≤ 4) — no per-node heap allocation.
     let mut indices: DimU = SmallVec::with_capacity(raw.len());
     for (d, &one_based) in raw.iter().enumerate() {
         let dim_size = arr.shape().get(d).copied().unwrap_or(0) as i64;
+        let mut resolved = one_based;
         if one_based < 1 || one_based > dim_size {
-            in_bounds = false;
+            match kind {
+                GatherKind::ZeroGhost => in_bounds = false,
+                GatherKind::ConstArray { name, scope } => {
+                    // An empty dimension can never be wrapped or clamped into a
+                    // valid 1-based index — always the error, whatever the policy.
+                    match (dim_size >= 1).then(|| scope.boundary(name, d)) {
+                        // 1-based periodic wrap == Julia `mod1(i, n)`.
+                        Some(BoundaryKind::Periodic) => {
+                            resolved = (one_based - 1).rem_euclid(dim_size) + 1;
+                        }
+                        Some(BoundaryKind::Clamp) => {
+                            resolved = one_based.clamp(1, dim_size);
+                        }
+                        Some(BoundaryKind::Error) | None => {
+                            latch_const_oob(name, one_based, dim_size, d);
+                            return Value::Scalar(f64::NAN);
+                        }
+                    }
+                }
+            }
         }
-        indices.push((one_based - 1).max(0) as usize);
+        indices.push((resolved - 1).max(0) as usize);
     }
     if !in_bounds {
         return Value::Scalar(0.0);
@@ -1119,10 +1204,17 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         && lookup_array_ref(name, ctx).is_some()
     {
         let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+        let kind = gather_kind(name, ctx);
         if let Some(arr) = lookup_array_ref(name, ctx) {
-            return index_into(arr, &raw, in_bounds);
+            return index_into(arr, &raw, in_bounds, kind);
         }
     }
+    // The gather's PROVENANCE is decided by the operand's NAME, so a computed
+    // array operand (`index(reshape(...), i)`) is never a const-array gather.
+    let const_kind = match &node.args[0] {
+        Expr::Variable(name) => gather_kind(name, ctx),
+        _ => GatherKind::ZeroGhost,
+    };
     let array_val = eval(&node.args[0], ctx);
     let arr = match array_val {
         Value::Array(a) => a,
@@ -1133,7 +1225,23 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // semantics: a discretized PDE's stencil can reference u[i-1] when i=1
     // (ghost cell at i=0) and the boundary condition is u=0.
     let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
-    index_into(&arr, &raw, in_bounds)
+    index_into(&arr, &raw, in_bounds, const_kind)
+}
+
+/// Which boundary convention a gather on `name` obeys: the const-array policy
+/// when the evaluation's registry lists it, else the state gather's zero ghost.
+///
+/// The borrow is tied to `ctx`, not to the (later, mutable) array borrow, so
+/// this is resolved before either `lookup_array_ref` or `eval` is called.
+fn gather_kind<'a>(name: &'a str, ctx: &EvalCtx<'a>) -> GatherKind<'a> {
+    if ctx.const_arrays.is_const(name) {
+        GatherKind::ConstArray {
+            name,
+            scope: ctx.const_arrays,
+        }
+    } else {
+        GatherKind::ZeroGhost
+    }
 }
 
 /// Evaluate a `const` op: the inline literal in the node's `value` field. A JSON
@@ -1422,6 +1530,35 @@ pub fn eval_expression_with_extents(
     t: f64,
     derived_extents: &HashMap<String, i64>,
 ) -> Result<Value, CompileError> {
+    eval_expression_with_extents_and_consts(
+        expr,
+        inputs,
+        params,
+        param_names,
+        t,
+        derived_extents,
+        ConstArrayScope::empty(),
+    )
+}
+
+/// [`eval_expression_with_extents`] with an explicit CONST-ARRAY registry
+/// (CONFORMANCE_SPEC §5.5.5).
+///
+/// A gather whose target is named in `const_arrays` is a const-array gather: an
+/// out-of-range index resolves by that factor's declared per-dimension boundary
+/// policy, and — with no declared policy — raises `E_TREEWALK_CONSTARRAY_OOB`
+/// instead of silently reading the state gather's zero ghost. Every other
+/// gather keeps the zero-ghost convention, so passing
+/// [`ConstArrayScope::empty`] is byte-identical to the pre-§5.5.5 evaluator.
+pub fn eval_expression_with_extents_and_consts(
+    expr: &Expr,
+    inputs: &HashMap<String, ArrayD<f64>>,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    derived_extents: &HashMap<String, i64>,
+    const_arrays: &ConstArrayScope,
+) -> Result<Value, CompileError> {
     check_evaluable(expr)?;
     let empty: ArrMap = ArrMap::default();
     // Cold public boundary: the standalone evaluator's `inputs` arrive as a std
@@ -1448,8 +1585,14 @@ pub fn eval_expression_with_extents(
         // Standalone one-shot evaluation: no CSE memo (nothing to amortize the
         // structural analysis over), so this path is unchanged.
         cse: None,
+        const_arrays,
     };
-    Ok(eval(expr, &mut ctx))
+    take_const_array_oob(); // discard any latch left by an earlier failed call
+    let v = eval(expr, &mut ctx);
+    match take_const_array_oob() {
+        Some(details) => Err(CompileError::InterpreterBuildError { details }),
+        None => Ok(v),
+    }
 }
 
 /// The output-index box of the aggregate currently being evaluated: the index
@@ -1583,6 +1726,412 @@ pub(super) fn reduce_contraction(
             set_bind(&mut ctx.loop_binds, kn, *kv);
         }
         // A filtered-out combination contributes 0̄ (acc ⊕ 0̄ = acc) (§5.3).
+        if filter_excludes(filter, cell, ctx) {
+            continue;
+        }
+        let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+        acc = reduce.combine(acc, term);
+    }
+    acc
+}
+
+// =========================================================================== //
+// OVERLAP-gate DRIVEN contraction (CONFORMANCE_SPEC.md §5.5.6 / Wall #1)
+// =========================================================================== //
+//
+// An overlap gate resolves its WHOLE admissible pair set once, so it can DRIVE
+// enumeration rather than filter it. The gate drives ANY aggregate — an
+// ordinary dense reduction as much as an index-set-producing `distinct`
+// producer; nothing in the contract distinguishes them. Three shapes reach
+// here (the policy itself is [`crate::broad_phase::overlap_drive_plan`], shared
+// with the value-invention producer, which differs only in loop shape because
+// its ranges may be ragged and are therefore resolved lazily):
+//
+//   RESTRICT — one gated axis is an OUTPUT index (already bound) and the other
+//     is contracted. This is the ISRM binning aggregate `E[c] = Σ_r […]` and
+//     its record-output mirror `P[r] = Σ_c […]`: the contracted axis iterates
+//     only this output cell's candidate partners, in the same ascending order
+//     its own range would have visited them, so the aggregate costs
+//     `O(|candidates|)` in total rather than `O(N_c·N_r)`.
+//   PAIRS — both gated axes are contracted AND are the only two contracted axes
+//     (the scalar-reduction form); the candidate pairs bind both at once.
+//   REJECT — both gated axes are already bound and the pair is not a candidate:
+//     no leaf is admitted at all.
+//
+// Anything else falls through to the full product. In EVERY shape the narrow
+// `filter` still runs per leaf, and the driven sequence is the exact
+// order-preserving SUBSEQUENCE of the product the gate would have admitted — so
+// the emitted terms, and hence the ⊕-reduction, are BIT-IDENTICAL to the
+// filtered full product. The driver removes work; it never changes an answer.
+//
+// IDENTITY FILL (normative, §5.5.6). Driving means an output cell with no
+// candidate pair emits NO term. That is the correct answer, not a hole: the
+// accumulator starts at `reduce.identity()` and is returned untouched — e.g. an
+// emission record outside the grid sums to `0` under `(+, 0)`.
+
+/// A resolved overlap gate: the two range symbols its envelopes run over, and
+/// the broad-phase candidate index built ONCE from the const-array envelope
+/// factors.
+pub(super) struct OverlapGate {
+    sym_src: String,
+    sym_tgt: String,
+    index: Rc<crate::broad_phase::OverlapIndex>,
+}
+
+/// Where one of a gate's two symbols sits in the aggregate being evaluated.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GateAxis {
+    /// A contracted index — free, at this position in `contract_names`.
+    Contracted(usize),
+    /// An output index — already bound in `ctx.loop_binds` for this cell.
+    Output,
+    /// Neither: the gate cannot be resolved against this node's loops.
+    Absent,
+}
+
+/// The per-aggregate (cell-independent) placement of a gate's two symbols.
+pub(super) struct GatePlacement {
+    src: GateAxis,
+    tgt: GateAxis,
+}
+
+fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> GateAxis {
+    if let Some(d) = contract_names.iter().position(|n| n == sym) {
+        return GateAxis::Contracted(d);
+    }
+    if idx_names.iter().any(|n| n == sym) {
+        return GateAxis::Output;
+    }
+    GateAxis::Absent
+}
+
+pub(super) fn gate_placement(
+    gate: &OverlapGate,
+    idx_names: &[String],
+    contract_names: &[String],
+) -> GatePlacement {
+    GatePlacement {
+        src: gate_axis(&gate.sym_src, idx_names, contract_names),
+        tgt: gate_axis(&gate.sym_tgt, idx_names, contract_names),
+    }
+}
+
+/// The cache key of a resolved gate: the envelope factor NAMES, the `eps`, and
+/// the two envelope side lengths.
+///
+/// §5.5.6 requires a gate's `src_env` / `tgt_env` factors to be build-time
+/// const-array data by the time the broad phase runs, so for a given node the
+/// candidate set is a pure function of this key — but a gate is resolved once
+/// per node and consulted once per RHS evaluation, and rebuilding the R*-tree
+/// each time would cost more than the enumeration it saves.
+type GateKey = (Vec<String>, Vec<String>, u64, usize, usize);
+
+thread_local! {
+    static GATE_CACHE: RefCell<HashMap<GateKey, Option<Rc<crate::broad_phase::OverlapIndex>>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// The dense length of an envelope factor, WITHOUT cloning it (the cache is
+/// consulted on every evaluation; the clone below happens only on a miss).
+fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
+    if let Some(a) = ctx.state_arrays.get(name) {
+        return Some(a.len());
+    }
+    if let Some(a) = ctx.observed_arrays.get(name) {
+        return Some(a.len());
+    }
+    ctx.forcing.borrow().get(name).map(|a| a.len())
+}
+
+/// Resolve the first drivable OVERLAP clause of `join` into a gate, building
+/// (or reusing) its broad-phase candidate index.
+///
+/// Returns `None` — and the caller then walks the untouched full product — when
+/// there is no overlap clause, when its range symbols were not resolved at
+/// build time ([`crate::join::resolve_overlap_join_syms`]), or when an envelope
+/// factor is not array data in this context. Declining is always SAFE: the gate
+/// is a conservative superset, so the full product yields the same terms.
+///
+/// **On Julia's "Hook 1b".** The Julia reference resolves its gates at BUILD
+/// time out of a `const_arrays` registry, so an envelope factor living on a
+/// value-invented derived axis — exactly the `pd_cell__*` gathers the pushdown
+/// rewrite puts in `tgt_env` — had to be materialised into that registry by a
+/// dedicated post-value-invention hook (`_derive_overlap_env_factors`) before
+/// join-gate resolution could see it. Rust needs no equivalent: the gate is
+/// resolved HERE, lazily, at the moment the aggregate is evaluated, by which
+/// point a `pd_cell__*` gather is simply another materialised observed in
+/// `ctx.observed_arrays` (the prepare front door and the compiled observed
+/// pipeline both evaluate observeds in dependency order). The ordering
+/// constraint the hook exists to satisfy is satisfied structurally.
+pub(super) fn resolve_overlap_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option<OverlapGate> {
+    for clause in join {
+        let Some(ov) = &clause.overlap else { continue };
+        let (Some(sym_src), Some(sym_tgt)) = (&ov.sym_src, &ov.sym_tgt) else {
+            continue;
+        };
+        let eps = ov.eps.unwrap_or(0.0);
+        let (Some(nsrc), Some(ntgt)) = (
+            env_factor_len(ov.src_env.first()?, ctx),
+            env_factor_len(ov.tgt_env.first()?, ctx),
+        ) else {
+            continue;
+        };
+        let key: GateKey = (
+            ov.src_env.clone(),
+            ov.tgt_env.clone(),
+            eps.to_bits(),
+            nsrc,
+            ntgt,
+        );
+        let cached = GATE_CACHE.with(|c| c.borrow().get(&key).cloned());
+        let index = match cached {
+            Some(hit) => hit,
+            None => {
+                let built = build_overlap_index(&ov.src_env, &ov.tgt_env, eps, ctx).map(Rc::new);
+                GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
+                built
+            }
+        };
+        if let Some(index) = index {
+            return Some(OverlapGate {
+                sym_src: sym_src.clone(),
+                sym_tgt: sym_tgt.clone(),
+                index,
+            });
+        }
+    }
+    None
+}
+
+fn build_overlap_index(
+    src_env: &[String],
+    tgt_env: &[String],
+    eps: f64,
+    ctx: &EvalCtx,
+) -> Option<crate::broad_phase::OverlapIndex> {
+    let mut arrays: HashMap<String, ArrayD<f64>> = HashMap::new();
+    for name in src_env.iter().chain(tgt_env.iter()) {
+        if arrays.contains_key(name) {
+            continue;
+        }
+        match lookup_variable(name, ctx) {
+            Value::Array(a) => {
+                arrays.insert(name.clone(), *a);
+            }
+            Value::Scalar(_) => return None,
+        }
+    }
+    let src = crate::broad_phase::envelope_vectors(src_env, &arrays).ok()?;
+    let tgt = crate::broad_phase::envelope_vectors(tgt_env, &arrays).ok()?;
+    let pairs = crate::broad_phase::broad_phase_candidates(&src, &tgt, eps);
+    Some(crate::broad_phase::OverlapIndex::from_zero_based(&pairs))
+}
+
+/// One contracted dimension's enumeration source: its own ascending interval,
+/// or the explicit ascending value list the gate restricted it to.
+enum DimSrc<'a> {
+    Range(i64, i64),
+    List(&'a [i64]),
+}
+
+impl DimSrc<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            DimSrc::Range(lo, hi) => (hi - lo + 1).max(0) as usize,
+            DimSrc::List(v) => v.len(),
+        }
+    }
+    #[inline]
+    fn at(&self, i: usize) -> i64 {
+        match self {
+            DimSrc::Range(lo, _) => lo + i as i64,
+            DimSrc::List(v) => v[i],
+        }
+    }
+}
+
+/// [`reduce_contraction`] under an OVERLAP gate that DRIVES the enumeration.
+///
+/// `ranges` is this cell's resolved contraction bounds (the same slice the
+/// ungated path walks). The output-index tuple is already bound in
+/// `ctx.loop_binds`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn reduce_contraction_gated(
+    contract_names: &[String],
+    ranges: &[(i64, i64)],
+    body: &Expr,
+    reduce: ReduceKind,
+    filter: Option<&Expr>,
+    cell: Option<&CellBox>,
+    gate: &OverlapGate,
+    place: &GatePlacement,
+    ctx: &mut EvalCtx,
+) -> f64 {
+    use crate::broad_phase::DrivePlan;
+
+    // A gated symbol that is an OUTPUT index is already bound for this cell; a
+    // contracted one is free. Anything else means the gate does not describe
+    // this node's loops — walk the full product.
+    let bound_of = |axis: GateAxis, sym: &str, ctx: &EvalCtx| -> Result<Option<i64>, ()> {
+        match axis {
+            GateAxis::Contracted(_) => Ok(None),
+            GateAxis::Output => ctx.loop_binds.get(sym).copied().map(Some).ok_or(()),
+            GateAxis::Absent => Err(()),
+        }
+    };
+    let (Ok(src_bound), Ok(tgt_bound)) = (
+        bound_of(place.src, &gate.sym_src, ctx),
+        bound_of(place.tgt, &gate.sym_tgt, ctx),
+    ) else {
+        return reduce_over_sources(
+            contract_names,
+            &full_sources(ranges),
+            body,
+            reduce,
+            filter,
+            cell,
+            ctx,
+        );
+    };
+
+    let free_dim = match (place.src, place.tgt) {
+        (GateAxis::Contracted(d), GateAxis::Output) => Some(d),
+        (GateAxis::Output, GateAxis::Contracted(d)) => Some(d),
+        _ => None,
+    };
+    let free_range = free_dim.and_then(|d| ranges.get(d).copied());
+
+    match crate::broad_phase::overlap_drive_plan(&gate.index, src_bound, tgt_bound, free_range) {
+        // No candidate pair for this output cell ⇒ no term at all ⇒ the
+        // semiring identity (§5.5.6 "Identity fill"). Not a hole, not NaN.
+        DrivePlan::Reject => reduce.identity(),
+        DrivePlan::Restrict { vals, .. } => {
+            let d = free_dim.expect("a Restrict plan names a free contracted dim");
+            let mut srcs = full_sources(ranges);
+            srcs[d] = DimSrc::List(&vals);
+            reduce_over_sources(contract_names, &srcs, body, reduce, filter, cell, ctx)
+        }
+        DrivePlan::Pairs
+            if contract_names.len() == 2
+                && matches!(
+                    (place.src, place.tgt),
+                    (GateAxis::Contracted(_), GateAxis::Contracted(_))
+                ) =>
+        {
+            // The contraction odometer varies `contract_names[1]` FASTEST, so
+            // the product order over the surviving tuples is the pair list
+            // sorted by (contract_names[0] position, contract_names[1] position).
+            let src_is_slow = place.src == GateAxis::Contracted(0);
+            let (lo0, hi0) = ranges[0];
+            let (lo1, hi1) = ranges[1];
+            let mut tuples: Vec<(i64, i64)> = gate
+                .index
+                .sorted_pairs()
+                .iter()
+                .map(|&(l, r)| if src_is_slow { (l, r) } else { (r, l) })
+                .filter(|&(a, b)| a >= lo0 && a <= hi0 && b >= lo1 && b <= hi1)
+                .collect();
+            if !src_is_slow {
+                tuples.sort_unstable();
+            }
+            reduce_over_pairs(contract_names, &tuples, body, reduce, filter, cell, ctx)
+        }
+        DrivePlan::Pairs | DrivePlan::Full => {
+            reduce_over_sources(
+                contract_names,
+                &full_sources(ranges),
+                body,
+                reduce,
+                filter,
+                cell,
+                ctx,
+            )
+        }
+    }
+}
+
+fn full_sources(ranges: &[(i64, i64)]) -> SmallVec<[DimSrc<'_>; 4]> {
+    ranges
+        .iter()
+        .map(|&(lo, hi)| DimSrc::Range(lo, hi))
+        .collect()
+}
+
+/// The gated unroll: an odometer over per-dimension sources with the LAST
+/// dimension varying fastest — bit-for-bit the order
+/// [`crate::simulate_array::layout::CartesianTuples`] walks, so a restricted
+/// dimension emits the exact subsequence of the terms the full product emitted.
+#[allow(clippy::too_many_arguments)]
+fn reduce_over_sources(
+    contract_names: &[String],
+    srcs: &[DimSrc],
+    body: &Expr,
+    reduce: ReduceKind,
+    filter: Option<&Expr>,
+    cell: Option<&CellBox>,
+    ctx: &mut EvalCtx,
+) -> f64 {
+    let mut acc = reduce.identity();
+    let n = srcs.len();
+    if n == 0 {
+        // Pointwise (no contracted index) — the same arm `reduce_contraction`
+        // takes, returning the body itself rather than `0̄ ⊕ body` so a `-0.0`
+        // term stays `-0.0`.
+        crate::broad_phase::bump_overlap_enum_visits(1);
+        return if filter_excludes(filter, cell, ctx) {
+            acc
+        } else {
+            eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
+        };
+    }
+    if srcs.iter().any(|s| s.len() == 0) {
+        return acc;
+    }
+    let mut odom: SmallVec<[usize; 4]> = SmallVec::from_elem(0usize, n);
+    loop {
+        crate::broad_phase::bump_overlap_enum_visits(1);
+        for (d, name) in contract_names.iter().enumerate() {
+            set_bind(&mut ctx.loop_binds, name, srcs[d].at(odom[d]));
+        }
+        if !filter_excludes(filter, cell, ctx) {
+            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+            acc = reduce.combine(acc, term);
+        }
+        let mut d = n;
+        loop {
+            if d == 0 {
+                return acc;
+            }
+            d -= 1;
+            odom[d] += 1;
+            if odom[d] < srcs[d].len() {
+                break;
+            }
+            odom[d] = 0;
+        }
+    }
+}
+
+/// The PAIRS drive shape: the two contracted symbols are bound TOGETHER from
+/// the gate's candidate pairs (already reordered to match the odometer's
+/// slow/fast convention), so the emitted term sequence is the exact
+/// subsequence the filtered full product emitted.
+#[allow(clippy::too_many_arguments)]
+fn reduce_over_pairs(
+    contract_names: &[String],
+    tuples: &[(i64, i64)],
+    body: &Expr,
+    reduce: ReduceKind,
+    filter: Option<&Expr>,
+    cell: Option<&CellBox>,
+    ctx: &mut EvalCtx,
+) -> f64 {
+    let mut acc = reduce.identity();
+    for &(a, b) in tuples {
+        crate::broad_phase::bump_overlap_enum_visits(1);
+        set_bind(&mut ctx.loop_binds, &contract_names[0], a);
+        set_bind(&mut ctx.loop_binds, &contract_names[1], b);
         if filter_excludes(filter, cell, ctx) {
             continue;
         }
@@ -1853,6 +2402,31 @@ pub(super) struct ArrayOpSpec<'n> {
     pub(super) contract_dims: Vec<ContractDim>,
     pub(super) reduce: ReduceKind,
     pub(super) filter: Option<&'n Expr>,
+    /// Surviving `join` clauses (CONFORMANCE_SPEC.md §5.5.6). A value-equality
+    /// `on` clause was already lowered into `filter` at build time; what
+    /// reaches here is a spatial OVERLAP gate, which the evaluator resolves
+    /// into a broad-phase candidate index and lets DRIVE the enumeration
+    /// instead of merely testing it (see [`resolve_overlap_gate`]).
+    pub(super) join: Option<&'n [JoinClause]>,
+}
+
+impl ArrayOpSpec<'_> {
+    /// Does this aggregate carry an OVERLAP gate whose range symbols were
+    /// resolved at build time — i.e. one the driver can act on?
+    ///
+    /// The whole-array overlay and the tape lowering both consult this and
+    /// decline: they evaluate the FULL product as shifted whole-array slices,
+    /// which is bit-identical but reinstates exactly the `O(∏ranges)` cost the
+    /// gate exists to remove.
+    pub(super) fn has_drivable_overlap(&self) -> bool {
+        self.join.is_some_and(|j| {
+            j.iter().any(|c| {
+                c.overlap
+                    .as_ref()
+                    .is_some_and(|o| o.sym_src.is_some() && o.sym_tgt.is_some())
+            })
+        })
+    }
 }
 
 /// Extract an aggregate node's evaluation parameters. `None` when the node
@@ -1905,6 +2479,7 @@ pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
         contract_dims,
         reduce,
         filter,
+        join: node.join.as_deref(),
     })
 }
 
@@ -1915,6 +2490,22 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     //
     // Supports generalized einsum: indices present in `ranges` but absent
     // from `output_idx` are contracted (summed/reduced) per `reduce`.
+    let spec = match arrayop_spec(node) {
+        Some(s) => s,
+        None => return Value::Scalar(f64::NAN),
+    };
+    // Resolve a spatial OVERLAP gate ONCE per node (its broad-phase candidate
+    // index is memoized across calls). When one resolves it DRIVES the
+    // contraction below instead of the full product — §5.5.6, and the whole
+    // point of the pushdown rewrite emitting a gate onto each rewritten binning
+    // aggregate.
+    let gate = spec
+        .join
+        .and_then(|j| resolve_overlap_gate(j, &*ctx))
+        .map(|g| {
+            let place = gate_placement(&g, spec.idx_names, &spec.contract_names);
+            (g, place)
+        });
     let ArrayOpSpec {
         idx_names,
         ranges,
@@ -1923,10 +2514,8 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         contract_dims,
         reduce,
         filter,
-    } = match arrayop_spec(node) {
-        Some(s) => s,
-        None => return Value::Scalar(f64::NAN),
-    };
+        join: _,
+    } = spec;
 
     // Stack-inlined (rank ≤ 4): rebuilt for every aggregate of every RHS call.
     let shape: DimU = ranges
@@ -1977,7 +2566,7 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // functions and ghost-0 convention, so the result is bit-identical to the
     // per-cell oracle below; any op / ragged-bound the overlay does not handle
     // returns `None` and we fall through. A local `Pool` recycles intermediates.
-    if !shape.is_empty() && scan.is_none() {
+    if !shape.is_empty() && scan.is_none() && gate.is_none() {
         // The pool is the THREAD's, not a fresh one per call: a stencil-heavy
         // model materializes dozens of standalone aggregates per RHS evaluation
         // and a per-call `Pool::default()` started empty every time, so every
@@ -2059,19 +2648,46 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             for (name, val) in idx_names.iter().zip(tuple.iter()) {
                 set_bind(&mut ctx.loop_binds, name, *val);
             }
-            let v = reduce_contraction(
-                &contract_names,
-                &contract_dims,
-                static_ranges.as_deref(),
-                body,
-                reduce,
-                filter,
-                Some(&CellBox {
-                    names: idx_names,
-                    origin: &origin,
-                }),
-                ctx,
-            );
+            let cellbox = CellBox {
+                names: idx_names,
+                origin: &origin,
+            };
+            let v = match &gate {
+                Some((g, place)) => {
+                    // This cell's contraction bounds: the hoisted static ones
+                    // when every dim is cell-independent, else re-derived here
+                    // exactly as `reduce_contraction` does.
+                    let derived: SmallVec<[(i64, i64); 4]>;
+                    let cell_ranges: &[(i64, i64)] = match static_ranges.as_deref() {
+                        Some(r) => r,
+                        None => {
+                            derived = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
+                            &derived
+                        }
+                    };
+                    reduce_contraction_gated(
+                        &contract_names,
+                        cell_ranges,
+                        body,
+                        reduce,
+                        filter,
+                        Some(&cellbox),
+                        g,
+                        place,
+                        ctx,
+                    )
+                }
+                None => reduce_contraction(
+                    &contract_names,
+                    &contract_dims,
+                    static_ranges.as_deref(),
+                    body,
+                    reduce,
+                    filter,
+                    Some(&cellbox),
+                    ctx,
+                ),
+            };
             let flat = multi_to_flat_col_major(tuple, &shape, &origin);
             buf[flat] = v;
         }

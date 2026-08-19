@@ -29,6 +29,7 @@ from earthsci_ast import (
     UrlTemplateError,
     apply_unit_conversion,
     apply_variable_mapping,
+    parse_unit_conversion,
     expand_url_template,
     expand_with_mirrors,
     file_anchor_for_time,
@@ -227,6 +228,23 @@ class TestUnitConversion:
         expr = ExprNode(op="+", args=["x", 273.15])
         out = apply_unit_conversion([0.0, 100.0], expr, variable_name="T")
         assert list(out) == [pytest.approx(273.15), pytest.approx(373.15)]
+
+    def test_parse_raw_json_number_and_expression(self):
+        """The raw-document entry point the provider paths use (esm-spec §8.5:
+        ``number | Expression``)."""
+        assert parse_unit_conversion(None, variable_name="x") is None
+        assert parse_unit_conversion(0.3048, variable_name="x") == 0.3048
+        assert parse_unit_conversion(2, variable_name="x") == 2.0
+        expr = parse_unit_conversion(
+            {"op": "+", "args": ["T", 273.15]}, variable_name="T"
+        )
+        assert list(apply_unit_conversion([0.0], expr, variable_name="T")) == [273.15]
+
+    def test_parse_rejects_a_non_conversion(self):
+        with pytest.raises(Exception):
+            parse_unit_conversion(True, variable_name="x")
+        with pytest.raises(Exception):
+            parse_unit_conversion("0.3048", variable_name="x")
 
     def test_apply_variable_mapping_renames_and_converts(self):
         variables = {

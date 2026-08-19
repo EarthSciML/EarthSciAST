@@ -78,7 +78,10 @@ mod vectorized;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::eval_buildtime_field;
 pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_invention};
-pub use eval::{eval_expression, eval_expression_with_extents};
+pub use eval::{
+    eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
+    take_const_array_oob,
+};
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
 // the vectorized overlay); re-exported crate-wide so the scalar interpreter
 // `crate::simulate::eval_op` routes through the SAME definition instead of
@@ -95,12 +98,13 @@ use vectorized::*;
 
 use crate::aggregate::{ReduceKind, empty_derived_extents};
 use crate::types::{Expr, IndexSet, RangeSpec};
+use crate::value_invention::BoundaryKind;
 use indexmap::IndexMap;
 use ndarray::{ArrayD, IxDyn};
 use rustc_hash::FxBuildHasher;
 use smallvec::SmallVec;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// Stack-inlined index vectors for per-axis kernel bookkeeping. Grid rank stays
@@ -462,6 +466,15 @@ pub struct ArrayCompiled {
     /// references on the flattened path) resolve at `u0` build time exactly as
     /// equation expressions do at compile time.
     index_sets: HashMap<String, IndexSet>,
+    /// The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
+    /// pre-computed factor arrays — the document's `const`-op variables plus
+    /// any caller-supplied factor arrays — whose gathers resolve an
+    /// out-of-range index by a declared boundary policy (default
+    /// `E_TREEWALK_CONSTARRAY_OOB`) rather than by the state gather's zero
+    /// ghost. `Rc` so the per-call scratch can hold the same registry without
+    /// cloning the name set every step. Empty for a model with no const
+    /// factors, which reads byte-identically to the pre-§5.5.5 evaluator.
+    const_scope: Rc<ConstArrayScope>,
     /// The single-model namespace (the top-level `models` map key), set by
     /// [`Self::from_file`]. The raw single-model path keys params/states by their
     /// BARE variable names (`R_0`, `psi[i,j]`), but the scalar backend, the
@@ -619,4 +632,82 @@ struct EvalCtx<'a> {
     /// a structural analysis over; the overlay then behaves exactly as it did
     /// before. See [`cse`] for the scoping rule that makes sharing sound.
     cse: Option<&'a CseRt>,
+    /// The CONST-ARRAY provenance of this evaluation (CONFORMANCE_SPEC §5.5.5).
+    ///
+    /// A gather whose target is named here is a **const-array gather** — a
+    /// pre-computed factor (Fornberg weights, mesh connectivity, a per-cell
+    /// metric / geometry array) — and its out-of-range resolution follows the
+    /// factor's declared per-dimension boundary policy, defaulting to
+    /// `E_TREEWALK_CONSTARRAY_OOB`. Every other gather is a state / observed
+    /// gather and keeps the homogeneous-Dirichlet zero-ghost convention, which
+    /// §5.5.5 says is **never** applied to a const-array gather.
+    ///
+    /// [`ConstArrayScope::empty`] on every path with no const-array registry,
+    /// which reads byte-identically to the pre-§5.5.5 evaluator.
+    const_arrays: &'a ConstArrayScope,
+}
+
+/// Which arrays in an evaluation are CONST-ARRAY factors, and each one's
+/// declared per-dimension out-of-range boundary policy
+/// (CONFORMANCE_SPEC §5.5.5 / ess-gj4).
+///
+/// This is the dense evaluator's counterpart of the Julia reference's
+/// `const_arrays` registry (whose `BoundedConstArray` wrapper carries the same
+/// per-dimension policy tuple) and of [`crate::value_invention`]'s
+/// `const_array_boundaries` input — the two engines must agree byte-for-byte on
+/// a resolved gather, so they resolve it by the same table.
+#[derive(Debug, Clone, Default)]
+pub struct ConstArrayScope {
+    /// Names that are const-array factors.
+    names: HashSet<String>,
+    /// Per-name, per-dimension policy. A name absent here (or a dimension
+    /// beyond the declared vec) is [`BoundaryKind::Error`] — the default that
+    /// keeps genuine connectivity / stencil-weight bugs caught.
+    boundaries: HashMap<String, Vec<BoundaryKind>>,
+}
+
+impl ConstArrayScope {
+    /// The shared empty scope: nothing is a const array, so every gather keeps
+    /// the zero-ghost convention exactly as before.
+    pub fn empty() -> &'static ConstArrayScope {
+        static EMPTY: std::sync::OnceLock<ConstArrayScope> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(ConstArrayScope::default)
+    }
+
+    /// A scope over `names`, with no declared boundary policies (so every one
+    /// of them resolves an out-of-range gather as `E_TREEWALK_CONSTARRAY_OOB`).
+    pub fn from_names<I: IntoIterator<Item = String>>(names: I) -> ConstArrayScope {
+        ConstArrayScope {
+            names: names.into_iter().collect(),
+            boundaries: HashMap::new(),
+        }
+    }
+
+    /// Declare `name`'s per-dimension boundary policy (and mark it const).
+    pub fn with_boundary(mut self, name: impl Into<String>, dims: Vec<BoundaryKind>) -> Self {
+        let name = name.into();
+        self.names.insert(name.clone());
+        self.boundaries.insert(name, dims);
+        self
+    }
+
+    /// Is this scope empty (nothing is a const array)?
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// Is `name` a const-array factor here?
+    pub fn is_const(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    /// `name`'s declared policy for dimension `d`, defaulting to
+    /// [`BoundaryKind::Error`].
+    pub fn boundary(&self, name: &str, d: usize) -> BoundaryKind {
+        self.boundaries
+            .get(name)
+            .and_then(|dims| dims.get(d))
+            .copied()
+            .unwrap_or(BoundaryKind::Error)
+    }
 }

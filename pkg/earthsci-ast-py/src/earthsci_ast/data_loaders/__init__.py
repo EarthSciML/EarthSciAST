@@ -54,6 +54,7 @@ from .variables import (
     UnitConversionError,
     apply_unit_conversion,
     apply_variable_mapping,
+    parse_unit_conversion,
 )
 
 __all__ = [
@@ -76,6 +77,7 @@ __all__ = [
     "UnitConversionError",
     "apply_variable_mapping",
     "apply_unit_conversion",
+    "parse_unit_conversion",
     "GridLoaderError",
     "GridLoader",
     "load_grid",

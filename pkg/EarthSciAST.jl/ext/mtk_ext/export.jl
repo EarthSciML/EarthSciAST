@@ -312,7 +312,7 @@ Fields populated from the MTK IR:
 - `continuous_events`, `discrete_events` (from MTK callback lists)
 
 Fields left as placeholders (filled in Phase 2 per-model migrations):
-- `description`, `version`, `reference`, `tests`, `examples`
+- `description`, `version`, `reference`, `tests`, `analyses`
 - `metadata.tags`, `metadata.source_ref` (populated from `metadata` kwarg)
 """
 function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
@@ -370,7 +370,7 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
 
     # Serialize directly to a Dict so callers can mutate and embed
     # TODO_GAP notes before writing to disk. We bypass the EsmFile type
-    # because the tests/examples fields are intentionally empty placeholders
+    # because the tests/analyses fields are intentionally empty placeholders
     # the downstream migration step fills in later.
     model_dict = EarthSciAST.serialize_model(esm_model)
 
@@ -384,11 +384,11 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
         model_dict["reference"] = Dict{String,Any}(
             "notes" => join(ref_notes_lines, "\n"))
     end
-    # Always emit placeholder tests/examples arrays: the schema treats them
+    # Always emit placeholder tests/analyses arrays: the schema treats them
     # as optional, but their empty presence is the downstream migration
     # tooling's "to be filled in Phase 2" signal.
     model_dict["tests"] = Any[]
-    model_dict["examples"] = Any[]
+    model_dict["analyses"] = Any[]
 
     # 6. Wrap in EsmFile-shaped Dict ----------------------------------------
     out = Dict{String,Any}(

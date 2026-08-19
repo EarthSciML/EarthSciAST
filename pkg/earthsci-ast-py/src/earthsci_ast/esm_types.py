@@ -287,8 +287,8 @@ class Model:
     tolerance: Tolerance | None = None
     # Inline validation tests (esm-spec §6.6).
     tests: list[Test] = field(default_factory=list)
-    # Inline illustrative examples (esm-spec §6.7).
-    examples: list[Example] = field(default_factory=list)
+    # Inline illustrative analyses (esm-spec §6.7).
+    analyses: list[Analysis] = field(default_factory=list)
     # Initialization-only equations (hold at t=0) and solver guesses (gt-ebuq).
     initialization_equations: list[Equation] = field(default_factory=list)
     guesses: dict[str, float | Expr] = field(default_factory=dict)
@@ -355,8 +355,8 @@ class ReactionSystem:
     tolerance: Tolerance | None = None
     # Inline validation tests (esm-spec §6.6).
     tests: list[Test] = field(default_factory=list)
-    # Inline illustrative examples (esm-spec §6.7).
-    examples: list[Example] = field(default_factory=list)
+    # Inline illustrative analyses (esm-spec §6.7).
+    analyses: list[Analysis] = field(default_factory=list)
     # Events owned by this reaction system (schema nests events inside
     # components; the flat EsmFile.events view aggregates these same objects).
     continuous_events: list[ContinuousEvent] = field(default_factory=list)
@@ -364,7 +364,7 @@ class ReactionSystem:
 
 
 # ========================================
-# 2b. Inline Tests, Examples, and Plots (esm-spec §6.6 / §6.7)
+# 2b. Inline Tests, Analyses, and Plots (esm-spec §6.6 / §6.7)
 # ========================================
 
 
@@ -459,7 +459,7 @@ class PlotSeries:
 
 @dataclass
 class Plot:
-    """A plot specification associated with an example."""
+    """A plot specification associated with an analysis."""
 
     id: str
     type: str  # "line" | "scatter" | "heatmap"
@@ -498,13 +498,13 @@ class ParameterSweep:
 
 
 @dataclass
-class Example:
-    """Inline illustrative example of how to run a component."""
+class Analysis:
+    """Inline illustrative analysis of how to run a component."""
 
     id: str
     time_span: TimeSpan
     description: str | None = None
-    # Scalar initial-value overrides for this example run, keyed by state-variable
+    # Scalar initial-value overrides for this analysis run, keyed by state-variable
     # name. A component's initial fields are declared with `ic` op equations in the
     # model (esm-spec §11.4); this map overrides their scalar values for this run.
     initial_state: dict[str, float] | None = None
@@ -512,7 +512,7 @@ class Example:
     parameter_sweep: ParameterSweep | None = None
     plots: list[Plot] = field(default_factory=list)
     # esm-spec §9.7.10 form C: raw §9.7.2 import entries naming the
-    # discretization this example runs under. Retained (not consumed at load)
+    # discretization this analysis runs under. Retained (not consumed at load)
     # so the field survives round-trip, mirroring Test.expression_template_imports.
     expression_template_imports: list[Any] = field(default_factory=list)
 

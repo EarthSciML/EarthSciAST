@@ -200,7 +200,7 @@
           ]
         }
       ],
-      "examples": [
+      "analyses": [
         {
           "id": "default_drop",
           "description": "A single ball dropped from h=10 m and allowed to bounce for 10 s under default gravity and restitution. Plots height and velocity versus time on a shared time axis.",

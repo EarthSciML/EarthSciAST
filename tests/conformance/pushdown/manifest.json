@@ -1,21 +1,53 @@
 {
   "category": "pushdown",
   "version": "1.0",
-  "description": "Projection-pushdown auto-rewrite (desugar_pushdown) golden documents. Each fixture pairs an INPUT document with the GOLDEN rewritten document the Julia reference emits. Bindings run their own desugar_pushdown on the parsed input and deep-compare the result to the parsed golden (numeric equality by value, key order free); they must also assert idempotency (desugaring the golden returns it unchanged) and input purity (the input document is not mutated). Files are canonical JSON (sorted keys, 2-space indent) for byte-stable re-emission via scripts/generate-pushdown-goldens.jl.",
+  "description": "Projection-pushdown auto-rewrite (desugar_pushdown) golden documents. Each fixture pairs an INPUT document with the GOLDEN rewritten document the Julia reference emits. Bindings run their own desugar_pushdown on the parsed input and deep-compare the result to the parsed golden (numeric equality by value, key order free); they must also assert idempotency (desugaring the golden returns it unchanged) and input purity (the input document is not mutated). The corpus covers BOTH recognised orientations of the binning join (CONFORMANCE_SPEC.md 5.5.7): the FORWARD cell-output aggregate, whose rewritten form is re-pointed onto the compact derived axis AND gated on the generated pd_cell__* envelopes, and the MIRRORED record-output aggregate, which keeps its full record axis and receives ONLY the gate. Files are canonical JSON (sorted keys, 2-space indent) for byte-stable re-emission via scripts/generate-pushdown-goldens.jl.",
   "fixtures": [
     {
       "id": "pushdown/l1",
       "input": "conformance/pushdown/fixtures/pushdown_l1.esm",
       "golden": "conformance/pushdown/golden/pushdown_l1.rewritten.json",
       "model_name": "ISRM",
-      "tags": ["core", "pushdown", "l1"]
+      "tags": [
+        "core",
+        "pushdown",
+        "l1"
+      ]
+    },
+    {
+      "id": "pushdown/gated_dense",
+      "input": "conformance/pushdown/fixtures/pushdown_gated_dense.esm",
+      "golden": "conformance/pushdown/golden/pushdown_gated_dense.rewritten.json",
+      "model_name": "Binned",
+      "tags": [
+        "core",
+        "pushdown",
+        "gate",
+        "dense_aggregate"
+      ]
+    },
+    {
+      "id": "pushdown/mirror",
+      "input": "conformance/pushdown/fixtures/pushdown_mirror.esm",
+      "golden": "conformance/pushdown/golden/pushdown_mirror.rewritten.json",
+      "model_name": "Binned",
+      "tags": [
+        "core",
+        "pushdown",
+        "gate",
+        "mirrored_orientation"
+      ]
     },
     {
       "id": "pushdown/isrm",
       "input": "conformance/pushdown/fixtures/isrm.esm",
       "golden": "conformance/pushdown/golden/isrm.rewritten.json",
       "model_name": null,
-      "tags": ["pushdown", "isrm", "full_document"]
+      "tags": [
+        "pushdown",
+        "isrm",
+        "full_document"
+      ]
     }
   ]
 }

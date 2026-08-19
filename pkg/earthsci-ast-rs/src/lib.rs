@@ -81,6 +81,7 @@ pub mod structural;
 pub mod substitute;
 pub mod template_imports;
 pub mod types;
+pub mod unit_conversion;
 pub mod units;
 pub mod validate;
 

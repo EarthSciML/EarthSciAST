@@ -193,3 +193,152 @@ function _overlap_candidate_set(src_names::AbstractVector, tgt_names::AbstractVe
     return _overlap_candidate_set(_envelope_vectors(src_names, arrays),
                                   _envelope_vectors(tgt_names, arrays); eps=eps)
 end
+
+# =========================================================================== #
+# CANDIDATE-DRIVEN ENUMERATION (projection-pushdown Wall #1) — the SHARED
+# driver policy behind BOTH overlap-gated enumeration paths.
+#
+# An overlap gate resolves its ENTIRE admissible pair set once. Enumerating the
+# full cartesian product and membership-testing each tuple therefore does
+# O(∏ranges) work to reach O(|candidates|) surviving tuples. Driving from the
+# candidate set instead collapses the cost to O(|candidates|·∏ungated).
+#
+# The two consumers differ ONLY in loop shape, never in policy:
+#
+#   * the value-invention producer (`_vi_enumerate_join`, value_invention.jl)
+#     enumerates ranges LAZILY (a ragged `of` bound depends on its parent
+#     binding), so it recurses; BOTH gated symbols are contracted there.
+#   * the dense aggregate expansion (`_foreach_aggregate_term`,
+#     tree_walk/resolve.jl) unrolls `Iterators.product` over PRE-EXPANDED
+#     iterators once per output cell, and the output cell has usually already
+#     bound one of the two gated symbols.
+#
+# `_overlap_drive_plan` below is the one implementation of the decision both
+# make: which symbol(s) the gate drives, and with which values. Everything a
+# caller then does is bind those values and recurse/product as it always did.
+#
+# The driver is a PURE OPTIMISATION. Both callers still run the full membership
+# test (`_join_admits` / `_vi_join_ok`) on every leaf, so a shape the planner
+# declines to drive (`:none`) falls back to the untouched full product and the
+# admitted leaf SET is identical either way.
+# =========================================================================== #
+
+# Instrumentation: number of leaf bindings an OVERLAP-GATED enumerator VISITED
+# (a tuple its callback was invoked on / a product tuple its unroll entered).
+# Reset by callers/tests; proves that an overlap-gated walk — the value-invention
+# producer AND the dense aggregate expansion alike — visits
+# O(|candidates|·∏ungated) tuples, NOT the full O(∏ranges) product
+# (projection-pushdown Wall #1).
+#
+# Counted ONLY when an overlap gate is present, so every ungated / bin-equality
+# expansion (the overwhelming majority, and the engine's hottest loop) keeps its
+# exact current instruction stream.
+const _VI_ENUM_VISITS = Ref{Int}(0)
+
+const _NO_PARTNERS = Int[]
+
+# The pairs of `oi` ascending by `(pos_src, pos_tgt)` — the deterministic
+# PAIR-drive order. Built once, cached on the index.
+function _overlap_sorted_pairs(oi::_OverlapIndex)
+    oi.sorted === nothing && (oi.sorted = sort!(collect(oi.pairs)))
+    return oi.sorted::Vector{Tuple{Int,Int}}
+end
+
+# `side == :l` ⇒ `pos_l ⇒ sorted pos_r`s; `side == :r` ⇒ `pos_r ⇒ sorted pos_l`s.
+# Built once per side, cached on the index (see the `_OverlapIndex` note).
+function _overlap_adjacency(oi::_OverlapIndex, side::Symbol)
+    cached = side === :l ? oi.adj_l : oi.adj_r
+    cached === nothing || return cached::Dict{Int,Vector{Int}}
+    adj = Dict{Int,Vector{Int}}()
+    for (pl, pr) in oi.pairs
+        k, v = side === :l ? (pl, pr) : (pr, pl)
+        push!(get!(() -> Int[], adj, k), v)
+    end
+    for v in values(adj)
+        sort!(v)
+    end
+    side === :l ? (oi.adj_l = adj) : (oi.adj_r = adj)
+    return adj
+end
+
+# The SORTED partner positions of `pos` on the side opposite `side`
+# (`side` names the side `pos` itself lives on). Empty when `pos` has none.
+_overlap_partners(oi::_OverlapIndex, side::Symbol, pos::Int) =
+    get(_overlap_adjacency(oi, side), pos, _NO_PARTNERS)
+
+# The first OVERLAP gate (the one carrying a prebuilt candidate index) among a
+# resolved gate vector, or `nothing`. Shared by both enumeration paths: this is
+# the gate whose candidates DRIVE enumeration. A bin-equality gate cannot drive
+# (its admissible pair set is never materialised) and is left as a filter.
+function _overlap_driver(gates)
+    gates === nothing && return nothing
+    for g in gates
+        g.candidates === nothing || return g
+    end
+    return nothing
+end
+
+# `vals` restricted to `parts`, ASCENDING — or `nothing` when `vals` is not an
+# ascending contiguous integer range and the restriction therefore cannot be
+# proven to be the same SUBSEQUENCE the membership test would have admitted.
+#
+# Preserving the subsequence (not merely the set) is what makes the driven walk
+# BIT-IDENTICAL to the filtered full product: the terms it drops are exactly the
+# gate-rejected ones, in the same relative order, and each of those contributes
+# the semiring identity. A shape this cannot prove returns `nothing`, and the
+# caller falls back to the full product.
+function _overlap_restrict(vals, parts::Vector{Int})
+    isempty(parts) && return Int[]
+    if vals isa AbstractUnitRange{<:Integer}
+        return Int[Int(p) for p in parts if p in vals]
+    elseif vals isa AbstractVector{<:Integer} && !isempty(vals)
+        lo = Int(first(vals)); hi = Int(last(vals)); n = length(vals)
+        n == hi - lo + 1 || return nothing          # stepped / permuted ⇒ decline
+        out = Int[]
+        for p in parts
+            (lo <= p <= hi) || continue
+            @inbounds Int(vals[p - lo + 1]) == p || return nothing   # not 1-strided
+            push!(out, p)
+        end
+        return out
+    end
+    return nothing
+end
+
+# ---- the shared DRIVE PLAN -------------------------------------------------
+#
+# Decide how `gate` drives an enumeration whose FREE (still-to-be-enumerated)
+# symbols are `free_syms` and whose already-bound symbols are `bound` (symbol ⇒
+# position). Returns one of:
+#
+#   `(:none,)`                    — do not drive; walk the full product.
+#   `(:reject,)`                  — both gated symbols are already bound and the
+#                                   pair is not a candidate: NO leaf is admitted.
+#   `(:pairs, sym_l, sym_r, ps)`  — both gated symbols are free: bind them from
+#                                   the candidate pairs `ps`, product the rest.
+#   `(:restrict, sym, vals)`      — one gated symbol is free and the other is
+#                                   bound: the free one enumerates only `vals`.
+#
+# `valuesof(sym)` supplies a free symbol's full value range; it is consulted
+# only for the `:restrict` shape (to prove the restriction is order-preserving).
+function _overlap_drive_plan(gate, free_syms, bound, valuesof)
+    gate === nothing && return (:none,)
+    oi = gate.candidates
+    oi === nothing && return (:none,)
+    l = gate.sym_l; r = gate.sym_r
+    lf = l in free_syms; rf = r in free_syms
+    if lf && rf
+        return (:pairs, l, r, _overlap_sorted_pairs(oi))
+    elseif lf || rf
+        free  = lf ? l : r
+        fixed = lf ? r : l
+        haskey(bound, fixed) || return (:none,)     # unbound ⇒ nothing to drive on
+        parts = _overlap_partners(oi, lf ? :r : :l, Int(bound[fixed]))
+        vals = _overlap_restrict(valuesof(free), parts)
+        vals === nothing && return (:none,)
+        return (:restrict, free, vals)
+    else
+        (haskey(bound, l) && haskey(bound, r)) || return (:none,)
+        return (Int(bound[l]), Int(bound[r])) in oi ? (:none,) : (:reject,)
+    end
+end

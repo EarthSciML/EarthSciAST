@@ -42,10 +42,15 @@ from .errors import EarthSciAstError
 
 __all__ = [
     "BroadPhaseError",
+    "ENUM_VISITS",
+    "OverlapIndex",
     "broad_phase_candidates",
     "envelope_vectors_from_cols",
     "envelope_vectors",
     "overlap_candidate_set",
+    "overlap_drive_plan",
+    "overlap_driver",
+    "overlap_restrict",
     "ring_envelopes",
 ]
 
@@ -182,3 +187,216 @@ def overlap_candidate_set(
     consulted by membership per contracted tuple.
     """
     return set(broad_phase_candidates(src_envs, tgt_envs, eps=eps))
+
+
+# =========================================================================== #
+# CANDIDATE-DRIVEN ENUMERATION (projection-pushdown Wall #1) — the SHARED
+# driver policy behind BOTH overlap-gated enumeration paths.
+#
+# An overlap gate resolves its ENTIRE admissible pair set once. Enumerating the
+# full cartesian product and membership-testing each tuple therefore does
+# ``O(PROD ranges)`` work to reach ``O(|candidates|)`` surviving tuples. Driving
+# from the candidate set instead collapses the cost to
+# ``O(|candidates| * PROD ungated)``.
+#
+# The two consumers differ ONLY in loop shape, never in policy:
+#
+#   * the value-invention producer (``value_invention._vi_enumerate_join``)
+#     enumerates ranges LAZILY (a ragged ``of`` bound depends on its parent
+#     binding), so it recurses; BOTH gated symbols are contracted there.
+#   * the dense aggregate expansion (``numpy_interpreter._eval_arrayop_scalar``)
+#     walks the contracted cartesian product once per OUTPUT cell, and that
+#     output cell has usually already bound one of the two gated symbols.
+#
+# :func:`overlap_drive_plan` is the one implementation of the decision both
+# make: which symbol(s) the gate drives, and with which values. Everything a
+# caller then does is bind those values and recurse / product as it always did.
+#
+# The driver is a PURE OPTIMISATION. Both callers still run the full membership
+# test on every leaf, so a shape the planner declines to drive (``"none"``) falls
+# back to the untouched full product and the admitted leaf SET is identical
+# either way.
+# =========================================================================== #
+
+#: Instrumentation: number of leaf bindings an OVERLAP-GATED enumerator VISITED
+#: (a tuple its callback was invoked on / a product tuple its unroll entered).
+#: Reset by callers / tests; proves that an overlap-gated walk — the
+#: value-invention producer AND the dense aggregate expansion alike — visits
+#: ``O(|candidates| * PROD ungated)`` tuples, NOT the full ``O(PROD ranges)``
+#: product (projection-pushdown Wall #1).
+#:
+#: Counted ONLY when an overlap gate is present, so every ungated / bin-equality
+#: expansion (the overwhelming majority, and the engine's hottest loop) keeps its
+#: exact current instruction stream.
+ENUM_VISITS = [0]
+
+_NO_PARTNERS: list[int] = []
+
+
+class OverlapIndex:
+    """A resolved overlap gate's candidate pair set, plus the derived views the
+    enumeration driver needs, built LAZILY and cached.
+
+    A gate is resolved ONCE per node but consulted once per OUTPUT CELL, so
+    rebuilding the sorted pair list or an adjacency map per cell would reinstate
+    exactly the cost being removed. Membership (``in``), ``len`` and truthiness
+    forward to the raw set, so every existing use site reads unchanged.
+
+    ``__contains__`` is TOTAL: a probe that is not a hashable ``(int, int)``
+    answers ``False`` rather than raising, matching the plain ``set`` this
+    replaced (a categorical range would otherwise turn a rejected binding into
+    a crash).
+    """
+
+    __slots__ = ("pairs", "_sorted", "_adj_l", "_adj_r")
+
+    def __init__(self, pairs: Any) -> None:
+        self.pairs: set[tuple[int, int]] = pairs if isinstance(pairs, set) else set(pairs)
+        self._sorted: list[tuple[int, int]] | None = None
+        self._adj_l: dict[int, list[int]] | None = None
+        self._adj_r: dict[int, list[int]] | None = None
+
+    def __contains__(self, probe: Any) -> bool:
+        try:
+            return probe in self.pairs
+        except TypeError:  # unhashable probe — not a candidate, not a crash
+            return False
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __bool__(self) -> bool:
+        return bool(self.pairs)
+
+    def __iter__(self):
+        return iter(self.pairs)
+
+    def sorted_pairs(self) -> list[tuple[int, int]]:
+        """The pairs ascending by ``(pos_src, pos_tgt)`` — the deterministic
+        PAIR-drive order. Built once, cached."""
+        if self._sorted is None:
+            self._sorted = sorted(self.pairs)
+        return self._sorted
+
+    def adjacency(self, side: str) -> dict[int, list[int]]:
+        """``side == "l"`` -> ``pos_l -> sorted pos_r``s; ``side == "r"`` ->
+        ``pos_r -> sorted pos_l``s. Built once per side, cached."""
+        cached = self._adj_l if side == "l" else self._adj_r
+        if cached is not None:
+            return cached
+        adj: dict[int, list[int]] = {}
+        for pl, pr in self.pairs:
+            k, v = (pl, pr) if side == "l" else (pr, pl)
+            adj.setdefault(k, []).append(v)
+        for v_list in adj.values():
+            v_list.sort()
+        if side == "l":
+            self._adj_l = adj
+        else:
+            self._adj_r = adj
+        return adj
+
+    def partners(self, side: str, pos: int) -> list[int]:
+        """The SORTED partner positions of ``pos`` on the side opposite ``side``
+        (``side`` names the side ``pos`` itself lives on). Empty when none."""
+        return self.adjacency(side).get(int(pos), _NO_PARTNERS)
+
+
+def overlap_driver(gates: Any) -> Any:
+    """The first OVERLAP gate (the one carrying a prebuilt candidate index)
+    among a resolved gate sequence, or ``None``. Shared by both enumeration
+    paths: this is the gate whose candidates DRIVE enumeration. A bin-equality
+    gate cannot drive (its admissible pair set is never materialised) and is
+    left as a filter."""
+    if gates is None:
+        return None
+    for g in gates:
+        if getattr(g, "candidates", None) is not None:
+            return g
+    return None
+
+
+def overlap_restrict(vals: Any, parts: Sequence[int]) -> list[int] | None:
+    """``vals`` restricted to ``parts``, ASCENDING — or ``None`` when ``vals``
+    is not an ascending contiguous integer range and the restriction therefore
+    cannot be proven to be the same SUBSEQUENCE the membership test would have
+    admitted.
+
+    Preserving the subsequence (not merely the set) is what makes the driven
+    walk BIT-IDENTICAL to the filtered full product: the terms it drops are
+    exactly the gate-rejected ones, in the same relative order, and each of
+    those contributes the semiring identity. A shape this cannot prove returns
+    ``None``, and the caller falls back to the full product.
+    """
+    if not parts:
+        return []
+    # NEVER materialise `vals`: this runs once per OUTPUT CELL, and copying the
+    # contracted axis each time would reinstate the O(N_out * N_contract) cost
+    # the driver exists to remove (1520 * 43,650 on isrm.esm). Random access is
+    # all the proof below needs, so a sized, indexable range is used in place.
+    try:
+        n = len(vals)
+    except TypeError:  # a bare iterator has no length — materialise that one
+        vals = list(vals)
+        n = len(vals)
+    if n == 0:
+        return None
+    lo, hi = int(vals[0]), int(vals[-1])
+    if n != hi - lo + 1:
+        return None  # stepped / permuted => decline
+    out: list[int] = []
+    for p in parts:
+        p = int(p)
+        if not (lo <= p <= hi):
+            continue
+        if int(vals[p - lo]) != p:
+            return None  # not 1-strided ascending => decline
+        out.append(p)
+    return out
+
+
+def overlap_drive_plan(
+    gate: Any,
+    free_syms: Sequence[str],
+    bound: Mapping[str, int],
+    valuesof: Any,
+) -> tuple:
+    """Decide how ``gate`` drives an enumeration whose FREE (still-to-be-
+    enumerated) symbols are ``free_syms`` and whose already-bound symbols are
+    ``bound`` (symbol -> 1-based position). Returns one of:
+
+    * ``("none",)`` — do not drive; walk the full product.
+    * ``("reject",)`` — both gated symbols are already bound and the pair is not
+      a candidate: NO leaf is admitted.
+    * ``("pairs", sym_l, sym_r, pairs)`` — both gated symbols are free: bind
+      them together from the candidate ``pairs``, product the rest.
+    * ``("restrict", sym, vals)`` — one gated symbol is free and the other is
+      bound: the free one enumerates only ``vals``.
+
+    ``valuesof(sym)`` supplies a free symbol's full value range; it is consulted
+    only for the ``"restrict"`` shape (to prove the restriction is
+    order-preserving).
+    """
+    if gate is None:
+        return ("none",)
+    oi = getattr(gate, "candidates", None)
+    if oi is None:
+        return ("none",)
+    l_sym, r_sym = gate.sym_l, gate.sym_r
+    lf = l_sym in free_syms
+    rf = r_sym in free_syms
+    if lf and rf:
+        return ("pairs", l_sym, r_sym, oi.sorted_pairs())
+    if lf or rf:
+        free = l_sym if lf else r_sym
+        fixed = r_sym if lf else l_sym
+        if fixed not in bound:
+            return ("none",)  # unbound => nothing to drive on
+        parts = oi.partners("r" if lf else "l", int(bound[fixed]))
+        vals = overlap_restrict(valuesof(free), parts)
+        if vals is None:
+            return ("none",)
+        return ("restrict", free, vals)
+    if l_sym not in bound or r_sym not in bound:
+        return ("none",)
+    return ("none",) if (int(bound[l_sym]), int(bound[r_sym])) in oi else ("reject",)

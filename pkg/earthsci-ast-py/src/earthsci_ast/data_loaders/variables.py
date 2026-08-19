@@ -46,6 +46,41 @@ def _scale_factor(conversion: Any, *, variable_name: str) -> float | None:
     )
 
 
+def parse_unit_conversion(raw: Any, *, variable_name: str) -> float | ExprNode | None:
+    """Parse a loader variable's RAW ``unit_conversion`` (esm-spec §8.5).
+
+    The JSON spelling is ``number | Expression``: a plain multiplicative factor,
+    or a full Expression AST for a conversion that is not a pure scale — an
+    affine one like °F→K, which §4.8.1 keeps OUT of the dimensional metadata on
+    purpose ("a unit conversion that needs the offset is a ``unit_conversion``
+    expression, not a dimensional judgement").
+
+    Returns ``None`` when the variable declares none, so a document that
+    declares no conversion costs nothing and behaves exactly as before. This is
+    the raw-document entry point the provider paths use; the typed parse
+    (:mod:`earthsci_ast.parse`) produces the same two shapes.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise UnitConversionError(
+            f"variable {variable_name!r} unit_conversion must be a number or an "
+            f"Expression object, got a boolean"
+        )
+    if isinstance(raw, Real):
+        return float(raw)
+    if isinstance(raw, ExprNode):
+        return raw
+    if isinstance(raw, Mapping):
+        from ..parse import _parse_expression
+
+        return _parse_expression(dict(raw))
+    raise UnitConversionError(
+        f"variable {variable_name!r} unit_conversion must be a number or an "
+        f"Expression object, got {type(raw).__name__}"
+    )
+
+
 def apply_unit_conversion(values: Any, conversion: Any, *, variable_name: str) -> Any:
     """Apply ``conversion`` to ``values``.
 

@@ -4087,6 +4087,29 @@ function _component_template_reg(file::EsmFile, model_name)
     return get(ct, "models.$name", nothing)
 end
 
+"""
+    expanded_model(file::EsmFile, model_name=nothing) -> Model
+
+A deep copy of the selected model with every surviving Option-B
+`apply_expression_template` reference (esm-spec §9.6.4) expanded against the
+document's `component_templates` — the same expansion `build_evaluator`
+performs before compiling, exposed as a public seam so downstream tools
+(e.g. EarthSciASTDiff, which differentiates the tree) analyze the SAME tree
+the evaluator compiles. `file` is not mutated.
+
+Model selection matches [`build_evaluator`](@ref): `model_name = nothing`
+selects the document's only model, or throws `E_TREEWALK_AMBIGUOUS_MODEL`
+when there are several; an unknown name throws `E_TREEWALK_NO_MODEL`.
+A document with no surviving references returns the plain copy.
+"""
+function expanded_model(file::EsmFile,
+                        model_name::Union{Nothing,AbstractString}=nothing)::Model
+    model = deepcopy(_select_model(file, model_name))
+    reg = _component_template_reg(file, model_name)
+    reg === nothing || _expand_model_refs!(model, reg)
+    return model
+end
+
 # Value-invention materialisation runs only through the AbstractDict
 # front-door (which owns the document-scoped index-set registry the pass
 # needs); default the internal extents/vars to empty here so a direct
@@ -4403,6 +4426,26 @@ function build_evaluator(esm::AbstractDict;
         _fed = _feed_back_vi_members(file.index_sets, _vi.members, model)
         if !isempty(_fed)
             merge!(_ca, _fed)
+            kwd[:const_arrays] = _ca
+        end
+    end
+
+    # ---- Phase 2b Hook 1b: OVERLAP env factors on a DERIVED axis ----
+    # §5.5.6 requires an `join.overlap` gate's envelope factors to be const-array
+    # data — the broad phase runs ONCE at build time. The pushdown rewrite gates
+    # each rewritten binning aggregate on the generated `pd_cell__*` gathers,
+    # which live on the compact derived axis and so cannot exist until the axis
+    # is sized (value invention) and its member factor is fed back (Hook 1
+    # above). Derive them here, immediately after. No-op (byte-identical) for a
+    # document whose overlap-gate factors are already const arrays — which is
+    # every document that predates the rewrite's forward gate.
+    if model !== nothing
+        _envf = _with_param_reads(_preads) do
+            _derive_overlap_env_factors(model, file.index_sets, _ca, _params,
+                (_vi === nothing ? Dict{String,Int}() : _vi.extents), _regfns)
+        end
+        if !isempty(_envf)
+            merge!(_ca, _envf)
             kwd[:const_arrays] = _ca
         end
     end

@@ -256,6 +256,246 @@ fn ring_envelopes(rings: &ArrayD<f64>) -> Result<Vec<Envelope>, String> {
     Ok(out)
 }
 
+// =========================================================================== //
+// CANDIDATE-DRIVEN ENUMERATION (projection-pushdown Wall #1) — the SHARED
+// driver policy behind BOTH overlap-gated enumeration paths.
+//
+// An overlap gate resolves its ENTIRE admissible pair set once. Enumerating the
+// full cartesian product and membership-testing each tuple therefore does
+// `O(∏ranges)` work to reach `O(|candidates|)` surviving tuples. Driving from
+// the candidate set instead collapses the cost to `O(|candidates|·∏ungated)`.
+//
+// The two consumers differ ONLY in loop shape, never in policy:
+//
+//   * the value-invention producer ([`crate::value_invention`]) enumerates
+//     ranges LAZILY (a ragged `of` bound depends on its parent binding), so it
+//     recurses; BOTH gated symbols are contracted there.
+//   * the dense aggregate expansion (`simulate_array::eval::eval_arrayop`)
+//     unrolls the cartesian product over PRE-EXPANDED contraction bounds once
+//     per output cell, and the output cell has usually already bound one of the
+//     two gated symbols.
+//
+// [`overlap_drive_plan`] is the one implementation of the decision both make:
+// which symbol(s) the gate drives, and with which values. Everything a caller
+// then does is bind those values and recurse / product as it always did.
+//
+// The driver is a PURE OPTIMISATION. Both callers still run the full membership
+// test (the narrow `filter`, and the gate itself) on every leaf, so a shape the
+// planner declines to drive ([`DrivePlan::Full`]) falls back to the untouched
+// full product and the admitted leaf SET is identical either way. This mirrors
+// the Julia `_overlap_drive_plan` in `pkg/EarthSciAST.jl/src/broad_phase.jl`.
+// =========================================================================== //
+
+use std::cell::Cell;
+use std::collections::HashSet;
+
+thread_local! {
+    /// Instrumentation: number of leaf bindings an OVERLAP-GATED dense
+    /// expansion VISITED (a product tuple its unroll entered). Reset by
+    /// callers/tests; proves that an overlap-gated walk visits
+    /// `O(|candidates|·∏ungated)` tuples, NOT the full `O(∏ranges)` product
+    /// (projection-pushdown Wall #1).
+    ///
+    /// Counted ONLY when an overlap gate is present, so every ungated /
+    /// bin-equality expansion (the overwhelming majority, and the engine's
+    /// hottest loop) keeps its exact current instruction stream.
+    static ENUM_VISITS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Add `n` to this thread's overlap-gated visit counter.
+#[inline]
+pub(crate) fn bump_overlap_enum_visits(n: u64) {
+    ENUM_VISITS.with(|c| c.set(c.get().wrapping_add(n)));
+}
+
+/// This thread's overlap-gated leaf-visit count (see [`reset_overlap_enum_visits`]).
+pub fn overlap_enum_visits() -> u64 {
+    ENUM_VISITS.with(Cell::get)
+}
+
+/// Zero this thread's overlap-gated leaf-visit counter.
+pub fn reset_overlap_enum_visits() {
+    ENUM_VISITS.with(|c| c.set(0));
+}
+
+/// Which side of an overlap gate a position lives on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The `src_env` (QUERY) side.
+    Src,
+    /// The `tgt_env` (INDEXED / cell) side.
+    Tgt,
+}
+
+/// The broad-phase candidate set of an OVERLAP join gate (§5.5.6), together
+/// with the DERIVED views the candidate-driven enumerator reads:
+///
+///   * the raw `(pos_src, pos_tgt)` membership set (the `in` test);
+///   * the same pairs ASCENDING — the pair drive order;
+///   * one side's position ⇒ its SORTED partner positions on the other side,
+///     the drive order used when the aggregate has already bound one gated axis
+///     (a per-output-cell dense aggregate).
+///
+/// Positions are **1-based**, matching the enumeration bindings (an index-set
+/// range resolves to `[1, N]`, and `vi_range_values` binds position `p` to `p`).
+///
+/// The derived views are built ONCE with the index. A gate is resolved once per
+/// node but consulted once per output cell, so rebuilding an adjacency per cell
+/// would reinstate exactly the `O(N_tgt·N_src)` cost the driver removes.
+#[derive(Debug, Clone, Default)]
+pub struct OverlapIndex {
+    pairs: HashSet<(i64, i64)>,
+    sorted: Vec<(i64, i64)>,
+    adj_src: HashMap<i64, Vec<i64>>,
+    adj_tgt: HashMap<i64, Vec<i64>>,
+}
+
+const NO_PARTNERS: &[i64] = &[];
+
+impl OverlapIndex {
+    /// Build the index from 0-based broad-phase pairs (as
+    /// [`broad_phase_candidates`] returns them), shifting to the 1-based range
+    /// positions the enumeration bindings use.
+    pub fn from_zero_based(pairs: &[(usize, usize)]) -> Self {
+        let mut sorted: Vec<(i64, i64)> = pairs
+            .iter()
+            .map(|&(q, c)| (q as i64 + 1, c as i64 + 1))
+            .collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let mut adj_src: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut adj_tgt: HashMap<i64, Vec<i64>> = HashMap::new();
+        for &(l, r) in &sorted {
+            adj_src.entry(l).or_default().push(r);
+            adj_tgt.entry(r).or_default().push(l);
+        }
+        // `sorted` ascends by `(l, r)`, so every `adj_src` list is already
+        // ascending; `adj_tgt` collects in `l` order, which is ascending too.
+        OverlapIndex {
+            pairs: sorted.iter().copied().collect(),
+            sorted,
+            adj_src,
+            adj_tgt,
+        }
+    }
+
+    /// Is `(pos_src, pos_tgt)` a candidate pair?
+    #[inline]
+    pub fn contains(&self, src: i64, tgt: i64) -> bool {
+        self.pairs.contains(&(src, tgt))
+    }
+
+    /// Number of candidate pairs.
+    pub fn len(&self) -> usize {
+        self.sorted.len()
+    }
+
+    /// Is the candidate set empty?
+    pub fn is_empty(&self) -> bool {
+        self.sorted.is_empty()
+    }
+
+    /// The candidate pairs ascending by `(pos_src, pos_tgt)`.
+    pub fn sorted_pairs(&self) -> &[(i64, i64)] {
+        &self.sorted
+    }
+
+    /// The SORTED partner positions of `pos` on the side opposite `side`
+    /// (`side` names the side `pos` itself lives on). Empty when it has none.
+    pub fn partners(&self, side: Side, pos: i64) -> &[i64] {
+        let adj = match side {
+            Side::Src => &self.adj_src,
+            Side::Tgt => &self.adj_tgt,
+        };
+        adj.get(&pos).map(Vec::as_slice).unwrap_or(NO_PARTNERS)
+    }
+}
+
+/// How an overlap gate drives an enumeration — the shared decision the
+/// value-invention producer and the dense aggregate expansion both apply.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DrivePlan {
+    /// Do not drive; walk the full product (and let the membership test filter).
+    Full,
+    /// Both gated symbols are already bound and the pair is NOT a candidate:
+    /// no leaf is admitted at all. The output position takes the semiring
+    /// identity (§5.5.6 "Identity fill").
+    Reject,
+    /// Both gated symbols are free: bind them from the candidate PAIRS, then
+    /// take the cartesian product with any ungated ranges.
+    Pairs,
+    /// One gated symbol is free and the other is already bound: the free one
+    /// enumerates only `vals` — its bound partner's candidates, restricted to
+    /// its own range and ASCENDING, i.e. the exact order-preserving
+    /// subsequence of the range it would otherwise have walked.
+    Restrict {
+        /// `true` when the free symbol is the `src_env` side.
+        free_is_src: bool,
+        /// The admitted values, ascending.
+        vals: Vec<i64>,
+    },
+}
+
+/// `parts` restricted to the inclusive integer range `[lo, hi]`, ASCENDING.
+///
+/// Preserving the SUBSEQUENCE (not merely the set) is what makes the driven
+/// walk BIT-IDENTICAL to the filtered full product: the terms it drops are
+/// exactly the gate-rejected ones, in the same relative order, and each of
+/// those contributes the semiring identity. A dense contraction range is always
+/// an ascending contiguous interval (`RangeSpec::bounds` yields `[lo, hi]` and
+/// the evaluator walks `lo..=hi`), so unlike the Julia reference — whose
+/// `contract_iters` may be arbitrary integer vectors and which therefore has to
+/// PROVE 1-stridedness before it may restrict — there is nothing here that can
+/// fail to be order-preserving.
+fn restrict_to_range(parts: &[i64], lo: i64, hi: i64) -> Vec<i64> {
+    parts
+        .iter()
+        .copied()
+        .filter(|p| *p >= lo && *p <= hi)
+        .collect()
+}
+
+/// Decide how an overlap gate drives an enumeration.
+///
+/// `src_bound` / `tgt_bound` give each gated symbol's already-bound position
+/// (`None` when the symbol is still FREE, i.e. to be enumerated), and
+/// `free_range` gives the free symbol's own inclusive `(lo, hi)` bounds — it is
+/// consulted only for the [`DrivePlan::Restrict`] shape.
+pub fn overlap_drive_plan(
+    index: &OverlapIndex,
+    src_bound: Option<i64>,
+    tgt_bound: Option<i64>,
+    free_range: Option<(i64, i64)>,
+) -> DrivePlan {
+    match (src_bound, tgt_bound) {
+        // Both free ⇒ drive from the sorted candidate pairs.
+        (None, None) => DrivePlan::Pairs,
+        // Both bound ⇒ a single membership test.
+        (Some(l), Some(r)) => {
+            if index.contains(l, r) {
+                DrivePlan::Full
+            } else {
+                DrivePlan::Reject
+            }
+        }
+        // One bound, one free ⇒ the free one walks its partner list.
+        (Some(l), None) => match free_range {
+            Some((lo, hi)) => DrivePlan::Restrict {
+                free_is_src: false,
+                vals: restrict_to_range(index.partners(Side::Src, l), lo, hi),
+            },
+            None => DrivePlan::Full,
+        },
+        (None, Some(r)) => match free_range {
+            Some((lo, hi)) => DrivePlan::Restrict {
+                free_is_src: true,
+                vals: restrict_to_range(index.partners(Side::Tgt, r), lo, hi),
+            },
+            None => DrivePlan::Full,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

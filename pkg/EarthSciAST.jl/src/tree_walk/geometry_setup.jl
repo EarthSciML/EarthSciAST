@@ -1285,3 +1285,111 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
     end
     return out
 end
+
+# ---- Build-time OVERLAP-gate ENVELOPE-FACTOR derivation (§5.5.6) -----------
+# An `join.overlap` gate names CONST-ARRAY envelope factors: its broad phase is
+# computed ONCE at build time, so every factor it names must be build-time data
+# by the time `_resolve_join_gates_for` runs. That is automatic for a plain
+# parameter (`src_W[c]`) or a derived coordinate (`X[r]`, above) — but NOT for a
+# factor living on a value-invented DERIVED axis.
+#
+# The projection-pushdown rewrite emits exactly such a factor: it re-points a
+# binning aggregate onto the compact `pd_support__*` axis and gates it on the
+# generated `pd_cell__*` gathers, `cell_F[c] = index(F, index(member_factor, c))`.
+# Those cannot exist before value invention has sized the derived axis and fed
+# the member factor back (Hook 1), so they are derived HERE, one hook later.
+#
+# Deliberately NARROW. A name is materialised only when it (a) is named by an
+# overlap gate, (b) is not already const-array data, (c) is a 1-D array OBSERVED
+# defined by an aggregate, and (d) reads nothing but build-time-constant names
+# (never a live state) — exactly the determinism guard `_derive_binning_coords`
+# applies. Anything else is left alone and the existing missing-factor error
+# still surfaces. Evaluation goes through the GENERAL build-time cell pipeline
+# (`_eval_cellwise` via `_materialize_setup_general_map`), which is the one that
+# speaks indirect gathers (`index(F, index(M, c))`).
+#
+# `vi_extents` is the value-invention extent map, keyed by PRODUCER id; the
+# setup materializer resolves a range by its index-set NAME, so derived sets are
+# re-keyed through `from_faq` here. Returns name → dense values (empty, hence
+# byte-identical, for a document with no overlap gate).
+
+# Every `src_env` / `tgt_env` factor name of every OVERLAP join clause reachable
+# from `model`'s variable expressions and equations.
+function _overlap_env_factor_names(model)
+    names = Set{String}()
+    seen = IdDict{OpExpr,Nothing}()
+    function visit(e)
+        e isa OpExpr || return
+        haskey(seen, e) && return
+        seen[e] = nothing
+        if e.join !== nothing
+            for clause in e.join
+                clause isa _OverlapJoinSpec || continue
+                for f in clause.src_env; push!(names, String(f)); end
+                for f in clause.tgt_env; push!(names, String(f)); end
+            end
+        end
+        for a in e.args; visit(a); end
+        visit(e.expr_body); visit(e.filter); visit(e.lower); visit(e.upper)
+        e.values === nothing || for v in e.values; visit(v); end
+    end
+    for (_, v) in model.variables
+        visit(v.expression)
+    end
+    for eqs in (model.equations, model.initialization_equations)
+        eqs === nothing && continue
+        for eq in eqs
+            visit(eq.lhs); visit(eq.rhs)
+        end
+    end
+    return names
+end
+
+function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_overrides,
+                                     vi_extents,
+                                     registered_functions::AbstractDict=Dict{String,Function}())
+    out = Dict{String,Vector{Float64}}()
+    want = _overlap_env_factor_names(model)
+    isempty(want) && return out                  # byte-identical: no overlap gate
+    env = _build_setup_env(model, const_arrays_kw; param_overrides=param_overrides)
+    todo = sort!(String[n for n in want if !haskey(env, n)])
+    isempty(todo) && return out                  # every factor is already const data
+    # Derived-set extents keyed by SET NAME (value invention keys them by producer id).
+    derived_extents = Dict{String,Int}()
+    for (sname, iset) in index_sets
+        (iset isa IndexSet && iset.kind == "derived" && iset.from_faq !== nothing) || continue
+        e = get(vi_extents, String(iset.from_faq), nothing)
+        e === nothing || (derived_extents[String(sname)] = Int(e))
+    end
+    var_shapes = _declared_var_shapes(model)
+    state_names = Set{String}(n for (n, v) in model.variables if v.type == StateVariable)
+    # One SATURATING pass so a factor that gathers through another derived factor
+    # resolves regardless of name order (the same fixpoint `_derive_binning_coords`
+    # uses; monotone over a finite set, so it terminates).
+    _saturate!() do
+        changed = false
+        for n in todo
+            haskey(out, n) && continue
+            v = get(model.variables, n, nothing)
+            (v !== nothing && v.type == ObservedVariable) || continue
+            length(get(var_shapes, n, String[])) == 1 || continue
+            e = v.expression
+            (e isa OpExpr && _is_aggregate_op(e.op)) || continue
+            bound = _agg_bound_syms(e); ok = true
+            for r in _referenced_var_names(e)
+                r in bound && continue
+                r in state_names && (ok = false; break)     # never a live state
+                haskey(env, r) && continue
+                ok = false; break                            # unresolved dep — retry / drop
+            end
+            ok || continue
+            arr = _materialize_setup_general_map(e, env, index_sets, derived_extents,
+                                                 registered_functions)
+            env[n] = arr
+            out[n] = vec(Array{Float64}(arr))
+            changed = true
+        end
+        changed
+    end
+    return out
+end

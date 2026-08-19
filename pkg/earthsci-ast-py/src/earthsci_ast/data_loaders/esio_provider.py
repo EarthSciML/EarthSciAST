@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from ..pushdown_rewrite import parse_select_axes
+from .variables import apply_unit_conversion, parse_unit_conversion
 
 Window = tuple[_dt.datetime, _dt.datetime]
 
@@ -346,6 +347,9 @@ class _ColumnSpec:
     name: str
     file_variable: str
     codes: _CodeMap | None = None
+    #: The declared ``unit_conversion`` (esm-spec §8.5), parsed; ``None`` when
+    #: the variable declares none.
+    unit_conversion: Any = None
 
 
 def _is_text(arr: Any) -> bool:
@@ -597,11 +601,16 @@ class EsioDocumentProvider:
         column: str | None = None,
         declared: list[Any] | None = None,
         extent_metaparameter: str | None = None,
+        unit_conversion: Any = None,
     ) -> None:
         self.key = key
         self._inner = inner
         self._table = table
         self._column = column
+        #: The variable's declared ``unit_conversion`` (esm-spec §8.5), parsed.
+        #: ``None`` for a variable that declares none — in which case delivery
+        #: is bit-for-bit what it was before this existed.
+        self._unit_conversion = unit_conversion
         #: The metaparameter this provider's delivered extent BINDS (``extent``).
         self.extent_metaparameter = extent_metaparameter
         self._reader_select: dict[str, Any] | None = None
@@ -666,12 +675,12 @@ class EsioDocumentProvider:
         """
         if selection is not None:
             nds = self._inner.materialize(select=_neutral_to_native(selection))
-            return _single_field(self.key, nds)
+            return self._convert_units(_single_field(self.key, nds))
         if self._table is not None:
             arr = self._table.column(str(self._column))
         else:
             arr = _single_field(self.key, self._inner.materialize(select=self._reader_select))
-        return self._apply_declared(arr)
+        return self._convert_units(self._apply_declared(arr))
 
     def refresh(self, when: Any) -> np.ndarray:
         """The DISCRETE cadence entry (delegated), under the same declared
@@ -683,7 +692,29 @@ class EsioDocumentProvider:
                 f"no cadence to refresh on"
             )
         nds = self._inner.refresh(when, select=self._reader_select)
-        return self._apply_declared(_single_field(self.key, nds))
+        return self._convert_units(self._apply_declared(_single_field(self.key, nds)))
+
+    def _convert_units(self, arr: np.ndarray) -> np.ndarray:
+        """Produce the values in the variable's DECLARED ``units``.
+
+        esm-spec §8.5 is normative: ``unit_conversion`` "is either a plain
+        multiplicative factor or a full Expression AST (§4); the runtime applies
+        it when producing values in the declared ``units``". Applied at
+        DELIVERY, after the loader's decode / codes / record filter / select —
+        so the filter still reasons about the raw column (a conversion cannot
+        turn a dropped record into a kept one) and every axis of the delivered
+        array is converted exactly once, whether it arrived through the table,
+        the reader-pushed select, or the engine's gated fetch.
+
+        A variable with no declared conversion returns ``arr`` unchanged: adding
+        this is a no-op for every document that does not declare one.
+        """
+        if self._unit_conversion is None:
+            return arr
+        out = apply_unit_conversion(
+            arr, self._unit_conversion, variable_name=self.key
+        )
+        return np.asarray(out, dtype=float)
 
     def _apply_declared(self, arr: np.ndarray) -> np.ndarray:
         if self._engine_axes is not None:
@@ -857,6 +888,10 @@ def providers_from_document(
                     vd.get("file_variable", vname) if isinstance(vd, dict) else vname
                 ),
                 codes=_parse_codes(f"data_loaders.{lname}.variables.{vname}", vd),
+                unit_conversion=parse_unit_conversion(
+                    vd.get("unit_conversion") if isinstance(vd, dict) else None,
+                    variable_name=f"{lname}.{vname}",
+                ),
             )
             for vname, vd in variables.items()
         ]
@@ -897,6 +932,7 @@ def providers_from_document(
                 column=spec.name,
                 declared=declared,
                 extent_metaparameter=extent_mp,
+                unit_conversion=spec.unit_conversion,
             )
     return out
 

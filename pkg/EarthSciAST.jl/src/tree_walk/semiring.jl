@@ -325,7 +325,8 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
             sym_r = _overlap_env_sym(clause.tgt_env, ranges, sym_to_set, var_shapes)
             cands = _overlap_candidate_set(clause.src_env, clause.tgt_env, const_arrays;
                                            eps=clause.eps)
-            push!(gates, _JoinGate(sym_l, sym_r, Dict{Int,Int}(), Dict{Int,Int}(), cands))
+            push!(gates, _JoinGate(sym_l, sym_r, Dict{Int,Int}(), Dict{Int,Int}(),
+                                   _OverlapIndex(cands)))
         else                           # clause :: Vector{Tuple{String,String}}
             for (lkey, rkey) in clause
                 sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets, sym_to_set, vi_maps)

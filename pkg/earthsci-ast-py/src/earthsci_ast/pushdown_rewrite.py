@@ -345,13 +345,31 @@ def _range_from(v: Any) -> str | None:
     return None
 
 
-def _pd_detect_binning(ev: Any, c_set: str):
-    """Is ``ev`` a binning aggregate ``E[c] = Σ_r [contains(cell_c, pt_r)]·…``
-    over cell set ``c_set``? Returns the binding dict or ``None``."""
+def _pd_detect_binning(ev: Any, out_set: str):
+    """Is ``ev`` a BINNING aggregate — a ``+``-semiring reduction over TWO 1-D
+    index sets whose body carries a rectangle-containment predicate between a
+    CELL-indexed rect factor and a RECORD-indexed point factor? BOTH
+    orientations are recognised (CONFORMANCE_SPEC §5.5.7):
+
+    * FORWARD ``E[c] = Σ_r [contains(cell_c, pt_r)]·…``  (cell axis is output)
+    * MIRROR  ``P[r] = Σ_c [contains(cell_c, pt_r)]·…``  (record axis is output)
+
+    The gate is IDENTICAL either way — the enumeration driver binds its two
+    symbols from the clause's declared envelopes and knows nothing about cells
+    vs records, and the aggregate's own ``output_idx`` decides the result's
+    orientation. So the guards here are on the aggregate's SHAPE, not on which
+    axis is which: ``out_set`` is the index set the observed is shaped on, the
+    single other range supplies the opposite side, and the CONTAINMENT
+    PREDICATE itself says which symbol is the cell (it carries the four rect
+    BOUND factors) and which is the record (the two point coordinates).
+
+    Returns the binding dict — ``c_sym``, ``r_sym``, ``C``, ``R``,
+    ``out_is_cell``, ``src_env``, ``tgt_env`` — or ``None``.
+    """
     if not (isinstance(ev, dict) and ev.get("type") == "observed"):
         return None
     shape = ev.get("shape")
-    if not (isinstance(shape, list) and len(shape) == 1 and shape[0] == c_set):
+    if not (isinstance(shape, list) and len(shape) == 1 and shape[0] == out_set):
         return None
     agg = ev.get("expression")
     if not (isinstance(agg, dict) and _is_aggregate_op(agg.get("op"))):
@@ -362,12 +380,15 @@ def _pd_detect_binning(ev: Any, c_set: str):
     oi = agg.get("output_idx")
     if not (isinstance(oi, list) and len(oi) == 1 and isinstance(oi[0], str)):
         return None
-    c_sym = oi[0]
+    out_sym = oi[0]
     ranges = _ranges_of(agg)
-    if len(ranges) != 2 or _range_from(ranges.get(c_sym)) != c_set:
+    if len(ranges) != 2 or _range_from(ranges.get(out_sym)) != out_set:
         return None
-    r_sym = next((k for k in ranges if k != c_sym), None)
-    if r_sym is None or _range_from(ranges[r_sym]) is None:
+    in_sym = next((k for k in ranges if k != out_sym), None)
+    if in_sym is None:
+        return None
+    in_set = _range_from(ranges[in_sym])
+    if in_set is None:
         return None
     body = agg.get("expr")
     if not isinstance(body, dict):
@@ -375,16 +396,64 @@ def _pd_detect_binning(ev: Any, c_set: str):
     pred = _pd_find_ifelse_cond(body)
     if pred is None:
         return None
-    env = _pd_parse_containment(pred, c_sym, r_sym)
+    # Exactly one of the two assignments parses: `_pd_parse_containment` demands
+    # each comparison put the cell symbol on one side and the record symbol on
+    # the other, and that the record side yield exactly two coordinates each
+    # with a min AND a max cell bound.
+    env = _pd_parse_containment(pred, out_sym, in_sym)
+    if env is not None:
+        return {
+            "c_sym": out_sym,
+            "r_sym": in_sym,
+            "C": out_set,
+            "R": in_set,
+            "out_is_cell": True,
+            "src_env": env["src_env"],
+            "tgt_env": env["tgt_env"],
+        }
+    env = _pd_parse_containment(pred, in_sym, out_sym)
     if env is None:
         return None
     return {
-        "c_sym": c_sym,
-        "r_sym": r_sym,
-        "R": _range_from(ranges[r_sym]),
+        "c_sym": in_sym,
+        "r_sym": out_sym,
+        "C": in_set,
+        "R": out_set,
+        "out_is_cell": False,
         "src_env": env["src_env"],
         "tgt_env": env["tgt_env"],
     }
+
+
+def _pd_mirror_specs(
+    variables: dict, C: str, R: str, forward_names: set
+) -> list[tuple[str, list[str], list[str]]]:
+    """The MIRRORED-orientation binning aggregates of a model: per-RECORD
+    observeds ``P[r] = Σ_{c∈C} [contains(cell_c, pt_r)]·…`` over the plan's
+    cell set ``C`` and record set ``R``. Returned as ``(name, src_env,
+    tgt_env)`` triples, sorted by name so the emitted document is identical
+    across bindings and hash seeds.
+
+    A mirror needs NOTHING but the gate (see the note on the mirrored arm in
+    :func:`_pd_apply`). Its cell axis stays the FULL ``C``, so its envelope
+    factors are the document's own const-array rects, unrewritten.
+    """
+    out: list[tuple[str, list[str], list[str]]] = []
+    for name, v in variables.items():
+        if name in forward_names:
+            continue
+        bind = _pd_detect_binning(v, R)
+        if bind is None:
+            continue
+        if bind["out_is_cell"] or bind["C"] != C or bind["R"] != R:
+            continue
+        # Never stack a second gate on an aggregate that already declares a join.
+        expr = v.get("expression")
+        if isinstance(expr, dict) and expr.get("join") is not None:
+            continue
+        out.append((name, bind["src_env"], bind["tgt_env"]))
+    out.sort(key=lambda t: t[0])
+    return out
 
 
 def _pd_detect(model: dict, index_sets: Any):
@@ -395,7 +464,8 @@ def _pd_detect(model: dict, index_sets: Any):
         return None
     conc_specs: list[tuple[str, str]] = []
     a_names: list[str] = []
-    e_specs: list[tuple[str, str]] = []
+    # (E name, cell output symbol, gate src_env, gate tgt_env)
+    e_specs: list[tuple[str, str, list[str], list[str]]] = []
     C = rcv_set = R = None
     src_env = tgt_env = None
     rep_ename = rep_csym = rep_rsym = None
@@ -441,7 +511,7 @@ def _pd_detect(model: dict, index_sets: Any):
         if ev is None:
             continue
         bind = _pd_detect_binning(ev, c_set)
-        if bind is None:
+        if bind is None or not bind["out_is_cell"]:  # FORWARD arm only
             continue
 
         if C is None:
@@ -454,13 +524,17 @@ def _pd_detect(model: dict, index_sets: Any):
         if aname not in a_names:
             a_names.append(aname)
         if not any(e[0] == ename for e in e_specs):
-            e_specs.append((ename, bind["c_sym"]))
+            e_specs.append((ename, bind["c_sym"], bind["src_env"], bind["tgt_env"]))
     if not conc_specs:
         return None
     # Deterministic plan order (mirrors the Julia `sort!(A_names)`): the one
     # collection-order-dependent list that leaks into the emitted document
     # (`gated_select.applies_to`) is sorted so all bindings agree.
     a_names.sort()
+    # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
+    # cell/record sets. They are collected only once the forward pattern has
+    # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
+    mirror_specs = _pd_mirror_specs(variables, C, R, {e[0] for e in e_specs})
     return {
         "C": C,
         "rcv_set": rcv_set,
@@ -468,6 +542,7 @@ def _pd_detect(model: dict, index_sets: Any):
         "conc_specs": conc_specs,
         "A_names": a_names,
         "E_specs": e_specs,
+        "mirror_specs": mirror_specs,
         "src_env": src_env,
         "tgt_env": tgt_env,
         "rep_ename": rep_ename,
@@ -499,6 +574,20 @@ def _pd_rewrite_rects(node: Any, rectmap: dict[str, str]) -> Any:
 
 def _pd_ix(f: Any, *idx: Any) -> dict:
     return {"op": "index", "args": [f, *idx]}
+
+
+def _pd_overlap_clause(src_env: Any, tgt_env: Any) -> dict:
+    """One dict-form ``join.overlap`` clause (CONFORMANCE_SPEC §5.5.6 wire
+    form). ``eps`` is always ``0.0``: the rewrite derives the envelopes from an
+    EXACT rectangle-containment predicate that stays on as the narrow
+    ``filter``, so no FP slack is wanted."""
+    return {
+        "overlap": {
+            "src_env": [str(f) for f in src_env],
+            "tgt_env": [str(f) for f in tgt_env],
+            "eps": 0.0,
+        }
+    }
 
 
 def _pd_apply(esm: dict, mname: str, plan: dict) -> dict:
@@ -560,14 +649,53 @@ def _pd_apply(esm: dict, mname: str, plan: dict) -> dict:
     for a in plan["A_names"]:
         mv[a]["shape"] = [setname, plan["rcv_set"]]
 
-    # --- rewrite E: axis → derived set, rect factors → cell gathers ---
-    for ename, csym in plan["E_specs"]:
-        expr = mv[ename]["expression"]
+    # --- rewrite E: axis → derived set, rect factors → cell gathers, + GATE ---
+    # The rewritten `E` still reduces over the FULL record axis, so without a
+    # gate it visits |support|·|records| pairs — 1520·43650 on isrm.esm. Attach
+    # the SAME overlap clause the producer carries, re-pointed at the generated
+    # cell gathers, and the enumeration driver (§5.5.6) walks one candidate
+    # partner list per output cell instead. The clause is derived, not authored:
+    # its envelopes are exactly the ones `_pd_parse_containment` read out of
+    # this aggregate's own containment predicate.
+    for ename, csym, e_src, e_tgt in plan["E_specs"]:
+        # DEEP-COPY before the in-place rect rewrite. `copy.deepcopy` is
+        # memoised by object identity, so a document built in memory keeps
+        # whatever subtree sharing its author created — and the ISRM-shaped
+        # fixtures share one `contains(...)` predicate object across every
+        # aggregate that bins. Rewriting E's rects in place would then reach
+        # through the shared node into a variable that is NOT being re-pointed
+        # (a mirrored per-record aggregate, say) and leave it gathering the
+        # compact cell buffers with full-grid indices. Copying first confines
+        # the rewrite to this variable; the emitted JSON is unchanged (sharing
+        # is not a document-level property).
+        expr = copy.deepcopy(mv[ename]["expression"])
+        mv[ename]["expression"] = expr
         expr["ranges"][csym]["from"] = setname
         _pd_rewrite_rects(expr, rectmap)
         if "args" in expr:
             expr["args"] = [rectmap.get(str(s), s) for s in expr["args"]]
         mv[ename]["shape"] = [setname]
+        if "join" not in expr:
+            expr["join"] = [
+                _pd_overlap_clause(e_src, [rectmap.get(f, f) for f in e_tgt])
+            ]
+
+    # --- MIRRORED orientation: gate only ---
+    # A per-record binning aggregate `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)]·…`
+    # is the same join read the other way round. It gets ONLY the gate — no
+    # derived index set, no `distinct` producer, no `member_factor`, no provider
+    # gating — because it wants the FULL record axis: every record must produce
+    # a value, and a record outside the grid must come out as the semiring
+    # identity (the driver leaves such a position with no term and 0̄ is
+    # emitted). There is nothing to compact, so a mirrored VALUE-INVENTION would
+    # derive a support set nobody reads. Its envelopes stay the document's own
+    # const-array factors (the cell axis is not re-pointed), so the mirror also
+    # needs no rect gathers.
+    for pname, p_src, p_tgt in plan.get("mirror_specs", ()):
+        pexpr = copy.deepcopy(mv[pname]["expression"])  # see the deep-copy note
+        mv[pname]["expression"] = pexpr
+        if "join" not in pexpr:
+            pexpr["join"] = [_pd_overlap_clause(p_src, p_tgt)]
 
     # --- restrict the conc reductions to the derived axis ---
     for cname, ssym in plan["conc_specs"]:

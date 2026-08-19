@@ -37,7 +37,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from . import op_registry
+from . import broad_phase, op_registry
 from .cadence import Partition
 from .cadence import partition as _partition_model
 from .errors import EarthSciAstError
@@ -160,6 +160,15 @@ class EvalContext:
     # loader-dependent quantity. Empty ⇒ nothing is known-invariant, so the
     # operator path declines and #1's dense reduce handles the node.
     invariant_names: frozenset[str] = field(default_factory=frozenset)
+    # Declared 1-D shape INDEX SET of each document array, keyed by the
+    # (flattened) variable name — the general form of ``join_key_index_sets``.
+    # A §5.5.6 ``join.overlap`` gate names its envelope FACTORS, not loop
+    # symbols, and resolves each side to a range symbol through that factor's
+    # declared 1-D shape (CONFORMANCE_SPEC §5.5.6; the Julia reference passes the
+    # same table as ``var_shapes``). Rank != 1 variables are simply absent.
+    # Empty ⇒ no overlap gate can resolve, which is exactly the fail-closed
+    # behaviour a document without one wants.
+    var_index_sets: dict[str, str] = field(default_factory=dict)
 
 
 def ragged_factor_scope(
@@ -202,6 +211,21 @@ def ragged_factor_scope(
 
 class NumpyInterpreterError(EarthSciAstError):
     """Raised when an expression cannot be evaluated by the NumPy interpreter."""
+
+
+class ComplexValueError(EarthSciAstError):
+    """An expression left the reals where the evaluable core requires a real
+    value (esm-spec §4.3.4) — see :func:`_require_real`.
+
+    Deliberately NOT a :class:`NumpyInterpreterError`. Half the interpreter is
+    built out of fast paths that ``except NumpyInterpreterError`` in order to
+    DECLINE to a slower path, and the tolerant build-time observed hoist catches
+    the same class in order to SKIP an observed whose inputs are not yet bound.
+    Neither reaction is right for a value that left the reals: there is no
+    slower path that would produce a real answer, and the observed is not
+    unresolved — it is wrong. Raising outside that hierarchy makes the
+    diagnostic propagate to the caller intact.
+    """
 
 
 class UnreachableSpatialOperatorError(NumpyInterpreterError):
@@ -610,11 +634,76 @@ def _apply_mul(vals: list[Any]) -> Any:
 
 
 def _apply_div(a: Any, b: Any) -> Any:
-    return a / b
+    """``a / b`` with IEEE-754 semantics for a zero denominator.
+
+    CONFORMANCE_SPEC §5.7 rule 6 is explicit: "division is IEEE, never an
+    exception, so every binding agrees" — `x/0` is `±Inf`, `0/0` is `NaN`. Every
+    other evaluator in this repo already honours that: numpy does it on any
+    array operand, and this binding's OWN value-invention evaluator
+    (``value_invention._vi_eval``) spells it out in the same words. Only the
+    PYTHON-scalar operand pair reached Python's `/`, which raises
+    ``ZeroDivisionError`` — so one document expression evaluated to `Inf` under
+    the relational engine and aborted the build under the interpreter, and to
+    `Inf` on an array and aborted on a scalar. The interpreter's ``ifelse`` is
+    EAGER, so it aborted even from a branch the model never selects: the regrid
+    normalisation idiom `ifelse(A_j > 0, x/A_j, 0)` runs in Julia and Rust and
+    could not be evaluated here.
+
+    The fallback fires ONLY where the plain `/` already raised, so nothing that
+    evaluates today changes, and it produces exactly the value ``_vi_eval``
+    produces (``np.float64`` is the same IEEE double the other bindings use, so
+    finite results stay bit-identical).
+    """
+    try:
+        return a / b
+    except ZeroDivisionError:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return float(np.float64(a) / np.float64(b))
 
 
 def _apply_pow(a: Any, b: Any) -> Any:
     return a**b
+
+
+def _require_real(value: Any, where: str) -> Any:
+    """Reject a COMPLEX evaluation result at the point where it would otherwise
+    be cast to a real (esm-spec §4.3.4 — the evaluable core is real-valued).
+
+    ``^`` with a NEGATIVE base and a FRACTIONAL exponent leaves the reals. On a
+    numpy array operand numpy already answers ``nan``, matching the Rust
+    binding; but on a PYTHON scalar operand Python's own ``**`` answers a
+    ``complex``, and casting that to a float either raises an unnamed
+    ``TypeError`` or — on a numpy scalar, under ``astype``/``np.asarray`` —
+    silently DISCARDS the imaginary part behind a ``ComplexWarning`` nothing
+    escalates, yielding a plausible wrong number. Measured on
+    ``x^0.333333333`` with ``x = -2.5``: Julia raises ``DomainError``, Rust
+    gives ``NaN``, and the discarded-imaginary cast gives 0.6786044051723126 —
+    the worst of the three outcomes, because it looks like an answer.
+
+    Checked HERE, at the cast, rather than inside :func:`_apply_pow`, so an
+    ``ifelse`` branch that is evaluated but not SELECTED (the interpreter's
+    ``ifelse`` is eager) cannot fail a model whose taken branch is perfectly
+    real — the complex value has to actually escape as a result.
+    """
+    # A complex DTYPE with an all-zero imaginary part discards NOTHING, and is
+    # routinely how an EAGER `ifelse` returns: both branches are evaluated and
+    # promoted to a common dtype, so an untaken complex branch leaves the taken
+    # real one spelled `1+0j`. Only a NONZERO imaginary part is the bug; a zero
+    # one is projected back onto the reals, which is what keeps a model whose
+    # TAKEN branch is perfectly real from failing on a branch it never selects.
+    if not np.iscomplexobj(value):
+        return value
+    if not bool(np.any(np.imag(value) != 0)):
+        real = np.real(value)
+        return real if isinstance(value, np.ndarray) else float(real)
+    raise ComplexValueError(
+            f"{where}: expression evaluated to a COMPLEX value ({value!r}); the "
+            f"evaluable core is real-valued (esm-spec §4.3.4). This is what '^' "
+            f"with a negative base and a fractional exponent produces on a scalar "
+            f"operand — casting it to a real would silently discard the imaginary "
+            f"part and return a plausible wrong number"
+        )
+    return value
 
 
 def _apply_atan2(a: Any, b: Any) -> Any:
@@ -1612,7 +1701,9 @@ def _materialize_map(
 
         with _bound_index_box(ctx, out_syms, out_ranges_exp):
             val = _compile_expr(body)(ctx)
-        res = np.asarray(val, dtype=float)
+        # `np.asarray(..., dtype=float)` / `.astype(float)` below would DISCARD
+        # an imaginary part behind a ComplexWarning; refuse instead.
+        res = np.asarray(_require_real(val, "arrayop map body"), dtype=float)
         if res.shape == tuple(out_shape):
             return res
         return np.broadcast_to(res, tuple(out_shape)).astype(float)
@@ -1643,7 +1734,7 @@ def _batched_ring_gather(
 
 
 def _join_admits_mask(
-    gates: list[tuple[str, str, dict[int, int], dict[int, int]]],
+    gates: list[_JoinGate],
     out_syms: list[str],
     out_ranges_exp: list[list[int]],
     out_shape: tuple[int, ...],
@@ -1653,13 +1744,26 @@ def _join_admits_mask(
     The vectorized form of :func:`_join_admits` over the whole output box: a cell
     is admitted iff every gate's two key columns are equal. Returns ``None`` if a
     gate references a range symbol that is not an output index (only a pure map's
-    output-index joins can be expressed as a dense mask)."""
+    output-index joins can be expressed as a dense mask), or if ANY gate is an
+    OVERLAP gate.
+
+    An overlap gate DECLINES on purpose. §5.5.6 requires its candidate set to
+    DRIVE enumeration, and every caller of this function materialises the whole
+    ``out × reduce`` box before masking it — precisely the ``O(N_c·N_r)`` work
+    (66.3M terms on isrm.esm) the driver exists to remove, and it would allocate
+    that box as well. Declining routes the node to the driven scalar path
+    (:func:`_eval_arrayop_scalar`), which is both faster and, because it
+    preserves the ⊕-accumulation order of the filtered full product, bit-exact.
+    """
     mask = np.ones(out_shape, dtype=bool)
     if not gates:
         return mask
     axis_of = {s: k for k, s in enumerate(out_syms)}
     ndim = len(out_syms)
-    for sym_l, sym_r, codes_l, codes_r in gates:
+    for g in gates:
+        if g.candidates is not None:
+            return None
+        sym_l, sym_r, codes_l, codes_r = g.sym_l, g.sym_r, g.codes_l, g.codes_r
         if sym_l not in axis_of or sym_r not in axis_of:
             return None
         al, ar = axis_of[sym_l], axis_of[sym_r]
@@ -1753,6 +1857,18 @@ def _eval_arrayop_batched_leaf(
     return out
 
 
+def _join_has_overlap(expr: ExprNode) -> bool:
+    """True iff any of ``expr``'s join clauses is a §5.5.6 spatial ``overlap``
+    gate. Read straight off the RAW clause — no resolution, no broad phase — so
+    the dispatcher can route an overlap-gated node to the driven scalar path
+    without every dense fast path first building (and discarding) the candidate
+    set."""
+    for clause in getattr(expr, "join", None) or []:
+        if isinstance(clause, dict) and clause.get("overlap") is not None:
+            return True
+    return False
+
+
 def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """Evaluate an aggregate / arrayop body over its output index box.
 
@@ -1806,13 +1922,21 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # unchanged M1 fast / scalar paths below and stay byte-for-byte identical.
     join_clauses = getattr(expr, "join", None)
     filter_expr = getattr(expr, "filter", None)
+    # An OVERLAP gate (§5.5.6) DRIVES enumeration rather than filtering it, so
+    # every path that would materialise the dense ``out × reduce`` box and mask
+    # it is bypassed outright — that box is exactly the ``O(N_c·N_r)`` work the
+    # driver exists to remove (66.3M terms on isrm.esm), and building it would
+    # also allocate it. Detected from the RAW clause here, BEFORE resolution, so
+    # the O(nq·nc) broad phase is built once (in the driven scalar path) rather
+    # than once per declining fast path.
+    overlap_gated = _join_has_overlap(expr)
 
     # Batched vectorized fast path for a fused geometry-leaf pure map — the planar
     # conservative-regrid narrow phase A_ij = polygon_intersection_area(src_i,
     # tgt_j). Evaluates the whole (join-admitted) candidate set in one kernel call
     # instead of a per-cell Sutherland–Hodgman clip; declines (→ None) to the
     # scalar join/fallback paths below for anything it does not recognize.
-    if not ragged_reduce:
+    if not ragged_reduce and not overlap_gated:
         batched = _eval_arrayop_batched_leaf(
             expr,
             ctx,
@@ -1857,18 +1981,22 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         # W_op (built once, cached on ctx.op_cache) applied to the current field
         # by one einsum. Declines (→ None) to the dense reduce below for anything
         # outside that shape or when operator caching is off.
-        op = _eval_arrayop_operator_cached(
-            expr,
-            ctx,
-            out_syms,
-            out_ranges_exp,
-            out_shape,
-            reduce_syms,
-            resolved,
-            raw_ranges,
-            reducer,
-            empty_zero,
-            filter_expr,
+        op = (
+            None
+            if overlap_gated
+            else _eval_arrayop_operator_cached(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                raw_ranges,
+                reducer,
+                empty_zero,
+                filter_expr,
+            )
         )
         if op is not None:
             return op
@@ -1880,18 +2008,22 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         # ``_join_admits`` gate; the vectorized reduce declines (→ None) on
         # anything it cannot broadcast (or a key that is not a box axis), so the
         # scalar loop still covers those cases.
-        vec = _eval_arrayop_reduce_vectorized(
-            expr,
-            ctx,
-            out_syms,
-            out_ranges_exp,
-            out_shape,
-            reduce_syms,
-            resolved,
-            reducer,
-            empty_zero,
-            filter_expr,
-            raw_ranges,
+        vec = (
+            None
+            if overlap_gated
+            else _eval_arrayop_reduce_vectorized(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                reducer,
+                empty_zero,
+                filter_expr,
+                raw_ranges,
+            )
         )
         if vec is not None:
             return vec
@@ -2207,18 +2339,132 @@ def _encode_join_keys(vals_a: list[Any], vals_b: list[Any]) -> tuple[list[int], 
     return codes(vals_a), codes(vals_b)
 
 
+@dataclass
+class _JoinGate:
+    """One RESOLVED join gate — §5.3 key equality or §5.5.6 spatial OVERLAP.
+
+    Both flavours admit on a pair of range SYMBOLS; they differ only in what they
+    consult. An equi-join gate compares bucket CODES (``codes_l``/``codes_r``,
+    1-based position → code) at the two bound positions. An OVERLAP gate tests
+    membership of the ``(pos_l, pos_r)`` pair in a broad-phase candidate index
+    built ONCE per node from the const-array envelope factors — never per tuple,
+    which is the whole point of the pushdown — and, unlike an equi-join, that
+    index can also DRIVE the enumeration (:func:`broad_phase.overlap_drive_plan`).
+    """
+
+    sym_l: str
+    sym_r: str
+    codes_l: dict[int, int] | None = None
+    codes_r: dict[int, int] | None = None
+    candidates: broad_phase.OverlapIndex | None = None
+
+
+def _scoped_array_name(name: str, registry: Any) -> str | None:
+    """``name`` as it is keyed in a runtime registry, or ``None``.
+
+    A ``join`` clause names its key columns / envelope factors with the name the
+    AUTHOR wrote, while flattening prefixes every variable with its owning model
+    (``px`` → ``ISRM.px``). Exact name wins; otherwise a UNIQUE dot-suffix match
+    binds — the same reconciliation :func:`_resolve_join_key_column` applies to
+    an ``on`` key column (the intra-model-reference namespacing gap, RFC §5.3).
+    """
+    if name in registry:
+        return name
+    cands = [k for k in registry if k.endswith("." + name)]
+    return cands[0] if len(cands) == 1 else None
+
+
+def _overlap_env_array(name: str, ctx: EvalContext) -> np.ndarray:
+    """The const-array data backing one ``join.overlap`` envelope factor.
+
+    §5.5.6 requires an overlap gate's ``src_env`` / ``tgt_env`` factors to be
+    build-time const-array data by the time the broad phase runs, so this
+    resolves them exactly the way the operator fast path resolves a per-cell
+    gather (:func:`_gather_operator_factor`): a materialised build-time observed
+    / geometry buffer, a loader-bound input array, or a state array. A missing
+    factor is a hard, NAMED error — a gate that silently fell back to the full
+    product would change the cost class without changing the answer, and so
+    would hide the bug.
+    """
+    for registry, reader in (
+        (ctx.derived_rings, lambda k: np.asarray(ctx.derived_rings[k], dtype=float)),
+        (ctx.input_arrays, lambda k: np.asarray(ctx.input_arrays[k], dtype=float)),
+        (ctx.state_layout, lambda k: np.asarray(_view_state_array(k, ctx), dtype=float)),
+    ):
+        key = _scoped_array_name(name, registry)
+        if key is not None:
+            return reader(key)
+    raise NumpyInterpreterError(
+        f"join 'overlap' envelope factor {name!r} is not bound as build-time "
+        f"const-array data; §5.5.6 requires every envelope factor to be "
+        f"materialised before the broad phase runs"
+    )
+
+
+def _overlap_env_sym(
+    env_names: Sequence[Any],
+    raw_ranges: dict[str, Any],
+    sym_to_set: dict[str, str],
+    ctx: EvalContext,
+) -> str:
+    """The range symbol an overlap gate's envelope side binds (§5.5.6).
+
+    Resolved from the FIRST factor's declared 1-D shape index set — never from
+    the clause's position — so which side is skolemised / reduced / output stays
+    free and the aggregate's own ``output_idx`` decides the orientation
+    independently. Mirrors the Julia ``_overlap_env_sym``.
+    """
+    if not env_names:
+        raise NumpyInterpreterError("join 'overlap' gate has an empty env-factor list")
+    fname = str(env_names[0])
+    key = _scoped_array_name(fname, ctx.var_index_sets)
+    if key is None:
+        raise NumpyInterpreterError(
+            f"join 'overlap' env factor {fname!r} must be a 1-D buffer whose shape "
+            f"index set names the join range; no 1-D declared shape is known for it "
+            f"(CONFORMANCE_SPEC §5.5.6)"
+        )
+    return _join_sym_for_key(ctx.var_index_sets[key], raw_ranges, sym_to_set)
+
+
+def _overlap_spec(clause: Any) -> dict | None:
+    """The ``overlap`` payload of a join clause, or ``None`` for an ``on`` clause.
+
+    A clause is one or the other (esm-schema.json pins this with a ``oneOf``); a
+    clause carrying BOTH is a malformed gate and is rejected rather than silently
+    resolved by precedence.
+    """
+    if not isinstance(clause, dict):
+        return None
+    ov = clause.get("overlap")
+    if ov is None:
+        return None
+    if clause.get("on") is not None:
+        raise NumpyInterpreterError(
+            "a join clause is either an 'on' equi-join or an 'overlap' spatial "
+            "gate, not both (CONFORMANCE_SPEC §5.5.6)"
+        )
+    if not isinstance(ov, dict):
+        raise NumpyInterpreterError(
+            f"join 'overlap' must be an object; got {type(ov).__name__}"
+        )
+    return ov
+
+
 def _resolve_join(
     expr: ExprNode,
     raw_ranges: dict[str, Any],
     sym_positions: dict[str, list[int]],
     ctx: EvalContext,
-) -> list[tuple[str, str, dict[int, int], dict[int, int]]]:
-    """Resolve every join clause into coded key-pair gates (RFC §5.3).
+) -> list[_JoinGate]:
+    """Resolve every join clause into a :class:`_JoinGate` (RFC §5.3 / §5.5.6).
 
-    Returns a list of ``(symL, symR, codesL, codesR)`` where ``codesX`` maps a
-    1-based position of the symbol to its bucket code. A contraction tuple
-    contributes a ⊗-term iff ``codesL[posL] == codesR[posR]`` for every pair of
-    every clause (all clauses' pairs are ANDed — multiple clauses compose).
+    An ``on`` clause yields one gate per key pair, carrying bucket ``codes``
+    keyed by 1-based position; a contraction tuple contributes a ⊗-term iff
+    ``codes_l[posL] == codes_r[posR]``. An ``overlap`` clause yields ONE gate
+    carrying the broad-phase candidate index, built once here from the
+    const-array envelope factors; a tuple contributes iff ``(posL, posR)`` is a
+    candidate. All clauses are ANDed (multiple clauses compose).
     """
     clauses = getattr(expr, "join", None) or []
     sym_to_set = {
@@ -2226,8 +2472,38 @@ def _resolve_join(
         for s, spec in raw_ranges.items()
         if isinstance(spec, dict) and "from" in spec
     }
-    gates: list[tuple[str, str, dict[int, int], dict[int, int]]] = []
+    gates: list[_JoinGate] = []
     for clause in clauses:
+        ov = _overlap_spec(clause)
+        if ov is not None:
+            src_env = list(ov.get("src_env") or [])
+            tgt_env = list(ov.get("tgt_env") or [])
+            if not src_env or not tgt_env:
+                raise NumpyInterpreterError(
+                    "join 'overlap' requires both 'src_env' (query side) and "
+                    "'tgt_env' (indexed side) envelope factor lists"
+                )
+            eps = float(ov.get("eps") or 0.0)
+            if eps < 0.0:
+                raise NumpyInterpreterError(
+                    f"join 'overlap' eps must be >= 0 (it inflates both envelopes "
+                    f"OUTWARD and so grows the candidate set monotonically); got {eps}"
+                )
+            sym_l = _overlap_env_sym(src_env, raw_ranges, sym_to_set, ctx)
+            sym_r = _overlap_env_sym(tgt_env, raw_ranges, sym_to_set, ctx)
+            cands = broad_phase.overlap_candidate_set(
+                broad_phase.envelope_vectors_from_cols(
+                    src_env, [_overlap_env_array(f, ctx) for f in src_env]
+                ),
+                broad_phase.envelope_vectors_from_cols(
+                    tgt_env, [_overlap_env_array(f, ctx) for f in tgt_env]
+                ),
+                eps=eps,
+            )
+            gates.append(
+                _JoinGate(sym_l, sym_r, candidates=broad_phase.OverlapIndex(cands))
+            )
+            continue
         on = (clause or {}).get("on") or []
         if not on:
             raise NumpyInterpreterError(
@@ -2247,7 +2523,7 @@ def _resolve_join(
             )
             codes_l, codes_r = _encode_join_keys(vals_l, vals_r)
             gates.append(
-                (
+                _JoinGate(
                     sym_l,
                     sym_r,
                     dict(zip(sym_positions[sym_l], codes_l)),
@@ -2316,19 +2592,22 @@ def _resolve_join_key_column(
     return sym, _key_member_values(sym, raw_ranges, sym_positions[sym], ctx)
 
 
-def _join_admits(
-    gates: list[tuple[str, str, dict[int, int], dict[int, int]]], binding: dict[str, int]
-) -> bool:
-    """True iff every join pair's key columns are equal under ``binding``."""
-    for sym_l, sym_r, codes_l, codes_r in gates:
-        if codes_l[binding[sym_l]] != codes_r[binding[sym_r]]:
+def _join_admits(gates: list[_JoinGate], binding: dict[str, int]) -> bool:
+    """True iff every gate admits ``binding`` — an equi-join gate's two key
+    columns are equal (§5.3), an OVERLAP gate's two range positions are a
+    broad-phase candidate pair (§5.5.6)."""
+    for g in gates:
+        if g.candidates is None:
+            if g.codes_l[binding[g.sym_l]] != g.codes_r[binding[g.sym_r]]:
+                return False
+        elif (int(binding[g.sym_l]), int(binding[g.sym_r])) not in g.candidates:
             return False
     return True
 
 
 def _filter_admits(filter_expr: Expr, ctx: EvalContext) -> bool:
     """Evaluate a scalar boolean filter predicate for the current binding."""
-    val = np.asarray(eval_expr(filter_expr, ctx))
+    val = np.asarray(_require_real(eval_expr(filter_expr, ctx), "aggregate filter"))
     if val.size != 1:
         raise NumpyInterpreterError(
             "aggregate 'filter' predicate must evaluate to a scalar for each "
@@ -2599,7 +2878,10 @@ def _eval_arrayop_reduce_vectorized(
             # value is immediately discarded by the mask, so silence the transient
             # divide/invalid warnings (mirrors the batched-leaf kernel).
             with np.errstate(divide="ignore", invalid="ignore"):
-                term = np.asarray(_compile_expr(expr.expr)(ctx), dtype=float)
+                term = np.asarray(
+                    _require_real(_compile_expr(expr.expr)(ctx), "aggregate body"),
+                    dtype=float,
+                )
                 term = np.broadcast_to(term, combined_shape)
                 if filter_expr is not None:
                     mask = np.asarray(_compile_expr(filter_expr)(ctx))
@@ -2787,10 +3069,115 @@ def _eval_arrayop_scalar(
         sym_positions[s] = list(r)
 
     gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
+
+    # An OVERLAP gate resolves its WHOLE admissible pair set once, so it DRIVES
+    # this expansion instead of merely filtering it (§5.5.6 / Wall #1).
+    ov = broad_phase.overlap_driver(gates)
+    if ov is not None:
+        return _eval_arrayop_scalar_gate_driven(
+            expr, ctx, out_syms, out_ranges_exp, out_shape, reduce_syms,
+            red_ranges_exp, reducer, empty_zero, filter_expr, gates, ov,
+        )
+
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
 
     out = np.zeros(out_shape, dtype=float)
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
+        out[multi_idx] = _reduce_over_gated(
+            expr.expr,
+            ctx,
+            local_binding,
+            reduce_syms,
+            cartesian_red,
+            reducer,
+            empty_zero,
+            gates,
+            filter_expr,
+        )
+    return out
+
+
+def _eval_arrayop_scalar_gate_driven(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    red_ranges_exp: list[list[int]],
+    reducer: str,
+    empty_zero: float,
+    filter_expr: Expr | None,
+    gates: list[_JoinGate],
+    ov: _JoinGate,
+) -> np.ndarray:
+    """OVERLAP-gate DRIVEN expansion of a DENSE aggregate (§5.5.6 "Join
+    admission" / projection-pushdown Wall #1).
+
+    An overlap gate resolves its whole admissible pair set once, so it can drive
+    enumeration rather than filter it. :func:`broad_phase.overlap_drive_plan` is
+    the shared decision — the value-invention producer
+    (``value_invention._vi_enumerate_join``) applies the identical policy,
+    differing only in loop shape because its ranges may be ragged and are
+    therefore resolved lazily. Three shapes reach here, decided PER OUTPUT CELL:
+
+    * ``restrict`` — one gated axis is an OUTPUT index (already bound) and the
+      other is contracted. This is the ISRM binning aggregate ``E[c] = Σ_r […]``
+      and its record-output mirror ``P[r] = Σ_c […]``: the contracted axis
+      iterates only this output cell's candidate partners, so the aggregate
+      costs ``O(|candidates|)`` in total rather than ``O(N_c·N_r)``.
+    * ``pairs`` — both gated axes are contracted AND are the only two contracted
+      axes (the scalar-reduction form); the candidate pairs bind both at once.
+    * ``reject`` — both gated axes are already bound and the pair is not a
+      candidate: no leaf is admitted at all.
+
+    Anything else plans ``none`` and falls through to the full product. In EVERY
+    shape :func:`_join_admits` still runs per leaf, and the driven sequence is
+    the exact order-preserving SUBSEQUENCE of the product the gate would have
+    admitted — so the emitted terms, and hence the ⊕-reduction, are BIT-IDENTICAL
+    to the filtered full product. The driver removes work; it never changes an
+    answer.
+
+    IDENTITY FILL (normative, §5.5.6). Driving means an output position with NO
+    candidate pair is never visited. Such a position is filled with the
+    semiring's ``0̄`` — ``empty_zero``, exactly what the full product would have
+    produced after rejecting every tuple — not a hole, not ``NaN``, not a stale
+    buffer value. An emission record outside the grid therefore reads as ``0``
+    under the additive monoid.
+    """
+    out = np.full(out_shape, empty_zero, dtype=float)
+    red_index = {s: d for d, s in enumerate(reduce_syms)}
+    # `_cartesian` varies the LAST symbol fastest, so an unrestricted full
+    # product is built once and reused across cells that plan `none`.
+    full_cartesian: list[tuple[int, ...]] | None = None
+
+    for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
+        plan = broad_phase.overlap_drive_plan(
+            ov, reduce_syms, local_binding, lambda s: red_ranges_exp[red_index[s]]
+        )
+        kind = plan[0]
+        if kind == "reject":
+            continue  # no admitted leaf ⇒ the identity fill already in `out`
+        if kind == "restrict":
+            d = red_index[plan[1]]
+            iters = list(red_ranges_exp)
+            iters[d] = plan[2]
+            cartesian_red = _cartesian(iters)
+        elif kind == "pairs" and len(reduce_syms) == 2:
+            # `_cartesian` varies `reduce_syms[-1]` fastest, so ordering the
+            # pairs by (slow-axis position, fast-axis position) reproduces
+            # exactly the subsequence the full product would have emitted.
+            fast_is_l = plan[1] == reduce_syms[-1]
+            prs = sorted(plan[3], key=(lambda pr: (pr[1], pr[0])) if fast_is_l else None)
+            cartesian_red = [
+                (int(pr[1]), int(pr[0])) if fast_is_l else (int(pr[0]), int(pr[1]))
+                for pr in prs
+            ]
+        else:
+            if full_cartesian is None:
+                full_cartesian = _cartesian(red_ranges_exp) if reduce_syms else [()]
+            cartesian_red = full_cartesian
+        broad_phase.ENUM_VISITS[0] += len(cartesian_red)
         out[multi_idx] = _reduce_over_gated(
             expr.expr,
             ctx,
@@ -2836,7 +3223,7 @@ def _reduce_over_gated(
                 ctx.locals[s] = v
             if filter_expr is not None and not _filter_admits(filter_expr, ctx):
                 continue
-            val = float(eval_expr(body, ctx))
+            val = float(_require_real(eval_expr(body, ctx), "aggregate body"))
             acc = _reduce_step(reducer, acc, val)
     finally:
         ctx.locals = prev
@@ -2879,7 +3266,7 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
 
     out = np.zeros(tuple(shape), dtype=float)
     for region, value_expr in zip(regions, values):
-        v = eval_expr(value_expr, ctx)
+        v = _require_real(eval_expr(value_expr, ctx), "makearray region value")
         slicer = tuple(slice(int(lo) - 1, int(hi)) for lo, hi in region)
         if isinstance(v, np.ndarray):
             out[slicer] = v

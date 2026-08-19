@@ -32,6 +32,7 @@ from .numpy_interpreter import (
     EvalContext,
     NumpyInterpreterError,
     _RaggedRange,
+    _require_real,
     _resolve_range_spec,
     eval_expr,
     ragged_factor_scope,
@@ -705,6 +706,10 @@ def _materialize_observeds(
                 file=_sys.stderr,
                 flush=True,
             )
+        # A COMPLEX result (a `^` with a negative base and a fractional exponent
+        # on a scalar operand) must not be cast to a real here — see
+        # `numpy_interpreter._require_real`.
+        val = _require_real(val, f"observed '{name}'")
         if isinstance(val, np.ndarray) and val.ndim > 0:
             ctx.derived_rings[name] = val
         else:
@@ -793,6 +798,10 @@ class _NumpyRhsBuild:
     # variable; see numpy_interpreter.ragged_factor_scope). Threaded into every
     # EvalContext this build spawns. Empty without ragged index sets.
     factor_scope: dict[str, str] = field(default_factory=dict)
+    # Declared 1-D shape index set per flattened variable (see
+    # :func:`_var_index_sets`): what a §5.5.6 ``join.overlap`` gate resolves its
+    # envelope factors through. Threaded into every EvalContext this build spawns.
+    var_index_sets: dict[str, str] = field(default_factory=dict)
     # Value-invention derived-index-set extents (RFC §6.1), keyed by the producing
     # aggregate's `id` (the `from_faq` target): the build-time skolem/distinct/rank
     # front-door's distinct-set cardinality, materialized ONCE at setup by
@@ -1671,6 +1680,7 @@ def _partition_and_materialize_observeds(
     static_cache: dict[str, Any] | None,
     derived_extents: dict[str, int] | None = None,
     axis_valued_input_names: frozenset[str] = frozenset(),
+    var_index_sets: dict[str, str] | None = None,
 ) -> tuple[
     list[tuple[str, Expr]], dict[str, float], dict[str, np.ndarray], dict[str, str]
 ]:
@@ -1753,6 +1763,7 @@ def _partition_and_materialize_observeds(
                 join_key_buffers=join_key_buffers,
                 join_key_index_sets=join_key_index_sets,
                 factor_scope=factor_scope,
+                var_index_sets=dict(var_index_sets or {}),
             )
             _materialize_observeds(
                 invariant_static,
@@ -1793,6 +1804,7 @@ def _partition_and_materialize_observeds(
             join_key_buffers=join_key_buffers,
             join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
+            var_index_sets=dict(var_index_sets or {}),
             op_cache=op_cache,
             invariant_names=invariant_names,
         )
@@ -1806,6 +1818,25 @@ def _partition_and_materialize_observeds(
         static_derived_rings = _vol_ctx.derived_rings
 
     return varying_observed, static_observed_values, static_derived_rings, static_skip_reasons
+
+
+def _var_index_sets(flat: FlattenedSystem) -> dict[str, str]:
+    """``flattened variable name -> its single declared index-set axis``.
+
+    The general form of ``join_key_index_sets``, covering states, observeds AND
+    parameters, and restricted to RANK-1 declared shapes. A §5.5.6
+    ``join.overlap`` gate names its envelope FACTORS, not loop symbols, and
+    resolves each side to a range symbol through that factor's declared 1-D
+    shape; this is the table it consults (the Julia reference passes the same
+    thing as ``var_shapes``). Threaded into every EvalContext the build spawns.
+    """
+    out: dict[str, str] = {}
+    for table in (flat.state_variables, flat.observed_variables, flat.parameters):
+        for name, var in table.items():
+            shape = getattr(var, "shape", None)
+            if shape and len(shape) == 1 and isinstance(shape[0], str):
+                out[name] = shape[0]
+    return out
 
 
 def _declared_axes_map(flat: FlattenedSystem) -> dict[str, tuple[str, ...]]:
@@ -2045,6 +2076,9 @@ def _build_numpy_rhs(
         flat.index_sets,
         list(flat.state_variables) + list(flat.observed_variables) + list(flat.parameters),
     )
+    # Declared 1-D index-set axis per variable — the table a §5.5.6 overlap gate
+    # resolves its envelope factors through (numpy_interpreter._overlap_env_sym).
+    var_index_sets = _var_index_sets(flat)
 
     # Value-invention front-door (RFC §5.3 / §6.1): materialize the broad-phase
     # bins (``rg_src_bin`` / ``rg_tgt_bin``) and the derived-index-set extents ONCE
@@ -2178,6 +2212,7 @@ def _build_numpy_rhs(
             static_cache,
             derived_extents,
             axis_valued_input_names=axis_valued_names,
+            var_index_sets=var_index_sets,
         )
     )
 
@@ -2229,6 +2264,7 @@ def _build_numpy_rhs(
             join_key_buffers=join_key_buffers,
             join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
+            var_index_sets=dict(var_index_sets or {}),
         )
         # Materialize array-valued observeds + derived rings and scalar
         # observeds into the context (dependency-ordered) so the state
@@ -2281,6 +2317,7 @@ def _build_numpy_rhs(
         join_key_buffers=join_key_buffers,
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
+        var_index_sets=var_index_sets,
         derived_extents=derived_extents,
         vi_members=vi_members,
     )
@@ -2386,6 +2423,7 @@ def _simulate_with_numpy(
                         join_key_buffers=build.join_key_buffers,
                         join_key_index_sets=build.join_key_index_sets,
                         factor_scope=build.factor_scope,
+                        var_index_sets=build.var_index_sets,
                     )
                     _materialize_observeds(ordered_observed, ctx)
                     scalar_obs = [n for n, _ in ordered_observed if n in ctx.observed_values]
@@ -2421,6 +2459,7 @@ def _simulate_with_numpy(
                             join_key_buffers=build.join_key_buffers,
                             join_key_index_sets=build.join_key_index_sets,
                             factor_scope=build.factor_scope,
+                            var_index_sets=build.var_index_sets,
                         )
                         # Per-observed skip policy (parity with the per-step RHS
                         # driver): a single DEAD observed that cannot be evaluated

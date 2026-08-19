@@ -71,7 +71,7 @@ The full authoring stance, normatively:
 | `index_sets` | | Document-scoped registry of named iteration domains (grid axes, categorical dimensions, data-derived sets) referenced by `aggregate` ranges (RFC semiring-faq-unified-ir §5.2) |
 | `coordinates` | | Document-scoped, **optional** registry marking existing data arrays (or inline literal vectors) as physical coordinates and attaching CF metadata (`standard_name`/`units`/`axis`). Purely additive — a document without it validates and emits bare integer axes (§2.1; RFC streaming-output-sinks §8) |
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
-| `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / example (§9.7.10) |
+| `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded from a `data_loaders` primitive or declared as variables/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
@@ -1447,7 +1447,7 @@ Each model corresponds to an ODE system — a set of time-dependent equations wi
 | `subsystems` | | Named child models (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | Model-level default numerical tolerance used by tests (see Section 6.6). Object with optional `abs` and/or `rel` fields. |
 | `tests` | | Inline validation tests that exercise this model in isolation (see Section 6.6). |
-| `examples` | | Inline illustrative examples showing how to run this model (see Section 6.7). |
+| `analyses` | | Inline illustrative analyses showing how to run this model (see Section 6.7). |
 
 ### 6.3 Variable Types
 
@@ -1720,17 +1720,17 @@ A reusable PDE leaf is written against the operator sugar (`grad`, `div`, `lapla
 
 The target is implicit — the enclosing model/reaction system, exactly as the assertion target is (§6.6). The injected rule lowers the component's rewrite-targets in the **per-test ephemeral build** (§9.7.10 timing): the resulting spatial field is collapsed to a scalar via `coords` or `reduce` at the assertion `time` and checked by the §6.6.5 machinery. Because each test carries its own list and runs as an independent build, one suite may exercise the component under several schemes (central vs. upwind, a convergence sweep over `bindings`) with no conflict between tests and no edit to the component. `bindings` close the library's grid-size metaparameters, which must agree with the index-set sizes the component's variables are shaped over (an inconsistency is the ordinary `template_import_index_set_conflict` / shape error at the build). Unlike the component's own `expression_template_imports` (§9.7.6), a test's list is authored per-run configuration and **does** survive `parse → emit` (§9.7.10 round-trip); the enclosing component round-trips with its operator sugar intact.
 
-### 6.7 Examples
+### 6.7 Analyses
 
-A model may also carry an array of **inline examples**. An example is an illustrative run (or family of runs) showing how the component is intended to be used. Examples do not produce pass/fail outcomes — they produce trajectories and plots.
+A model may also carry an array of **inline analyses**. An analysis is an illustrative run (or family of runs) showing how the component is intended to be used. Analyses do not produce pass/fail outcomes — they produce trajectories and plots.
 
-Like tests, examples are per-component and travel with the model in the `.esm` document.
+Like tests, analyses are per-component and travel with the model in the `.esm` document.
 
-#### 6.7.1 Example Schema
+#### 6.7.1 Analysis Schema
 
 ```json
 {
-  "examples": [
+  "analyses": [
     {
       "id": "rate_constant_sweep",
       "description": "Sweep over photolysis rates to explore the NO-NO2-O3 partitioning.",
@@ -1763,17 +1763,17 @@ Like tests, examples are per-component and travel with the model in the `.esm` d
 }
 ```
 
-#### 6.7.2 Example Fields
+#### 6.7.2 Analysis Fields
 
 | Field | Required | Description |
 |---|---|---|
-| `id` | ✓ | Identifier unique within this component's `examples` array. |
+| `id` | ✓ | Identifier unique within this component's `analyses` array. |
 | `description` | | Human-readable description. |
 | `initial_state` | | Scalar initial-value overrides for this run, keyed by state-variable name (`{var: number}`). A component's initial fields are declared with `ic` equations in the model (§11.4); this map overrides their scalar values for this run only. |
 | `parameters` | | Parameter overrides, keyed by local parameter name. |
 | `time_span` | ✓ | `{start, end}` in the component's time units. |
-| `parameter_sweep` | | Optional parameter sweep; see Section 6.7.3. When present, the example represents a family of runs rather than a single trajectory. |
-| `expression_template_imports` | | Ordered `TemplateImport[]` (§9.7.2 shape) registered into the enclosing component's template scope **for this run only** — the discretization under which this example runs (§9.7.10). Semantics mirror a test's `expression_template_imports` (§6.6.6): implicit target, per-run ephemeral build, survives `parse → emit`. |
+| `parameter_sweep` | | Optional parameter sweep; see Section 6.7.3. When present, the analysis represents a family of runs rather than a single trajectory. |
+| `expression_template_imports` | | Ordered `TemplateImport[]` (§9.7.2 shape) registered into the enclosing component's template scope **for this run only** — the discretization under which this analysis runs (§9.7.10). Semantics mirror a test's `expression_template_imports` (§6.6.6): implicit target, per-run ephemeral build, survives `parse → emit`. |
 | `plots` | | Plot specifications derived from the run(s); see Section 6.7.4. |
 
 #### 6.7.3 Parameter Sweeps
@@ -1813,14 +1813,14 @@ Five plot types are defined:
 
 | Field | Required | Description |
 |---|---|---|
-| `id` | ✓ | Identifier unique within this example's `plots` array. |
+| `id` | ✓ | Identifier unique within this analysis's `plots` array. |
 | `type` | ✓ | `line`, `scatter`, `heatmap`, `field_slice`, or `field_snapshot`. |
 | `description` | | Human-readable description. |
 | `x` | ✓ | X-axis specification (`{variable, label?}`). For trajectory/sweep plots `variable` may be any state variable, observed variable, parameter name, or swept parameter; for `field_slice` and `field_snapshot`, `x` MUST name a domain spatial dimension. |
 | `y` | ✓ | Y-axis specification. May be a single `PlotAxis` (`{variable, label?}`) or, for `line`/`scatter` plots, an array of `PlotAxis` objects as an inline multi-series shorthand (see below). For `field_slice` and `field_snapshot`, `y` MUST be a single `PlotAxis` naming a domain spatial dimension. |
 | `value` | heatmap, field_snapshot | Color channel for `heatmap` (a `PlotValue`) and for `field_snapshot` (only `value.variable` is used; `at_time` and `reduce` are ignored — the field is sampled at the plot-level `at_time`). |
 | `series` | | For `line`/`scatter`: an array of `{name, variable}` pairs selecting multiple trajectories to overlay. Ignored for heatmap/field plots. |
-| `at_time` | field_slice, field_snapshot | Required for field plots: simulation time at which to extract the spatial field. Must lie within the example's `time_span`. |
+| `at_time` | field_slice, field_snapshot | Required for field plots: simulation time at which to extract the spatial field. Must lie within the analysis's `time_span`. |
 | `pinned_coords` | field plots, when domain has higher dimensionality than the plot | Map from each non-plotted spatial dimension name to a numeric coordinate. Required when the component domain has more spatial dimensions than the plot uses (1 axis for `field_slice`, 2 for `field_snapshot`). |
 
 **Plot axes are flexible.** Any state variable, observed variable, parameter, or swept-parameter name is allowed for `x`, `y`, and (for heatmaps) the `value.variable`. The independent variable of the simulation is typically spelled `"t"`.
@@ -2099,7 +2099,7 @@ This section maps to Catalyst.jl's `ReactionSystem` but is fully self-contained.
 | `subsystems` | | Named child reaction systems (subsystems), keyed by unique identifier. Each subsystem can be defined inline or included by reference (see Section 4.7). Enables hierarchical composition — variables in subsystems are referenced via dot notation (see Section 4.6). |
 | `tolerance` | | System-level default numerical tolerance for tests. Same semantics as Section 6.6.4. |
 | `tests` | | Inline validation tests for this reaction system. Semantics, field shape, and tolerance resolution are identical to Section 6.6. Assertion `variable` names refer to species or observed quantities of this reaction system. |
-| `examples` | | Inline illustrative examples. Semantics, field shape, and plot/sweep rules are identical to Section 6.7. |
+| `analyses` | | Inline illustrative analyses. Semantics, field shape, and plot/sweep rules are identical to Section 6.7. |
 
 ### 7.3 Reaction Fields
 
@@ -2138,7 +2138,7 @@ where `net_stoich_X = (stoich as product) − (stoich as substrate)`.
 
 **Reservoir species (`constant: true`).** A species declared with `constant: true` is a *reservoir*: it appears in rate laws as a concentration but no `dX/dt` equation is generated for it. Bindings that target Catalyst emit it as a parameter with `isconstantspecies=true` metadata; other bindings skip the ODE for that species while still evaluating mass-action contributions from it. Typical use: O₂, CH₄, H₂O in tropospheric chemistry where the species participates in many reactions but its concentration is effectively unchanged on the simulation timescale.
 
-**Initial conditions.** A species' initial value is its scalar `species.default` (overridable per run via `test.initial_conditions` / `example.initial_state`). A reaction system has no `equations` field and hosts no `ic` equations of its own; a non-constant, coordinate-dependent, or loaded-field species IC — for example once the reaction system is spatially lifted onto a grid (§10.5) — is declared with a scoped-reference `ic` equation in a model, `ic(Sys.species) ~ <field>` (§11.4.1), not inside the reaction system.
+**Initial conditions.** A species' initial value is its scalar `species.default` (overridable per run via `test.initial_conditions` / `analysis.initial_state`). A reaction system has no `equations` field and hosts no `ic` equations of its own; a non-constant, coordinate-dependent, or loaded-field species IC — for example once the reaction system is spatially lifted onto a grid (§10.5) — is declared with a scoped-reference `ic` equation in a model, `ic(Sys.species) ~ <field>` (§11.4.1), not inside the reaction system.
 
 ---
 
@@ -3391,17 +3391,17 @@ The §9.7 diagnostic codes are listed in the §9.6.6 table (`template_import_*` 
 
 - **§4.7 subsystem-ref edge** — `SubsystemRef.expression_template_imports`, an ordered `TemplateImport[]`; target **implicit** (the one component the edge mounts).
 - **§10 coupling entry** — `CouplingEntry.expression_template_imports`, a **map** `{ <target-system>: TemplateImport[] }`; target **explicit** (an entry references two-plus systems).
-- **§6.6 / §6.7 inline test / example** — `Test.expression_template_imports` / `Example.expression_template_imports`, an ordered `TemplateImport[]`; target **implicit** (the enclosing component).
+- **§6.6 / §6.7 inline test / analysis** — `Test.expression_template_imports` / `Analysis.expression_template_imports`, an ordered `TemplateImport[]`; target **implicit** (the enclosing component).
 
 Each entry uses the §9.7.2 `TemplateImport` shape verbatim (`ref`, `only?`, `bindings?`, `prefix?`, `rename?`, `rebind?`); the injected `ref` MUST resolve to a template-library file (§9.7.1) — `template_import_not_library` otherwise, exactly as an ordinary import.
 
 **The shared operation.** All three forms compile to the same load operation: **extend a target component's effective template scope (§9.7.4) with an appended `TemplateImport[]`**, as if the target had added those entries to the *end* of its own `expression_template_imports`. Component-local scope is **preserved, not escaped**: the injected rules become part of the target's own scope and do not leak to its parent or siblings; the only new capability is *who may write into that scope* — now also the consuming surface. A rule injected into a component still fires only on that component's expression positions, and a parent still cannot discretize a grandchild it does not directly mount (deeper nested targeting is deferred). Determinism (§9.6.3) is untouched: injection only widens the rule set handed to the already-deterministic engine.
 
-**Merge order.** When one target receives imports from more than one source, they concatenate into its §9.7.4 effective declaration order in this fixed, structure-determined order: (1) the target's own `expression_template_imports`; (2) its subsystem-ref edge's injection, if mounted by ref; (3) coupling-entry injections in `coupling`-array order; (4) for a test/example run, that test's injection. The concatenation then feeds §9.7.4 unchanged — depth-first post-order, deep-equal diamond dedup at first occurrence, non-deep-equal same-name collision `template_import_name_conflict`. Forms (2)/(3) and form (4) never mix in one build: (2)/(3) build the assembled document, (4) builds an ephemeral per-test instance of a leaf.
+**Merge order.** When one target receives imports from more than one source, they concatenate into its §9.7.4 effective declaration order in this fixed, structure-determined order: (1) the target's own `expression_template_imports`; (2) its subsystem-ref edge's injection, if mounted by ref; (3) coupling-entry injections in `coupling`-array order; (4) for a test/analysis run, that test's injection. The concatenation then feeds §9.7.4 unchanged — depth-first post-order, deep-equal diamond dedup at first occurrence, non-deep-equal same-name collision `template_import_name_conflict`. Forms (2)/(3) and form (4) never mix in one build: (2)/(3) build the assembled document, (4) builds an ephemeral per-test instance of a leaf.
 
-**Timing — two regimes.** *Composition forms (subsystem-ref, coupling-entry) resolve at load and are consumed by the fixpoint.* §4.7 resolution mounts the target "before validation or any other processing"; injection rides that step — the resolver extends the mounted/target component's scope with its edge injection (merge steps 2–3) **before** the §9.6.3 fixpoint (within-load order §9.7.6: resolve imports → merge index sets → close metaparameters → body composition → fixpoint). Coupling-entry injections are collected after all `coupling`-named systems resolve, so an entry may target an inline-declared system as well as a referenced one. The fixpoint then lowers the target's rewrite-targets; the `unlowered_operator` gate (§9.6.3 constraint 6) never trips on it. A composition that mounts a PDE component **without** injecting (and where the component imports nothing itself) still fails cleanly at evaluation with `unlowered_operator` naming the surviving op — the same failure as today, now with an obvious fix. *The test/example form resolves at execution time, in an ephemeral build.* A test's injection MUST NOT run at component load — doing so would lower the enclosing component's `grad` in the canonical document and prevent a sibling test from choosing a different scheme. Instead the inline runner (§6.6) constructs, per test, an ephemeral instance of the enclosing component with that test's imports appended to its scope (merge steps 1 + 4), runs the §9.6.3 fixpoint on *that* instance, and evaluates. The persisted component is never mutated. This is what makes **one suite, many schemes** sound: a single component's tests may exercise it under central vs. upwind, or across a convergence sweep, by varying the injected `ref`/`bindings` per test.
+**Timing — two regimes.** *Composition forms (subsystem-ref, coupling-entry) resolve at load and are consumed by the fixpoint.* §4.7 resolution mounts the target "before validation or any other processing"; injection rides that step — the resolver extends the mounted/target component's scope with its edge injection (merge steps 2–3) **before** the §9.6.3 fixpoint (within-load order §9.7.6: resolve imports → merge index sets → close metaparameters → body composition → fixpoint). Coupling-entry injections are collected after all `coupling`-named systems resolve, so an entry may target an inline-declared system as well as a referenced one. The fixpoint then lowers the target's rewrite-targets; the `unlowered_operator` gate (§9.6.3 constraint 6) never trips on it. A composition that mounts a PDE component **without** injecting (and where the component imports nothing itself) still fails cleanly at evaluation with `unlowered_operator` naming the surviving op — the same failure as today, now with an obvious fix. *The test/analysis form resolves at execution time, in an ephemeral build.* A test's injection MUST NOT run at component load — doing so would lower the enclosing component's `grad` in the canonical document and prevent a sibling test from choosing a different scheme. Instead the inline runner (§6.6) constructs, per test, an ephemeral instance of the enclosing component with that test's imports appended to its scope (merge steps 1 + 4), runs the §9.6.3 fixpoint on *that* instance, and evaluates. The persisted component is never mutated. This is what makes **one suite, many schemes** sound: a single component's tests may exercise it under central vs. upwind, or across a convergence sweep, by varying the injected `ref`/`bindings` per test.
 
-**Round-trip.** Injection fields share the round-trip fate of their timing regime. *Composition forms do not survive `parse → emit`.* Like a component's own `expression_template_imports` (§9.7.6), they are load-time constructs consumed by the fixpoint; the canonical emitted form is the assembled document with the mounted/target component's operators already lowered (reference-preserving from `esm: 0.9.0`, §9.6.4 rule 5 — the injected rules' surviving stencil references materialize into the target component's registry), the injection field subsumed into that component's now-lowered scope and gone. *The test/example form survives `parse → emit` verbatim.* A `Test`/`Example` injection is authored per-run configuration, a peer of `parameter_overrides`, `initial_conditions`, and `tolerance`. The enclosing component round-trips with its rewrite-targets **intact** (§9.6.3 constraint 6), and the test's `expression_template_imports` is preserved so the runner can rebuild the ephemeral instance on the next run. Source files remain the source of truth in both regimes.
+**Round-trip.** Injection fields share the round-trip fate of their timing regime. *Composition forms do not survive `parse → emit`.* Like a component's own `expression_template_imports` (§9.7.6), they are load-time constructs consumed by the fixpoint; the canonical emitted form is the assembled document with the mounted/target component's operators already lowered (reference-preserving from `esm: 0.9.0`, §9.6.4 rule 5 — the injected rules' surviving stencil references materialize into the target component's registry), the injection field subsumed into that component's now-lowered scope and gone. *The test/analysis form survives `parse → emit` verbatim.* A `Test`/`Analysis` injection is authored per-run configuration, a peer of `parameter_overrides`, `initial_conditions`, and `tolerance`. The enclosing component round-trips with its rewrite-targets **intact** (§9.6.3 constraint 6), and the test's `expression_template_imports` is preserved so the runner can rebuild the ephemeral instance on the next run. Source files remain the source of truth in both regimes.
 
 **Index sets and metaparameters.** In every form the injected library's `index_sets` merge into the **document's** registry as a §9.7.5 import would (deep-equal idempotent; non-equal collision `template_import_index_set_conflict`), so the stencil's axes and the target component's variable shapes resolve against one registry; the library's metaparameters close via `expression_template_imports[k].bindings` at the injection edge (left-open names re-export per §9.7.6 site 2). One rule file therefore serves every resolution — the assembler (or the test) binds the grid size at the edge, and re-binding serves a convergence sweep. An injected grid size inconsistent with the index-set sizes the target's variables are shaped over surfaces at the (ephemeral, for a test) build as the ordinary `template_import_index_set_conflict` / shape error.
 
@@ -3937,7 +3937,7 @@ The RHS is an ordinary Expression:
 
 A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate expression. Every state variable SHOULD have exactly one `ic` equation; a missing one defaults to the variable's declared `default`.
 
-**Run-time overrides.** A test or example MAY override the *scalar* initial value of a state variable for one run via `test.initial_conditions` / `example.initial_state` (a `{var: number}` map, §6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model.
+**Run-time overrides.** A test or analysis MAY override the *scalar* initial value of a state variable for one run via `test.initial_conditions` / `analysis.initial_state` (a `{var: number}` map, §6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model.
 
 #### 11.4.1 Scoped-reference ICs (reaction-system species and cross-component ICs)
 

@@ -28,6 +28,10 @@ module EarthSciASTEarthSciIOExt
 using EarthSciAST: RefreshError, OutputError, StateSnapshot, VarGridding,
     derive_output_gridding, scatter_grid!, gather_flat!, OutputMeta, DimCoord,
     plan_dimension_coordinates, output_var_dims, DEFAULT_TIME_DIM
+# The declared §8.5 unit conversion, parsed once per loader variable and applied
+# at delivery (see `_convert_units`).
+using EarthSciAST: parse_unit_conversion, apply_unit_conversion
+
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
 import EarthSciAST: provider_gate_spec, provider_extent_metaparameter
@@ -170,6 +174,9 @@ struct ColumnSpec
     name::String              # the loader-level variable name
     file_variable::String     # the on-disk column
     codes::Union{Nothing,CodeMap}
+    # The declared `unit_conversion` (esm-spec §8.5), parsed; `nothing` when the
+    # variable declares none.
+    unit_conversion::Any
 end
 
 """
@@ -439,6 +446,7 @@ struct DeclaredProvider
     select::Union{Nothing,Vector{Any}}
     push_to_reader::Bool                          # where `select` is honoured
     extent_mp::Union{Nothing,String}
+    unit_conversion::Any                          # the declared §8.5 conversion
 end
 
 provider_refresh_times(p::DeclaredProvider) = EarthSciIO.refresh_times(p.inner)
@@ -460,11 +468,28 @@ function provider_gate_spec(p::DeclaredProvider)
     return Dict{String,Any}("axes" => p.select, "applies_to" => Any[p.varname])
 end
 
+# Produce the values in the variable's DECLARED `units` (esm-spec §8.5).
+#
+# Applied at DELIVERY — after the loader's decode, `codes`, `record_filter` and
+# `select` — so the filter still reasons about the raw column (a conversion
+# cannot turn a dropped record into a kept one) and every delivered array is
+# converted exactly once, whether it arrived through the record table, a
+# reader-pushed select, or the engine's gated fetch.
+#
+# A variable with no declared conversion returns the array untouched: this is a
+# no-op for every document that does not declare one.
+function _convert_units(p::DeclaredProvider, arr)
+    p.unit_conversion === nothing && return arr
+    return apply_unit_conversion(arr, p.unit_conversion; variable_name = p.key)
+end
+
 function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     if selection !== nothing
         # The GATED path: `prepare` resolved the members and is asking for that
-        # slab. It supersedes the declared select it was derived from.
-        return provider_sample(p.inner, t; selection = selection)
+        # slab. It supersedes the declared select it was derived from — but NOT
+        # the declared unit_conversion, which is a property of the VALUES rather
+        # than of which of them were fetched.
+        return _convert_units(p, provider_sample(p.inner, t; selection = selection))
     end
     arr = if p.table !== nothing
         _table_column(p.table, p.column)
@@ -479,11 +504,11 @@ function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     end
     # Pushed to the reader, only the `fixed` axes still need dropping; applied
     # engine-side, the whole select does. Both produce the same array.
-    p.select === nothing && return arr
+    p.select === nothing && return _convert_units(p, arr)
     axes = p.push_to_reader ?
         Any[ax isa AbstractDict && haskey(ax, "fixed") ?
             Dict{String,Any}("fixed" => 0) : "all" for ax in p.select] : p.select
-    return _apply_declared_select(p.key, arr, axes)
+    return _convert_units(p, _apply_declared_select(p.key, arr, axes))
 end
 
 function providers_from_document(doc;
@@ -543,7 +568,10 @@ function providers_from_document(doc;
             vd = vars[vname0]
             fv = vd isa AbstractDict ? String(get(vd, "file_variable", vname0)) : vname0
             push!(columns, ColumnSpec(vname0, fv,
-                _parse_codes("data_loaders.$lname.variables.$vname0", vd)))
+                _parse_codes("data_loaders.$lname.variables.$vname0", vd),
+                parse_unit_conversion(
+                    vd isa AbstractDict ? get(vd, "unit_conversion", nothing) : nothing;
+                    variable_name = "$lname.$vname0")))
         end
 
         # A record filter or a code map makes the loader a TABLE: one decode,
@@ -575,7 +603,8 @@ function providers_from_document(doc;
                         EarthSciIO.supports_selection(inner) &&
                         !any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in sel)
             out[key] = DeclaredProvider(key, spec.name, inner, table, spec.name,
-                                        sel, push_down, extent_mp)
+                                        sel, push_down, extent_mp,
+                                        spec.unit_conversion)
         end
     end
     return out

@@ -1047,6 +1047,12 @@ fn eval_vec_nested_aggregate<'a>(
     if spec.ranges.is_empty() {
         bail_vec!("aggregate: rank-0 output (scalar reduction)");
     }
+    // An OVERLAP gate DRIVES the per-cell contraction (CONFORMANCE_SPEC §5.5.6);
+    // the overlay would fold the FULL product as shifted whole-array slices —
+    // bit-identical, but exactly the `O(∏ranges)` cost the gate removes.
+    if spec.has_drivable_overlap() {
+        bail_vec!("aggregate: carries an overlap join gate that drives enumeration");
+    }
     if let Some(name) = nested_aggregate_capture(
         &spec,
         bx.syms
@@ -1364,6 +1370,14 @@ pub(super) fn eval_vec_index<'a>(
     if node.args.is_empty() {
         bail_vec!("index: no arguments");
     }
+    // A gather on a CONST-ARRAY factor (CONFORMANCE_SPEC §5.5.5) may not use
+    // this kernel's ghost-0 fill: an out-of-range const-array index resolves by
+    // the factor's declared boundary policy, and with no declared policy it is
+    // `E_TREEWALK_CONSTARRAY_OOB`, never a silent zero. Every out-of-range arm
+    // below therefore bails to the per-cell oracle when the base is one — an
+    // IN-RANGE const-array gather (the overwhelmingly common stencil-weight /
+    // geometry-table read) keeps the exact vectorized path it had.
+    let const_base = matches!(&node.args[0], Expr::Variable(v) if ctx.const_arrays.is_const(v));
     let arg0 = eval_vec(&node.args[0], bx, ctx, pool, ops)?;
     let n = node.args.len() - 1;
     // `index(scalar)` with a single arg is the identity; a scalar is otherwise
@@ -1462,6 +1476,9 @@ pub(super) fn eval_vec_index<'a>(
     // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
     if any_fixed_oob {
         arg0.release(pool);
+        if const_base {
+            bail_vec!("index: const-array gather with an out-of-range fixed axis (§5.5.5)");
+        }
         return Some(if n_mapped == 0 {
             VecValue::Scalar(0.0)
         } else {
@@ -1512,10 +1529,23 @@ pub(super) fn eval_vec_index<'a>(
                 if lo_p >= hi_p {
                     // Entirely out of bounds ⇒ the whole result is ghost-0.
                     arg0.release(pool);
+                    if const_base {
+                        bail_vec!(
+                            "index: const-array gather entirely out of range on an axis (§5.5.5)"
+                        );
+                    }
                     return Some(VecValue::Owned {
                         data: pool.take_array(bx.shape),
                         origin: bx.lo.iter().copied().collect(),
                     });
+                }
+                if const_base && (lo_p != 0 || hi_p != bx.shape[a] as i64) {
+                    // A PARTIAL overhang would leave ghost-0 in the uncovered
+                    // positions; §5.5.5 forbids that for a const array.
+                    arg0.release(pool);
+                    bail_vec!(
+                        "index: const-array gather partially out of range on an axis (§5.5.5)"
+                    );
                 }
                 let mut segs = SmallVec::new();
                 segs.push((

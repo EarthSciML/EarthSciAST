@@ -1,7 +1,7 @@
 # Execution runner for inline `tests` blocks (schema gt-cc1).
 #
-# The `tests/valid/tests_examples_comprehensive.esm` fixture exists for
-# schema coverage of the inline `tests` / `examples` surface — parsing and
+# The `tests/valid/tests_analyses_comprehensive.esm` fixture exists for
+# schema coverage of the inline `tests` / `analyses` surface — parsing and
 # round-trip only. This file closes the schema-vs-execution gap for the
 # Julia reference binding: it walks every Model's inline `tests` list,
 # builds the MTK system, applies `initial_conditions` and
@@ -126,10 +126,10 @@ end
 @testset "Inline tests-block execution runner" begin
     fixture_path = joinpath(@__DIR__, "..", "..", "..",
                             "tests", "valid",
-                            "tests_examples_comprehensive.esm")
+                            "tests_analyses_comprehensive.esm")
     @test isfile(fixture_path)
 
-    any_tests = _execute_fixture_tests(fixture_path; label="tests_examples_comprehensive")
+    any_tests = _execute_fixture_tests(fixture_path; label="tests_analyses_comprehensive")
     @test any_tests
 
     # tests/simulation/ physics fixtures — gt-l5b migrated these from the

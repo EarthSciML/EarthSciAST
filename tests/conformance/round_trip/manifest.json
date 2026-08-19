@@ -34,7 +34,7 @@
     { "id": "valid/coupling_transform_expression",  "path": "valid/coupling_transform_expression.esm",  "tags": ["coupling", "expression-transform", "esm-spec-10.4"] },
 
     { "id": "valid/expr_graphs_variable_deps",      "path": "valid/expr_graphs_variable_deps.esm",      "tags": ["expressions"] },
-    { "id": "valid/tests_examples_comprehensive",   "path": "valid/tests_examples_comprehensive.esm",   "tags": ["tests_blocks"] },
+    { "id": "valid/tests_analyses_comprehensive",   "path": "valid/tests_analyses_comprehensive.esm",   "tags": ["tests_blocks"] },
     { "id": "valid/wildfire_atmosphere_ocean",      "path": "valid/wildfire_atmosphere_ocean.esm",      "tags": ["coupling", "end_to_end"] },
     { "id": "valid/structural_issues",              "path": "valid/structural_issues.esm",              "tags": ["core"] },
     { "id": "valid/full_coupled",                   "path": "valid/full_coupled.esm",                   "tags": ["coupling", "comprehensive", "esm-umm"] },
@@ -78,7 +78,7 @@
     { "id": "closed_functions/datetime/is_leap_year","path": "closed_functions/datetime/is_leap_year/canonical.esm","tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
     { "id": "closed_functions/interp/searchsorted",  "path": "closed_functions/interp/searchsorted/canonical.esm",  "tags": ["closed-function-registry", "interp", "esm-tzp", "esm-4aw"] },
 
-    { "id": "spatial/pde_tests_examples",            "path": "spatial/pde_tests_examples.esm",            "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots", "gt-vzwk"] },
+    { "id": "spatial/pde_tests_analyses",            "path": "spatial/pde_tests_analyses.esm",            "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots", "gt-vzwk"] },
 
     { "id": "valid/nonlinear_isorropia_shape",       "path": "valid/nonlinear_isorropia_shape.esm",       "tags": ["nonlinear", "initialization", "guesses", "gt-ebuq"] },
     { "id": "valid/nonlinear_mogi_shape",            "path": "valid/nonlinear_mogi_shape.esm",            "tags": ["nonlinear", "geodynamics", "gt-ebuq"] },

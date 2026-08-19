@@ -8,15 +8,15 @@ import (
 	"testing"
 )
 
-// TestInlineTestsExamplesRoundTrip verifies that the Go binding round-trips
-// the tests_examples_comprehensive.esm fixture, preserving inline Test /
-// Assertion / Example / Plot / ParameterSweep blocks (gt-krpg).
-func TestInlineTestsExamplesRoundTrip(t *testing.T) {
+// TestInlineTestsAnalysesRoundTrip verifies that the Go binding round-trips
+// the tests_analyses_comprehensive.esm fixture, preserving inline Test /
+// Assertion / Analysis / Plot / ParameterSweep blocks (gt-krpg).
+func TestInlineTestsAnalysesRoundTrip(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	path := filepath.Join(repoRoot, "tests", "valid", "tests_examples_comprehensive.esm")
+	path := filepath.Join(repoRoot, "tests", "valid", "tests_analyses_comprehensive.esm")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
@@ -63,8 +63,8 @@ func TestInlineTestsExamplesRoundTrip(t *testing.T) {
 	if got, want := len(m.Tests), 2; got != want {
 		t.Errorf("model tests count: got %d, want %d", got, want)
 	}
-	if got, want := len(m.Examples), 3; got != want {
-		t.Errorf("model examples count: got %d, want %d", got, want)
+	if got, want := len(m.Analyses), 3; got != want {
+		t.Errorf("model analyses count: got %d, want %d", got, want)
 	}
 
 	// Spot-check first test assertion list + tolerance override.
@@ -89,15 +89,15 @@ func TestInlineTestsExamplesRoundTrip(t *testing.T) {
 	}
 
 	// rK_heatmap_sweep: 2-D Cartesian sweep with heatmap plots.
-	var sweep *Example
-	for i := range m.Examples {
-		if m.Examples[i].ID == "rK_heatmap_sweep" {
-			sweep = &m.Examples[i]
+	var sweep *Analysis
+	for i := range m.Analyses {
+		if m.Analyses[i].ID == "rK_heatmap_sweep" {
+			sweep = &m.Analyses[i]
 			break
 		}
 	}
 	if sweep == nil {
-		t.Fatalf("rK_heatmap_sweep example missing")
+		t.Fatalf("rK_heatmap_sweep analysis missing")
 	}
 	if sweep.ParameterSweep == nil || len(sweep.ParameterSweep.Dimensions) != 2 {
 		t.Errorf("sweep dims: %+v", sweep.ParameterSweep)
@@ -128,10 +128,10 @@ func TestInlineTestsExamplesRoundTrip(t *testing.T) {
 	}
 
 	// enumerated_r_sweep: 1-D sweep using Values (not Range).
-	var enumSweep *Example
-	for i := range m.Examples {
-		if m.Examples[i].ID == "enumerated_r_sweep" {
-			enumSweep = &m.Examples[i]
+	var enumSweep *Analysis
+	for i := range m.Analyses {
+		if m.Analyses[i].ID == "enumerated_r_sweep" {
+			enumSweep = &m.Analyses[i]
 			break
 		}
 	}
@@ -146,7 +146,7 @@ func TestInlineTestsExamplesRoundTrip(t *testing.T) {
 		t.Errorf("enumerated values count: got %d, want %d", got, want)
 	}
 
-	// ReactionSystem parity: tolerance, tests, examples, and PlotSeries.
+	// ReactionSystem parity: tolerance, tests, analyses, and PlotSeries.
 	rs, ok := esmFile.ReactionSystems["SimpleDecay"]
 	if !ok {
 		t.Fatalf("SimpleDecay reaction system missing")
@@ -157,29 +157,29 @@ func TestInlineTestsExamplesRoundTrip(t *testing.T) {
 	if got, want := len(rs.Tests), 1; got != want {
 		t.Errorf("rs tests: got %d, want %d", got, want)
 	}
-	if got, want := len(rs.Examples), 2; got != want {
-		t.Errorf("rs examples: got %d, want %d", got, want)
+	if got, want := len(rs.Analyses), 2; got != want {
+		t.Errorf("rs analyses: got %d, want %d", got, want)
 	}
-	// PlotSeries survives round-trip on the reaction-system example.
-	rsExample := rs.Examples[0]
-	if len(rsExample.Plots) != 1 || len(rsExample.Plots[0].Series) != 2 {
-		t.Fatalf("rs plot series missing: %+v", rsExample.Plots)
+	// PlotSeries survives round-trip on the reaction-system analysis.
+	rsAnalysis := rs.Analyses[0]
+	if len(rsAnalysis.Plots) != 1 || len(rsAnalysis.Plots[0].Series) != 2 {
+		t.Fatalf("rs plot series missing: %+v", rsAnalysis.Plots)
 	}
-	if rsExample.Plots[0].Series[0].Name != "A" ||
-		rsExample.Plots[0].Series[1].Name != "B" {
-		t.Errorf("rs plot series names: %+v", rsExample.Plots[0].Series)
+	if rsAnalysis.Plots[0].Series[0].Name != "A" ||
+		rsAnalysis.Plots[0].Series[1].Name != "B" {
+		t.Errorf("rs plot series names: %+v", rsAnalysis.Plots[0].Series)
 	}
 
 	// multi_y_trace: inline array-form y (v0.5.0) projects onto Y + Series.
-	var multiYEx *Example
-	for i := range rs.Examples {
-		if rs.Examples[i].ID == "multi_y_trace" {
-			multiYEx = &rs.Examples[i]
+	var multiYEx *Analysis
+	for i := range rs.Analyses {
+		if rs.Analyses[i].ID == "multi_y_trace" {
+			multiYEx = &rs.Analyses[i]
 			break
 		}
 	}
 	if multiYEx == nil {
-		t.Fatalf("multi_y_trace example missing")
+		t.Fatalf("multi_y_trace analysis missing")
 	}
 	if got, want := len(multiYEx.Plots), 1; got != want {
 		t.Fatalf("multi_y_trace plots: got %d, want %d", got, want)

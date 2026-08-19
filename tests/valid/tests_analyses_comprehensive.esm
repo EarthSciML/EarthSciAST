@@ -1,15 +1,15 @@
 {
   "esm": "0.1.0",
   "metadata": {
-    "name": "TestsAndExamplesComprehensive",
-    "description": "Worked fixture exercising the full surface area of the inline tests and examples features: model-level tolerance, per-test and per-assertion tolerance overrides, initial_condition and parameter overrides, multi-dimension Cartesian parameter sweeps, and all three plot types (line, scatter, heatmap) including a heatmap over a sweep with a reduced z value.",
+    "name": "TestsAndAnalysesComprehensive",
+    "description": "Worked fixture exercising the full surface area of the inline tests and analyses features: model-level tolerance, per-test and per-assertion tolerance overrides, initial_condition and parameter overrides, multi-dimension Cartesian parameter sweeps, and all three plot types (line, scatter, heatmap) including a heatmap over a sweep with a reduced z value.",
     "authors": [
       "ESM Format Contributors"
     ],
     "created": "2026-04-14T00:00:00Z",
     "tags": [
       "tests",
-      "examples",
+      "analyses",
       "parameter-sweep",
       "heatmap",
       "fixture"
@@ -158,7 +158,7 @@
           ]
         }
       ],
-      "examples": [
+      "analyses": [
         {
           "id": "single_run",
           "description": "A single default run illustrating the classic sigmoid approach to carrying capacity.",
@@ -335,7 +335,7 @@
   "reaction_systems": {
     "SimpleDecay": {
       "reference": {
-        "notes": "A -> B reaction system used to demonstrate that tests/examples have identical shape on ReactionSystem as on Model."
+        "notes": "A -> B reaction system used to demonstrate that tests/analyses have identical shape on ReactionSystem as on Model."
       },
       "species": {
         "A": {
@@ -421,7 +421,7 @@
           ]
         }
       ],
-      "examples": [
+      "analyses": [
         {
           "id": "decay_trace",
           "description": "Plot A and B vs time for a single default run.",

@@ -1,0 +1,505 @@
+{
+  "esm": "0.9.0",
+  "index_sets": {
+    "emis_records": {
+      "kind": "interval",
+      "size": 3
+    },
+    "rcv_cells": {
+      "kind": "interval",
+      "size": 2
+    },
+    "src_cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "name": "pushdown_mirror"
+  },
+  "models": {
+    "Binned": {
+      "equations": [],
+      "variables": {
+        "E_PM25": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "px",
+              "py",
+              "emis_annual"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "px",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "px",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "py",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "py",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    "emis_annual",
+                    "r"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "src_cells"
+          ],
+          "type": "observed"
+        },
+        "SR_PM25": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "conc_PM25": {
+          "expression": {
+            "args": [
+              "SR_PM25",
+              "E_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_PM25",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_PM25",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "observed"
+        },
+        "emis_annual": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "in_grid": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "px",
+              "py"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "src_W",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "px",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "px",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "src_E",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "src_S",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "py",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "py",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "src_N",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<"
+                    }
+                  ],
+                  "op": "and"
+                },
+                1.0,
+                0.0
+              ],
+              "op": "ifelse"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed"
+        },
+        "plume_top": {
+          "expression": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "px",
+              "py"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "px",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "px",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "py",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "py",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<"
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    "src_N",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          },
+          "shape": [
+            "emis_records"
+          ],
+          "type": "observed"
+        },
+        "px": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "py": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "src_E": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_N": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_S": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_W": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        }
+      }
+    }
+  }
+}

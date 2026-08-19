@@ -1,0 +1,59 @@
+{
+  "delivered": {
+    "Stacks.annual": [
+      111.1,
+      22.2,
+      333.3,
+      0.0
+    ],
+    "Stacks.stkdiam": [
+      9.2964,
+      1.2954,
+      0.0,
+      3.62712
+    ],
+    "Stacks.stkhgt": [
+      215.49360000000001,
+      9.99744,
+      0.0,
+      45.9486
+    ],
+    "Stacks.stktemp": [
+      875.3722222222223,
+      273.15000000000003,
+      233.15,
+      295.65000000000003
+    ]
+  },
+  "description": "The delivered arrays esm-spec \u00a78.5 requires, computed independently of any binding: `annual` is the raw ANN_VALUE column untouched (no conversion declared -- the no-op control); `stkhgt` is STKHGT*0.3048; `stkdiam` is STKDIAM*(0.3048*1.0), the same factor reached by folding a closed Expression; `stktemp` is (STKTEMP+459.67)*0.5555555555555556, evaluated once per element with the raw value bound to the expression's single free variable. Values are shortest round-trip decimal, so every binding parses the SAME f64 bits and the comparison is byte-identity, not a tolerance.",
+  "no_conversion_declared": [
+    "Stacks.annual"
+  ],
+  "raw_columns": {
+    "Stacks.annual": [
+      111.1,
+      22.2,
+      333.3,
+      0.0
+    ],
+    "Stacks.stkdiam": [
+      30.5,
+      4.25,
+      0.0,
+      11.9
+    ],
+    "Stacks.stkhgt": [
+      707.0,
+      32.8,
+      0.0,
+      150.75
+    ],
+    "Stacks.stktemp": [
+      1116.0,
+      32.0,
+      -40.0,
+      72.5
+    ]
+  },
+  "records": 4
+}

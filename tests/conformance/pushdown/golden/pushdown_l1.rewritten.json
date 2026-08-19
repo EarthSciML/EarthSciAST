@@ -507,6 +507,23 @@
               ],
               "op": "*"
             },
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "X",
+                    "Y"
+                  ],
+                  "tgt_env": [
+                    "pd_cell__src_cells__src_W",
+                    "pd_cell__src_cells__src_S",
+                    "pd_cell__src_cells__src_E",
+                    "pd_cell__src_cells__src_N"
+                  ]
+                }
+              }
+            ],
             "op": "aggregate",
             "output_idx": [
               "c"
@@ -650,6 +667,23 @@
               ],
               "op": "*"
             },
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "X",
+                    "Y"
+                  ],
+                  "tgt_env": [
+                    "pd_cell__src_cells__src_W",
+                    "pd_cell__src_cells__src_S",
+                    "pd_cell__src_cells__src_E",
+                    "pd_cell__src_cells__src_N"
+                  ]
+                }
+              }
+            ],
             "op": "aggregate",
             "output_idx": [
               "c"
@@ -793,6 +827,23 @@
               ],
               "op": "*"
             },
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "X",
+                    "Y"
+                  ],
+                  "tgt_env": [
+                    "pd_cell__src_cells__src_W",
+                    "pd_cell__src_cells__src_S",
+                    "pd_cell__src_cells__src_E",
+                    "pd_cell__src_cells__src_N"
+                  ]
+                }
+              }
+            ],
             "op": "aggregate",
             "output_idx": [
               "c"
@@ -936,6 +987,23 @@
               ],
               "op": "*"
             },
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "X",
+                    "Y"
+                  ],
+                  "tgt_env": [
+                    "pd_cell__src_cells__src_W",
+                    "pd_cell__src_cells__src_S",
+                    "pd_cell__src_cells__src_E",
+                    "pd_cell__src_cells__src_N"
+                  ]
+                }
+              }
+            ],
             "op": "aggregate",
             "output_idx": [
               "c"
@@ -1079,6 +1147,23 @@
               ],
               "op": "*"
             },
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "X",
+                    "Y"
+                  ],
+                  "tgt_env": [
+                    "pd_cell__src_cells__src_W",
+                    "pd_cell__src_cells__src_S",
+                    "pd_cell__src_cells__src_E",
+                    "pd_cell__src_cells__src_N"
+                  ]
+                }
+              }
+            ],
             "op": "aggregate",
             "output_idx": [
               "c"

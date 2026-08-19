@@ -399,11 +399,11 @@ export type SweepDimension1 =
       [k: string]: unknown;
     };
 /**
- * A plot specification associated with an example. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.
+ * A plot specification associated with an analysis. Only structural information is recorded — axes, series selection, and value reductions. Styling (colors, fonts, legends, themes) is the viewer's concern. PDE-aware plot types `field_slice` and `field_snapshot` visualize spatial fields at a fixed time; `x` (and `y` for snapshots) name domain dimensions, the variable value becomes the y / color channel, and any non-plotted spatial dimension MUST be pinned in `pinned_coords`.
  */
 export type Plot = Plot1 & {
   /**
-   * Identifier unique within this example's plots array.
+   * Identifier unique within this analysis's plots array.
    */
   id: string;
   type: "line" | "scatter" | "heatmap" | "field_slice" | "field_snapshot";
@@ -419,7 +419,7 @@ export type Plot = Plot1 & {
    */
   series?: PlotSeries[];
   /**
-   * Required for field_slice and field_snapshot: simulation time at which to extract the spatial field. Must lie within the example's time_span.
+   * Required for field_slice and field_snapshot: simulation time at which to extract the spatial field. Must lie within the analysis's time_span.
    */
   at_time?: number;
   /**
@@ -788,9 +788,9 @@ export interface Model {
    */
   tests?: Test[];
   /**
-   * Inline illustrative examples of how to run this model. Each example specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.
+   * Inline illustrative analyses of how to run this model. Each analysis specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.
    */
-  examples?: Example[];
+  analyses?: Analysis[];
   /**
    * Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this model's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.
    */
@@ -1138,19 +1138,19 @@ export interface Tolerance2 {
   rel?: number;
 }
 /**
- * An inline illustrative example of how to run the enclosing component. Defines the run configuration and one or more plots derived from the result.
+ * An inline illustrative analysis of how to run the enclosing component. Defines the run configuration and one or more plots derived from the result.
  */
-export interface Example {
+export interface Analysis {
   /**
-   * Identifier unique within this component's examples array.
+   * Identifier unique within this component's analyses array.
    */
   id: string;
   /**
-   * Human-readable description of what this example illustrates.
+   * Human-readable description of what this analysis illustrates.
    */
   description?: string;
   /**
-   * Scalar initial-value overrides for this example run, keyed by state-variable name. A component's initial fields are declared with `ic` equations in the model (esm-spec §11.4); this map overrides their scalar values for this run.
+   * Scalar initial-value overrides for this analysis run, keyed by state-variable name. A component's initial fields are declared with `ic` equations in the model (esm-spec §11.4); this map overrides their scalar values for this run.
    */
   initial_state?: {
     [k: string]: number;
@@ -1164,16 +1164,16 @@ export interface Example {
   time_span: TimeSpan;
   parameter_sweep?: ParameterSweep;
   /**
-   * Plot specifications derived from this example's run(s).
+   * Plot specifications derived from this analysis's run(s).
    */
   plots?: Plot[];
   /**
-   * Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline examples run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).
+   * Template-library imports registered into the ENCLOSING component's template scope for THIS run only (esm-spec §9.7.10 / §6.7) — lets a discretization-agnostic PDE component's inline analyses run under a per-run discretization chosen without editing the leaf. Same entry shape as §9.7.2; target implicit (the enclosing component). Execution-time (ephemeral per-run build); authored per-run configuration, so it DOES survive parse→emit (peer of parameters / parameter_sweep).
    */
   expression_template_imports?: TemplateImport[];
 }
 /**
- * Optional parameter sweep. When present, the example represents a family of runs (one per Cartesian combination) rather than a single trajectory.
+ * Optional parameter sweep. When present, the analysis represents a family of runs (one per Cartesian combination) rather than a single trajectory.
  */
 export interface ParameterSweep {
   /**
@@ -1310,9 +1310,9 @@ export interface ReactionSystem {
    */
   tests?: Test[];
   /**
-   * Inline illustrative examples of how to run this reaction system. Each example specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.
+   * Inline illustrative analyses of how to run this reaction system. Each analysis specifies initial state, parameters, a time span, an optional parameter sweep, and plot specifications.
    */
-  examples?: Example[];
+  analyses?: Analysis[];
   /**
    * Component-scoped in-file Expression-AST templates (v0.4.0; docs/rfcs/ast-expression-templates.md). Each entry names a fixed Expression body with parameter substitution slots; `apply_expression_template` AST nodes elsewhere in this component (typically inside `reactions[*].rate`) reference the entry by key with per-parameter bindings. Templates are component-local: declarations here are visible only within this reaction system's expression positions. A body MAY reference other match-less in-scope templates as a statically-checked acyclic DAG — no cycles, no recursion (esm-spec §9.7.3). From esm 0.9.0 the round-trip is Option B (reference-preserving, esm-spec §9.6.4): references survive load and parse-then-emit and denote their expansion (`Expand`); eager (target-bearing) references still expand at load; emit materializes referenced templates into this registry — authored entries first in authored order, then materialized entries in lexicographic UTF-8 name order; keys may be dotted post-rename names. Pre-0.9.0 loaders expanded every reference at load (Option A) and emitted the expanded form.
    */

@@ -194,7 +194,7 @@ These semantics are exercised by:
 
 Simulation tests are carried **inline** inside each `Model` and `ReactionSystem` under a `tests` array field. Reference trajectories are no longer stored as a parallel filesystem hierarchy — each test is a small run specification plus a handful of scalar `(variable, time, expected)` assertion points that travel with the model in the `.esm` document itself.
 
-See `esm-spec.md` Sections 6.6 (tests) and 6.7 (examples) for the full schema.
+See `esm-spec.md` Sections 6.6 (tests) and 6.7 (analyses) for the full schema.
 
 **Structure:**
 - Component-level tests live at `models.<name>.tests[]` and `reaction_systems.<name>.tests[]`.
@@ -236,7 +236,7 @@ See `esm-spec.md` Sections 6.6 (tests) and 6.7 (examples) for the full schema.
 
 **Runtime tolerance default:** when no `tolerance` is given at the assertion, test, or component level, conforming runtimes should use `rel = 1e-6` and no `abs` bound. If both `abs` and `rel` are given, passing either bound counts as a pass (standard numerical convention).
 
-**Inline examples.** Alongside `tests`, each `Model` and `ReactionSystem` may carry an `examples` array — illustrative run configurations (optionally including Cartesian parameter sweeps) paired with structural plot specifications (line, scatter, heatmap). Examples produce trajectories and plots, not pass/fail outcomes. See `esm-spec.md` Section 6.7.
+**Inline analyses.** Alongside `tests`, each `Model` and `ReactionSystem` may carry an `analyses` array — illustrative run configurations (optionally including Cartesian parameter sweeps) paired with structural plot specifications (line, scatter, heatmap). Analyses produce trajectories and plots, not pass/fail outcomes. See `esm-spec.md` Section 6.7.
 
 > **Note:** Earlier versions of this document described filesystem-based simulation tests (`tests/simulation/*.esm` + `tests/simulation/expected/*.csv`). That convention has been retired. The existing `tests/simulation/*.esm` fixtures now carry their reference behavior inline as `tests[]` arrays; the `expected/` CSV directory has been removed. Validation-error fixtures under `tests/invalid/` are unrelated to simulation tests and are unaffected by this change.
 
@@ -976,21 +976,64 @@ result is:
 
 **Join admission.** The gate admits a binding iff `(pos_src, pos_tgt)` is in the
 candidate set (positions 1-based, matching the enumeration bindings). The gate's
-candidate set is built ONCE per node (not per tuple). An overlap-gated producer
-DRIVES enumeration from the sorted candidate pairs (binding the two gated symbols
-from each pair, then the cartesian product of any ungated ranges) — cost
-`O(|candidates|·∏ungated)` rather than `O(∏ranges)`. The materialised member set
-is IDENTICAL to the full-product path: the gate is conservative, so it only skips
-tuples the narrow `filter` would have rejected. Because the broad phase compares
-only floating-point envelopes but the emitted **keys are integer** (§5.5.1), the
-`distinct` member set is byte-identical across bindings regardless of the
-candidate-generation backend.
+candidate set is built ONCE per node (not per tuple).
+
+An overlap gate **DRIVES enumeration** of the aggregate it is attached to. This
+holds for **any** aggregate — an ordinary dense reduction as much as an
+index-set-producing `distinct` producer; nothing in the contract distinguishes
+them, and a binding MUST NOT restrict the driver to the producer. The gate binds
+its two gated symbols from the candidate set rather than testing every tuple of
+the full product, so the cost is `O(|candidates|·∏ungated)` rather than
+`O(∏ranges)`. Which side is **skolemised**, reduced, or output is FREE: the gate
+resolves `src_env` → one loop symbol and `tgt_env` → the other purely from each
+side's declared 1-D shape, and the aggregate's own `output_idx` decides the
+result's orientation independently. Concretely:
+
+* both gated symbols contracted ⇒ drive from the sorted candidate PAIRS, then
+  take the cartesian product with any ungated ranges (the producer case);
+* one gated symbol already bound (it is an **output** index of a dense
+  aggregate) and the other contracted ⇒ the contracted one enumerates only that
+  bound position's candidate partners, in the same ascending order its own range
+  would have visited them;
+* both gated symbols bound ⇒ a single membership test.
+
+**Identity fill (normative).** Driving means an output position with NO candidate
+pair is never visited. Such a position MUST be filled with the semiring's
+`0̄` — the empty-⊕-reduction identity of §5.6 (`0` for `(+,·)`) — exactly as if
+the full product had run and every tuple had been rejected. It is not a hole, not
+`NaN`, and not left at whatever the buffer previously held. An emission record
+that falls outside the grid, or a grid cell containing no record, therefore reads
+as `0` under the additive monoid.
+
+The driver is a pure optimisation of the enumeration EXTENT, never of the
+result: the emitted leaf set is exactly the set the membership test would have
+admitted, in the same relative order. The three shapes above MUST be driven —
+that is what the MUST NOT above forbids sidestepping by looking at whether the
+node is a producer. A binding MAY fall back to the full product ONLY for a shape
+outside them, where it cannot show that the driven sequence preserves the
+⊕-accumulation order (an aggregate with additional contracted axes beside two
+contracted gated ones, say); such a fallback is slower but produces the same
+answer. The materialised member set is
+likewise IDENTICAL to the full-product path — the gate is conservative, so it
+only skips tuples the narrow `filter` would have rejected. Because the broad
+phase compares only floating-point envelopes but the emitted **keys are integer**
+(§5.5.1), the `distinct` member set is byte-identical across bindings regardless
+of the candidate-generation backend.
 
 **Derived-set `member_factor` and `gated_select` pushdown.** A `kind:"derived"`
 index set produced by an overlap-gated `distinct` aggregate carries
 `from_faq:"<producer id>"` and MAY carry `member_factor:"<var>"` — the buffer that
 receives the surviving member key per invented position (Hook 1: fed back as a
-`const` factor so downstream aggregates gather on the compact derived axis). A
+`const` factor so an aggregate ranging over the compact derived axis can gather
+the full-grid rows that axis selects). Gathering on the compact axis is what
+downstream aggregates do; it is not a claim about ORIENTATION. An aggregate that
+reduces OVER the compact axis and outputs another one gathers exactly the same
+way, and so does one whose envelope factors are themselves such gathers — which
+is the case for the binning aggregate the pushdown desugar rewrites (§5.5.7). An
+overlap gate's `src_env` / `tgt_env` factors MUST be build-time const-array data
+by the time the broad phase runs; a factor that lives on a derived axis is
+therefore materialised AFTER the axis is sized and its `member_factor` is fed
+back, and before join-gate resolution. A
 provider whose axis is `gated_by:"<derived set>"` is DEFERRED past value-invention
 and then fetched with a `Selection` built from the materialised members **in
 sorted order** — the compact slab only, never a wholesale fetch (the `gated_select`
@@ -1017,6 +1060,90 @@ loader exactly once, reusing that array rather than re-reading it when the
 provider is later injected, (b) reject a loader whose variables disagree on the
 count, naming both, and (c) reject a caller binding of `M` that contradicts the
 discovered value rather than silently preferring either.
+
+#### 5.5.7 Projection-pushdown desugar — recognised patterns (normative)
+
+> The AUTOMATIC rewrite (`desugar_pushdown`) that turns the natural math into
+> the §5.5.6 constructs, so an author writes NO derived index set, NO `distinct`
+> producer and NO `gated_select`. Reference implementation: Julia
+> `EarthSciAST.jl/src/pushdown_rewrite.jl`. Cross-language conformance: the
+> `tests/conformance/pushdown/` corpus — a manifest of input/golden document
+> pairs, one per recognised shape, compared as parsed JSON.
+
+The rewrite is a **narrow pattern recogniser**, not a general optimiser. It MUST
+leave a document it does not recognise byte-identical, and it MUST be idempotent
+and pure: re-running it on its own output returns that output unchanged (the
+provenance record `metadata.x_esd.pushdown` is the guard), and the input document
+is never mutated.
+
+**The BINNING aggregate.** The pattern's core is a `+`-semiring aggregate over
+exactly two 1-D index sets — a CELL set `C` and a RECORD set `R` — whose body
+carries a rectangle-containment predicate between four CELL-indexed rect-bound
+factors and two RECORD-indexed point-coordinate factors. The predicate is parsed
+into the §5.5.6 envelopes (`src_env` the two point coordinates, `tgt_env` the
+four rect bounds `[xmin, ymin, xmax, ymax]`, each bound identified by the
+ORIENTATION of its comparison, so the authored comparison order is free).
+
+Both **orientations** of that aggregate are recognised. Which axis is the output
+is decided by the aggregate's own `output_idx`; which symbol is the cell and
+which the record is decided by the containment predicate, never by position:
+
+| | FORWARD `E[c] = Σ_{r∈R} […]` | MIRRORED `P[r] = Σ_{c∈C} […]` |
+|---|---|---|
+| observed shape | `[C]` | `[R]` |
+| reduces over | records | cells |
+| rewrite emits | the full construct set, below | the GATE only |
+
+**FORWARD arm (full desugar).** When the binning observed `E[c]` also feeds a
+provider-backed mat-vec `conc[out] = Σ_{c∈C} A[c, out] · E[c]` with `A` a rank-2
+parameter shaped `[C, out]`, the rewrite emits:
+
+1. a `kind:"derived"` index set `pd_support__<C>` with `from_faq` naming (2) and
+   `member_factor` naming (4);
+2. a `distinct:true`, `bool_and_or` producer over `R × C` carrying the derived
+   `join.overlap` clause, the containment comparisons as its `filter`, and
+   `key: skolem(label:"cell", args:[<cell symbol>])` — the skolem is what makes
+   the produced member set CELL-oriented;
+3. a `state` member variable and (4) a `parameter` member factor, both shaped on
+   the derived set;
+4. one `observed` cell-gather per rect bound,
+   `pd_cell__<C>__<F>[c] = F[member_factor[c]]`, shaped on the derived set;
+5. `E`'s reduction axis and declared shape re-pointed onto the derived set, its
+   rect references rewritten to the gathers of (4), **and the derived
+   `join.overlap` clause attached** — with `tgt_env` naming the gathers of (4),
+   i.e. the envelopes in the COMPACT index space `E` now ranges over;
+6. `A`'s first axis re-pointed onto the derived set, and a provenance record
+   `metadata.x_esd.pushdown` whose `gated_select` names the derived set, the
+   gated axis, and the (sorted) list of gated arrays.
+
+Emitting (5)'s gate is what stops the rewritten `E` from still visiting
+`|support| × |R|` pairs; with it, §5.5.6's driver makes the aggregate cost
+`O(|candidates|)`.
+
+**MIRRORED arm (gate only).** A per-record binning aggregate receives ONLY the
+`join.overlap` clause. It MUST NOT receive a derived index set, a producer, a
+member factor, a gathered rect family, or a `gated_select` entry, and its
+`shape`, `output_idx` and `ranges` MUST be left untouched. The reasons are
+normative, not stylistic:
+
+* it wants the **full** record axis — every record keeps a value, and a record
+  contained by no cell reduces to the semiring identity under §5.5.6's
+  identity-fill rule. There is nothing to compact;
+* its cell axis is therefore NOT re-pointed, so its envelope factors are the
+  document's own const-array rect factors, unrewritten.
+
+A mirrored aggregate consequently gets no provider gating: nothing it reads is
+sliced to a support set.
+
+The mirrored arm is a **rider, not a trigger**: mirrors are collected only after
+the forward pattern has fixed `C` and `R`. A document containing only mirrored
+binning aggregates is not rewritten.
+
+**Soundness guard.** Every arm fires only when the reduction's semiring is the
+additive `(+, 0)` monoid. A `max_product` / `min_sum` / etc. aggregate of the
+same shape MUST be left untouched — the gate is conservative and the identity
+fill is semiring-specific, and the rewrite does not attempt to reason about
+either for a non-additive monoid.
 
 ### 5.6 Closed Semiring Registry (normative)
 

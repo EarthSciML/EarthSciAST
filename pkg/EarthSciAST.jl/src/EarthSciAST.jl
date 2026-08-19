@@ -98,6 +98,7 @@ include("area_faq.jl")
 include("broad_phase.jl")
 # MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
 include("tree_walk.jl")
+include("unit_conversion.jl")
 include("data_refresh.jl")
 include("data_output.jl")
 include("simulate.jl")
@@ -122,6 +123,9 @@ export
     build_reference_graph, resolve_references,
     # Expression types
     ASTExpr, NumExpr, IntExpr, VarExpr, OpExpr,
+    # Data-loader unit conversion (esm-spec §8.5)
+    UnitConversionError, parse_unit_conversion,
+    apply_unit_conversion, apply_unit_conversion!,
     # Literal predicates (RFC §5.4.1 int/float distinction)
     is_literal, literal_value,
     # Equation types
@@ -211,6 +215,10 @@ export
     broad_phase_candidates, build_spatial_index,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
     build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
+    # Public template-expansion seam (esm-spec §9.6.4 Option B): the typed
+    # model exactly as `build_evaluator` sees it post-expansion, for
+    # downstream analyzers (EarthSciASTDiff differentiates this tree).
+    expanded_model,
     # Parameter-vector ABI: name → position in a `p` that is an AbstractVector
     # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
     # is a function of `p` and not a sixth `build_evaluator` return value.

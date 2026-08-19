@@ -596,6 +596,21 @@ pub struct OverlapClause {
     /// Non-negative outward envelope inflation (default `0.0`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eps: Option<f64>,
+    /// The aggregate range symbol the `src_env` axis runs over, resolved at
+    /// build time by [`crate::join::resolve_overlap_join_syms`] while each
+    /// range still carries its `{ "from": <index set> }` linkage. `None` until
+    /// then, and `None` for a clause whose env factors could not be traced to a
+    /// loop symbol — the enumeration driver then declines to drive and the
+    /// evaluator walks the full product, exactly as it did before the gate
+    /// became a driver.
+    ///
+    /// NOT part of the wire form: `#[serde(skip)]` keeps every document's
+    /// parse -> emit round trip byte-identical.
+    #[serde(skip)]
+    pub sym_src: Option<String>,
+    /// The aggregate range symbol the `tgt_env` axis runs over. See [`Self::sym_src`].
+    #[serde(skip)]
+    pub sym_tgt: Option<String>,
 }
 
 /// (De)serialize [`ExpressionNode::output_idx`] as a heterogeneous list of

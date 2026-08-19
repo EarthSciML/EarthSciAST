@@ -64,7 +64,7 @@ use serde_json::Value;
 
 use crate::aggregate::is_aggregate_op;
 use crate::compile_error::CompileError;
-use crate::types::{Expr, ExpressionNode, IndexSet, Model, RangeSpec};
+use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec};
 
 /// One component of a join / group-by key. Exact-equality types only (§5.3):
 /// an integer ID or a categorical member. **Floats are forbidden in keys**
@@ -146,6 +146,10 @@ pub fn resolve_aggregate_joins(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
+    // Resolve each OVERLAP clause's two range symbols FIRST — that resolution
+    // needs the declared shapes of the model's variables, which the per-node
+    // lowering below does not carry. See [`resolve_overlap_join_syms`].
+    resolve_overlap_join_syms(model);
     for eq in &mut model.equations {
         lower_expr_joins(&mut eq.lhs, index_sets)?;
         lower_expr_joins(&mut eq.rhs, index_sets)?;
@@ -250,13 +254,19 @@ fn lower_node_joins(
     }
 
     let mut conjuncts: Vec<Expr> = Vec::new();
+    // A spatial OVERLAP gate (CONFORMANCE_SPEC §5.5.6) is NOT lowered to a
+    // filter and is NOT dropped: since the gate DRIVES enumeration on any
+    // aggregate — an ordinary dense reduction as much as a `distinct` producer
+    // — the clause has to survive lowering so the evaluator can build its
+    // broad-phase candidate set and walk one candidate partner list per output
+    // cell instead of the full product. (It used to be dropped here as a
+    // numerically-inert no-op, which was true of the RESULT but left the COST
+    // at `O(∏ranges)`.) Carried through verbatim, with the range symbols
+    // `resolve_overlap_join_syms` resolved still attached.
+    let mut kept: Vec<JoinClause> = Vec::new();
     for clause in &joins {
-        // A spatial OVERLAP gate (CONFORMANCE_SPEC §5.5.6) is a broad-phase
-        // superset resolved on the value-invention path; the dense evaluator
-        // computes the geometric narrow phase densely, so the gate is
-        // numerically inert here (every real overlap survives the exact `filter`)
-        // — drop it as a no-op, exactly like a degenerate positional `on` pair.
         if clause.overlap.is_some() {
+            kept.push(clause.clone());
             continue;
         }
         if clause.on.is_empty() {
@@ -330,8 +340,100 @@ fn lower_node_joins(
         };
         node.filter = Some(Box::new(pred));
     }
+    if !kept.is_empty() {
+        node.join = Some(kept);
+    }
 
     Ok(())
+}
+
+/// Resolve every OVERLAP join clause's two range symbols in `model`, in place.
+///
+/// An overlap gate names const-array envelope FACTORS, not loop symbols; like
+/// an `on` key column, each factor is a 1-D buffer whose shape index set names
+/// the join range, so the first factor of a side identifies that side's
+/// aggregate range symbol. That mapping needs BOTH the node's own ranges (with
+/// their `{ "from": <index set> }` linkage intact) and the model's declared
+/// variable shapes — which is why it lives here rather than inside
+/// [`lower_node_joins`], and why it must run BEFORE
+/// [`crate::aggregate::resolve_aggregate_ranges`] erases the linkage.
+///
+/// Mirrors the Julia `_overlap_env_sym` (`tree_walk/semiring.jl`). Deliberately
+/// INFALLIBLE: a factor whose shape is unknown or not 1-D, or an index set no
+/// range draws from, simply leaves the symbol `None`, and the enumeration
+/// driver then declines to drive that gate (the full product still runs and
+/// still produces the same answer). Erroring here would turn documents whose
+/// overlap gate the dense evaluator has always ignored into build failures.
+pub fn resolve_overlap_join_syms(model: &mut Model) {
+    let var_shapes = declared_var_shapes(model);
+    for eq in &mut model.equations {
+        resolve_overlap_syms_expr(&mut eq.lhs, &var_shapes);
+        resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
+    }
+    if let Some(init_eqs) = &mut model.initialization_equations {
+        for eq in init_eqs {
+            resolve_overlap_syms_expr(&mut eq.lhs, &var_shapes);
+            resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
+        }
+    }
+    for var in model.variables.values_mut() {
+        if let Some(expr) = &mut var.expression {
+            resolve_overlap_syms_expr(expr, &var_shapes);
+        }
+    }
+}
+
+/// Every declared variable's shape (index-set names), for
+/// [`resolve_overlap_join_syms`]. Mirrors the Julia `_declared_var_shapes`.
+pub fn declared_var_shapes(model: &Model) -> HashMap<String, Vec<String>> {
+    model
+        .variables
+        .iter()
+        .filter_map(|(n, v)| v.shape.as_ref().map(|s| (n.clone(), s.clone())))
+        .collect()
+}
+
+/// [`resolve_overlap_join_syms`] over one expression tree.
+pub fn resolve_overlap_syms_expr(expr: &mut Expr, var_shapes: &HashMap<String, Vec<String>>) {
+    // Sharing-aware gate: only branches actually containing a `join` clause are
+    // descended (and thereby copy-on-write split); see `contains_join`.
+    if !contains_join(expr) {
+        return;
+    }
+    let Some(node) = expr.node_mut() else {
+        return;
+    };
+    if node.join.is_some() {
+        let ranges = node.ranges.clone().unwrap_or_default();
+        let declared: HashSet<&str> = ranges.keys().map(String::as_str).collect();
+        let mut set_to_syms: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (sym, spec) in &ranges {
+            if let RangeSpec::IndexSetRef { from, .. } = spec {
+                set_to_syms.entry(from.as_str()).or_default().push(sym);
+            }
+        }
+        // A set drawn by two symbols is ambiguous; sort so at least the CHOICE
+        // is deterministic, then reject the ambiguous case below.
+        for syms in set_to_syms.values_mut() {
+            syms.sort_unstable();
+        }
+        let env_sym = |env: &[String]| -> Option<String> {
+            let shape = var_shapes.get(env.first()?)?;
+            if shape.len() != 1 {
+                return None;
+            }
+            resolve_key(&shape[0], &declared, &set_to_syms)
+        };
+        if let Some(joins) = &mut node.join {
+            for clause in joins.iter_mut() {
+                if let Some(ov) = &mut clause.overlap {
+                    ov.sym_src = env_sym(&ov.src_env);
+                    ov.sym_tgt = env_sym(&ov.tgt_env);
+                }
+            }
+        }
+    }
+    node.for_each_child_mut(&mut |child| resolve_overlap_syms_expr(child, var_shapes));
 }
 
 /// Resolve a join key to the loop symbol it denotes: the key itself if it is a

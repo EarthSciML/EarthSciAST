@@ -315,7 +315,7 @@
           ]
         }
       ],
-      "examples": [
+      "analyses": [
         {
           "id": "default_run",
           "description": "One-hour simulation of the box model under default parameters, plotting NO, NO2, and O3 concentration vs time. This reproduces the standard photostationary-state approach used in introductory atmospheric chemistry courses.",

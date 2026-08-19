@@ -428,7 +428,7 @@ describe('Parse and Serialize', () => {
               { lhs: { op: 'D', args: ['A'], wrt: 't' }, rhs: { op: '*', args: [-0.1, 'A'] } },
               { lhs: { op: 'D', args: ['B'], wrt: 't' }, rhs: { op: '*', args: [0.1, 'A'] } },
             ],
-            examples: [
+            analyses: [
               {
                 id: 'ab_trace',
                 time_span: { start: 0.0, end: 10.0 },

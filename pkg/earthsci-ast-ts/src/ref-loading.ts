@@ -686,7 +686,7 @@ function resolveReactionSystemRefs(
  * `mname` has the run's `imports` (raw §9.7.2 entries) appended to its own
  * `expression_template_imports`, so the ordinary import resolver + §9.6.3
  * fixpoint lower its rewrite-targets under the run-chosen discretization. The
- * persisted `file` is never mutated. This is what lets one test/example suite
+ * persisted `file` is never mutated. This is what lets one test/analysis suite
  * exercise a discretization-agnostic PDE leaf under several schemes with no
  * conflict between runs.
  *

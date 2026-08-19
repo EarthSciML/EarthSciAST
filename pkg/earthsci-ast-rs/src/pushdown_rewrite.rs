@@ -317,22 +317,47 @@ fn range_from(v: Option<&Value>) -> Option<&str> {
     v?.get("from")?.as_str()
 }
 
-/// A matched binning aggregate `E[c] = Σ_r [contains(cell_c, pt_r)]·…`.
+/// A matched binning aggregate — a `+`-semiring reduction over TWO 1-D index
+/// sets whose body carries a rectangle-containment predicate between a
+/// CELL-indexed rect factor and a RECORD-indexed point factor. BOTH
+/// orientations are recognised (CONFORMANCE_SPEC.md §5.5.7):
+///
+/// ```text
+/// FORWARD  E[c] = Σ_r [contains(cell_c, pt_r)] · …   (the cell axis is output)
+/// MIRROR   P[r] = Σ_c [contains(cell_c, pt_r)] · …   (the record axis is output)
+/// ```
 struct Binning {
+    /// The loop symbol carrying the CELL side (the four rect bounds).
     c_sym: String,
+    /// The loop symbol carrying the RECORD side (the two point coordinates).
     r_sym: String,
+    /// The index set `c_sym` ranges over.
+    c_set: String,
+    /// The index set `r_sym` ranges over.
     r_set: String,
+    /// `true` when the aggregate's own output axis is the CELL one (FORWARD).
+    out_is_cell: bool,
     src_env: [String; 2],
     tgt_env: [String; 4],
 }
 
-/// Is `ev` a binning aggregate over cell set `c_set`? Returns the binding.
-fn pd_detect_binning(ev: &Value, c_set: &str) -> Option<Binning> {
+/// Is `ev` a binning aggregate whose OUTPUT axis is `out_set`? Returns the
+/// binding, or `None`.
+///
+/// The gate is IDENTICAL either way — the enumeration driver binds its two
+/// symbols from the join clause's declared envelopes and knows nothing about
+/// cells vs records, and the aggregate's own `output_idx` decides the result's
+/// orientation. So the guards here are on the aggregate's SHAPE, not on which
+/// axis is which: `out_set` is the index set the observed is shaped on, the
+/// single other range supplies the opposite side, and the CONTAINMENT PREDICATE
+/// itself says which symbol is the cell (it carries the four rect BOUND
+/// factors) and which is the record (the two point coordinates).
+fn pd_detect_binning(ev: &Value, out_set: &str) -> Option<Binning> {
     if ev.get("type")?.as_str()? != "observed" {
         return None;
     }
     let shape = ev.get("shape")?.as_array()?;
-    if shape.len() != 1 || shape[0].as_str()? != c_set {
+    if shape.len() != 1 || shape[0].as_str()? != out_set {
         return None;
     }
     let agg = ev.get("expression")?;
@@ -347,26 +372,79 @@ fn pd_detect_binning(ev: &Value, c_set: &str) -> Option<Binning> {
     if oi.len() != 1 {
         return None;
     }
-    let c_sym = oi[0].as_str()?;
+    let out_sym = oi[0].as_str()?;
     let ranges = ranges_of(agg)?;
-    if ranges.len() != 2 || range_from(ranges.get(c_sym)) != Some(c_set) {
+    if ranges.len() != 2 || range_from(ranges.get(out_sym)) != Some(out_set) {
         return None;
     }
-    let r_sym = ranges.keys().find(|k| k.as_str() != c_sym)?.clone();
-    let r_set = range_from(ranges.get(&r_sym))?.to_string();
+    let in_sym = ranges.keys().find(|k| k.as_str() != out_sym)?.clone();
+    let in_set = range_from(ranges.get(&in_sym))?.to_string();
     let body = agg.get("expr")?;
     if !body.is_object() {
         return None;
     }
     let pred = pd_find_ifelse_cond(body)?;
-    let env = pd_parse_containment(pred, c_sym, &r_sym)?;
+    // Exactly one of the two assignments parses: `pd_parse_containment` demands
+    // each comparison put the cell symbol on one side and the record symbol on
+    // the other, and that the record side yield exactly two coordinates each
+    // with a min AND a max cell bound.
+    if let Some(env) = pd_parse_containment(pred, out_sym, &in_sym) {
+        return Some(Binning {
+            c_sym: out_sym.to_string(),
+            r_sym: in_sym,
+            c_set: out_set.to_string(),
+            r_set: in_set,
+            out_is_cell: true,
+            src_env: env.src_env,
+            tgt_env: env.tgt_env,
+        });
+    }
+    let env = pd_parse_containment(pred, &in_sym, out_sym)?;
     Some(Binning {
-        c_sym: c_sym.to_string(),
-        r_sym,
-        r_set,
+        c_sym: in_sym,
+        r_sym: out_sym.to_string(),
+        c_set: in_set,
+        r_set: out_set.to_string(),
+        out_is_cell: false,
         src_env: env.src_env,
         tgt_env: env.tgt_env,
     })
+}
+
+/// The MIRRORED-orientation binning aggregates of a model: per-RECORD observeds
+/// `P[r] = Σ_{c∈C} [contains(cell_c, pt_r)] · …` over the plan's cell set
+/// `c_set` and record set `r_set`. Returned as `(name, src_env, tgt_env)`
+/// triples, SORTED by name so the emitted document is identical across
+/// bindings and hash seeds.
+///
+/// A mirror needs NOTHING but the gate (CONFORMANCE_SPEC.md §5.5.7, "MIRRORED
+/// arm"). Its cell axis stays the FULL `c_set`, so its envelope factors are the
+/// document's own const-array rects, unrewritten.
+fn pd_mirror_specs(
+    variables: &Map<String, Value>,
+    c_set: &str,
+    r_set: &str,
+    forward_names: &[String],
+) -> Vec<(String, [String; 2], [String; 4])> {
+    let mut out: Vec<(String, [String; 2], [String; 4])> = Vec::new();
+    for (name, v) in variables {
+        if forward_names.iter().any(|f| f == name) {
+            continue;
+        }
+        let Some(bind) = pd_detect_binning(v, r_set) else {
+            continue;
+        };
+        if bind.out_is_cell || bind.c_set != c_set || bind.r_set != r_set {
+            continue;
+        }
+        // Never stack a second gate on an aggregate that already declares a join.
+        if v.get("expression").and_then(|e| e.get("join")).is_some() {
+            continue;
+        }
+        out.push((name.clone(), bind.src_env, bind.tgt_env));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
 }
 
 /// The detected pushdown plan (the Julia/Python plan dict, typed).
@@ -380,8 +458,15 @@ struct Plan {
     /// `applies_to` — the one collection-order-dependent list that leaks into
     /// the emitted document; mirrors the Julia `sort!(A_names)`).
     a_names: Vec<String>,
-    /// `(E name, cell symbol)` per matched binning observed.
-    e_specs: Vec<(String, String)>,
+    /// `(E name, cell symbol, gate src_env, gate tgt_env)` per matched
+    /// FORWARD binning observed. The envelopes are the ones
+    /// [`pd_parse_containment`] read out of THIS aggregate's own containment
+    /// predicate — the gate emitted onto the rewritten `E` is derived, not
+    /// authored.
+    e_specs: Vec<(String, String, [String; 2], [String; 4])>,
+    /// `(P name, gate src_env, gate tgt_env)` per MIRRORED binning observed,
+    /// sorted by name. These receive ONLY the gate (§5.5.7 "MIRRORED arm").
+    mirror_specs: Vec<(String, [String; 2], [String; 4])>,
     src_env: [String; 2],
     tgt_env: [String; 4],
     rep_ename: String,
@@ -395,7 +480,7 @@ fn pd_detect(model: &Value) -> Option<Plan> {
     let variables = model.get("variables")?.as_object()?;
     let mut conc_specs: Vec<(String, String)> = Vec::new();
     let mut a_names: Vec<String> = Vec::new();
-    let mut e_specs: Vec<(String, String)> = Vec::new();
+    let mut e_specs: Vec<(String, String, [String; 2], [String; 4])> = Vec::new();
     let mut plan: Option<Plan> = None;
 
     for (cname, cv) in variables {
@@ -467,6 +552,9 @@ fn pd_detect(model: &Value) -> Option<Plan> {
         let Some(bind) = pd_detect_binning(ev, c_set) else {
             continue;
         };
+        if !bind.out_is_cell {
+            continue; // FORWARD arm only
+        }
 
         match &plan {
             None => {
@@ -477,6 +565,7 @@ fn pd_detect(model: &Value) -> Option<Plan> {
                     conc_specs: Vec::new(),
                     a_names: Vec::new(),
                     e_specs: Vec::new(),
+                    mirror_specs: Vec::new(),
                     src_env: bind.src_env.clone(),
                     tgt_env: bind.tgt_env.clone(),
                     rep_ename: ename.clone(),
@@ -493,8 +582,8 @@ fn pd_detect(model: &Value) -> Option<Plan> {
         if !a_names.contains(&aname) {
             a_names.push(aname);
         }
-        if !e_specs.iter().any(|(e, _)| e == &ename) {
-            e_specs.push((ename, bind.c_sym));
+        if !e_specs.iter().any(|(e, ..)| e == &ename) {
+            e_specs.push((ename, bind.c_sym, bind.src_env, bind.tgt_env));
         }
     }
     let mut plan = plan?;
@@ -503,6 +592,13 @@ fn pd_detect(model: &Value) -> Option<Plan> {
     }
     // Deterministic plan order (mirrors the Julia `sort!(A_names)`).
     a_names.sort();
+    // MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
+    // cell/record sets. They are collected only once the forward pattern has
+    // fixed `c_set`/`r_set`: the mirror is a RIDER on the rewrite, never its
+    // trigger, so a document holding only mirrored binning aggregates is not
+    // rewritten at all (§5.5.7).
+    let forward_names: Vec<String> = e_specs.iter().map(|(e, ..)| e.clone()).collect();
+    plan.mirror_specs = pd_mirror_specs(variables, &plan.c_set, &plan.r_set, &forward_names);
     plan.conc_specs = conc_specs;
     plan.a_names = a_names;
     plan.e_specs = e_specs;
@@ -541,6 +637,20 @@ fn pd_rewrite_rects(node: &mut Value, rectmap: &HashMap<String, String>) {
 
 fn pd_ix(f: impl Into<Value>, idx: impl Into<Value>) -> Value {
     json!({"op": "index", "args": [f.into(), idx.into()]})
+}
+
+/// One dict-form `join.overlap` clause (CONFORMANCE_SPEC.md §5.5.6 wire form).
+/// `eps` is always `0.0`: the rewrite derives the envelopes from an EXACT
+/// rectangle-containment predicate that stays on as the narrow `filter`, so no
+/// FP slack is wanted.
+fn pd_overlap_clause(src_env: &[String], tgt_env: &[String]) -> Value {
+    json!({
+        "overlap": {
+            "src_env": src_env.to_vec(),
+            "tgt_env": tgt_env.to_vec(),
+            "eps": 0.0,
+        }
+    })
 }
 
 fn pd_apply(esm: &Value, mname: &str, plan: &Plan) -> Result<Value, PushdownRewriteError> {
@@ -654,8 +764,15 @@ fn pd_apply(esm: &Value, mname: &str, plan: &Plan) -> Result<Value, PushdownRewr
         }
     }
 
-    // --- rewrite E: axis → derived set, rect factors → cell gathers ---
-    for (ename, csym) in &plan.e_specs {
+    // --- rewrite E: axis -> derived set, rect factors -> cell gathers, + GATE ---
+    // The rewritten `E` still reduces over the FULL record axis, so without a
+    // gate it visits |support|*|records| pairs -- 1520*43650 on isrm.esm.
+    // Attach the SAME overlap clause the producer carries, re-pointed at the
+    // generated cell gathers, and the enumeration driver (§5.5.6) walks one
+    // candidate partner list per output cell instead. The clause is derived,
+    // not authored: its envelopes are exactly the ones `pd_parse_containment`
+    // read out of this aggregate's own containment predicate.
+    for (ename, csym, e_src, e_tgt) in &plan.e_specs {
         let expr = mv
             .get_mut(ename)
             .and_then(|v| v.get_mut("expression"))
@@ -677,8 +794,43 @@ fn pd_apply(esm: &Value, mname: &str, plan: &Plan) -> Result<Value, PushdownRewr
                 }
             }
         }
+        if expr.get("join").is_none()
+            && let Some(eo) = expr.as_object_mut()
+        {
+            let gathered: Vec<String> =
+                e_tgt.iter().map(|f| rectmap.get(f).cloned().unwrap_or_else(|| f.clone())).collect();
+            eo.insert(
+                "join".to_string(),
+                Value::Array(vec![pd_overlap_clause(e_src, &gathered)]),
+            );
+        }
         if let Some(evo) = mv.get_mut(ename).and_then(Value::as_object_mut) {
             evo.insert("shape".to_string(), json!([setname.clone()]));
+        }
+    }
+
+    // --- MIRRORED orientation: gate only ---
+    // A per-record binning aggregate `P[r] = SUM_{c in C} [contains(cell_c, pt_r)]*...`
+    // is the same join read the other way round. It gets ONLY the gate -- no
+    // derived index set, no `distinct` producer, no `member_factor`, no
+    // provider gating -- because it wants the FULL record axis: every record
+    // must produce a value, and a record outside the grid must come out as the
+    // semiring identity (the driver leaves such a position with no term and the
+    // identity fill emits 0). There is nothing to compact, so a mirrored
+    // value-invention would derive a support set nobody reads. Its envelopes
+    // stay the document's own const-array factors (the cell axis is not
+    // re-pointed), so the mirror also needs no rect gathers.
+    for (pname, p_src, p_tgt) in &plan.mirror_specs {
+        let Some(pexpr) = mv.get_mut(pname).and_then(|v| v.get_mut("expression")) else {
+            continue;
+        };
+        if pexpr.get("join").is_none()
+            && let Some(po) = pexpr.as_object_mut()
+        {
+            po.insert(
+                "join".to_string(),
+                Value::Array(vec![pd_overlap_clause(p_src, p_tgt)]),
+            );
         }
     }
 
@@ -715,13 +867,7 @@ fn pd_apply(esm: &Value, mname: &str, plan: &Plan) -> Result<Value, PushdownRewr
             "distinct": true,
             "semiring": "bool_and_or",
             "id": faqid.clone(),
-            "join": [{
-                "overlap": {
-                    "src_env": plan.src_env.to_vec(),
-                    "tgt_env": plan.tgt_env.to_vec(),
-                    "eps": 0.0,
-                }
-            }],
+            "join": [pd_overlap_clause(&plan.src_env, &plan.tgt_env)],
             "filter": prod_filter,
             "key": {"op": "skolem", "label": "cell", "args": [plan.rep_csym.clone()]},
             "args": prod_args,
