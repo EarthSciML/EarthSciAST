@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://earthsciml.org/schemas/esm/0.9.0/esm.schema.json",
+  "$id": "https://earthsciml.org/schemas/esm/1.0.0/esm.schema.json",
   "title": "ESM Format",
-  "description": "EarthSciML Serialization Format (v0.9.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v0.9.0 changes no on-disk shape: it replaces the Option A (always-expanded) template round-trip with Option B (reference-preserving; esm-spec §9.6.4, docs/content/rfcs/out-of-line-expression-templates.md). Template references survive load and parse-then-emit; emit materializes each component's referenced templates into its `expression_templates` registry (authored entries first in authored order, materialized entries after in lexicographic UTF-8 name order; registry keys may be dotted post-rename names); eager references (target-bearing, esm-spec §9.6.4 rule 3) still expand at load, so no rewrite-target op survives inside a reference; `emit ∘ load` is a byte-wise fixed point; emitted documents carrying surviving references or materialized registries declare `esm: 0.9.0` or later. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.",
+  "description": "EarthSciML Serialization Format (v1.0.0) — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v1.0.0 is a clean break with no deprecation path and no compatibility shims (docs/content/rfcs/unified-variable-model.md): the five declared variable types collapse to TWO. `unknown` is a quantity the solver solves for — its behavior is given by EQUATIONS and never by a field on the variable — and `parameter` is a quantity supplied to the solver, carrying a number or a `distribution` plus an optional `update` block saying when and from what it refreshes. Removed: `state` and `observed` (with the `expression` field — an observed variable becomes an unknown plus a bare-variable-LHS equation); `brownian` (with `noise_kind` / `correlation_group` — a noise source is a parameter with a `distribution` and `update.kind: \"wiener\"`, correlated noise being ONE vector-valued parameter whose distribution carries a `cov` matrix, which closes the gap the 0.x schema explicitly deferred); `discrete` (with `refresh` and the `RefreshTrigger` def — a refreshing input is a parameter with a `schedule` / `data` / `remesh` update); the `discrete_parameters` event lists and the event `functional_affect` (parameter mutation moves onto the parameter itself as a `condition` / `crossing` update carrying an `expression`, a `from` binding, or a `handler`; events now affect UNKNOWNS only); and the `data_loaders` COMPONENT kind together with `DataLoader.variables` (top-level `data_sources` is now a pure registry of ingest configuration — source, temporal, select, record_filter, extent, reader_options, determinism — that parameters draw from via `update.from`; a data source is no longer a coupling endpoint, a subsystem, or a scoped-name path root). Everything the solver needs is DERIVED rather than declared — which unknowns are ODE states, observed, or algebraic, and which parameters are Brownian, discrete, sampled, or constant — and every binding exposes the same classification functions to derive it (esm-spec §6.3.1). v0.9.0 changes no on-disk shape: it replaces the Option A (always-expanded) template round-trip with Option B (reference-preserving; esm-spec §9.6.4, docs/content/rfcs/out-of-line-expression-templates.md). Template references survive load and parse-then-emit; emit materializes each component's referenced templates into its `expression_templates` registry (authored entries first in authored order, materialized entries after in lexicographic UTF-8 name order; registry keys may be dotted post-rename names); eager references (target-bearing, esm-spec §9.6.4 rule 3) still expand at load, so no rewrite-target op survives inside a reference; `emit ∘ load` is a byte-wise fixed point; emitted documents carrying surviving references or materialized registries declare `esm: 0.9.0` or later. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.",
   "type": "object",
   "required": [
     "esm",
@@ -22,7 +22,7 @@
     },
     {
       "required": [
-        "data_loaders"
+        "data_sources"
       ]
     },
     {
@@ -73,11 +73,11 @@
         ]
       }
     },
-    "data_loaders": {
+    "data_sources": {
       "type": "object",
-      "description": "External data source registrations (by reference).",
+      "description": "Document-scoped registry of external data sources, keyed by name. A data source is INGEST CONFIGURATION, not a component: it says where bytes live and how to decode, slice, and filter them, and it exposes no variables of its own. A model consumes one by declaring a parameter whose `update` names the source and binds a `file_variable` from it. The shared parts stay here because their guarantees are source-wide and cannot be stated per-parameter: `record_filter` computes the surviving-record mask ONCE and applies it to every parameter drawing from this source, which is what makes it impossible for two columns of one points table to fall out of alignment, and `extent` binds ONE metaparameter from that single shared record count.",
       "additionalProperties": {
-        "$ref": "#/$defs/DataLoader"
+        "$ref": "#/$defs/DataSource"
       }
     },
     "enums": {
@@ -114,7 +114,7 @@
     },
     "coordinates": {
       "type": "object",
-      "description": "Document-scoped, OPTIONAL registry of coordinate variables (RFC streaming-output-sinks §8), keyed by name. Purely additive: a document without it validates and emits exactly as before (bare integer axes). Each entry marks an existing data array — a model variable, parameter, or loader field referenced BY NAME (exactly as a ragged `IndexSet` references its `offsets`/`values` factors), or an inline literal `values` vector — as a physical coordinate and attaches CF metadata (`standard_name`, `units`, optional `axis`). The coordinate's SHAPE is read from its source, so it is NOT attached to any single axis: this is the CF coordinate data model, covering rectilinear (1-D monotonic → CF dimension coordinate), unstructured (1-D over a shared dimension → CF auxiliary coordinate) and curvilinear (2-D `lat(y,x)`/`lon(y,x)` → auxiliary coordinate) grids under one rule. A streaming writer derives each data variable's CF `coordinates` attribute mechanically: every coordinate whose source DIMENSIONS (by identity, NOT by length) are a subset of the data variable's dimensions applies to it.",
+      "description": "Document-scoped, OPTIONAL registry of coordinate variables (RFC streaming-output-sinks §8), keyed by name. Purely additive: a document without it validates and emits exactly as before (bare integer axes). Each entry marks an existing data array — a model unknown or parameter referenced BY NAME (including a parameter fed from a `data_sources` entry) (exactly as a ragged `IndexSet` references its `offsets`/`values` factors), or an inline literal `values` vector — as a physical coordinate and attaches CF metadata (`standard_name`, `units`, optional `axis`). The coordinate's SHAPE is read from its source, so it is NOT attached to any single axis: this is the CF coordinate data model, covering rectilinear (1-D monotonic → CF dimension coordinate), unstructured (1-D over a shared dimension → CF auxiliary coordinate) and curvilinear (2-D `lat(y,x)`/`lon(y,x)` → auxiliary coordinate) grids under one rule. A streaming writer derives each data variable's CF `coordinates` attribute mechanically: every coordinate whose source DIMENSIONS (by identity, NOT by length) are a subset of the data variable's dimensions applies to it.",
       "additionalProperties": {
         "$ref": "#/$defs/Coordinate"
       }
@@ -306,7 +306,7 @@
         },
         "args": {
           "type": "array",
-          "description": "Operand list. For most ops these are sub-expressions. Array ops use args for the input array operands (aggregate, broadcast, index, reshape, transpose, concat). makearray has no natural args and uses an empty array. For `D` (esm-spec §4.2 \"Arity of `D`\"): `args[0]` is always the differentiated operand; a STRUCTURAL `D` (`wrt` \"t\", or `wrt` absent) is strictly unary, while a REWRITE-TARGET `D` (spatial `wrt`) MAY carry an unbounded number of TRAILING AUXILIARY OPERANDS after `args[0]` \u2014 the per-face boundary/halo data a discretization rule binds and consumes (§9.6.8). Trailing operands carry NO evaluator semantics and no per-position meaning assigned by this format; they are matched positionally by the consuming rule.",
+          "description": "Operand list. For most ops these are sub-expressions. Array ops use args for the input array operands (aggregate, broadcast, index, reshape, transpose, concat). makearray has no natural args and uses an empty array. For `D` (esm-spec §4.2 \"Arity of `D`\"): `args[0]` is always the differentiated operand; a STRUCTURAL `D` (`wrt` \"t\", or `wrt` absent) is strictly unary, while a REWRITE-TARGET `D` (spatial `wrt`) MAY carry an unbounded number of TRAILING AUXILIARY OPERANDS after `args[0]` — the per-face boundary/halo data a discretization rule binds and consumes (§9.6.8). Trailing operands carry NO evaluator semantics and no per-position meaning assigned by this format; they are matched positionally by the consuming rule.",
           "items": {
             "$ref": "#/$defs/Expression"
           },
@@ -930,7 +930,7 @@
     },
     "ContinuousEvent": {
       "type": "object",
-      "description": "Fires when a condition expression crosses zero (root-finding). Maps to MTK SymbolicContinuousCallback.",
+      "description": "Fires when a condition expression crosses zero (root-finding). Maps to MTK SymbolicContinuousCallback. An event may affect UNKNOWNS ONLY; a parameter that changes on a zero crossing declares `update: {kind: \"crossing\", …}` on itself instead.",
       "required": [
         "conditions",
         "affects"
@@ -951,7 +951,7 @@
         },
         "affects": {
           "type": "array",
-          "description": "Affect equations applied on positive-going zero crossings (or both directions if affect_neg is absent). Empty array for pure detection.",
+          "description": "Affect equations applied on positive-going zero crossings (or both directions if affect_neg is absent). Empty array for pure detection. Every LHS MUST name an unknown (`event_affects_parameter` otherwise).",
           "items": {
             "$ref": "#/$defs/AffectEquation"
           }
@@ -1058,54 +1058,239 @@
         }
       ]
     },
-    "FunctionalAffect": {
+    "DiscreteEvent": {
       "type": "object",
-      "description": "A registered functional affect handler for complex event behavior that cannot be expressed symbolically.",
+      "description": "Fires when a boolean condition is true at end of a timestep, or at preset/periodic times. Maps to MTK SymbolicDiscreteCallback. An event may affect UNKNOWNS ONLY: from 1.0.0 a parameter carries its own `update` block, so there is no `discrete_parameters` list and no `functional_affect` here — a handler only ever wrote parameters, and now lives on the parameter it writes.",
       "required": [
-        "handler_id",
-        "read_vars",
-        "read_params"
+        "trigger",
+        "affects"
       ],
       "additionalProperties": false,
       "properties": {
-        "handler_id": {
+        "name": {
           "type": "string",
-          "description": "Registered identifier for the affect implementation."
+          "description": "Human-readable identifier."
         },
-        "read_vars": {
+        "trigger": {
+          "$ref": "#/$defs/DiscreteEventTrigger"
+        },
+        "affects": {
           "type": "array",
+          "description": "Affect equations. Every LHS MUST name an unknown (`event_affects_parameter` otherwise).",
           "items": {
-            "type": "string"
-          },
-          "description": "State variables accessed by the handler."
+            "$ref": "#/$defs/AffectEquation"
+          }
         },
-        "read_params": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Parameters accessed by the handler."
+        "reinitialize": {
+          "type": "boolean",
+          "description": "Whether to reinitialize the system after the event."
         },
-        "modified_params": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Parameters modified by the handler (implicitly discrete parameters)."
-        },
-        "config": {
-          "type": "object",
-          "description": "Handler-specific configuration.",
-          "additionalProperties": true
+        "description": {
+          "type": "string"
         }
       }
     },
-    "RefreshTrigger": {
-      "description": "Refresh-trigger descriptor for a `discrete` ModelVariable (RFC semiring-faq-unified-ir §6.1): declares WHEN the variable's per-event buffer is recomputed by the dependency-partition pass's per-event handler. It seeds the DISCRETE cadence class but is otherwise inert to the algebra — it schedules the recompute and carries no value. Exactly one of three forms, discriminated by `kind`: a `schedule` (time-driven on a tstops schedule — the MTK PresetTimeCallback / tstops analogue), a `data_ingest` event (recompute when a named external data source advances to a new record, e.g. the next met/BC slice), or a `remesh` hook (recompute on an AMR refinement / moving-mesh topology change).",
+    "Distribution": {
+      "description": "A parameter's value drawn from a probability distribution rather than fixed. The closed set is `normal`, `lognormal`, and `uniform` (esm-spec §9.1's closed-registry principle applies here too: bindings implement exactly these and reject anything else). WHEN it is drawn is decided by the parameter's `update`, and that is the whole difference between the two uses of this field: with NO update the value is sampled ONCE at setup and held for the run (the uncertainty-quantification / ensemble case), while `update.kind: \"wiener\"` resamples it every step with √dt increment scaling (the stochastic-process case that promotes the model to an SDE). A distribution is univariate when its location parameter is a number and multivariate when it is an array, in which case the parameter's `shape` MUST agree.",
       "oneOf": [
         {
           "type": "object",
-          "description": "schedule: time-driven refresh on a tstops schedule (the MTK PresetTimeCallback / tstops analogue). Recompute at the listed preset `times` and/or on a periodic `interval`; at least one of the two MUST be present.",
+          "description": "Gaussian. Give `std` for independent components or `cov` for a full covariance matrix — exactly one of the two, never both.",
+          "required": [
+            "kind",
+            "mean"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "normal"
+            },
+            "mean": {
+              "oneOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1
+                }
+              ],
+              "description": "Mean. A number for a scalar parameter; an array for a vector-valued one, whose length MUST match the parameter's shape."
+            },
+            "std": {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "minItems": 1
+                }
+              ],
+              "description": "Standard deviation of INDEPENDENT components — a number, or one entry per component. Mutually exclusive with `cov`."
+            },
+            "cov": {
+              "$ref": "#/$defs/CovarianceMatrix"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "std"
+              ]
+            },
+            {
+              "required": [
+                "cov"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Log-normal: the natural logarithm of the value is normally distributed with mean `mu` and spread `sigma` / `cov`. Both spread forms are on the LOG scale.",
+          "required": [
+            "kind",
+            "mu"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "lognormal"
+            },
+            "mu": {
+              "oneOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1
+                }
+              ],
+              "description": "Mean of the underlying normal (log scale)."
+            },
+            "sigma": {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "minItems": 1
+                }
+              ],
+              "description": "Standard deviation of the underlying normal (log scale), for independent components. Mutually exclusive with `cov`."
+            },
+            "cov": {
+              "$ref": "#/$defs/CovarianceMatrix"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "sigma"
+              ]
+            },
+            {
+              "required": [
+                "cov"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Uniform on [low, high]. Components are independent by construction, so there is no covariance form; `low` and `high` are numbers for a scalar parameter or equal-length arrays for a vector-valued one, and every `low` MUST be strictly below its `high`.",
+          "required": [
+            "kind",
+            "low",
+            "high"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "uniform"
+            },
+            "low": {
+              "oneOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1
+                }
+              ]
+            },
+            "high": {
+              "oneOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 1
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "CovarianceMatrix": {
+      "type": "array",
+      "description": "Symmetric positive-semidefinite covariance matrix in row-major order: entry [i][j] is the covariance of components i and j. MUST be square, and its order MUST equal the length of the accompanying `mean` / `mu` vector and of the parameter's declared `shape`. A binding MUST reject a non-square, non-symmetric, or non-positive-semidefinite matrix at load with `distribution_covariance_invalid` rather than silently repairing it. This is how the format encodes correlated noise: one vector-valued parameter with a `cov`, instead of the opaque correlation-group tags the 0.x schema used and never gave a matrix for.",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "number"
+        },
+        "minItems": 1
+      }
+    },
+    "ParameterUpdate": {
+      "description": "Declares WHEN a parameter refreshes and WHAT it refreshes from. A parameter with no `update` is a constant (or, with a `distribution`, is sampled once at setup). Six kinds. `wiener` is a driving stochastic process and takes no value form — it resamples the parameter's own `distribution`. The other five each take EXACTLY ONE value form: an `expression`, a `from` binding to a data source, or a registered `handler`. Together they subsume three constructs the 0.x format kept apart: the `brownian` variable type (now `wiener`), the `discrete` type with its `RefreshTrigger` (now `schedule` / `data` / `remesh`), and the `discrete_parameters` event lists with their `functional_affect` (now `condition` / `crossing`). This is also the sole seed of the DISCRETE cadence class in the dependency-partition pass (RFC semiring-faq-unified-ir §6.1): without it such inputs would be mis-seeded as CONST (never refresh) or CONTINUOUS (recompute every step).",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "wiener: a driving Wiener (Brownian) process. The parameter's `distribution` is resampled every step with √dt increment scaling, which is why such a parameter's units carry a 1/s^0.5-style intensity rather than the units of the quantity it drives (esm-spec §4.8.4). The presence of ANY wiener-updated parameter promotes the enclosing model from an ODE system to an SDE system. Correlated noise is one vector-valued parameter whose `distribution` carries a `cov`; there is no separate correlation-group tag and no value form to give, because the distribution IS the value.",
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wiener"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "description": "schedule: time-driven refresh on a tstops schedule (the MTK PresetTimeCallback / tstops analogue). Refreshes at the listed preset `times` and/or on a periodic `interval`; at least one of the two MUST be present.",
           "required": [
             "kind"
           ],
@@ -1120,7 +1305,7 @@
                 "type": "number"
               },
               "minItems": 1,
-              "description": "Explicit simulation times (the tstops) at which the buffer recomputes."
+              "description": "Explicit simulation times (the tstops) at which the parameter refreshes."
             },
             "interval": {
               "type": "number",
@@ -1131,24 +1316,163 @@
               "type": "number",
               "default": 0,
               "description": "Offset from t=0 for the first periodic refresh. Ignored when `interval` is absent."
+            },
+            "expression": {
+              "$ref": "#/$defs/Expression",
+              "description": "The parameter's new value, computed symbolically when the update fires."
+            },
+            "from": {
+              "$ref": "#/$defs/DataSourceBinding",
+              "description": "The parameter's new value, read from the named data source."
+            },
+            "handler": {
+              "$ref": "#/$defs/FunctionalUpdate",
+              "description": "The parameter's new value, computed by a registered handler — the escape hatch for behavior no expression can state (control logic, external calls, table interpolation)."
             }
           },
-          "anyOf": [
+          "allOf": [
             {
-              "required": [
-                "times"
+              "anyOf": [
+                {
+                  "required": [
+                    "times"
+                  ]
+                },
+                {
+                  "required": [
+                    "interval"
+                  ]
+                }
               ]
             },
             {
-              "required": [
-                "interval"
+              "oneOf": [
+                {
+                  "required": [
+                    "expression"
+                  ]
+                },
+                {
+                  "required": [
+                    "from"
+                  ]
+                },
+                {
+                  "required": [
+                    "handler"
+                  ]
+                }
               ]
             }
           ]
         },
         {
           "type": "object",
-          "description": "data_ingest: refresh driven by arrival of a new external data record. The buffer recomputes when the named data source advances to a new record (e.g. the next met / boundary-condition slice from a DataLoader).",
+          "description": "condition: refresh at the end of any timestep at which the boolean `when` expression is true — the 0.x discrete-event `condition` trigger, relocated onto the parameter it writes.",
+          "required": [
+            "kind",
+            "when"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "condition"
+            },
+            "when": {
+              "$ref": "#/$defs/Expression",
+              "description": "Boolean expression tested at the end of each timestep."
+            },
+            "expression": {
+              "$ref": "#/$defs/Expression",
+              "description": "The parameter's new value, computed symbolically when the update fires."
+            },
+            "from": {
+              "$ref": "#/$defs/DataSourceBinding",
+              "description": "The parameter's new value, read from the named data source."
+            },
+            "handler": {
+              "$ref": "#/$defs/FunctionalUpdate",
+              "description": "The parameter's new value, computed by a registered handler — the escape hatch for behavior no expression can state (control logic, external calls, table interpolation)."
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "expression"
+              ]
+            },
+            {
+              "required": [
+                "from"
+              ]
+            },
+            {
+              "required": [
+                "handler"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "crossing: refresh when the `when` expression crosses zero, located by root-finding — the 0.x continuous-event trigger, relocated onto the parameter it writes. Use this rather than `condition` when the exact crossing time matters.",
+          "required": [
+            "kind",
+            "when"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "crossing"
+            },
+            "when": {
+              "$ref": "#/$defs/Expression",
+              "description": "Expression whose zero crossing triggers the refresh."
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "up",
+                "down",
+                "any"
+              ],
+              "default": "any",
+              "description": "Which crossings count: positive-going (`up`), negative-going (`down`), or both (`any`, the default)."
+            },
+            "expression": {
+              "$ref": "#/$defs/Expression",
+              "description": "The parameter's new value, computed symbolically when the update fires."
+            },
+            "from": {
+              "$ref": "#/$defs/DataSourceBinding",
+              "description": "The parameter's new value, read from the named data source."
+            },
+            "handler": {
+              "$ref": "#/$defs/FunctionalUpdate",
+              "description": "The parameter's new value, computed by a registered handler — the escape hatch for behavior no expression can state (control logic, external calls, table interpolation)."
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "expression"
+              ]
+            },
+            {
+              "required": [
+                "from"
+              ]
+            },
+            {
+              "required": [
+                "handler"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "data: refresh when the named data source advances to a new record — the next met or boundary-condition slice, the next emissions month. This is how external data enters a model in 1.0.0, replacing the `data_loaders` component and its coupling edge: the parameter IS the loaded field. Ordinarily paired with a `from` binding; an `expression` or `handler` instead refreshes a DERIVED quantity on the same cadence as the source it depends on.",
           "required": [
             "kind",
             "source"
@@ -1156,17 +1480,46 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
-              "const": "data_ingest"
+              "const": "data"
             },
             "source": {
               "type": "string",
-              "description": "Name of the external data source (e.g. a DataLoader id or a provided-variable name) whose record advance drives the refresh. Resolution of the name is a build-time concern; the schema does not enforce the cross-reference."
+              "description": "Key of the `data_sources` entry whose record advance drives this refresh. MUST resolve (`data_source_undefined`)."
+            },
+            "expression": {
+              "$ref": "#/$defs/Expression",
+              "description": "The parameter's new value, computed symbolically when the update fires."
+            },
+            "from": {
+              "$ref": "#/$defs/DataSourceBinding",
+              "description": "The parameter's new value, read from the named data source."
+            },
+            "handler": {
+              "$ref": "#/$defs/FunctionalUpdate",
+              "description": "The parameter's new value, computed by a registered handler — the escape hatch for behavior no expression can state (control logic, external calls, table interpolation)."
             }
-          }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "expression"
+              ]
+            },
+            {
+              "required": [
+                "from"
+              ]
+            },
+            {
+              "required": [
+                "handler"
+              ]
+            }
+          ]
         },
         {
           "type": "object",
-          "description": "remesh: refresh driven by a mesh-topology change (AMR refinement or a moving / reloaded mesh). The buffer — typically reloadable mesh topology or coefficients derived from it — recomputes when the remesh event fires.",
+          "description": "remesh: refresh on a mesh-topology change (AMR refinement, or a moving / reloaded mesh). The refreshed quantity is typically mesh topology or coefficients derived from it.",
           "required": [
             "kind"
           ],
@@ -1177,69 +1530,107 @@
             },
             "hook": {
               "type": "string",
-              "description": "Optional name of the remesh hook / event that drives the refresh. Absent ⇒ refresh on any remesh event."
+              "description": "Optional name of the remesh hook driving the refresh. Absent ⇒ refresh on any remesh event."
+            },
+            "expression": {
+              "$ref": "#/$defs/Expression",
+              "description": "The parameter's new value, computed symbolically when the update fires."
+            },
+            "from": {
+              "$ref": "#/$defs/DataSourceBinding",
+              "description": "The parameter's new value, read from the named data source."
+            },
+            "handler": {
+              "$ref": "#/$defs/FunctionalUpdate",
+              "description": "The parameter's new value, computed by a registered handler — the escape hatch for behavior no expression can state (control logic, external calls, table interpolation)."
             }
-          }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "expression"
+              ]
+            },
+            {
+              "required": [
+                "from"
+              ]
+            },
+            {
+              "required": [
+                "handler"
+              ]
+            }
+          ]
         }
       ]
     },
-    "DiscreteEvent": {
+    "FunctionalUpdate": {
       "type": "object",
-      "description": "Fires when a boolean condition is true at end of a timestep, or at preset/periodic times. Maps to MTK SymbolicDiscreteCallback.",
+      "description": "A registered handler that computes this parameter's new value when the update fires. This is the 0.x event `functional_affect` relocated: a handler's only write channel was `modified_params`, so it now lives ON the parameter it writes and needs no write list at all. Handlers stay deliberately out of scope for the §9 closed function registry — they mutate simulator state at update time, while §9 entries are pure expression-embedded callables. `handler_id` is the sole remaining registration mechanism in the format.",
       "required": [
-        "trigger"
+        "handler_id"
       ],
       "additionalProperties": false,
       "properties": {
-        "name": {
+        "handler_id": {
           "type": "string",
-          "description": "Human-readable identifier."
+          "description": "Registered identifier for the handler implementation."
         },
-        "trigger": {
-          "$ref": "#/$defs/DiscreteEventTrigger"
-        },
-        "affects": {
-          "type": "array",
-          "description": "Affect equations. Required unless functional_affect is used.",
-          "items": {
-            "$ref": "#/$defs/AffectEquation"
-          }
-        },
-        "functional_affect": {
-          "$ref": "#/$defs/FunctionalAffect",
-          "description": "Registered functional affect handler (alternative to symbolic affects)."
-        },
-        "discrete_parameters": {
+        "read_vars": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Parameters modified by this event. Required when affects modify parameters rather than state variables."
+          "description": "Unknowns read by the handler. Absent means none."
         },
-        "reinitialize": {
-          "type": "boolean",
-          "description": "Whether to reinitialize the system after the event."
+        "read_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Parameters read by the handler. Absent means none."
+        },
+        "config": {
+          "type": "object",
+          "description": "Handler-specific configuration, passed through verbatim.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "DataSourceBinding": {
+      "type": "object",
+      "description": "Binds a parameter to one variable of a `data_sources` entry. This is the 0.x `DataLoaderVariable` minus `units`: the units are the parameter's own, declared once on the parameter instead of twice. `select` here overrides the source-level default for this parameter only, which is how a full-grid field and a prefix of it are both read from one `file_variable` without either being sliced by the consumer.",
+      "required": [
+        "file_variable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file_variable": {
+          "type": "string",
+          "description": "Name of the variable in the source file supplying this parameter's values."
+        },
+        "unit_conversion": {
+          "type": "number",
+          "description": "Multiplicative factor applied to the raw file values to reach the parameter's declared `units`. Scales a number that is already a number — contrast `codes`, which decodes a text label into one."
+        },
+        "codes": {
+          "$ref": "#/$defs/DataSourceCodes"
+        },
+        "select": {
+          "$ref": "#/$defs/DataSourceSelect"
         },
         "description": {
           "type": "string"
-        }
-      },
-      "oneOf": [
-        {
-          "required": [
-            "affects"
-          ]
         },
-        {
-          "required": [
-            "functional_affect"
-          ]
+        "reference": {
+          "$ref": "#/$defs/Reference"
         }
-      ]
+      }
     },
     "ModelVariable": {
       "type": "object",
-      "description": "A variable in an ODE/SDE model.",
+      "description": "A variable in a model — either an `unknown` the solver solves for, or a `parameter` supplied to it. There is no third kind. Everything the solver additionally needs to know is DERIVED: whether an unknown is an ODE state, an observed quantity, or an algebraic one follows from the EQUATIONS, and whether a parameter is Brownian, discrete, sampled, or constant follows from its `distribution` and `update` (esm-spec §6.3.1).",
       "required": [
         "type"
       ],
@@ -1248,19 +1639,17 @@
         "type": {
           "type": "string",
           "enum": [
-            "state",
-            "parameter",
-            "observed",
-            "brownian",
-            "discrete"
+            "unknown",
+            "parameter"
           ],
-          "description": "state = time-dependent unknown; parameter = externally set constant; observed = derived quantity; brownian = stochastic noise process (Wiener) that drives an SDE — the presence of any brownian variable promotes the enclosing model from an ODE system to an SDE system; discrete = a variable whose shape is fixed at setup but whose values refresh only at discrete events (piecewise-constant between them) — the declared seed for the DISCRETE cadence class of the dependency-partition pass (RFC semiring-faq-unified-ir §6.1), e.g. loaded met/BC fields, scheduled emission inventories, or reloadable mesh topology. A discrete variable MUST declare its `shape` (the index sets / dims known ahead of time) and MAY declare an optional `refresh` trigger that drives when its per-event buffer recomputes. Without this kind the partition pass would be forced to mis-seed such inputs as CONST (never refresh) or CONTINUOUS (recompute every step)."
+          "description": "unknown = a quantity the solver solves for; its behavior is stated by the model's `equations` and NOWHERE else. parameter = a quantity supplied to the solver, whose value is `default` or a `distribution`, optionally refreshed by an `update`. A checker MUST NOT infer an unknown's role from anything but the equations: an unknown under `D(·, t)` on some equation LHS is an ODE state, one with a bare-variable LHS is observed (eliminable), and one constrained only implicitly (`H*H*SO4 ~ Ksp`) is algebraic."
         },
         "units": {
           "type": "string"
         },
         "default": {
-          "type": "number"
+          "type": "number",
+          "description": "For an unknown, its initial value at t=0. For a parameter, its constant value — mutually exclusive with `distribution`, which draws the value instead."
         },
         "default_units": {
           "type": "string",
@@ -1269,36 +1658,24 @@
         "description": {
           "type": "string"
         },
-        "expression": {
-          "$ref": "#/$defs/Expression",
-          "description": "Defining expression for observed variables."
-        },
         "shape": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped index_sets registry. Omitted or null indicates a scalar. REQUIRED for a `discrete` variable, which by definition has a shape fixed at setup (RFC semiring-faq-unified-ir §6.1); a discrete variable that omits it is invalid. An empty array is a valid (scalar) discrete shape."
+          "description": "Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped `index_sets` registry. Omitted or null indicates a scalar. REQUIRED for a parameter whose `update` is `schedule`, `data`, or `remesh` — such a parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so its extent must be known ahead of time (RFC semiring-faq-unified-ir §6.1); an empty array is a valid (scalar) shape."
         },
         "location": {
           "type": "string",
           "description": "Optional free-form placement tag for a staggered quantity (e.g., \"cell_center\", \"edge_normal\", \"x_face\", \"vertex\"). Advisory metadata only; the index set a quantity lives on is given by `shape`. Omitted indicates no explicit placement."
         },
-        "noise_kind": {
-          "type": "string",
-          "enum": [
-            "wiener"
-          ],
-          "default": "wiener",
-          "description": "Brownian-only: kind of stochastic process. Currently only \"wiener\" (zero-mean unit-variance Gaussian increments) is supported; reserved for future extension to \"colored\", \"correlated\", etc."
+        "distribution": {
+          "$ref": "#/$defs/Distribution",
+          "description": "Parameter-only: draw this parameter's value from a distribution instead of fixing it at `default`. Mutually exclusive with `default`. With no `update` it is drawn ONCE at setup (uncertainty quantification / ensembles); with `update.kind: \"wiener\"` it is redrawn every step with √dt scaling (a stochastic process, which makes the model an SDE)."
         },
-        "correlation_group": {
-          "type": "string",
-          "description": "Brownian-only: optional opaque tag used to group correlated noise sources. Brownian variables sharing a group label are interpreted by the runtime as drawn from a joint multivariate normal whose correlation matrix is supplied externally. Brownian variables without a group label are independent. The spec does not currently encode the correlation matrix itself; that is left to a future extension."
-        },
-        "refresh": {
-          "$ref": "#/$defs/RefreshTrigger",
-          "description": "Discrete-only: optional refresh-trigger descriptor declaring WHEN this variable's per-event buffer is recomputed by the dependency-partition pass's per-event handler (RFC semiring-faq-unified-ir §6.1). One of a `schedule` (a tstops schedule — the MTK PresetTimeCallback / tstops analogue), a `data_ingest` event (arrival of a new external data record, e.g. the next met/BC slice), or a `remesh` hook (an AMR refinement / moving-mesh topology change). The trigger is inert to the algebra — it schedules the DISCRETE-cadence recompute and nothing else. Absent ⇒ the buffer is computed once at setup and never refreshed (e.g. a mesh topology loaded once at the start of a run)."
+        "update": {
+          "$ref": "#/$defs/ParameterUpdate",
+          "description": "Parameter-only: when this parameter refreshes and what it refreshes from. Absent means it never changes after setup."
         }
       },
       "allOf": [
@@ -1306,43 +1683,24 @@
           "if": {
             "properties": {
               "type": {
-                "const": "observed"
+                "const": "parameter"
               }
             },
             "required": [
               "type"
             ]
           },
-          "then": {
-            "required": [
-              "expression"
-            ]
-          }
-        },
-        {
-          "if": {
-            "not": {
-              "properties": {
-                "type": {
-                  "const": "brownian"
-                }
-              },
-              "required": [
-                "type"
-              ]
-            }
-          },
-          "then": {
+          "else": {
             "not": {
               "anyOf": [
                 {
                   "required": [
-                    "noise_kind"
+                    "distribution"
                   ]
                 },
                 {
                   "required": [
-                    "correlation_group"
+                    "update"
                   ]
                 }
               ]
@@ -1352,12 +1710,47 @@
         {
           "if": {
             "properties": {
-              "type": {
-                "const": "discrete"
+              "update": {
+                "properties": {
+                  "kind": {
+                    "const": "wiener"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
               }
             },
             "required": [
-              "type"
+              "update"
+            ]
+          },
+          "then": {
+            "required": [
+              "distribution"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "update": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "schedule",
+                      "data",
+                      "remesh"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "update"
             ]
           },
           "then": {
@@ -1367,24 +1760,11 @@
           }
         },
         {
-          "if": {
-            "not": {
-              "properties": {
-                "type": {
-                  "const": "discrete"
-                }
-              },
-              "required": [
-                "type"
-              ]
-            }
-          },
-          "then": {
-            "not": {
-              "required": [
-                "refresh"
-              ]
-            }
+          "not": {
+            "required": [
+              "default",
+              "distribution"
+            ]
           }
         }
       ]
@@ -1431,7 +1811,7 @@
         },
         "system_kind": {
           "type": "string",
-          "description": "Discriminates the MTK system type this model maps to. Defaults to 'ode' (time-stepping). 'nonlinear' for algebraic-only systems (no time derivative; e.g. aerosol equilibrium, Mogi). 'sde' when brownian variables are present. 'pde' for models with a spatial domain plus differential operators (often implied by the domain field; set explicitly to disambiguate).",
+          "description": "Discriminates the MTK system type this model maps to. Defaults to 'ode' (time-stepping). 'nonlinear' for algebraic-only systems (no time derivative; e.g. aerosol equilibrium, Mogi). 'sde' when any parameter carries a `wiener` update. 'pde' for models with a spatial domain plus differential operators (often implied by the domain field; set explicitly to disambiguate). From 1.0.0 this field is a DECLARATION of something the equations and parameter updates already determine: bindings expose a `system_kind` classifier that derives it, use the derivation when this field is absent, and report `system_kind_mismatch` when a present field contradicts it.",
           "enum": [
             "ode",
             "nonlinear",
@@ -1453,14 +1833,14 @@
         },
         "subsystems": {
           "type": "object",
-          "description": "Named child subsystems, keyed by unique identifier. A subsystem is a child model, a pure-I/O data loader (RFC pure-io-data-loaders §4.3), or a reference to an external file containing exactly one of those. Enables hierarchical model composition. Variables in subsystems are referenced via dot notation: \"ParentModel.ChildModel.var\" (and \"ParentModel.Loader.var\" for a loader subsystem). Each subsystem can be defined inline or included by reference via a local file path or URL.",
+          "description": "Named child subsystems, keyed by unique identifier. A subsystem is a child model, or a reference to an external file containing exactly one. Enables hierarchical model composition. Variables in subsystems are referenced via dot notation: \"ParentModel.ChildModel.var\". Each subsystem can be defined inline or included by reference via a local file path or URL. A `data_sources` entry is NOT a component and cannot be a subsystem: a model reaches external data through a parameter whose `update` names the source.",
           "additionalProperties": {
             "oneOf": [
               {
                 "$ref": "#/$defs/Model"
               },
               {
-                "$ref": "#/$defs/DataLoader"
+                "$ref": "#/$defs/DataSource"
               },
               {
                 "$ref": "#/$defs/SubsystemRef"
@@ -1504,7 +1884,7 @@
     },
     "SubsystemRef": {
       "type": "object",
-      "description": "A reference to an external ESM file containing a model, reaction system, or data loader definition. The ref field can be a relative or absolute local file path, or an HTTP/HTTPS URL. Relative paths are resolved relative to the directory of the referencing file.",
+      "description": "A reference to an external ESM file containing a model or reaction system definition. The ref field can be a relative or absolute local file path, or an HTTP/HTTPS URL. Relative paths are resolved relative to the directory of the referencing file.",
       "required": [
         "ref"
       ],
@@ -1512,7 +1892,7 @@
       "properties": {
         "ref": {
           "type": "string",
-          "description": "Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model, reaction system, or data loader (unless `model` / `reaction_system` selects one of several), which is used as the subsystem definition (esm-spec.md §4.7). A single top-level data loader is named by the parent's subsystem key; no fragment selector is needed because the file is single-component."
+          "description": "Local file path or URL pointing to an ESM file. The referenced file must contain exactly one top-level model or reaction system (unless `model` / `reaction_system` selects one of several), which is used as the subsystem definition (esm-spec.md §4.7)."
         },
         "model": {
           "type": "string",
@@ -1565,7 +1945,7 @@
     },
     "Parameter": {
       "type": "object",
-      "description": "A parameter in a reaction system.",
+      "description": "A reaction-system parameter — rate constant, temperature, photolysis rate. Carries the same value machinery as a model `parameter`: a fixed `default`, or a `distribution`, with an optional `update` saying when it refreshes.",
       "additionalProperties": false,
       "properties": {
         "units": {
@@ -1580,8 +1960,50 @@
         },
         "description": {
           "type": "string"
+        },
+        "distribution": {
+          "$ref": "#/$defs/Distribution",
+          "description": "Draw this parameter's value from a distribution instead of fixing it at `default`. Mutually exclusive with `default`."
+        },
+        "update": {
+          "$ref": "#/$defs/ParameterUpdate",
+          "description": "When this parameter refreshes and what it refreshes from."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "update": {
+                "properties": {
+                  "kind": {
+                    "const": "wiener"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "update"
+            ]
+          },
+          "then": {
+            "required": [
+              "distribution"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "default",
+              "distribution"
+            ]
+          }
+        }
+      ]
     },
     "StoichiometryEntry": {
       "type": "object",
@@ -2104,7 +2526,7 @@
         },
         "initial_conditions": {
           "type": "object",
-          "description": "Initial-value overrides for state variables, keyed by variable name (local to this component). Values not listed fall back to the variable's declared default.",
+          "description": "Initial-value overrides for unknowns, keyed by variable name (local to this component). Values not listed fall back to the variable's declared default.",
           "additionalProperties": {
             "type": "number"
           }
@@ -2253,7 +2675,7 @@
     },
     "PlotAxis": {
       "type": "object",
-      "description": "Axis specification: any state variable, observed variable, parameter name, or swept parameter may be used.",
+      "description": "Axis specification: any unknown, parameter name, or swept parameter may be used.",
       "required": [
         "variable"
       ],
@@ -2469,15 +2891,25 @@
             {
               "type": "object",
               "description": "Legacy flat scalar-override map (state-variable name -> value).",
-              "additionalProperties": { "type": "number" }
+              "additionalProperties": {
+                "type": "number"
+              }
             },
             {
               "type": "object",
               "description": "Discriminated union (esm-spec §11.4).",
               "additionalProperties": false,
-              "required": ["type", "values"],
+              "required": [
+                "type",
+                "values"
+              ],
               "properties": {
-                "type": { "enum": ["per_variable", "expression"] },
+                "type": {
+                  "enum": [
+                    "per_variable",
+                    "expression"
+                  ]
+                },
                 "values": {
                   "type": "object",
                   "description": "For type=per_variable each value is a scalar number; for type=expression each value is an expression AST (a closed-form per-cell field over the state's index sets)."
@@ -2516,7 +2948,7 @@
         }
       }
     },
-    "DataLoaderSource": {
+    "DataSourceLocation": {
       "type": "object",
       "description": "File discovery configuration. Describes how to locate data files at runtime via URL templates with date/variable substitutions.",
       "required": [
@@ -2537,7 +2969,7 @@
         }
       }
     },
-    "DataLoaderTemporal": {
+    "DataSourceTemporal": {
       "type": "object",
       "description": "Temporal coverage and record layout for a data source.",
       "additionalProperties": false,
@@ -2585,55 +3017,13 @@
             1,
             2
           ],
-          "description": "How many time records the DISCRETE loader returns per query time — pure I/O; the loader does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file)."
+          "description": "How many time records the source returns per query time — pure I/O; the source does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file)."
         }
       }
     },
-    "DataLoaderVariable": {
+    "DataSourceCodes": {
       "type": "object",
-      "description": "A variable exposed by a data loader, mapped from a source-file variable.",
-      "required": [
-        "file_variable",
-        "units"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "file_variable": {
-          "type": "string",
-          "description": "Name of the variable inside the source file. May differ from the schema-level variable name."
-        },
-        "units": {
-          "type": "string",
-          "description": "Units of the variable as exposed to the schema."
-        },
-        "unit_conversion": {
-          "oneOf": [
-            {
-              "type": "number"
-            },
-            {
-              "$ref": "#/$defs/Expression"
-            }
-          ],
-          "description": "Optional multiplicative factor or Expression AST applied to convert source-file values to the declared units."
-        },
-        "codes": {
-          "$ref": "#/$defs/DataLoaderCodes"
-        },
-        "select": {
-          "$ref": "#/$defs/DataLoaderSelect"
-        },
-        "description": {
-          "type": "string"
-        },
-        "reference": {
-          "$ref": "#/$defs/Reference"
-        }
-      }
-    },
-    "DataLoaderCodes": {
-      "type": "object",
-      "description": "Maps a TEXT source column to the numbers a model can compute with — an FF10 `POLID` string (\"NOX\", \"SO2\", ...) to the pollutant enum integer the `is_NOx`/`is_SOx` membership observeds compare against. Without it a text column is a hard error at the loader boundary, because a model forcing must be numeric. This is decoding a code, not converting a unit: `unit_conversion` scales a number that is already one.",
+      "description": "Maps a TEXT source column to the numbers a model can compute with — an FF10 `POLID` string (\"NOX\", \"SO2\", ...) to the pollutant enum integer the `is_NOx`/`is_SOx` membership unknowns compare against. Without it a text column is a hard error at the ingest boundary, because a model forcing must be numeric. This is decoding a code, not converting a unit: `unit_conversion` scales a number that is already one.",
       "required": [
         "map"
       ],
@@ -2669,9 +3059,9 @@
         }
       }
     },
-    "DataLoaderSelect": {
+    "DataSourceSelect": {
       "type": "object",
-      "description": "A per-axis selection of what the loader DELIVERS from an on-disk array — one entry per NATIVE array dimension, in native dims order. Declared on a loader (the default for all its variables) or on a single variable (which overrides the loader's). Two variables of one loader MAY read the same `file_variable` under different selections, which is how a full-grid field and a prefix of it are both declared instead of one being sliced by the caller. The selection is defined over the axis the loader DELIVERS, so it follows any `record_filter`: `range 0..200` on a filtered points table is the first 200 SURVIVING records. Whether a binding pushes it down to the reader (fetching only what it keeps) or applies it after the read is an optimization; the two MUST agree exactly.",
+      "description": "A per-axis selection of what the source DELIVERS from an on-disk array — one entry per NATIVE array dimension, in native dims order. Declared on a source (the default for every parameter drawing from it) or on a single parameter's `from` binding (which overrides the source's). Two parameters of one source MAY read the same `file_variable` under different selections, which is how a full-grid field and a prefix of it are both declared instead of one being sliced by the caller. The selection is defined over the axis the loader DELIVERS, so it follows any `record_filter`: `range 0..200` on a filtered points table is the first 200 SURVIVING records. Whether a binding pushes it down to the reader (fetching only what it keeps) or applies it after the read is an optimization; the two MUST agree exactly.",
       "required": [
         "axes"
       ],
@@ -2682,12 +3072,12 @@
           "description": "One selector per native array dimension, in native dims order.",
           "minItems": 1,
           "items": {
-            "$ref": "#/$defs/DataLoaderSelectAxis"
+            "$ref": "#/$defs/DataSourceSelectAxis"
           }
         }
       }
     },
-    "DataLoaderSelectAxis": {
+    "DataSourceSelectAxis": {
       "description": "One native axis of a `DataLoaderSelect`. The vocabulary is shared with the projection-pushdown gate template (CONFORMANCE_SPEC §5.5): \"all\" keeps the axis whole; `fixed` takes one index and DROPS the axis; `range` takes a half-open strided window and keeps it; `gated_by` names a `derived` index set whose value-invention members become the axis, which DEFERS the fetch until those members exist.",
       "oneOf": [
         {
@@ -2793,14 +3183,14 @@
         }
       ]
     },
-    "DataLoaderRecordFilter": {
+    "DataSourceRecordFilter": {
       "type": "object",
-      "description": "Which records of a `points` loader are DELIVERED. The surviving mask is computed ONCE for the loader and applied to every variable, so its columns can never fall out of alignment, and the surviving count is the loader's `extent`. A record is dropped when any `require_finite` variable is non-finite at it, or when a `codes` map with `unmapped: \"drop\"` does not recognise its value.",
+      "description": "Which records of a `points` source are DELIVERED. The surviving mask is computed ONCE for the source and applied to every parameter drawing from it, so its columns can never fall out of alignment, and the surviving count is the source's `extent`. A record is dropped when any `require_finite` variable is non-finite at it, or when a `codes` map with `unmapped: \"drop\"` does not recognise its value.",
       "additionalProperties": false,
       "properties": {
         "require_finite": {
           "type": "array",
-          "description": "Loader variable names (not `file_variable` names) whose value must be finite for a record to survive. A point with no coordinate cannot be placed and a row with no annual total cannot be weighted; dropping it is a declaration about the source, rather than a NaN travelling into the model to surface as an empty result later.",
+          "description": "`file_variable` names whose value must be finite for a record to survive. (Pre-1.0.0 this named loader variable names; a source has no variables of its own now, so it names the file's.) A point with no coordinate cannot be placed and a row with no annual total cannot be weighted; dropping it is a declaration about the source, rather than a NaN travelling into the model to surface as an empty result later.",
           "minItems": 1,
           "items": {
             "type": "string"
@@ -2808,9 +3198,9 @@
         }
       }
     },
-    "DataLoaderExtent": {
+    "DataSourceExtent": {
       "type": "object",
-      "description": "Binds the loader's DELIVERED record count to a metaparameter, for a source whose extent is not knowable until it is read. A binding samples such a loader BEFORE it closes metaparameters (esm-spec §9.7.6 site 4), so an index set declared `size: \"N_REC\"` is sized by the data itself and no caller counts rows and passes the number in. Every variable of the loader MUST agree on the count — that agreement is also the alignment check.",
+      "description": "Binds the source's DELIVERED record count to a metaparameter, for a source whose extent is not knowable until it is read. A binding samples such a source BEFORE it closes metaparameters (esm-spec §9.7.6 site 4), so an index set declared `size: \"N_REC\"` is sized by the data itself and no caller counts rows and passes the number in. Every parameter drawing from the source MUST agree on the count — that agreement is also the alignment check.",
       "required": [
         "metaparameter"
       ],
@@ -2822,7 +3212,7 @@
         }
       }
     },
-    "DataLoaderDeterminism": {
+    "DataSourceDeterminism": {
       "type": "object",
       "description": "Reproducibility contract a binary-format loader advertises to bindings. A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.",
       "additionalProperties": false,
@@ -2853,13 +3243,12 @@
         }
       }
     },
-    "DataLoader": {
+    "DataSource": {
       "type": "object",
-      "description": "A generic, runtime-agnostic description of an external data source reduced to pure I/O: it locates, reads, and slices bytes from disk and exposes them as named `variables`. It performs no reprojection and no regridding; any grid geometry it reads (coordinates, connectivity, metric arrays) is exposed as ordinary variables and transformed downstream by `aggregate` FAQs and coupling expressions. Authentication and algorithm-specific tuning are runtime-only and not part of the schema.",
+      "description": "A named external data source reduced to pure I/O: it locates, reads, decodes, slices, and filters bytes on disk. It performs no reprojection and no regridding, and — from 1.0.0 — it exposes no variables and is NOT a component. It cannot be a coupling endpoint, a subsystem, or a scoped-name path root; a model consumes it by declaring a parameter whose `update` names this source and binds one of its `file_variable`s. Grid geometry a source reads (coordinates, connectivity, metric arrays) arrives as ordinary parameters and is transformed downstream by `aggregate` FAQs and coupling expressions. Authentication and algorithm-specific tuning are runtime-only and not part of the schema.",
       "required": [
         "kind",
-        "source",
-        "variables"
+        "source"
       ],
       "additionalProperties": false,
       "properties": {
@@ -2870,24 +3259,16 @@
             "points",
             "static"
           ],
-          "description": "Structural kind of the dataset: 'grid' (gridded array source), 'points' (scattered point/station source), or 'static' (time-invariant source). Grid geometry the loader reads — coordinates, connectivity, metric arrays — is exposed as ordinary loader `variables` and consumed by `aggregate` FAQs downstream; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, ...) is not schema-validated and belongs in metadata.tags."
+          "description": "Structural kind of the dataset: 'grid' (gridded array source), 'points' (scattered point/station source), or 'static' (time-invariant source). Grid geometry the source reads — coordinates, connectivity, metric arrays — arrives as ordinary parameters bound to its `file_variable`s and is consumed by `aggregate` FAQs downstream; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, ...) is not schema-validated and belongs in metadata.tags."
         },
         "source": {
-          "$ref": "#/$defs/DataLoaderSource"
+          "$ref": "#/$defs/DataSourceLocation"
         },
         "temporal": {
-          "$ref": "#/$defs/DataLoaderTemporal"
+          "$ref": "#/$defs/DataSourceTemporal"
         },
         "determinism": {
-          "$ref": "#/$defs/DataLoaderDeterminism"
-        },
-        "variables": {
-          "type": "object",
-          "description": "Variables exposed by this loader, keyed by schema-level variable name.",
-          "minProperties": 1,
-          "additionalProperties": {
-            "$ref": "#/$defs/DataLoaderVariable"
-          }
+          "$ref": "#/$defs/DataSourceDeterminism"
         },
         "reader_options": {
           "type": "object",
@@ -2895,13 +3276,13 @@
           "additionalProperties": true
         },
         "select": {
-          "$ref": "#/$defs/DataLoaderSelect"
+          "$ref": "#/$defs/DataSourceSelect"
         },
         "record_filter": {
-          "$ref": "#/$defs/DataLoaderRecordFilter"
+          "$ref": "#/$defs/DataSourceRecordFilter"
         },
         "extent": {
-          "$ref": "#/$defs/DataLoaderExtent"
+          "$ref": "#/$defs/DataSourceExtent"
         },
         "reference": {
           "$ref": "#/$defs/Reference"
@@ -2987,7 +3368,7 @@
       }
     },
     "CouplingEntry": {
-      "description": "A single coupling rule connecting models, reaction systems, or data loaders.",
+      "description": "A single coupling rule connecting models or reaction systems. A `data_sources` entry is not a component and cannot appear as a coupling endpoint; external data enters through a parameter's `update`.",
       "oneOf": [
         {
           "$ref": "#/$defs/CouplingOperatorCompose"
@@ -3027,7 +3408,7 @@
         },
         "bind": {
           "type": "object",
-          "description": "Total map from every library role name to a scoped component reference in the assembly (esm-spec §10.10.1). Each value names a top-level or nested models/reaction_systems/data_loaders component (a system or loader node), not a variable. No role may be omitted; there is no auto-binding.",
+          "description": "Total map from every library role name to a scoped component reference in the assembly (esm-spec §10.10.1). Each value names a top-level or nested models/reaction_systems component (a system node), not a variable. No role may be omitted; there is no auto-binding.",
           "additionalProperties": {
             "type": "string"
           }
@@ -3282,7 +3663,8 @@
       "description": "Cross-system event involving variables from multiple coupled systems.",
       "required": [
         "type",
-        "event_type"
+        "event_type",
+        "affects"
       ],
       "additionalProperties": false,
       "properties": {
@@ -3319,10 +3701,6 @@
           },
           "description": "Affect equations. Required unless functional_affect is used."
         },
-        "functional_affect": {
-          "$ref": "#/$defs/FunctionalAffect",
-          "description": "Registered functional affect handler (alternative to symbolic affects)."
-        },
         "affect_neg": {
           "oneOf": [
             {
@@ -3335,12 +3713,6 @@
               }
             }
           ]
-        },
-        "discrete_parameters": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         },
         "root_find": {
           "type": "string",
@@ -3367,18 +3739,6 @@
           "type": "string"
         }
       },
-      "oneOf": [
-        {
-          "required": [
-            "affects"
-          ]
-        },
-        {
-          "required": [
-            "functional_affect"
-          ]
-        }
-      ],
       "allOf": [
         {
           "if": {
@@ -3415,18 +3775,28 @@
       "description": "One entry of the document-scoped `coordinates` registry (RFC streaming-output-sinks §8): marks an existing data array (or an inline literal vector) as a physical coordinate and attaches CF metadata. Exactly one of `source` (reference an existing array by name) or `values` (inline literal) MUST be present. The coordinate's shape/dimensions come from its source, so no per-axis attachment is needed; the writer resolves CF role (dimension vs auxiliary) from that shape.",
       "additionalProperties": false,
       "oneOf": [
-        { "required": ["source"] },
-        { "required": ["values"] }
+        {
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "required": [
+            "values"
+          ]
+        }
       ],
       "properties": {
         "source": {
           "type": "string",
-          "description": "Name of an existing data array — a model variable, parameter, or data-loader field — supplying this coordinate's values. Referenced by name exactly as a ragged `IndexSet` references its `offsets`/`values` factors. Mutually exclusive with `values`. The array's declared shape (its ordered index-set dimensions) IS the coordinate's shape: 1-D monotonic over a grid axis → CF dimension coordinate; 1-D over a shared dimension (e.g. `lat(cells)`) or 2-D (`lat(y,x)`) → CF auxiliary coordinate."
+          "description": "Name of an existing data array — a model unknown or parameter (including one fed from a `data_sources` entry) — supplying this coordinate's values. Referenced by name exactly as a ragged `IndexSet` references its `offsets`/`values` factors. Mutually exclusive with `values`. The array's declared shape (its ordered index-set dimensions) IS the coordinate's shape: 1-D monotonic over a grid axis → CF dimension coordinate; 1-D over a shared dimension (e.g. `lat(cells)`) or 2-D (`lat(y,x)`) → CF auxiliary coordinate."
         },
         "values": {
           "type": "array",
           "description": "Inline literal 1-D coordinate vector for the simple rectilinear case, mirroring `FunctionTableAxis.values` (finite floats). Mutually exclusive with `source`. Use `source` for anything not a plain 1-D literal (unstructured/curvilinear coordinates live in data arrays).",
-          "items": { "type": "number" },
+          "items": {
+            "type": "number"
+          },
           "minItems": 1
         },
         "standard_name": {
@@ -3440,7 +3810,12 @@
         "axis": {
           "type": "string",
           "description": "Optional CF axis role for a rectilinear dimension coordinate. Set it ONLY for a 1-D monotonic dimension coordinate; omit it for auxiliary coordinates (unstructured/curvilinear), which have no single axis. Emitted as the `axis` attribute.",
-          "enum": ["X", "Y", "Z", "T"]
+          "enum": [
+            "X",
+            "Y",
+            "Z",
+            "T"
+          ]
         }
       }
     },
