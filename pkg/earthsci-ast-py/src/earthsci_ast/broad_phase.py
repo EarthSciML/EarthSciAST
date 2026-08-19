@@ -330,10 +330,18 @@ def overlap_restrict(vals: Any, parts: Sequence[int]) -> list[int] | None:
     """
     if not parts:
         return []
-    vals = list(vals)
-    if not vals:
+    # NEVER materialise `vals`: this runs once per OUTPUT CELL, and copying the
+    # contracted axis each time would reinstate the O(N_out * N_contract) cost
+    # the driver exists to remove (1520 * 43,650 on isrm.esm). Random access is
+    # all the proof below needs, so a sized, indexable range is used in place.
+    try:
+        n = len(vals)
+    except TypeError:  # a bare iterator has no length — materialise that one
+        vals = list(vals)
+        n = len(vals)
+    if n == 0:
         return None
-    lo, hi, n = int(vals[0]), int(vals[-1]), len(vals)
+    lo, hi = int(vals[0]), int(vals[-1])
     if n != hi - lo + 1:
         return None  # stepped / permuted => decline
     out: list[int] = []
