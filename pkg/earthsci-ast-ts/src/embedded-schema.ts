@@ -3621,7 +3621,7 @@ export const schema: AnySchemaObject = {
         },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -3683,7 +3683,7 @@ export const schema: AnySchemaObject = {
         },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -3752,7 +3752,7 @@ export const schema: AnySchemaObject = {
         },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -3808,7 +3808,7 @@ export const schema: AnySchemaObject = {
         },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
@@ -3890,7 +3890,7 @@ export const schema: AnySchemaObject = {
         },
         "expression_template_imports": {
           "type": "object",
-          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
+          "description": "Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.",
           "additionalProperties": {
             "type": "array",
             "items": {
