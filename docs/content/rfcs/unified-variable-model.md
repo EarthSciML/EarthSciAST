@@ -87,6 +87,27 @@ ball's `v ~ -0.8*v`. Any mutation of a parameter moves onto that parameter as
 `update: {"kind": "condition", …}`. `discrete_parameters` is removed entirely.
 Coupling-level events (§5.6) narrow to unknowns the same way.
 
+### D4a. A parameter may carry several update rules
+
+Discovered while converting the corpus, and a correction to D4 as first drafted.
+D4 moved parameter mutation onto the parameter, but a parameter could then carry
+only ONE update — while before 1.0.0 any number of events could write one
+parameter. That is not a rare shape: 50 parameters in the shared corpus were
+written by two or more events, including a seasonal modifier set by four
+transitions and counters incremented on several schedules.
+
+Resolving those by splitting one parameter into several would have changed the
+models rather than re-expressing them, because the equations read one name. So
+`update` accepts an ordered array of two or more rules, applied in declaration
+order. A single rule must still be written as the object form (a one-element
+array is invalid) so each update set has exactly one spelling; `wiener` is
+object-form only, since a driving noise process is the parameter's whole value.
+
+The same conversion showed `ReactionSystem.parameters` had no `shape` field,
+which made the discrete-cadence contract unsatisfiable there and left D6's "one
+parameter concept across the format" only half true. `Parameter` now carries
+`shape` and the same conditional as `ModelVariable`.
+
 ### D5. `_var` ranges over ODE states
 
 The operator-composition placeholder expands over `ode_states(model)` as

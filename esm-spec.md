@@ -1303,8 +1303,52 @@ Every kind except `wiener` carries **exactly one** of:
 | `from` | the new value, read from the `data_sources` entry named by `update.source` (§8) |
 | `handler` | the new value, computed by a registered handler (§5.5) |
 
+A parameter may carry SEVERAL rules — see "Several rules on one parameter" below.
+
 `wiener` carries none of them: it resamples the parameter's own `distribution`,
 which *is* its value.
+
+#### Several rules on one parameter
+
+`update` is either a single rule or an **ordered array of two or more**.
+
+The array form is not a convenience. Before 1.0.0 any number of events could
+write one parameter, and collapsing parameter mutation onto the parameter must
+not cost that expressiveness. A counter incremented on two different schedules, a
+mode switch driven by two conditions, a seasonal modifier set by four transitions,
+and a continuous event's `affects` / `affect_neg` pair are each **one** parameter
+with several rules — the model's equations read one name. Splitting them into
+several parameters would change the model rather than re-express it.
+
+```json
+{
+  "seasonal_growth_modifier": {
+    "type": "parameter", "units": "1", "shape": [], "default": 1.0,
+    "update": [
+      { "kind": "condition", "when": { "op": "==", "args": ["season", 1] }, "expression": "spring_modifier" },
+      { "kind": "condition", "when": { "op": "==", "args": ["season", 2] }, "expression": "summer_modifier" },
+      { "kind": "condition", "when": { "op": "==", "args": ["season", 3] }, "expression": "autumn_modifier" },
+      { "kind": "condition", "when": { "op": "==", "args": ["season", 4] }, "expression": "winter_modifier" }
+    ]
+  }
+}
+```
+
+Three rules govern the array form:
+
+- **Order is declaration order.** Where more than one rule fires at the same
+  point, they apply in the order written, so a later rule's `expression` sees the
+  earlier rule's result. `Pre` still means the value before this firing *as a
+  whole*, not before the preceding rule in the list.
+- **A single rule MUST be the object form.** A one-element array is invalid, so
+  every update set has exactly one spelling and the round-trip is stable.
+- **`wiener` is object-form only.** A driving noise process IS the parameter's
+  whole value; combining it with scheduled writes is incoherent, and a `wiener`
+  entry inside an array is rejected.
+
+The `shape` requirement below reads through the array: a parameter is
+discrete-cadence, and so must declare `shape`, if **any** of its rules is
+`schedule`, `data`, or `remesh`.
 
 #### Cadence
 

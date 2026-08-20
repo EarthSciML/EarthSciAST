@@ -1582,6 +1582,37 @@ export const schema: AnySchemaObject = {
         }
       ]
     },
+    "ParameterUpdateSpec": {
+      "description": "A parameter's update behavior: EITHER a single rule, OR an ordered array of two or more rules. The array form exists because collapsing parameter mutation onto the parameter must not cost expressiveness that events had: before 1.0.0 any number of events could write one parameter, and a counter incremented on two different schedules, a mode switch driven by two conditions, and a continuous event's `affects` / `affect_neg` pair are each ONE parameter with several rules. Splitting them into several parameters would change the model, because the equations read one name. Rules are independent: at any point where more than one rule's trigger fires, they apply in DECLARATION ORDER, so a later rule's `expression` sees the earlier rule's result and `Pre` still means the value before this firing as a whole. A single rule MUST be written as the object form — a one-element array is invalid — so the representation of any given update set is unique and the round-trip is stable. `wiener` is admissible only as the object form: a driving noise process is the parameter's whole value, so combining it with scheduled writes is incoherent.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ParameterUpdate"
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/ParameterUpdate"
+              },
+              {
+                "not": {
+                  "properties": {
+                    "kind": {
+                      "const": "wiener"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
     "FunctionalUpdate": {
       "type": "object",
       "description": "A registered handler that computes this parameter's new value when the update fires. This is the 0.x event `functional_affect` relocated: a handler's only write channel was `modified_params`, so it now lives ON the parameter it writes and needs no write list at all. Handlers stay deliberately out of scope for the §9 closed function registry — they mutate simulator state at update time, while §9 entries are pure expression-embedded callables. `handler_id` is the sole remaining registration mechanism in the format.",
@@ -1691,7 +1722,7 @@ export const schema: AnySchemaObject = {
           "description": "Parameter-only: draw this parameter's value from a distribution instead of fixing it at `default`. Mutually exclusive with `default`. With no `update` it is drawn ONCE at setup (uncertainty quantification / ensembles); with `update.kind: \"wiener\"` it is redrawn every step with √dt scaling (a stochastic process, which makes the model an SDE)."
         },
         "update": {
-          "$ref": "#/$defs/ParameterUpdate",
+          "$ref": "#/$defs/ParameterUpdateSpec",
           "description": "Parameter-only: when this parameter refreshes and what it refreshes from. Absent means it never changes after setup."
         }
       },
@@ -1728,13 +1759,31 @@ export const schema: AnySchemaObject = {
           "if": {
             "properties": {
               "update": {
-                "properties": {
-                  "kind": {
-                    "const": "wiener"
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "wiener"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "wiener"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    }
                   }
-                },
-                "required": [
-                  "kind"
                 ]
               }
             },
@@ -1752,17 +1801,39 @@ export const schema: AnySchemaObject = {
           "if": {
             "properties": {
               "update": {
-                "properties": {
-                  "kind": {
-                    "enum": [
-                      "schedule",
-                      "data",
-                      "remesh"
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "schedule",
+                          "data",
+                          "remesh"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
                     ]
+                  },
+                  {
+                    "type": "array",
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "schedule",
+                            "data",
+                            "remesh"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    }
                   }
-                },
-                "required": [
-                  "kind"
                 ]
               }
             },
@@ -1978,12 +2049,19 @@ export const schema: AnySchemaObject = {
         "description": {
           "type": "string"
         },
+        "shape": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped `index_sets` registry. Omitted or null indicates a scalar. REQUIRED for a parameter whose `update` is `schedule`, `data`, or `remesh` — such a parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so its extent must be known ahead of time (RFC semiring-faq-unified-ir §6.1); an empty array is a valid (scalar) shape."
+        },
         "distribution": {
           "$ref": "#/$defs/Distribution",
           "description": "Draw this parameter's value from a distribution instead of fixing it at `default`. Mutually exclusive with `default`."
         },
         "update": {
-          "$ref": "#/$defs/ParameterUpdate",
+          "$ref": "#/$defs/ParameterUpdateSpec",
           "description": "When this parameter refreshes and what it refreshes from."
         }
       },
@@ -1992,13 +2070,31 @@ export const schema: AnySchemaObject = {
           "if": {
             "properties": {
               "update": {
-                "properties": {
-                  "kind": {
-                    "const": "wiener"
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "wiener"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "const": "wiener"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    }
                   }
-                },
-                "required": [
-                  "kind"
                 ]
               }
             },
@@ -2017,6 +2113,56 @@ export const schema: AnySchemaObject = {
             "required": [
               "default",
               "distribution"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "update": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "schedule",
+                          "data",
+                          "remesh"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "contains": {
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "schedule",
+                            "data",
+                            "remesh"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "update"
+            ]
+          },
+          "then": {
+            "required": [
+              "shape"
             ]
           }
         }
