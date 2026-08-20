@@ -1947,27 +1947,52 @@ references, so a consumer with no template handling calls this at its entry —
 the MTK `System`/`PDESystem` constructors do; the tree-walk `build_evaluator`
 does NOT (it expands at its own entry with site recording, the compile-once
 tier).
+
+Every EXPRESSION-BEARING variable is expanded, not only the observeds: the
+flattener namespaces `v.expression` for EVERY variable type before partitioning
+it into `state_variables` / `parameters` (parameters AND discrete variables) /
+`observed_variables` (`_collect_model!`, namespacing.jl), so any of the three
+buckets can legally carry an `apply_expression_template`. Expanding only the
+observeds left an Option-B node in a state's or a parameter's `expression` for
+a consumer that had been promised an Option-A image.
+
+`memo` is the shared expansion memo (`_expand_model_refs!`'s default, ~34% of
+build wall time on the 7×7×7 transport fixture when absent): structurally
+identical apply sites expand once and share the result. Pass `nothing` for the
+per-site re-expansion, or set `ESS_EXPAND_MEMO_DISABLE=1` globally. Sharing is
+safe here for the same reason it is in `_expand_model_refs!` — the expanded set
+becomes a DAG, which is what interning would produce one pass later anyway.
 """
-function expand_flattened_refs(flat::FlattenedSystem)::FlattenedSystem
+function expand_flattened_refs(flat::FlattenedSystem;
+        memo::_ExpandMemo = _expand_memo_disabled() ? nothing :
+                            Dict{Tuple{String,String},OpExpr}())::FlattenedSystem
     reg = flat.template_registry
     isempty(reg) && return flat
-    neweqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg),
-                               _expand_expr_refs(eq.rhs, reg); _comment=eq._comment)
+    neweqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg, nothing, memo),
+                               _expand_expr_refs(eq.rhs, reg, nothing, memo);
+                               _comment=eq._comment)
                       for eq in flat.equations]
-    newobs = OrderedDict{String,ModelVariable}()
-    for (name, var) in flat.observed_variables
-        if var.expression !== nothing
-            ex = _expand_expr_refs(var.expression, reg)
-            newobs[name] = ex === var.expression ? var :
-                ModelVariable(var.type; default=var.default, description=var.description,
-                    expression=ex, units=var.units, default_units=var.default_units,
-                    shape=var.shape, location=var.location, noise_kind=var.noise_kind,
-                    correlation_group=var.correlation_group)
+    return FlattenedSystem(flat; equations=neweqs,
+        state_variables=_expand_vars_refs(flat.state_variables, reg, memo),
+        parameters=_expand_vars_refs(flat.parameters, reg, memo),
+        observed_variables=_expand_vars_refs(flat.observed_variables, reg, memo))
+end
+
+# One variable bucket of a `FlattenedSystem`, expanded. Unchanged variables are
+# passed through BY IDENTITY (`ex === var.expression`), so a bucket with no
+# references costs one dictionary rebuild and no `ModelVariable` allocation.
+function _expand_vars_refs(vars::OrderedDict{String,ModelVariable}, reg,
+                           memo::_ExpandMemo)
+    out = OrderedDict{String,ModelVariable}()
+    for (name, var) in vars
+        if var.expression === nothing
+            out[name] = var
         else
-            newobs[name] = var
+            ex = _expand_expr_refs(var.expression, reg, nothing, memo)
+            out[name] = ex === var.expression ? var : reconstruct(var; expression=ex)
         end
     end
-    return FlattenedSystem(flat; equations=neweqs, observed_variables=newobs)
+    return out
 end
 
 # ===========================================================================
