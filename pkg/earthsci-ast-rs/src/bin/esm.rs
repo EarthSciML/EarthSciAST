@@ -1435,13 +1435,8 @@ fn print_complexity_analysis(esm_file: &earthsci_ast::EsmFile) {
                 walk(&eq.lhs, 1, &mut nodes, &mut max_depth, &mut ops);
                 walk(&eq.rhs, 1, &mut nodes, &mut max_depth, &mut ops);
             }
-            let mut var_names: Vec<&String> = model.variables.keys().collect();
-            var_names.sort();
-            for name in var_names {
-                if let Some(ref expr) = model.variables[name].expression {
-                    walk(expr, 1, &mut nodes, &mut max_depth, &mut ops);
-                }
-            }
+            // (An observed's defining expression is an ordinary equation
+            // since 1.0.0, so the equation walk above already counted it.)
             println!("  Model {model_id}: {nodes} expression nodes, max depth {max_depth}");
             total_nodes += nodes;
             total_max_depth = total_max_depth.max(max_depth);
