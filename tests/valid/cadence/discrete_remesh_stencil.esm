@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "discrete_remesh_stencil",
-    "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir §6.1 / §7.3; CONFORMANCE_SPEC.md §5.7; bead ess-my4.3.10): the DISCRETE-REMESH worked-trace path — the §6.1 FVM-diffusion stencil with the mesh TOPOLOGY declared `discrete` (a reloaded / AMR-refined mesh) instead of document-literal `parameter`s. It is the direct sibling of mixed_stencil.esm: the SAME RHS D(u[i])/dt = sum_{k in stencil} coeff[i,k] * (u[nbr[i,k]] - u[i]), but `nbr` (neighbour/connectivity table) and `coeff` (per-edge geometry) are now `discrete` variables refreshed on a `remesh` event rather than CONST literals. This realizes the §6.1 worked-trace claim: 'mesh primitives as document literals -> topology partition is CONST (folds at compile); if instead the mesh is reloaded/refined at discrete events, the SAME topology nodes are DISCRETE and move from the artifact into the per-event handler — nothing else changes.' Only the leaf seed changes (nbr/coeff: parameter -> discrete with refresh:{kind:remesh}); the max-propagation does the rest. The gather split is preserved exactly: the inner topology selection index(nbr,i,k) is now DISCRETE while the outer value-load index(u, .) stays CONTINUOUS (class(index(A,e..)) = max(class(A), class(e..)) classes indices independently of the array). So the two topology gathers (nbr, coeff) materialize at the DISCRETE->CONTINUOUS threshold — recomputed by the per-event handler on each remesh event (bind provenance), NOT folded once at compile as in mixed_stencil — exactly the 'discrete-mesh path re-runs only on event' requirement. The hot per-step contraction over u is unchanged and stays CONTINUOUS; topology is never on the hot path, CONST or DISCRETE. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator; the golden class summary + materialization set live in tests/conformance/cadence/manifest.json. (The pure-relational discrete edge ENUMERATION — distinct/skolem over a discrete mesh — is the value-invention analogue of this path; its cross-binding materialization-point emission is tracked separately as it currently diverges between bindings.)",
+    "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir §6.1 / §7.3; CONFORMANCE_SPEC.md §5.7; bead ess-my4.3.10): the DISCRETE-REMESH worked-trace path — the §6.1 FVM-diffusion stencil with the mesh TOPOLOGY declared as parameters carrying a `remesh` `update` (a reloaded / AMR-refined mesh) instead of plain document-literal parameters. It is the direct sibling of mixed_stencil.esm: the SAME RHS D(u[i])/dt = sum_{k in stencil} coeff[i,k] * (u[nbr[i,k]] - u[i]), but `nbr` (neighbour/connectivity table) and `coeff` (per-edge geometry) now carry `update: {kind: remesh}` (esm-spec §5.4) and so refresh on a remesh event rather than staying CONST literals. This realizes the §6.1 worked-trace claim: 'mesh primitives as document literals -> topology partition is CONST (folds at compile); if instead the mesh is reloaded/refined at discrete events, the SAME topology nodes are DISCRETE and move from the artifact into the per-event handler — nothing else changes.' Only the leaf seed changes (nbr/coeff: a plain parameter -> a parameter with update:{kind:remesh}); the value form is a registered `handler`, since reloading a refined mesh is not statable as an expression; the max-propagation does the rest. The gather split is preserved exactly: the inner topology selection index(nbr,i,k) is now DISCRETE while the outer value-load index(u, .) stays CONTINUOUS (class(index(A,e..)) = max(class(A), class(e..)) classes indices independently of the array). So the two topology gathers (nbr, coeff) materialize at the DISCRETE->CONTINUOUS threshold — recomputed by the per-event handler on each remesh event (bind provenance), NOT folded once at compile as in mixed_stencil — exactly the 'discrete-mesh path re-runs only on event' requirement. The hot per-step contraction over u is unchanged and stays CONTINUOUS; topology is never on the hot path, CONST or DISCRETE. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator; the golden class summary + materialization set live in tests/conformance/cadence/manifest.json. (The pure-relational discrete edge ENUMERATION — distinct/skolem over a discrete mesh — is the value-invention analogue of this path; its cross-binding materialization-point emission is tracked separately as it currently diverges between bindings.)",
     "authors": [
       "EarthSciAST/polecats/gastown.nux"
     ],
@@ -40,33 +40,39 @@
           "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step)."
         },
         "nbr": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "cells",
             "stencil"
           ],
-          "description": "Neighbour index table (mesh topology / connectivity), RELOADED from the refined mesh on each AMR remesh event — a discrete variable (shape fixed at setup, values refresh at the remesh event). DISCRETE cadence; materialized into a per-event buffer (bind provenance), recomputed on each remesh — the analogue of mixed_stencil's CONST nbr that folded at compile.",
-          "refresh": {
+          "description": "Neighbour index table (mesh topology / connectivity), RELOADED from the refined mesh on each AMR remesh event — a parameter with a `remesh` update (shape fixed at setup, values refresh at the remesh event). DISCRETE cadence; materialized into a per-event buffer (bind provenance), recomputed on each remesh — the analogue of mixed_stencil's CONST nbr that folded at compile.",
+          "update": {
             "kind": "remesh",
-            "hook": "amr_refine"
+            "hook": "amr_refine",
+            "handler": {
+              "handler_id": "amr_mesh_connectivity"
+            }
           }
         },
         "coeff": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "cells",
             "stencil"
           ],
-          "description": "Per-edge geometric diffusion coefficients derived from the reloaded mesh geometry, recomputed on the AMR remesh event — discrete variable, DISCRETE cadence; materialized into a per-event buffer (bind provenance).",
-          "refresh": {
+          "description": "Per-edge geometric diffusion coefficients derived from the reloaded mesh geometry, recomputed on the AMR remesh event — a parameter with a `remesh` update, DISCRETE cadence; materialized into a per-event buffer (bind provenance).",
+          "update": {
             "kind": "remesh",
-            "hook": "amr_refine"
+            "hook": "amr_refine",
+            "handler": {
+              "handler_id": "amr_mesh_geometry"
+            }
           }
         }
       },
       "equations": [
         {
-          "_comment": "D(u[i])/dt = sum_{k in stencil} coeff[i,k] * (u[nbr[i,k]] - u[i]). The contraction reduces CONTINUOUS terms over a CONST-fixed range -> a CONTINUOUS hot contraction. The inner topology gather nbr[i,k] is DISCRETE (reloaded mesh) and materializes into the per-event handler; coeff[i,k] is DISCRETE and materializes; u-loads are CONTINUOUS. Same gather split as mixed_stencil, only the topology leaf seed is discrete instead of const.",
+          "_comment": "D(u[i])/dt = sum_{k in stencil} coeff[i,k] * (u[nbr[i,k]] - u[i]). The contraction reduces CONTINUOUS terms over a CONST-fixed range -> a CONTINUOUS hot contraction. The inner topology gather nbr[i,k] is DISCRETE (reloaded mesh) and materializes into the per-event handler; coeff[i,k] is DISCRETE and materializes; u-loads are CONTINUOUS. Same gather split as mixed_stencil, only the topology leaf seed carries a remesh update instead of being a plain const parameter.",
           "lhs": {
             "op": "aggregate",
             "args": [],

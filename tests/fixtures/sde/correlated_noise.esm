@@ -2,10 +2,16 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "CorrelatedNoise",
-    "description": "SDE with two correlated Wiener noise sources (same correlation_group tag) driving two state variables. Exercises the correlation_group field and multiple brownians in one model.",
+    "description": "SDE with two CORRELATED Wiener noise sources driving two state variables. In 1.0.0 correlated noise is ONE vector-valued parameter whose `distribution` carries an explicit `cov` (esm-spec §6.3, CovarianceMatrix) — there is no correlation-group tag, and the matrix is stated rather than implied. NOTE: the pre-1.0.0 fixture only tagged the two brownians with the same `correlation_group` (\"wind\") and never gave a correlation, so the intended off-diagonal was NOT recoverable; ρ = 0.5 is chosen here as a strong-but-non-degenerate correlation (eigenvalues 1.5 and 0.5, so the matrix is symmetric positive-definite) that keeps the correlated path load-bearing. Exercises a multivariate wiener-updated parameter and multiple noise components in one model.",
     "authors": ["gt-kuxo"],
     "created": "2026-04-19T00:00:00Z",
     "tags": ["sde", "brownian", "correlated"]
+  },
+  "index_sets": {
+    "wind_noise": {
+      "kind": "interval",
+      "size": 2
+    }
   },
   "models": {
     "TwoBody": {
@@ -15,15 +21,17 @@
         "k": { "type": "parameter", "units": "1/s", "default": 1.0 },
         "sx": { "type": "parameter", "units": "1/s^0.5", "default": 0.3 },
         "sy": { "type": "parameter", "units": "1/s^0.5", "default": 0.4 },
-        "Bx": {
-          "type": "brownian",
-          "noise_kind": "wiener",
-          "correlation_group": "wind"
-        },
-        "By": {
-          "type": "brownian",
-          "noise_kind": "wiener",
-          "correlation_group": "wind"
+        "B": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "shape": ["wind_noise"],
+          "description": "Two correlated Wiener increments as one vector-valued parameter: component 1 drives x, component 2 drives y. The correlation that the old `correlation_group: \"wind\"` tag only named is now the explicit off-diagonal of `cov`.",
+          "distribution": {
+            "kind": "normal",
+            "mean": [0.0, 0.0],
+            "cov": [[1.0, 0.5], [0.5, 1.0]]
+          },
+          "update": { "kind": "wiener" }
         }
       },
       "equations": [
@@ -33,7 +41,7 @@
             "op": "+",
             "args": [
               { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] },
-              { "op": "*", "args": ["sx", "Bx"] }
+              { "op": "*", "args": ["sx", { "op": "index", "args": ["B", 1] }] }
             ]
           }
         },
@@ -43,7 +51,7 @@
             "op": "+",
             "args": [
               { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "y"] },
-              { "op": "*", "args": ["sy", "By"] }
+              { "op": "*", "args": ["sy", { "op": "index", "args": ["B", 2] }] }
             ]
           }
         }

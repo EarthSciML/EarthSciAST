@@ -53,15 +53,19 @@
           "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step)."
         },
         "bc": {
-          "type": "discrete",
+          "type": "parameter",
+          "units": "mol/mol",
           "shape": [
             "cells"
           ],
-          "refresh": {
-            "kind": "data_ingest",
-            "source": "bc_loader"
-          },
-          "description": "Boundary-condition field read from the `bc_loader` DataLoader. The loader declares NO `temporal` block, so the partition refines this loader output down to CONST: loaded once and folded at bind (external-resource provenance), never refreshing. Declared `discrete`+`data_ingest` identically to the temporal sibling — the loader's missing `temporal` is what makes the difference."
+          "description": "Boundary-condition field bound to the `bc_loader` data source (`from.file_variable: boundary_o3`). The source declares NO `temporal` block, so the partition refines this `data` update down to CONST: loaded once and folded at bind (external-resource provenance), never refreshing. Declared with the SAME `update: {kind: data}` as the temporal sibling — the source's missing `temporal` is what makes the difference.",
+          "update": {
+            "kind": "data",
+            "source": "bc_loader",
+            "from": {
+              "file_variable": "boundary_o3"
+            }
+          }
         }
       },
       "equations": [
