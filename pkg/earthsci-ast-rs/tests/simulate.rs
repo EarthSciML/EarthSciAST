@@ -71,15 +71,14 @@ fn state(name: &str, default: f64) -> (String, ModelVariable) {
         name.to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(default),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     )
 }
@@ -93,11 +92,10 @@ fn param(name: &str, default: f64) -> (String, ModelVariable) {
             units: None,
             default: Some(default),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     )
 }
@@ -699,7 +697,6 @@ fn test_error_continuous_events_rejected() {
         affect_neg: None,
         root_find: None,
         reinitialize: None,
-        discrete_parameters: None,
         priority: None,
         description: None,
     });
@@ -719,8 +716,6 @@ fn test_error_discrete_events_rejected() {
         name: Some("ping".to_string()),
         trigger: DiscreteEventTrigger::PresetTimes { times: vec![1.0] },
         affects: None,
-        functional_affect: None,
-        discrete_parameters: None,
         reinitialize: None,
         description: None,
     });
@@ -782,15 +777,14 @@ fn test_error_missing_initial_condition() {
     // State variable with NO default → must be supplied via IC.
     let mut state_x = ModelVariable {
         default_units: None,
-        var_type: VariableType::State,
+        var_type: VariableType::Unknown,
         units: None,
         default: None,
         description: None,
-        expression: None,
+        distribution: None,
+        update: None,
         shape: None,
         location: None,
-        noise_kind: None,
-        correlation_group: None,
     };
     // Force a state with no default
     state_x.default = None;
@@ -831,15 +825,14 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
         "u".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     FlattenedSystem {

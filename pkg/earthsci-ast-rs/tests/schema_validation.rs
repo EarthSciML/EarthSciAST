@@ -116,41 +116,47 @@ fn test_metadata_validation_errors() {
     }
 }
 
-/// Test data loader validation errors
+/// Test data SOURCE validation errors.
+///
+/// The 1.0.0 fixture set differs from the 0.x `data_loader_*` one, not just in
+/// name: a source no longer declares the fields it provides, so the
+/// `missing_provides` / `provides_missing_units` / `provides_missing_description`
+/// cases are gone, and the required keys are now `kind` and `source`. The
+/// binding-side defects moved onto the consuming parameter's `update`.
 #[test]
 fn test_data_source_validation_errors() {
     let fixtures = [
         (
-            "missing_type",
-            include_str!("../../../tests/invalid/data_source_missing_type.esm"),
+            "missing_kind",
+            include_str!("../../../tests/invalid/data_source_missing_kind.esm"),
         ),
         (
-            "missing_loader_id",
-            include_str!("../../../tests/invalid/data_source_missing_loader_id.esm"),
-        ),
-        (
-            "missing_provides",
-            include_str!("../../../tests/invalid/data_source_missing_provides.esm"),
+            "missing_source",
+            include_str!("../../../tests/invalid/data_source_missing_source.esm"),
         ),
         (
             "invalid_type",
             include_str!("../../../tests/invalid/data_source_invalid_type.esm"),
         ),
         (
-            "undefined_reference",
-            include_str!("../../../tests/invalid/data_source_undefined_reference.esm"),
-        ),
-        (
             "config_schema_violation",
             include_str!("../../../tests/invalid/data_source_config_schema_violation.esm"),
         ),
         (
-            "provides_missing_units",
-            include_str!("../../../tests/invalid/data_source_provides_missing_units.esm"),
+            "legacy_variables",
+            include_str!("../../../tests/invalid/data_source_legacy_variables.esm"),
         ),
         (
-            "provides_missing_description",
-            include_str!("../../../tests/invalid/data_source_provides_missing_description.esm"),
+            "legacy_spatial",
+            include_str!("../../../tests/invalid/data_source_legacy_spatial.esm"),
+        ),
+        (
+            "binding_missing_file_variable",
+            include_str!("../../../tests/invalid/data_source_binding_missing_file_variable.esm"),
+        ),
+        (
+            "update_missing_shape",
+            include_str!("../../../tests/invalid/data_source_update_missing_shape.esm"),
         ),
     ];
 
@@ -158,7 +164,7 @@ fn test_data_source_validation_errors() {
         let result = load(fixture);
         assert!(
             result.is_err(),
-            "Expected data loader {name} to fail validation"
+            "Expected data source {name} to fail schema validation"
         );
     }
 }

@@ -659,15 +659,14 @@ mod tests {
             "x".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: None,
                 default: None,
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -754,30 +753,28 @@ mod tests {
             "x".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: None,
                 default: None,
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
         variables.insert(
             "y".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: None,
                 default: None,
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -908,24 +905,26 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_observed_expression() {
+    fn test_unknown_without_equation() {
         let mut models = HashMap::new();
         let mut variables = HashMap::new();
 
-        // Observed variable without expression - should cause validation error
+        // An unknown that no equation defines. 1.0.0 retires
+        // `missing_observed_expr`: an unknown's behaviour is stated by an
+        // equation, so nothing defining it is an UNBALANCED SYSTEM rather than
+        // a malformed declaration (esm-spec §4.9.4).
         variables.insert(
             "total".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::Observed,
+                var_type: VariableType::Unknown,
                 units: None,
                 default: None,
                 description: None,
-                expression: None, // Missing expression
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -980,17 +979,21 @@ mod tests {
         };
 
         let result = validate(&esm_file);
-        // Should fail validation due to missing expression
         assert!(!result.is_valid);
         assert_eq!(result.structural_errors.len(), 1);
+        let err = &result.structural_errors[0];
         assert!(matches!(
-            result.structural_errors[0].code,
-            StructuralErrorCode::MissingObservedExpr
+            err.code,
+            StructuralErrorCode::EquationCountMismatch
         ));
-        assert!(
-            result.structural_errors[0]
-                .message
-                .contains("Observed variable \"total\" is missing its expression field")
+        assert_eq!(
+            err.message,
+            "Number of equations (0) does not match number of unknowns (1)"
+        );
+        assert_eq!(err.details["unknowns"], serde_json::json!(["total"]));
+        assert_eq!(
+            err.details["missing_equations_for"],
+            serde_json::json!(["total"])
         );
     }
 
@@ -1004,15 +1007,14 @@ mod tests {
             "x".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("m".to_string()),
                 default: Some(1.0),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1025,37 +1027,26 @@ mod tests {
                 units: Some("1/s".to_string()),
                 default: Some(0.1),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
-        // Observed variable WITH expression - should pass validation
+        // Observed unknown, DEFINED BY an equation below.
         variables.insert(
             "rate".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::Observed,
+                var_type: VariableType::Unknown,
                 units: Some("m/s".to_string()),
                 default: None,
                 description: Some("Rate of change".to_string()),
-                expression: Some(Expr::operator(ExpressionNode {
-                    op: "*".to_string(),
-                    args: vec![
-                        Expr::Variable("k".to_string()),
-                        Expr::Variable("x".to_string()),
-                    ],
-                    wrt: None,
-                    dim: None,
-                    ..Default::default()
-                })),
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1066,16 +1057,33 @@ mod tests {
                 subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
-                equations: vec![Equation {
-                    lhs: Expr::operator(ExpressionNode {
-                        op: "D".to_string(),
-                        args: vec![Expr::Variable("x".to_string())],
-                        wrt: Some("t".to_string()),
-                        dim: None,
-                        ..Default::default()
-                    }),
-                    rhs: Expr::Variable("rate".to_string()),
-                }],
+                equations: vec![
+                    Equation {
+                        lhs: Expr::operator(ExpressionNode {
+                            op: "D".to_string(),
+                            args: vec![Expr::Variable("x".to_string())],
+                            wrt: Some("t".to_string()),
+                            dim: None,
+                            ..Default::default()
+                        }),
+                        rhs: Expr::Variable("rate".to_string()),
+                    },
+                    // `rate ~ k * x` — the 1.0.0 home of what used to be the
+                    // variable's `expression` field.
+                    Equation {
+                        lhs: Expr::Variable("rate".to_string()),
+                        rhs: Expr::operator(ExpressionNode {
+                            op: "*".to_string(),
+                            args: vec![
+                                Expr::Variable("k".to_string()),
+                                Expr::Variable("x".to_string()),
+                            ],
+                            wrt: None,
+                            dim: None,
+                            ..Default::default()
+                        }),
+                    },
+                ],
                 discrete_events: None,
                 continuous_events: None,
                 description: None,
@@ -1170,13 +1178,15 @@ mod tests {
             result.structural_errors
         );
 
-        // Verify the observed variable has the expression
+        // `rate` is an unknown DEFINED BY an equation, which is what makes it
+        // observed (esm-spec §6.3.1).
         let model = esm_file.models.as_ref().unwrap().get("TestModel").unwrap();
         let rate_var = model.variables.get("rate").unwrap();
-        assert_eq!(rate_var.var_type, VariableType::Observed);
+        assert_eq!(rate_var.var_type, VariableType::Unknown);
+        assert_eq!(crate::classify::observed_unknowns(model), vec!["rate"]);
         assert!(
-            rate_var.expression.is_some(),
-            "Observed variable should have expression"
+            crate::classify::observed_definition(model, "rate").is_some(),
+            "an observed unknown must have a defining equation"
         );
 
         // Test serialization back to JSON
@@ -1198,15 +1208,14 @@ mod tests {
             "x".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1219,11 +1228,10 @@ mod tests {
                 units: Some("1/s".to_string()), // per second
                 default: Some(0.1),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1322,15 +1330,14 @@ mod tests {
             "x".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1343,11 +1350,10 @@ mod tests {
                 units: Some("kg".to_string()), // mass units (incompatible)
                 default: Some(0.1),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1438,15 +1444,14 @@ mod tests {
             "position".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("m".to_string()),
                 default: Some(0.0),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1459,11 +1464,10 @@ mod tests {
                 units: Some("m/s".to_string()),
                 default: Some(1.0),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -1551,15 +1555,14 @@ mod tests {
             "x".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 

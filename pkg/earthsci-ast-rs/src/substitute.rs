@@ -550,15 +550,14 @@ mod tests {
             "temperature".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("K".to_string()),
                 default: Some(298.15),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -634,15 +633,14 @@ mod tests {
             "temperature".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("K".to_string()),
                 default: Some(298.15),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -721,15 +719,14 @@ mod tests {
             "temperature".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("K".to_string()),
                 default: Some(298.15),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -808,15 +805,14 @@ mod tests {
             "Chemistry.FastChem.O3".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("mol/L".to_string()),
                 default: Some(40e-9),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
         model_variables.insert(
@@ -827,11 +823,10 @@ mod tests {
                 units: Some("s-1".to_string()),
                 default: Some(1.8e-12),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -947,8 +942,6 @@ mod tests {
                 lhs: "target".to_string(),
                 rhs: Expr::Variable("y".to_string()),
             }]),
-            functional_affect: None,
-            discrete_parameters: None,
             reinitialize: None,
             description: None,
         };
@@ -991,7 +984,6 @@ mod tests {
             affect_neg: None,
             root_find: None,
             reinitialize: None,
-            discrete_parameters: None,
             priority: None,
             description: None,
         };
@@ -1032,15 +1024,14 @@ mod tests {
                     "state_var".to_string(),
                     ModelVariable {
                         default_units: None,
-                        var_type: VariableType::State,
+                        var_type: VariableType::Unknown,
                         units: Some("m".to_string()),
                         default: Some(0.0),
                         description: None,
-                        expression: None,
+                        distribution: None,
+                        update: None,
                         shape: None,
                         location: None,
-                        noise_kind: None,
-                        correlation_group: None,
                     },
                 );
                 vars
@@ -1055,8 +1046,6 @@ mod tests {
                     lhs: "state_var".to_string(),
                     rhs: Expr::Variable("param".to_string()),
                 }]),
-                functional_affect: None,
-                discrete_parameters: None,
                 reinitialize: None,
                 description: None,
             }]),
@@ -1070,7 +1059,6 @@ mod tests {
                 affect_neg: None,
                 root_find: None,
                 reinitialize: None,
-                discrete_parameters: None,
                 priority: None,
                 description: None,
             }]),

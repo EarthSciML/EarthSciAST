@@ -419,30 +419,31 @@ mod tests {
     fn state_var() -> ModelVariable {
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         }
     }
 
+    /// An unknown that the test's equations define with a bare LHS, i.e. an
+    /// OBSERVED one. Observedness is derived from those equations, so the
+    /// declared type is simply `unknown`.
     fn observed_var() -> ModelVariable {
         ModelVariable {
             default_units: None,
-            var_type: VariableType::Observed,
+            var_type: VariableType::Unknown,
             units: None,
             default: None,
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         }
     }
 
@@ -453,11 +454,10 @@ mod tests {
             units: None,
             default: Some(0.5),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         }
     }
 

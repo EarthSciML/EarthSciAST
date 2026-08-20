@@ -28,15 +28,14 @@ fn test_component_graph_generation() {
         "x".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
 
@@ -226,15 +225,14 @@ fn test_model_expression_graph() {
         "x".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     variables.insert(
@@ -245,11 +243,10 @@ fn test_model_expression_graph() {
             units: None,
             default: Some(0.1),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
 
@@ -531,15 +528,14 @@ fn test_expected_graph_outputs() {
         "x".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
 

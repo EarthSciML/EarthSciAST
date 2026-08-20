@@ -193,15 +193,14 @@ fn flatten_mixed_model_and_reaction_system() {
         "y".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let mut models = HashMap::new();
@@ -385,15 +384,14 @@ fn flatten_conflicting_derivative_raises_error() {
         "X".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let mut models = HashMap::new();
@@ -465,15 +463,14 @@ fn flatten_operator_compose_sums_matched_rhses() {
         "u".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     vars_a.insert(
@@ -484,11 +481,10 @@ fn flatten_operator_compose_sums_matched_rhses() {
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     // Model B: d(A.u)/dt = k_B  (references A's state via a pre-namespaced
@@ -503,11 +499,10 @@ fn flatten_operator_compose_sums_matched_rhses() {
             units: None,
             default: Some(2.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let mut models = HashMap::new();
@@ -615,15 +610,14 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
         "u".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     vars_m.insert(
@@ -634,11 +628,10 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
             units: None,
             default: Some(298.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     // Source model "S" has observed T_out.
@@ -647,15 +640,14 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
         "T_out".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::Observed,
+            var_type: VariableType::Unknown,
             units: None,
             default: None,
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let mut models = HashMap::new();
@@ -687,7 +679,12 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
             name: None,
             reference: None,
             variables: vars_s,
-            equations: vec![],
+            // T_out is an OBSERVED unknown, so an equation must define it:
+            // with none it would classify as algebraic instead.
+            equations: vec![Equation {
+                lhs: var("T_out"),
+                rhs: Expr::Number(0.0),
+            }],
             discrete_events: None,
             continuous_events: None,
             description: None,
@@ -743,15 +740,14 @@ fn flatten_couple_includes_connector_equations() {
         "x".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let mut models = HashMap::new();
@@ -823,15 +819,14 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
         "q".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let model = Model {
@@ -867,15 +862,14 @@ fn flatten_rejects_spatial_operators() {
         "c".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let mut models = HashMap::new();
@@ -941,15 +935,14 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
         "c".to_string(),
         ModelVariable {
             default_units: None,
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     let mut models = HashMap::new();

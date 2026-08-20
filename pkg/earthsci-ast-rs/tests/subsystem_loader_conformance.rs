@@ -83,29 +83,47 @@ fn value_at(sol: &Solution, name: &str, t: f64) -> f64 {
     interp(&sol.time, &sol.state[vi], t)
 }
 
-/// The flattener lowers each subsystem-loader variable to an observed
-/// `Box.raw.<var>` carrying NO defining expression, and no equation defines it.
+/// Since 1.0.0 a data source is a document-scoped registry entry, not a
+/// component: it cannot be mounted as a subsystem, so there is no
+/// `Box.raw.<var>` observed any more. The owning model declares a PARAMETER per
+/// consumed field carrying `update: {kind: "data", source, from}`, and the
+/// flattener lowers each to `Box.<var>` in the DISCRETE bucket. Its value still
+/// arrives at the RHS through the provider forcing seam, so nothing defines it
+/// and it is not integrated.
 #[test]
-fn subsystem_loader_flattens_to_expressionless_observeds() {
+fn source_backed_parameters_flatten_to_discrete_inputs() {
     let file =
         load_path(fixture_dir().join("fixtures/subsystem_loader_ode.esm")).expect("load fixture");
     let flat = flatten(&file).expect("flatten");
 
-    for name in ["Box.raw.k", "Box.raw.wind"] {
-        let observed = flat.observed_variables.get(name).unwrap_or_else(|| {
+    for name in ["Box.k", "Box.wind"] {
+        let var = flat.discrete_variables.get(name).unwrap_or_else(|| {
             panic!(
-                "{name} must be an observed; got {:?}",
-                flat.observed_variables.keys().collect::<Vec<_>>()
+                "{name} must be a discrete (source-refreshed) parameter; got {:?}",
+                flat.discrete_variables.keys().collect::<Vec<_>>()
             )
         });
+        let update = var.update.as_ref().unwrap_or_else(|| {
+            panic!("{name} must carry the `update` that makes it source-backed")
+        });
         assert!(
-            observed.expression.is_none(),
-            "{name} must have NO defining expression (value injected at the RHS)"
+            update.rules().iter().all(|r| r.source() == Some("raw")),
+            "{name} must refresh from the declared source 'raw'"
         );
-        // Not an integrated state, and no equation defines it.
+        assert!(
+            !update.is_brownian(),
+            "{name} is a data input, not a noise source"
+        );
+
+        // Not an integrated state, not an observed, and no equation defines it
+        // (the value is injected at the RHS through the provider seam).
         assert!(
             !flat.state_variables.contains_key(name),
             "{name} must not be an integrated state"
+        );
+        assert!(
+            !flat.observed_variables.contains_key(name),
+            "{name} must not be an observed"
         );
         assert!(
             !flat

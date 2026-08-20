@@ -2812,15 +2812,14 @@ mod tests {
     fn state_var_with_units(units: Option<&str>) -> crate::ModelVariable {
         crate::ModelVariable {
             default_units: None,
-            var_type: crate::VariableType::State,
+            var_type: crate::VariableType::Unknown,
             units: units.map(str::to_string),
             default: None,
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         }
     }
 

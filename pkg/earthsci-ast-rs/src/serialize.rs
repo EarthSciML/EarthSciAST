@@ -131,15 +131,14 @@ mod tests {
             "x".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("m".to_string()),
                 default: Some(0.0),
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 

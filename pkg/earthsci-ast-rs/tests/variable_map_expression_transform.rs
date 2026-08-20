@@ -65,11 +65,10 @@ fn model_variable(var_type: VariableType, default: Option<f64>) -> ModelVariable
         units: None,
         default,
         description: None,
-        expression: None,
+        distribution: None,
+        update: None,
         shape: None,
         location: None,
-        noise_kind: None,
-        correlation_group: None,
     }
 }
 
@@ -123,9 +122,12 @@ fn transform_node() -> ExpressionNode {
 /// coupling maps `Src.F -> Sink.F_in` via the given transform.
 fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<f64>) -> EsmFile {
     let mut vars_src = HashMap::new();
-    let mut f = model_variable(VariableType::Observed, None);
-    f.expression = Some(Expr::Number(4.0));
-    vars_src.insert("F".to_string(), f);
+    // An observed unknown is DEFINED BY an equation since 1.0.0, so `F ~ 4.0`
+    // goes into Src's equation list rather than onto the variable.
+    vars_src.insert(
+        "F".to_string(),
+        model_variable(VariableType::Unknown, None),
+    );
 
     let mut vars_sink = HashMap::new();
     vars_sink.insert(
@@ -138,11 +140,20 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
     vars_sink.insert("F_in".to_string(), f_in);
     vars_sink.insert(
         "u".to_string(),
-        model_variable(VariableType::State, Some(0.0)),
+        model_variable(VariableType::Unknown, Some(0.0)),
     );
 
     let mut models = HashMap::new();
-    models.insert("Src".to_string(), make_model(vars_src, vec![]));
+    models.insert(
+        "Src".to_string(),
+        make_model(
+            vars_src,
+            vec![Equation {
+                lhs: Expr::Variable("F".to_string()),
+                rhs: Expr::Number(4.0),
+            }],
+        ),
+    );
     models.insert(
         "Sink".to_string(),
         make_model(
@@ -350,8 +361,14 @@ fn flatten_expression_transform_creates_observed_and_removes_parameter() {
         .observed_variables
         .get("Sink.F_in")
         .expect("expected observed Sink.F_in");
-    assert_eq!(obs.var_type, VariableType::Observed);
-    assert_eq!(obs.expression, Some(Expr::operator(node)));
+    assert_eq!(obs.var_type, VariableType::Unknown);
+    // Its defining expression is an EQUATION now: `Sink.F_in ~ <transform>`.
+    let def = flat
+        .equations
+        .iter()
+        .find(|e| matches!(&e.lhs, Expr::Variable(v) if v == "Sink.F_in"))
+        .expect("expected a defining equation for Sink.F_in");
+    assert_eq!(def.rhs, Expr::operator(node));
     // Units / description metadata carry over from the removed parameter.
     assert_eq!(obs.units.as_deref(), Some("kg/s"));
     assert_eq!(obs.description.as_deref(), Some("coupled inflow"));

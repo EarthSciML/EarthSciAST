@@ -280,49 +280,59 @@ fn test_reaction_system_non_ic_constraint_ok() {
     );
 }
 
-/// Test missing observed expression
+/// An unknown that no equation defines.
+///
+/// 1.0.0 removes the variable `expression` field and with it the
+/// `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN
+/// EQUATION, so an observed with nothing defining it is no longer a malformed
+/// declaration but an UNBALANCED SYSTEM, caught by `equation_count_mismatch`
+/// (esm-spec §4.9.4). The fixtures were renamed to match; `missing_equations_for`
+/// preserves their original discriminating power by naming the very unknowns the
+/// removed code named.
 #[test]
-fn test_missing_observed_expression() {
+fn test_unknown_without_equation() {
     let fixtures = [
         (
-            "missing_observed_expr",
-            include_str!("../../../tests/invalid/missing_observed_expr.esm"),
+            "unknown_without_equation",
+            include_str!("../../../tests/invalid/unknown_without_equation.esm"),
+            vec!["total_rate"],
         ),
         (
-            "missing_observed_expr_single",
-            include_str!("../../../tests/invalid/missing_observed_expr_single.esm"),
+            "unknown_without_equation_single",
+            include_str!("../../../tests/invalid/unknown_without_equation_single.esm"),
+            vec!["total"],
         ),
         (
-            "missing_observed_expr_multiple",
-            include_str!("../../../tests/invalid/missing_observed_expr_multiple.esm"),
+            "unknown_without_equation_multiple",
+            include_str!("../../../tests/invalid/unknown_without_equation_multiple.esm"),
+            vec!["ratio", "total"],
         ),
     ];
 
-    for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+    for (name, fixture, missing) in fixtures {
+        let esm_file = load(fixture).unwrap_or_else(|e| panic!("{name} should load: {e:?}"));
+        let validation_result = validate(&esm_file);
+        assert!(
+            validation_result.has_errors(),
+            "Expected {name} to have validation errors"
+        );
 
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_missing_observed_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::MissingObservedExpr));
-                assert!(
-                    has_missing_observed_error,
-                    "Expected MissingObservedExpr error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
+        let err = validation_result
+            .structural_errors
+            .clone()
+            .into_iter()
+            .find(|e| matches!(e.code, StructuralErrorCode::EquationCountMismatch))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected equation_count_mismatch for {name}, got {:?}",
+                    validation_result.structural_errors.clone()
+                )
+            });
+        assert_eq!(
+            err.details["missing_equations_for"],
+            serde_json::json!(missing),
+            "missing_equations_for for {name}"
+        );
     }
 }
 
@@ -418,43 +428,84 @@ fn test_event_variable_undeclared() {
     }
 }
 
-/// Test invalid discrete parameter
+/// An event that writes a PARAMETER.
+///
+/// esm 1.0.0 removes `discrete_parameters` and the event `functional_affect`:
+/// events affect UNKNOWNS only, and a parameter that changes during a run
+/// carries its own `update` (esm-spec §5.4). The two fixtures' defect is
+/// unchanged — an event writing a parameter — but it is now reached through
+/// `affects` and reported as `event_affects_parameter`. Their FILENAMES were
+/// deliberately kept, because they are hard-referenced here by `include_str!`.
 #[test]
-fn test_invalid_discrete_parameter() {
+fn test_event_affects_parameter() {
     let fixtures = [
         (
             "invalid_discrete_param",
             include_str!("../../../tests/invalid/invalid_discrete_param.esm"),
+            "valid_param",
+            "parameter_update",
+            None,
         ),
         (
             "invalid_discrete_param_not_parameter",
             include_str!("../../../tests/invalid/invalid_discrete_param_not_parameter.esm"),
+            "k",
+            "invalid_discrete_update",
+            Some("periodic"),
         ),
     ];
 
-    for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+    for (name, fixture, variable, event_name, trigger_type) in fixtures {
+        let esm_file = load(fixture).unwrap_or_else(|e| panic!("{name} should load: {e:?}"));
+        let validation_result = validate(&esm_file);
+        assert!(
+            validation_result.has_errors(),
+            "Expected {name} to have validation errors"
+        );
 
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
+        let err = validation_result
+            .structural_errors
+            .clone()
+            .into_iter()
+            .find(|e| matches!(e.code, StructuralErrorCode::EventAffectsParameter))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected event_affects_parameter for {name}, got {:?}",
+                    validation_result.structural_errors.clone()
+                )
+            });
 
-                let has_invalid_discrete_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::InvalidDiscreteParam));
-                assert!(
-                    has_invalid_discrete_error,
-                    "Expected InvalidDiscreteParam error for {name}"
+        assert_eq!(err.path, "/models/TestModel/discrete_events/0/affects/0");
+        assert_eq!(
+            err.message,
+            format!(
+                "Event '{event_name}' affects '{variable}', which is a parameter; \
+                 an event may affect unknowns only"
+            )
+        );
+        assert_eq!(err.details["variable"], variable);
+        assert_eq!(err.details["variable_type"], "parameter");
+        assert_eq!(err.details["event_name"], event_name);
+        assert_eq!(err.details["event_type"], "discrete");
+        match trigger_type {
+            // A fixed-interval rewrite of a parameter has an exact 1.0.0
+            // replacement, so the remedy names it.
+            Some(tt) => {
+                assert_eq!(err.details["trigger_type"], tt);
+                assert_eq!(
+                    err.details["remedy"],
+                    format!(
+                        "declare the change as update: {{kind: \"schedule\", interval: 60.0}} \
+                         on '{variable}' (esm-spec 5.4)"
+                    )
                 );
             }
-            Err(_) => {
-                // Parse failure is also acceptable
+            None => {
+                assert!(err.details.get("trigger_type").is_none());
+                assert_eq!(
+                    err.details["remedy"],
+                    "declare the change as the parameter's own update (esm-spec 5.4)"
+                );
             }
         }
     }
@@ -969,18 +1020,24 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
 /// with `unknown variant 'discrete'` — five valid fixtures could not even be
 /// LOADED, let alone validated.
 #[test]
-fn discrete_variable_type_loads() {
-    // A `discrete` variable is piecewise-constant and array-shaped (the schema
-    // requires `shape` for it), refreshed by an event / cadence / loader rather
-    // than integrated.
+fn discrete_parameter_loads_and_classifies() {
+    // The 1.0.0 spelling of a `discrete` variable: a PARAMETER carrying an
+    // `update`, piecewise-constant between refreshes rather than integrated.
+    // `schedule` requires a `shape` on the variable.
     let doc = r#"{
-      "esm": "0.8.0",
-      "metadata": { "name": "D", "description": "discrete variable" },
+      "esm": "1.0.0",
+      "metadata": { "name": "D", "description": "discrete parameter" },
       "index_sets": { "cells": { "kind": "interval", "size": 3 } },
       "models": { "M": {
         "variables": {
-          "x": { "type": "state", "units": "m", "default": 0.0 },
-          "held": { "type": "discrete", "units": "m", "shape": ["cells"] }
+          "x": { "type": "unknown", "units": "m", "default": 0.0 },
+          "held": {
+            "type": "parameter", "units": "m", "shape": ["cells"], "default": 0.0,
+            "update": {
+              "kind": "schedule", "interval": 60.0,
+              "handler": { "handler_id": "reload_held" }
+            }
+          }
         },
         "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 1 }]
       } }
@@ -988,17 +1045,24 @@ fn discrete_variable_type_loads() {
     let r = validate_complete(doc, None);
     assert!(
         r.schema_errors.is_empty(),
-        "a `discrete` variable must parse: {:?}",
+        "a parameter update must parse: {:?}",
         r.schema_errors
     );
     assert!(r.is_valid, "and validate: {:?}", r.structural_errors);
 
-    // The variable really is typed `discrete` — not silently coerced.
+    // Discreteness is DERIVED from the update, not declared (esm-spec §6.3.1).
     let esm = earthsci_ast::load(doc).expect("load");
+    let model = &esm.models.as_ref().expect("models")["M"];
     assert_eq!(
-        esm.models.as_ref().expect("models")["M"].variables["held"].var_type,
-        earthsci_ast::VariableType::Discrete
+        model.variables["held"].var_type,
+        earthsci_ast::VariableType::Parameter
     );
+    assert_eq!(
+        earthsci_ast::classify::discrete_parameters(model),
+        vec!["held"]
+    );
+    assert!(earthsci_ast::classify::brownian_parameters(model).is_empty());
+    assert_eq!(earthsci_ast::classify::ode_states(model), vec!["x"]);
 }
 
 /// A `default_units` naming a unit OTHER than the declared `units` means the

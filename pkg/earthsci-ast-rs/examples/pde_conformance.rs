@@ -407,10 +407,10 @@ fn reproj_expressions(lib: &Path, params: &Value) -> Result<HashMap<String, Expr
         .ok_or("wrapper doc lost its Reproject model")?;
     let mut out = HashMap::new();
     for name in ["fwd_x", "fwd_y", "inv_lon", "inv_lat"] {
-        let expr = model
-            .variables
-            .get(name)
-            .and_then(|v| v.expression.clone())
+        // An observed unknown's composed expression is its defining equation's
+        // RHS since 1.0.0 (esm-spec §6.3.1).
+        let expr = earthsci_ast::classify::observed_definition(model, name)
+            .cloned()
             .ok_or_else(|| format!("wrapper variable '{name}' has no composed expression"))?;
         out.insert(name.to_string(), expr);
     }

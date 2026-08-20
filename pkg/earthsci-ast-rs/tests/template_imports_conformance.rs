@@ -22,6 +22,15 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// The DEFINING EQUATION RHS of an observed unknown. Since 1.0.0 an unknown's
+/// behaviour is stated by an equation, not by a `variables[v].expression`
+/// field (esm-spec §6.3.1).
+fn observed_def<'a>(model: &'a earthsci_ast::Model, name: &str) -> &'a Expr {
+    earthsci_ast::classify::observed_definition(model, name)
+        .unwrap_or_else(|| panic!("{name} has no defining equation"))
+}
+
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -395,20 +404,14 @@ fn loader_api_bindings_and_defaults() {
     let problem = conf(&["metaparameter_resolutions", "problem.esm"]);
     let fdef = load_path(&problem).expect("default load");
     let models = fdef.models.as_ref().expect("models");
-    let npts = models["Problem"].variables["npts"]
-        .expression
-        .as_ref()
-        .expect("npts expression");
+    let npts = observed_def(&models["Problem"], "npts");
     assert_eq!(*npts, Expr::Integer(2)); // default
 
     let mut api = BTreeMap::new();
     api.insert("N".to_string(), 6i64);
     let fapi = load_path_with_options(&problem, &api).expect("API-bound load");
     let models = fapi.models.as_ref().expect("models");
-    let npts = models["Problem"].variables["npts"]
-        .expression
-        .as_ref()
-        .expect("npts expression");
+    let npts = observed_def(&models["Problem"], "npts");
     assert_eq!(*npts, Expr::Integer(6)); // API > default
 
     let mut bogus = BTreeMap::new();
@@ -450,10 +453,7 @@ fn valid_suite_library_and_minimal_consumer() {
     );
     // scale_by_n(x) lowered by the imported match rule to x * 8 (the
     // zero-parameter n_cells body composed and N folded at registration).
-    let y = m.models.as_ref().expect("models")["M"].variables["y"]
-        .expression
-        .as_ref()
-        .expect("y expression");
+    let y = observed_def(&m.models.as_ref().expect("models")["M"], "y");
     assert_eq!(
         serde_json::to_value(y).expect("serialize y"),
         json!({"op": "*", "args": ["x", 8]})
@@ -848,9 +848,9 @@ fn metaparameter_fold_ranges_regions_size_exact() {
         Some(12)
     );
     let m = &f.models.as_ref().expect("models")["M"];
-    let agg = serde_json::to_value(m.variables["agg"].expression.as_ref().unwrap()).unwrap();
+    let agg = serde_json::to_value(observed_def(m, "agg")).unwrap();
     assert_eq!(agg["ranges"]["i"], json!([1, 5]));
-    let ma = serde_json::to_value(m.variables["ma"].expression.as_ref().unwrap()).unwrap();
+    let ma = serde_json::to_value(observed_def(m, "ma")).unwrap();
     assert_eq!(ma["regions"], json!([[[3, 6]]]));
 }
 
@@ -904,10 +904,7 @@ fn expression_position_substitution_never_folds() {
     "#,
     )
     .expect("subst load");
-    let dlon = f.models.as_ref().expect("models")["M"].variables["dlon"]
-        .expression
-        .as_ref()
-        .unwrap();
+    let dlon = observed_def(&f.models.as_ref().expect("models")["M"], "dlon");
     assert_eq!(
         serde_json::to_value(dlon).unwrap(),
         json!({"op": "/", "args": [360, 144]})

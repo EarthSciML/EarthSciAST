@@ -18,6 +18,29 @@
 
 use earthsci_ast::{DataSourceKind, EsmFile, load, save};
 
+/// Every `file_variable` the document's model parameters bind, across all
+/// `update` rules.
+///
+/// Since 1.0.0 a data source declares no variables of its own: the CONSUMING
+/// parameter names the file variable it binds and owns the units
+/// (esm-spec §8.5). So the coverage this test asserts moved from
+/// `data_sources[*].variables` onto `models[*].variables[*].update.from`.
+fn bound_file_variables(f: &EsmFile) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for model in f.models.iter().flatten().map(|(_, m)| m) {
+        for (vname, var) in &model.variables {
+            let Some(update) = &var.update else { continue };
+            for rule in update.rules() {
+                if let Some(binding) = rule.from() {
+                    out.insert(binding.file_variable.clone(), vname.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+
 struct Fixture {
     /// Short name used in assertion messages.
     name: &'static str,
@@ -122,33 +145,20 @@ fn every_earthscidata_source_round_trips_without_loss() {
                 .get(name)
                 .unwrap_or_else(|| panic!("{}: loader '{}' disappeared", fx.name, name));
             assert_eq!(
-                dl1.variables.len(),
-                dl2.variables.len(),
-                "{}/{}: variables count changed",
-                fx.name,
-                name
-            );
-            for (vname, v1) in &dl1.variables {
-                let v2 = dl2.variables.get(vname).unwrap_or_else(|| {
-                    panic!("{}/{}: variable '{}' disappeared", fx.name, name, vname)
-                });
-                assert_eq!(
-                    v1.file_variable, v2.file_variable,
-                    "{}/{}/{}: file_variable changed",
-                    fx.name, name, vname
-                );
-                assert_eq!(
-                    v1.units, v2.units,
-                    "{}/{}/{}: units changed",
-                    fx.name, name, vname
-                );
-            }
-            assert_eq!(
                 dl1.source.url_template, dl2.source.url_template,
                 "{}/{}: url_template changed",
                 fx.name, name
             );
         }
+
+        // The bindings live on the consuming parameters now, so that is what
+        // must survive the round-trip.
+        assert_eq!(
+            bound_file_variables(&parsed),
+            bound_file_variables(&reparsed),
+            "{}: parameter/file_variable bindings changed across round-trip",
+            fx.name
+        );
     }
 }
 
@@ -166,18 +176,13 @@ fn every_earthscidata_source_has_expected_variables() {
             fx.name
         );
 
-        // Flatten every variable across every loader in the fixture.
-        let mut all_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Every file variable the document's parameters bind.
+        let bound = bound_file_variables(&parsed);
+        let all_vars: std::collections::HashSet<String> = bound.keys().cloned().collect();
         for (loader_name, dl) in loaders {
             assert!(
                 !dl.source.url_template.is_empty(),
                 "{}/{}: url_template is empty",
-                fx.name,
-                loader_name
-            );
-            assert!(
-                !dl.variables.is_empty(),
-                "{}/{}: variables map is empty",
                 fx.name,
                 loader_name
             );
@@ -186,23 +191,29 @@ fn every_earthscidata_source_has_expected_variables() {
             match dl.kind {
                 DataSourceKind::Grid | DataSourceKind::Points | DataSourceKind::Static => {}
             }
-            for (vname, var) in &dl.variables {
-                assert!(
-                    !var.file_variable.is_empty(),
-                    "{}/{}/{}: file_variable is empty",
-                    fx.name,
-                    loader_name,
-                    vname
-                );
-                assert!(
-                    !var.units.is_empty(),
-                    "{}/{}/{}: units is empty",
-                    fx.name,
-                    loader_name,
-                    vname
-                );
-                all_vars.insert(vname.clone());
-            }
+        }
+
+        // A binding names a non-empty file variable, and the consuming
+        // parameter — which now owns the units — declares them.
+        for (file_variable, param) in &bound {
+            assert!(
+                !file_variable.is_empty(),
+                "{}: a binding has an empty file_variable",
+                fx.name
+            );
+            let units = parsed
+                .models
+                .iter()
+                .flatten()
+                .find_map(|(_, m)| m.variables.get(param))
+                .and_then(|v| v.units.as_deref())
+                .unwrap_or("");
+            assert!(
+                !units.is_empty(),
+                "{}/{}: consuming parameter declares no units",
+                fx.name,
+                param
+            );
         }
 
         for expected in fx.expected_variables {

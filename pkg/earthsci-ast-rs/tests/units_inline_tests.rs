@@ -56,22 +56,18 @@ fn resolve_tol(
 }
 
 fn resolve_observed(model: &Model, bindings: &mut HashMap<String, f64>) {
-    let vars = &model.variables;
-    let n = vars.len() + 1;
+    // An observed unknown's defining expression is its equation's RHS since
+    // 1.0.0 (esm-spec §6.3.1).
+    let defs = earthsci_ast::classify::observed_definitions(model);
+    let n = model.variables.len() + 1;
     for _ in 0..n {
         let mut progress = false;
-        for (vname, var) in vars {
-            if !matches!(var.var_type, VariableType::Observed) {
+        for (vname, expr) in &defs {
+            if bindings.contains_key(*vname) {
                 continue;
             }
-            if bindings.contains_key(vname) {
-                continue;
-            }
-            let Some(expr) = &var.expression else {
-                continue;
-            };
             if let Some(val) = eval_expr(expr, bindings) {
-                bindings.insert(vname.clone(), val);
+                bindings.insert((*vname).to_string(), val);
                 progress = true;
             }
         }
@@ -84,7 +80,7 @@ fn resolve_observed(model: &Model, bindings: &mut HashMap<String, f64>) {
 fn build_bindings(model: &Model, t: &ModelTest) -> HashMap<String, f64> {
     let mut bindings = HashMap::new();
     for (vname, var) in &model.variables {
-        if matches!(var.var_type, VariableType::Parameter | VariableType::State)
+        if matches!(var.var_type, VariableType::Parameter | VariableType::Unknown)
             && let Some(d) = var.default
         {
             bindings.insert(vname.clone(), d);

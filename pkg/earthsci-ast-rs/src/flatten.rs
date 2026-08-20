@@ -2191,16 +2191,15 @@ mod tests {
         vars.insert(
             "x".to_string(),
             ModelVariable {
-                var_type: VariableType::State,
+                var_type: VariableType::Unknown,
                 units: Some("m".to_string()),
                 default: Some(0.0),
                 default_units: None,
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
         vars.insert(
@@ -2211,11 +2210,10 @@ mod tests {
                 default: Some(1.0),
                 default_units: None,
                 description: None,
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
 
@@ -2305,11 +2303,10 @@ mod tests {
             default: None,
             default_units: None,
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         }
     }
 
@@ -2351,13 +2348,13 @@ mod tests {
     /// `from_units`) onto the parameter `dst.temp` (units `to_units`).
     fn identity_map_file(from_units: Option<&str>, to_units: Option<&str>) -> EsmFile {
         let src = make_model(
-            vec![("T", var(VariableType::State, from_units))],
+            vec![("T", var(VariableType::Unknown, from_units))],
             vec![ddt("T", Expr::Number(0.0))],
         );
         let dst = make_model(
             vec![
                 ("temp", var(VariableType::Parameter, to_units)),
-                ("y", var(VariableType::State, Some("K"))),
+                ("y", var(VariableType::Unknown, Some("K"))),
             ],
             vec![ddt("y", Expr::Variable("temp".to_string()))],
         );
@@ -2430,7 +2427,7 @@ mod tests {
         });
         let mut equations = vec![ddt("C", makearray)];
         let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
-        state_variables.insert("C".to_string(), var(VariableType::State, None));
+        state_variables.insert("C".to_string(), var(VariableType::Unknown, None));
         let loaded_producers: HashMap<String, usize> = HashMap::new();
 
         let err = apply_pointwise_lift(&mut equations, &mut state_variables, &loaded_producers)

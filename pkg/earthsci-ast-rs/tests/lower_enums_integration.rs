@@ -21,8 +21,10 @@ fn enums_categorical_lookup_fixture_lowers_enum_ops() {
         .expect("file should have models")
         .get("DryDep")
         .expect("DryDep model present");
-    let r_c = model.variables.get("r_c").expect("r_c variable present");
-    let expr = r_c.expression.as_ref().expect("r_c has expression");
+    // An observed unknown's defining expression is its equation's RHS
+    // (esm-spec §6.3.1).
+    let expr = earthsci_ast::classify::observed_definition(model, "r_c")
+        .expect("r_c has a defining equation");
 
     let Expr::Operator(node) = expr else {
         panic!("r_c expression must be an Operator node, got {expr:?}");

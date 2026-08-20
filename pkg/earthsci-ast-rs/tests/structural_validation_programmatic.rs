@@ -21,15 +21,14 @@ fn test_undefined_variable_in_model() {
         "x".to_string(),
         ModelVariable {
             default_units: Default::default(),
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
 
@@ -111,15 +110,14 @@ fn test_equation_count_mismatch() {
         "x".to_string(),
         ModelVariable {
             default_units: Default::default(),
-            var_type: VariableType::State,
+            var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
     variables.insert(
@@ -130,11 +128,10 @@ fn test_equation_count_mismatch() {
             units: None,
             default: Some(0.1),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
 
@@ -352,11 +349,10 @@ fn test_valid_file_passes() {
             units: None,
             default: Some(0.1),
             description: None,
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         },
     );
 

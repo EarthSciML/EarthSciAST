@@ -469,6 +469,12 @@ impl ArrayCompiled {
         for (name, var) in &flat.brownian_variables {
             variables.insert(name.clone(), var.clone());
         }
+        // Discrete parameters too, so `classify_variables` sees their `update`
+        // and can tell a provider-fed `data` channel from a refresh kind this
+        // backend cannot run (rather than the name silently disappearing).
+        for (name, var) in &flat.discrete_variables {
+            variables.insert(name.clone(), var.clone());
+        }
 
         // `index_sets` is not carried through flatten today, so coupled models
         // that address `arrayop`/`aggregate` ranges via `{ "from": <set> }`
@@ -1091,7 +1097,14 @@ fn classify_variables(
                     .as_ref()
                     .is_some_and(|u| u.rules().iter().all(|r| r.source().is_some()));
                 if all_data {
-                    param_vars.push(name);
+                    // Deliberately in NO list. Its value arrives through the
+                    // provider forcing buffer, which `lookup_variable` consults
+                    // LAST — after state, observeds and params — so binding it
+                    // as a param would shadow the provider with the
+                    // placeholder `default` and silently produce the wrong
+                    // trajectory. Leaving it unbound is what makes the forcing
+                    // seam reachable, and is exactly how 0.x treated the
+                    // loader observeds this construct replaces.
                 } else {
                     let kinds: Vec<&str> = var
                         .update

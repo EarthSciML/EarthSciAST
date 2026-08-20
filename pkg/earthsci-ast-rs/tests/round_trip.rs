@@ -332,7 +332,7 @@ fn test_model_tests_tolerance_round_trip() {
 }
 
 /// Round-trip the Ornstein-Uhlenbeck SDE fixture, asserting that the
-/// brownian variable type and its `noise_kind` field survive load/save.
+/// wiener-updated parameter and its `distribution` survive load/save.
 #[test]
 fn test_ornstein_uhlenbeck_sde_round_trip() {
     let fixture = include_str!("../../../tests/fixtures/sde/ornstein_uhlenbeck.esm");
@@ -344,21 +344,34 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
         .and_then(|m| m.get("OU"))
         .expect("OU model missing");
     let bw = model.variables.get("Bw").expect("Bw variable missing");
-    assert_eq!(bw.var_type, VariableType::Brownian);
-    assert_eq!(bw.noise_kind.as_deref(), Some("wiener"));
+    // A former `brownian` variable is a PARAMETER with a distribution and a
+    // wiener update (esm-spec §6.3); Brownian-ness is derived, not declared.
+    assert_eq!(bw.var_type, VariableType::Parameter);
+    assert!(bw.update.as_ref().expect("Bw update").is_brownian());
+    assert!(bw.distribution.is_some(), "a wiener update needs a distribution");
+    assert_eq!(
+        earthsci_ast::classify::brownian_parameters(model),
+        vec!["Bw"]
+    );
+    assert_eq!(
+        earthsci_ast::classify::system_kind(model),
+        earthsci_ast::classify::SystemKind::Sde
+    );
 
     let serialized = save(&parsed).expect("failed to serialize OU SDE");
     let reparsed: EsmFile = load(&serialized).expect("failed to reparse OU SDE");
 
-    // Serialization must preserve the brownian type and noise_kind.
+    // Serialization must preserve the parameter type, its update and its
+    // distribution.
     let rbw = reparsed
         .models
         .as_ref()
         .and_then(|m| m.get("OU"))
         .and_then(|m| m.variables.get("Bw"))
         .expect("Bw missing after round-trip");
-    assert_eq!(rbw.var_type, VariableType::Brownian);
-    assert_eq!(rbw.noise_kind.as_deref(), Some("wiener"));
+    assert_eq!(rbw.var_type, VariableType::Parameter);
+    assert!(rbw.update.as_ref().expect("Bw update").is_brownian());
+    assert!(rbw.distribution.is_some());
 
     // Idempotency.
     let serialized_again = save(&reparsed).expect("second serialize");
@@ -374,7 +387,9 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
     );
 }
 
-/// Correlated-noise SDE fixture: two brownian vars sharing a `correlation_group`.
+/// Correlated-noise SDE fixture: ONE vector-valued wiener parameter whose
+/// `distribution.cov` carries the correlation the 0.x `correlation_group` tag
+/// only named.
 #[test]
 fn test_correlated_noise_sde_round_trip() {
     let fixture = include_str!("../../../tests/fixtures/sde/correlated_noise.esm");
@@ -385,14 +400,19 @@ fn test_correlated_noise_sde_round_trip() {
         .as_ref()
         .and_then(|m| m.get("TwoBody"))
         .expect("TwoBody model missing");
-    for name in ["Bx", "By"] {
-        let bv = model
-            .variables
-            .get(name)
-            .unwrap_or_else(|| panic!("{name} missing"));
-        assert_eq!(bv.var_type, VariableType::Brownian);
-        assert_eq!(bv.correlation_group.as_deref(), Some("wind"));
-    }
+    let bv = model.variables.get("B").expect("B missing");
+    assert_eq!(bv.var_type, VariableType::Parameter);
+    assert!(bv.update.as_ref().expect("B update").is_brownian());
+    let dist = bv.distribution.as_ref().expect("B distribution");
+    assert!(
+        dist.is_multivariate(),
+        "correlated noise is ONE vector-valued parameter"
+    );
+    assert_eq!(
+        dist.cov().expect("cov"),
+        &vec![vec![1.0, 0.5], vec![0.5, 1.0]],
+        "the off-diagonal IS the correlation"
+    );
 
     let serialized = save(&parsed).expect("failed to serialize");
     let reparsed: EsmFile = load(&serialized).expect("failed to reparse");
