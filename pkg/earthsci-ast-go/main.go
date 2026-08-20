@@ -94,8 +94,8 @@ func parseFile(filename string) {
 	if len(esmFile.ReactionSystems) > 0 {
 		fmt.Printf("Reaction Systems: %d\n", len(esmFile.ReactionSystems))
 	}
-	if len(esmFile.DataLoaders) > 0 {
-		fmt.Printf("Data Loaders: %d\n", len(esmFile.DataLoaders))
+	if len(esmFile.DataSources) > 0 {
+		fmt.Printf("Data Sources: %d\n", len(esmFile.DataSources))
 	}
 	if len(esmFile.Enums) > 0 {
 		fmt.Printf("Enums: %d\n", len(esmFile.Enums))

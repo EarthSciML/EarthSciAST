@@ -3,7 +3,9 @@ package esm
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -90,14 +92,20 @@ const (
 	ErrorUndefinedSystem     = "undefined_system"
 	ErrorUndefinedOperator   = "undefined_operator"
 	ErrorUnresolvedScopedRef = "unresolved_scoped_ref"
-	// ErrorInvalidDiscreteParam is reserved for a future discrete-parameter
-	// diagnostic; no check emits it yet (kept for cross-binding code parity).
-	ErrorInvalidDiscreteParam = "invalid_discrete_param"
-	ErrorNullReaction         = "null_reaction"
-	ErrorMissingObservedExpr  = "missing_observed_expr"
-	ErrorEventVarUndeclared   = "event_var_undeclared"
-	ErrorUnitInconsistency    = "unit_inconsistency"
-	ErrorIcInReactionSystem   = "ic_in_reaction_system"
+	ErrorNullReaction        = "null_reaction"
+	// ErrorEventAffectsParameter: an event `affects` LHS names a PARAMETER.
+	// esm 1.0.0 events affect unknowns only -- a parameter that changes during a
+	// run carries its own `update` -- so this replaces both `invalid_discrete_param`
+	// and `undeclared_discrete_parameter`, which named a `discrete_parameters`
+	// list that no longer exists. Raised from a model's continuous_events /
+	// discrete_events and from an `event` coupling entry alike.
+	ErrorEventAffectsParameter = "event_affects_parameter"
+	// ErrorDataSourceUndefined: a parameter update's `update.source` names no
+	// entry in the document's top-level `data_sources`.
+	ErrorDataSourceUndefined = "data_source_undefined"
+	ErrorEventVarUndeclared  = "event_var_undeclared"
+	ErrorUnitInconsistency   = "unit_inconsistency"
+	ErrorIcInReactionSystem  = "ic_in_reaction_system"
 	// ErrorUnitParseError is a declared unit string that denotes no real unit
 	// ("not_a_unit"). It is a defect in the FILE — a hard error, distinct from
 	// `unit_inconsistency` (a provable dimensional mismatch between two
@@ -162,7 +170,7 @@ func ValidateFile(file *ESMFile, jsonStr string) *ValidationResult {
 	// Without this, Go rejected every template library outright, because
 	// ValidateStruct's assembly-document invariant fired on the emptied struct.
 	if isLibraryDocumentJSON(jsonStr) && len(file.Models) == 0 &&
-		len(file.ReactionSystems) == 0 && len(file.DataLoaders) == 0 {
+		len(file.ReactionSystems) == 0 && len(file.DataSources) == 0 {
 		return result
 	}
 
@@ -463,7 +471,7 @@ func collectStructuralErrors(file *ESMFile) []StructuralError {
 	s.validateCouplingReferences()
 	s.validateSubsystemRefs()
 	s.validateCircularReferences()
-	s.validateDataLoaderReferences()
+	s.validateDataSourceEntries()
 
 	return s.errors
 }
@@ -691,7 +699,10 @@ func coordinateNames(file *ESMFile) map[string]bool {
 			walk(eq.RHS)
 		}
 		for _, v := range model.Variables {
-			walk(v.Expression)
+			_ = v.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
+				walk(expr)
+				return expr, nil
+			})
 		}
 	}
 	return coords
@@ -714,11 +725,9 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	allVars := make(map[string]bool)
 	if isCoupled {
 		allVars = s.documentWideScope()
-		for _, loader := range s.file.DataLoaders {
-			for name := range loader.Variables {
-				allVars[name] = true
-			}
-		}
+		// A data source no longer contributes names to any scope: it exposes no
+		// variables (esm-spec 8). A field it supplies is an ordinary PARAMETER of
+		// the consuming model, already credited above through model.Variables.
 		allVars[operatorPlaceholderVar] = true
 	} else {
 		for varName := range model.Variables {
@@ -745,21 +754,22 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 		})
 	}
 
-	// An OBSERVED variable's defining expression is a reference site like any
-	// other — `T_v ~ T*(1 + 0.61*q_typo)` names variables, and an undeclared one
-	// there is exactly as broken as in an equation. It went unchecked because
-	// reference integrity only ever entered through `equations`.
+	// A parameter's UPDATE carries three Expression positions -- `when`, the
+	// `expression` value form, and a `from` binding's `unit_conversion` -- and
+	// esm-spec 4.9.5 lists all three as reference-integrity sites. In 0.x the
+	// equivalent site was the observed variable's `expression` field; an observed's
+	// definition is now an ordinary equation and is checked with the others above.
 	for _, varName := range sortedKeys(model.Variables) {
 		variable := model.Variables[varName]
-		if variable.Expression == nil {
-			continue
-		}
-		scope := allVars
-		if bound := expressionBoundSymbols(variable.Expression); len(bound) > 0 {
-			scope = unionScope(allVars, bound)
-		}
-		s.validateExpressionVariables(variable.Expression, scope,
-			fmt.Sprintf("%s/variables/%s/expression", basePath, varName), modelName)
+		_ = variable.MapUpdateExpressions(func(expr Expression, rule int, pos string) (Expression, error) {
+			scope := allVars
+			if bound := expressionBoundSymbols(expr); len(bound) > 0 {
+				scope = unionScope(allVars, bound)
+			}
+			s.validateExpressionVariables(expr, scope,
+				updatePointer(basePath, varName, variable.Update, rule, pos), modelName)
+			return expr, nil
+		})
 	}
 
 	// `initialization_equations` hold at t=0 but are ordinary equations, and
@@ -795,32 +805,23 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 		eventVars = unionScope(allVars, map[string]bool{operatorPlaceholderVar: true})
 	}
 
-	// Observed variables must carry an expression.
-	for varName, variable := range model.Variables {
-		if variable.Type == VarTypeObserved && variable.Expression == nil {
-			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s/variables/%s", basePath, varName),
-				Code:    ErrorMissingObservedExpr,
-				Message: "Observed variable must have an expression",
-				Details: map[string]any{
-					"variable": varName,
-					"model":    modelName,
-				},
-			})
-		}
-	}
+	// `missing_observed_expr` is RETIRED with the field it named. An observed
+	// unknown is defined by an equation, so one with nothing defining it is not a
+	// malformed declaration but an UNBALANCED SYSTEM -- caught by
+	// equation_count_mismatch, whose `missing_equations_for` detail names exactly
+	// the unknowns this code used to name (esm-spec 4.9.4).
+
+	// A parameter whose update is `data` must name a declared source.
+	s.validateDataSourceRefs(model, basePath)
 
 	for i, event := range model.DiscreteEvents {
 		event := event
 		eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
-		s.validateDiscreteEvent(&event, eventVars, eventPath, modelName)
-		s.validateDiscreteParameters(event.DiscreteParameters, model, eventPath, modelName)
+		s.validateDiscreteEvent(&event, model, eventVars, eventPath, modelName)
 	}
-	// `discrete_parameters` is a DISCRETE-event field only (a continuous event
-	// carries no such list — see types.go).
 	for i, event := range model.ContinuousEvents {
 		event := event
-		s.validateContinuousEvent(&event, eventVars, fmt.Sprintf("%s/continuous_events/%d", basePath, i), modelName)
+		s.validateContinuousEvent(&event, model, eventVars, fmt.Sprintf("%s/continuous_events/%d", basePath, i), modelName)
 	}
 
 	// F-6 static aggregate checks: join-key type, undeclared index set, and
@@ -1225,53 +1226,165 @@ func (s *structuralScan) validateAffectTarget(lhs string, allVars map[string]boo
 	})
 }
 
-// validateDiscreteParameters checks that every name in an event's
-// `discrete_parameters` list is a DECLARED PARAMETER of the model.
+// validateAffectsUnknownOnly reports `event_affects_parameter` when an event's
+// `affects` LHS names a declared PARAMETER.
 //
-// The list names the parameters the event is allowed to write — so a name that
-// is not declared at all ("undefined_param") or that is declared as something
-// other than a parameter (a STATE variable: `discrete_parameters: ["x"]` where x
-// is integrated) is a defect, and the code the shared corpus pins for both is
-// `invalid_discrete_param` (tests/invalid/invalid_discrete_param.esm,
-// invalid_discrete_param_not_parameter.esm).
-func (s *structuralScan) validateDiscreteParameters(names []string, model *Model, path, modelName string) {
-	for i, name := range names {
-		v, declared := model.Variables[name]
-		switch {
-		case !declared:
+// esm 1.0.0 events affect UNKNOWNS ONLY: a parameter that changes during a run
+// declares its own `update`, so writing one from an event is wrong outright
+// rather than wrong-unless-listed. This one diagnostic replaces the whole 0.x
+// `discrete_parameters` apparatus -- `invalid_discrete_param` and
+// `undeclared_discrete_parameter` both named a list that no longer exists.
+//
+// The `remedy` detail names the `update.kind` that expresses the SAME intent
+// legally, chosen from how the event was triggered, so the message tells an
+// author what to write instead of only what not to. A name that is not declared
+// at all is not this diagnostic's business -- validateAffectTarget already
+// reports it as `event_var_undeclared`.
+func (s *structuralScan) validateAffectsUnknownOnly(
+	affects []AffectEquation, model *Model, path, eventName, eventType string,
+	trigger *DiscreteEventTrigger,
+) {
+	if model == nil {
+		return
+	}
+	for i, affect := range affects {
+		v, declared := model.Variables[affect.LHS]
+		if !declared || v.Type != VarTypeParameter {
+			continue
+		}
+		details := map[string]any{
+			"variable":      affect.LHS,
+			"variable_type": VarTypeParameter,
+			"event_type":    eventType,
+			"remedy":        affectRemedy(affect.LHS, eventType, trigger),
+		}
+		if eventName != "" {
+			details["event_name"] = eventName
+		}
+		if trigger != nil && trigger.Type != "" {
+			details["trigger_type"] = trigger.Type
+		}
+		message := fmt.Sprintf(
+			"Event affects '%s', which is a parameter; an event may affect unknowns only",
+			affect.LHS)
+		if eventName != "" {
+			message = fmt.Sprintf(
+				"Event '%s' affects '%s', which is a parameter; an event may affect unknowns only",
+				eventName, affect.LHS)
+		}
+		s.addErr(StructuralError{
+			Path:    fmt.Sprintf("%s/affects/%d", path, i),
+			Code:    ErrorEventAffectsParameter,
+			Message: message,
+			Details: details,
+		})
+	}
+}
+
+// formatFloat renders a trigger interval for the `remedy` message, dropping a
+// trailing ".0" only when the value is not integral -- 60.0 stays "60.0",
+// matching the way the schema's number literals are spelled in the corpus.
+func formatFloat(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64) + trailingPointZero(f)
+}
+
+// trailingPointZero returns ".0" for an integral value, so an interval written
+// `60.0` is quoted back as `60.0` rather than `60`.
+func trailingPointZero(f float64) string {
+	if f == math.Trunc(f) && !math.IsInf(f, 0) {
+		return ".0"
+	}
+	return ""
+}
+
+// affectRemedy names the `update` rule that legally expresses what the offending
+// event was trying to do (esm-spec 5.4). A periodic trigger maps exactly onto
+// `schedule`, a condition trigger onto `condition`, and a continuous event's
+// zero crossing onto `crossing`; anything else gets the generic pointer.
+func affectRemedy(varName, eventType string, trigger *DiscreteEventTrigger) string {
+	if eventType == "continuous" {
+		return fmt.Sprintf(
+			"declare the change as update: {kind: \"crossing\", when, direction} on '%s' (esm-spec 5.4)",
+			varName)
+	}
+	if trigger != nil {
+		switch trigger.Type {
+		case "periodic":
+			if trigger.Interval != nil {
+				return fmt.Sprintf(
+					"declare the change as update: {kind: \"schedule\", interval: %s} on '%s' (esm-spec 5.4)",
+					formatFloat(*trigger.Interval), varName)
+			}
+			return fmt.Sprintf(
+				"declare the change as update: {kind: \"schedule\", interval} on '%s' (esm-spec 5.4)",
+				varName)
+		case "preset_times":
+			return fmt.Sprintf(
+				"declare the change as update: {kind: \"schedule\", times} on '%s' (esm-spec 5.4)",
+				varName)
+		case "condition":
+			return fmt.Sprintf(
+				"declare the change as update: {kind: \"condition\", when} on '%s' (esm-spec 5.4)",
+				varName)
+		}
+	}
+	return "declare the change as the parameter's own update (esm-spec 5.4)"
+}
+
+// validateDataSourceRefs reports `data_source_undefined` for a parameter whose
+// `update.source` names no entry in the document's top-level `data_sources`.
+//
+// This is the ONLY way a source can now be misnamed. In 0.x a loader was a
+// coupling endpoint, so a bad reference was caught (or missed) by the coupling
+// checks; from 1.0.0 a source is reached solely through `update.source`, which
+// is schema-valid by construction for any string and therefore has to be checked
+// here.
+func (s *structuralScan) validateDataSourceRefs(model *Model, basePath string) {
+	if s.file == nil || model == nil {
+		return
+	}
+	available := sortedKeys(s.file.DataSources)
+	for _, varName := range sortedKeys(model.Variables) {
+		v := model.Variables[varName]
+		if v.Update == nil {
+			continue
+		}
+		for _, key := range v.Update.DataSourceKeys() {
+			if _, ok := s.file.DataSources[key]; ok {
+				continue
+			}
 			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s/discrete_parameters", path),
-				Code:    ErrorInvalidDiscreteParam,
-				Message: fmt.Sprintf("Discrete parameter '%s' is not declared", name),
+				Path: fmt.Sprintf("%s/variables/%s/update", basePath, varName),
+				Code: ErrorDataSourceUndefined,
+				Message: fmt.Sprintf(
+					"Parameter update names data source '%s', which the document does not declare",
+					key),
 				Details: map[string]any{
-					"parameter":   name,
-					"model":       modelName,
-					"index":       i,
-					"expected_in": "variables",
-				},
-			})
-		case v.Type != VarTypeParameter:
-			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s/discrete_parameters", path),
-				Code:    ErrorInvalidDiscreteParam,
-				Message: fmt.Sprintf("Discrete parameter '%s' is declared as a %q, not a parameter", name, v.Type),
-				Details: map[string]any{
-					"parameter":     name,
-					"model":         modelName,
-					"index":         i,
-					"declared_type": v.Type,
-					"expected_type": VarTypeParameter,
+					"variable":          varName,
+					"source":            key,
+					"available_sources": available,
 				},
 			})
 		}
 	}
 }
 
+// updatePointer builds the JSON Pointer of one Expression position inside a
+// parameter's update, spelling the rule index only for the ARRAY form -- a
+// single rule is an object on the wire and has no index to address.
+func updatePointer(basePath, varName string, spec *ParameterUpdateSpec, rule int, pos string) string {
+	if spec != nil && spec.IsArray {
+		return fmt.Sprintf("%s/variables/%s/update/%d/%s", basePath, varName, rule, pos)
+	}
+	return fmt.Sprintf("%s/variables/%s/update/%s", basePath, varName, pos)
+}
+
 // validateDiscreteEvent validates discrete event structure.
-func (s *structuralScan) validateDiscreteEvent(event *DiscreteEvent, allVars map[string]bool, path, currentSystem string) {
+func (s *structuralScan) validateDiscreteEvent(event *DiscreteEvent, model *Model, allVars map[string]bool, path, currentSystem string) {
 	if event.Trigger.Type == "condition" && event.Trigger.Expression != nil {
 		s.validateExpressionVariables(event.Trigger.Expression, allVars, fmt.Sprintf("%s/trigger/expression", path), currentSystem)
 	}
+	s.validateAffectsUnknownOnly(event.Affects, model, path, event.Name, "discrete", &event.Trigger)
 	for i, affect := range event.Affects {
 		affectPath := fmt.Sprintf("%s/affects/%d", path, i)
 		s.validateAffectTarget(affect.LHS, allVars, currentSystem, fmt.Sprintf("%s/lhs", affectPath), "affect", "discrete")
@@ -1280,7 +1393,13 @@ func (s *structuralScan) validateDiscreteEvent(event *DiscreteEvent, allVars map
 }
 
 // validateContinuousEvent validates continuous event structure.
-func (s *structuralScan) validateContinuousEvent(event *ContinuousEvent, allVars map[string]bool, path, currentSystem string) {
+func (s *structuralScan) validateContinuousEvent(event *ContinuousEvent, model *Model, allVars map[string]bool, path, currentSystem string) {
+	eventName := ""
+	if event.Name != nil {
+		eventName = *event.Name
+	}
+	s.validateAffectsUnknownOnly(event.Affects, model, path, eventName, "continuous", nil)
+	s.validateAffectsUnknownOnly(event.AffectNeg, model, path, eventName, "continuous", nil)
 	for i, condition := range event.Conditions {
 		s.validateExpressionVariables(condition, allVars, fmt.Sprintf("%s/conditions/%d", path, i), currentSystem)
 	}
@@ -1300,189 +1419,114 @@ func (s *structuralScan) validateContinuousEvent(event *ContinuousEvent, allVars
 // number of ODE equations does not equal the number of state variables
 // (ESM libraries spec Section 3.2.1).
 func (s *structuralScan) validateEquationUnknownBalance(modelName string, model *Model, basePath string) {
-	nStates, nOdes, missing, extra, message, balanced := computeEquationBalance(model, s.indep)
+	unknowns, nEqs, missing, balanced := computeEquationBalance(s.file, model)
 	if balanced {
 		return
 	}
 	s.addErr(StructuralError{
-		Path:    basePath,
-		Code:    ErrorEquationCountMismatch,
-		Message: message,
+		Path: basePath,
+		Code: ErrorEquationCountMismatch,
+		Message: fmt.Sprintf(
+			"Number of equations (%d) does not match number of unknowns (%d)",
+			nEqs, len(unknowns)),
 		Details: map[string]any{
-			"model":             modelName,
-			"state_count":       nStates,
-			"ode_count":         nOdes,
-			"missing_equations": missing,
-			"extra_equations":   extra,
+			"unknowns":              unknowns,
+			"equations":             nEqs,
+			"missing_equations_for": missing,
 		},
 	})
 }
 
-// computeEquationBalance counts state variables and defining equations for a
-// model and reports the balance outcome. It is BIDIRECTIONAL: it reports both
-// state variables that no equation defines (missing) and equations that define
-// something which is not a state variable (extra).
+// computeEquationBalance balances a model's UNKNOWNS against its EQUATIONS
+// (esm-spec §4.9.4).
 //
-// What counts as "an equation that defines state variable v" (mirrors TS
-// validateEquationBalance / countDerivatives / lhsAssignmentTarget):
+// Since 1.0.0 this is the only thing the check COULD be. `unknown` is the
+// declared type, and ODE-state-ness is derived from the very equations being
+// counted — so counting "ODE states versus time-derivative equations", as the
+// 0.x code did, would ask the equations to answer a question about themselves.
 //
-//   - a time derivative `D(v, t)` ANYWHERE in the LHS — including the
-//     ARRAY FORM, where the derivative is carried inside an aggregate's
-//     contracted body (`aggregate(output_idx:[i], expr: D(index(v, i)))`)
-//     rather than in `args`. Only looking for a top-level `D` LHS is what made
-//     Go reject two dozen perfectly good aggregate/geometry fixtures with
-//     "0 ODE equations";
-//   - failing that, an ALGEBRAIC/relational equation whose LHS assigns to a
-//     state variable (`v ~ f(...)`, `index(v, i) ~ aggregate(...)`), which
-//     credits that variable — element-defined and observed-style state still
-//     balances the unknown count.
+// An equation is CREDITED whichever form its LHS takes:
 //
-// An `ic` equation defines an initial value, not the dynamics, so it never
-// credits a variable (its LHS op is neither D nor an assignment target).
+//   - a derivative LHS, `D(x)/dt ~ …`;
+//   - a bare-variable LHS, `x ~ …` (an observed equation);
+//   - an EXPRESSION LHS, `H*H*SO4 ~ Ksp` (an implicit algebraic constraint).
 //
-// An ALGEBRAIC model (`system_kind: "nonlinear"`) is balanced the same way, but
-// on the general statement of the rule — UNKNOWNS versus EQUATIONS — because it
-// has no derivatives at all: its unknowns are determined by algebraic equations
-// whose LHS is an arbitrary EXPRESSION, not an assignment target (ISORROPIA's
-// solubility product is spelled `H*H*SO4 ~ Ksp`). Counting derivatives there
-// yields "0 ODE equations for 2 state variables" and rejects a perfectly
-// balanced 2×2 system, which is why the check used to be skipped outright for
-// every non-ODE kind. See nonlinearEquationBalance.
+// The third is what the old check got wrong: crediting only a bare-variable
+// derivative undercounts every algebraic equation, so
+// tests/valid/nonlinear_isorropia_shape.esm — two unknowns, two equations, one
+// of them expression-LHS — was reported as "1 ODE equation, 2 unknowns" and
+// rejected though it is square.
 //
-// Two carve-outs still skip the check entirely:
+// So the TEST is a count: as many equations as unknowns. `missing_equations_for`
+// is reported alongside as a diagnostic aid, naming the unknowns that no
+// equation assigns to; it is not itself the failure condition, since an
+// expression-LHS equation determines an unknown without assigning to it.
 //
-//   - a model whose SystemKind is sde / pde / dae — the balance rule for those
-//     is not the plain unknown count (a `pde` carries spatial operators, an
-//     `sde` a Brownian term, a `dae` explicit constraints);
+// Both lists are sorted (CONFORMANCE_SPEC §7.1.0).
+//
+// An `ic`-op equation prescribes an initial value rather than the dynamics and
+// so is not counted, and `initialization_equations` are a separate block with a
+// separate balance (§4.9.4) and are never in `equations`.
+//
+// Two carve-outs skip the check entirely:
+//
 //   - a model with SUBSYSTEMS holds its dynamics in those subsystems, so its own
-//     `equations` list may legitimately be empty while it declares state
-//     variables (tests/valid/scoped_refs_coupling.esm). Only a subsystem-free
-//     model owes an equation for each of its state variables.
-func computeEquationBalance(model *Model, indep string) (nStates, nOdes int, missing, extra []string, message string, balanced bool) {
+//     `equations` list may legitimately be empty while it declares unknowns
+//     (tests/valid/scoped_refs_coupling.esm);
+//   - a `pde` or `dae` model, whose balance is not the plain unknown count — a
+//     PDE carries spatial operators and a DAE explicit constraints. An `sde` is
+//     NO LONGER exempt: its noise source is a parameter now, not an extra
+//     unknown, so it balances exactly like an ODE.
+func computeEquationBalance(file *ESMFile, model *Model) (unknowns []string, nEqs int, missing []string, balanced bool) {
 	if len(model.Subsystems) > 0 {
-		return 0, 0, nil, nil, "", true
+		return nil, 0, nil, true
 	}
-	if isAlgebraicSystem(model) {
-		return nonlinearEquationBalance(model)
-	}
-	if !isDAETargetSystem(model) {
-		return 0, 0, nil, nil, "", true
+	if kind, declared := DeclaredSystemKind(model); declared &&
+		(kind == SystemKindPDE || kind == SystemKindDAE) {
+		return nil, 0, nil, true
 	}
 
-	stateVars := make(map[string]bool)
-	for varName, variable := range model.Variables {
-		if variable.Type == VarTypeState {
-			stateVars[varName] = true
-		}
-	}
-	nStates = len(stateVars)
+	unknowns = Unknowns(model)
 
-	definedVars := make(map[string]bool)
-	extraSet := make(map[string]bool)
-	for _, eq := range model.Equations {
-		derivatives := countDerivatives(eq.LHS, indep)
-		if len(derivatives) > 0 {
-			for varName, count := range derivatives {
-				nOdes += count
-				// A SCOPED target (`D(Chemistry.O3, t)`) drives a variable owned by
-				// ANOTHER system; it is not this model's unknown and says nothing
-				// about this model's balance. The reference check already validates
-				// that the scoped name resolves.
-				if strings.Contains(varName, ".") {
-					continue
-				}
-				if stateVars[varName] {
-					definedVars[varName] = true
-				} else {
-					extraSet[varName] = true
-				}
-			}
-			continue
-		}
-		// A non-differential equation credits the state variable its LHS assigns
-		// to: an algebraic/relational definition (`v ~ f(...)`,
-		// `index(v,i) ~ aggregate(...)`), or an `ic` prescription — a state variable
-		// with an initial condition and no dynamics is a PRESCRIBED field, held at
-		// its initial value and typically exported to other models through a
-		// coupling (tests/valid/wildfire_atmosphere_ocean.esm's wind_u/wind_v).
-		target := extractVariableFromLHS(eq.LHS)
-		if target == "" {
-			if node, ok := asExprNode(eq.LHS); ok && node.Op == OpIC && len(node.Args) > 0 {
-				target = extractVariableFromLHS(node.Args[0])
-			}
-		}
-		if target != "" && stateVars[target] {
-			definedVars[target] = true
-		}
-	}
-
-	missing = []string{}
-	for varName := range stateVars {
-		if !definedVars[varName] {
-			missing = append(missing, varName)
-		}
-	}
-	extra = []string{}
-	for varName := range extraSet {
-		extra = append(extra, varName)
-	}
-	sort.Strings(missing)
-	sort.Strings(extra)
-
-	if len(missing) == 0 && len(extra) == 0 {
-		return nStates, nOdes, nil, nil, "", true
-	}
-
-	message = fmt.Sprintf("Equation-unknown balance failed: found %d state variables but %d ODE equations", nStates, nOdes)
-	if len(missing) > 0 {
-		message += fmt.Sprintf("; state variables without ODE equations: %v", missing)
-	}
-	if len(extra) > 0 {
-		message += fmt.Sprintf("; ODE equations for non-state variables: %v", extra)
-	}
-	return nStates, nOdes, missing, extra, message, false
-}
-
-// isAlgebraicSystem reports whether a model is purely algebraic
-// (`system_kind: "nonlinear"`): its unknowns are determined by algebraic
-// equations and it carries no derivatives.
-func isAlgebraicSystem(model *Model) bool {
-	return model.SystemKind != nil && *model.SystemKind == SystemKindNonlinear
-}
-
-// nonlinearEquationBalance balances an ALGEBRAIC model: the number of UNKNOWNS
-// (state variables) against the number of EQUATIONS.
-//
-// A nonlinear system has no derivatives, and its equations need not have an
-// assignment target: ISORROPIA's charge balance is `H ~ 2*SO4` (a bare target)
-// but its solubility product is `H*H*SO4 ~ Ksp` — an expression on the left,
-// crediting no single variable. The balance is therefore a COUNT, not a
-// per-variable credit: 2 equations determine 2 unknowns
-// (tests/valid/nonlinear_isorropia_shape.esm), and it is square-ness, not
-// assignment shape, that the solver requires.
-//
-// `ic`-op equations prescribe an initial guess, not a determining equation, so
-// they do not count (initialization_equations live in their own field and are
-// never in `equations`).
-func nonlinearEquationBalance(model *Model) (nStates, nEqs int, missing, extra []string, message string, balanced bool) {
-	for _, variable := range model.Variables {
-		if variable.Type == VarTypeState {
-			nStates++
-		}
-	}
+	indep := indepVarOf(file)
+	assigned := map[string]bool{}
 	for _, eq := range model.Equations {
 		if node, ok := asExprNode(eq.LHS); ok && node.Op == OpIC {
 			continue
 		}
 		nEqs++
+
+		// Credit the unknown this equation assigns to, if any. A derivative LHS
+		// credits its base variable — including the wrapped forms `D(u[i])` and an
+		// aggregate whose `expr` is a `D(...)`, which countDerivatives finds
+		// because it walks every expression-bearing field. A SCOPED target
+		// (`D(Chemistry.O3, t)`) drives another system's unknown and says nothing
+		// about this model's balance.
+		if derivs := countDerivatives(eq.LHS, indep); len(derivs) > 0 {
+			for name := range derivs {
+				if !strings.Contains(name, ".") {
+					assigned[name] = true
+				}
+			}
+			continue
+		}
+		if target := extractVariableFromLHS(eq.LHS); target != "" {
+			assigned[target] = true
+		}
 	}
-	if nStates == nEqs {
-		return nStates, nEqs, nil, nil, "", true
+
+	missing = []string{}
+	for _, name := range unknowns {
+		if !assigned[name] {
+			missing = append(missing, name)
+		}
 	}
-	message = fmt.Sprintf(
-		"Equation-unknown balance failed: found %d state variables but %d algebraic equations",
-		nStates, nEqs)
-	return nStates, nEqs, []string{}, []string{}, message, false
+	sort.Strings(missing)
+
+	if len(unknowns) == nEqs {
+		return unknowns, nEqs, missing, true
+	}
+	return unknowns, nEqs, missing, false
 }
 
 // countDerivatives returns, per variable, how many time derivatives of it an
@@ -1624,11 +1668,11 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 		for i, event := range system.DiscreteEvents {
 			event := event
 			eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
-			s.validateDiscreteEvent(&event, allVars, eventPath, systemName)
+			s.validateDiscreteEvent(&event, nil, allVars, eventPath, systemName)
 		}
 		for i, event := range system.ContinuousEvents {
 			event := event
-			s.validateContinuousEvent(&event, allVars, fmt.Sprintf("%s/continuous_events/%d", basePath, i), systemName)
+			s.validateContinuousEvent(&event, nil, allVars, fmt.Sprintf("%s/continuous_events/%d", basePath, i), systemName)
 		}
 		s.validateTestRefs(system.Tests, allVars, basePath, systemName)
 	})
@@ -1962,25 +2006,21 @@ func sortedKeysOfSet(set map[string]bool) []string {
 }
 
 // couplableSystemNames returns every name a coupling entry may legally reference
-// as a "system": a model, a reaction system, OR A DATA LOADER.
+// as a "system": a model or a reaction system.
 //
-// A data loader is a first-class coupling endpoint — `variable_map` exists
-// precisely to wire a loader's variables into a model
-// (`from: "GEOSFP_MeteoData.u"`, `to: "Transport.u"`). Omitting loaders from
-// this namespace made Go reject every document that does so, with a spurious
-// `undefined_system` on the loader and an `unresolved_scoped_ref` on each of its
-// variables (audit G7; tests/valid/data_loaders_comprehensive.esm,
-// full_coupled.esm, model_only.esm, reaction_system_only.esm). TS has always
-// included them (validate/coupling-checks.ts `availableSystems`).
+// A data source is NOT among them. In 0.x a loader was a first-class coupling
+// endpoint and `variable_map` existed to wire its variables into a model; from
+// 1.0.0 esm-spec §8 states a source cannot be a coupling endpoint at all. The
+// field a source supplies reaches a model as that model's own PARAMETER, whose
+// `update` names the source — so the wiring that used to be a coupling entry is
+// now a declaration, and a coupling entry naming a source is an
+// `undefined_system` rather than a special case.
 func couplableSystemNames(file *ESMFile) map[string]bool {
-	names := make(map[string]bool, len(file.Models)+len(file.ReactionSystems)+len(file.DataLoaders))
+	names := make(map[string]bool, len(file.Models)+len(file.ReactionSystems))
 	for name := range file.Models {
 		names[name] = true
 	}
 	for name := range file.ReactionSystems {
-		names[name] = true
-	}
-	for name := range file.DataLoaders {
 		names[name] = true
 	}
 	return names
@@ -2017,65 +2057,37 @@ func (s *structuralScan) validateCouplingSystems(systems []string, allSystems ma
 	}
 }
 
-// validateDataLoaderReferences validates data loader configurations.
-func (s *structuralScan) validateDataLoaderReferences() {
-	for loaderName, loader := range s.file.DataLoaders {
-		basePath := fmt.Sprintf("/data_loaders/%s", loaderName)
+// validateDataSourceEntries checks each `data_sources` entry's own shape
+// (esm-spec §8).
+//
+// Only two structural obligations survive 1.0.0. A source still owes a `kind`
+// and a locatable `source.url_template`; the three per-variable checks are gone
+// with the `variables` map, since a source no longer declares the fields it
+// provides. `file_variable` is now the consuming parameter's `update.from`
+// (schema-required there), and `units` are the parameter's own.
+//
+// The one REFERENCE a source participates in runs the other way — a parameter
+// naming a source that does not exist — and lives in validateDataSourceRefs.
+func (s *structuralScan) validateDataSourceEntries() {
+	for _, sourceName := range sortedKeys(s.file.DataSources) {
+		source := s.file.DataSources[sourceName]
+		basePath := fmt.Sprintf("/data_sources/%s", sourceName)
 
-		if loader.Kind == "" {
+		if source.Kind == "" {
 			s.addErr(StructuralError{
 				Path:    fmt.Sprintf("%s/kind", basePath),
-				Code:    CodeMissingLoaderKind,
-				Message: "Data loader kind is required",
-				Details: map[string]any{"loader": loaderName},
+				Code:    CodeMissingDataSourceKind,
+				Message: "Data source kind is required",
+				Details: map[string]any{"source": sourceName},
 			})
 		}
-		if loader.Source.URLTemplate == "" {
+		if source.Source.URLTemplate == "" {
 			s.addErr(StructuralError{
 				Path:    fmt.Sprintf("%s/source/url_template", basePath),
-				Code:    CodeMissingLoaderSourceURLTemplate,
-				Message: "Data loader source.url_template is required",
-				Details: map[string]any{"loader": loaderName},
+				Code:    CodeMissingDataSourceURLTemplate,
+				Message: "Data source source.url_template is required",
+				Details: map[string]any{"source": sourceName},
 			})
-		}
-		if len(loader.Variables) == 0 {
-			s.addErr(StructuralError{
-				Path:    fmt.Sprintf("%s/variables", basePath),
-				Code:    CodeMissingLoaderVariables,
-				Message: "Data loader must expose at least one variable",
-				Details: map[string]any{"loader": loaderName},
-			})
-		}
-		// `unit_conversion` is a number OR an Expression (types.go). The expression
-		// form is a reference site — it scales a loaded field by, say, a model
-		// parameter — and it was never checked. See documentWideScope for why a
-		// loader's expression is resolved against the whole document.
-		for _, varName := range sortedKeys(loader.Variables) {
-			dv := loader.Variables[varName]
-			if dv.UnitConversion == nil {
-				continue
-			}
-			s.validateExpressionVariables(dv.UnitConversion, s.documentWideScope(),
-				fmt.Sprintf("%s/variables/%s/unit_conversion", basePath, varName), "")
-		}
-
-		for varName, dv := range loader.Variables {
-			if dv.FileVariable == "" {
-				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s/variables/%s/file_variable", basePath, varName),
-					Code:    CodeMissingLoaderVariableFileVariable,
-					Message: "Data loader variable missing file_variable",
-					Details: map[string]any{"loader": loaderName, "variable": varName},
-				})
-			}
-			if dv.Units == "" {
-				s.addErr(StructuralError{
-					Path:    fmt.Sprintf("%s/variables/%s/units", basePath, varName),
-					Code:    CodeMissingLoaderVariableUnits,
-					Message: "Data loader variable missing units",
-					Details: map[string]any{"loader": loaderName, "variable": varName},
-				})
-			}
 		}
 	}
 }

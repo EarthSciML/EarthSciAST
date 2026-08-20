@@ -78,15 +78,24 @@ func (s *structuralScan) validateArrayBroadcastShapes(model *Model, basePath str
 	}
 
 	// A declared array-shaped observed's defining expression is the same bare
-	// array-level form under the same alignment rule. Sorted so the emitted
-	// findings are deterministic across runs.
+	// array-level form under the same alignment rule -- and in 1.0.0 that
+	// expression IS one of the equations already walked above, so it needs no
+	// separate pass.
+	//
+	// What does still need one is an arrayed PARAMETER's update: a `schedule`,
+	// `data` or `remesh` parameter must declare a `shape`, and the `expression`
+	// that refills that buffer is a bare array-level form subject to the same
+	// broadcast rule. Sorted so the emitted findings are deterministic.
 	for _, varName := range sortedKeys(model.Variables) {
-		expr := model.Variables[varName].Expression
-		if expr == nil {
-			continue
-		}
-		s.checkOperandAxes(expr, varName, declaredAxes,
-			fmt.Sprintf("%s/variables/%s/expression", basePath, varName))
+		v := model.Variables[varName]
+		_ = v.MapUpdateExpressions(func(expr Expression, rule int, pos string) (Expression, error) {
+			if pos != UpdatePosExpression {
+				return expr, nil
+			}
+			s.checkOperandAxes(expr, varName, declaredAxes,
+				updatePointer(basePath, varName, v.Update, rule, pos))
+			return expr, nil
+		})
 	}
 }
 

@@ -59,11 +59,13 @@ const opAggregate = "aggregate"
 // (`.../equations/i/lhs` or `.../rhs`), never at the leaf position — the same
 // granularity §7.1.2 and the shared corpus pin.
 func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, model *Model, basePath string) {
+	// The relational-node-in-continuous check asks whether an aggregate reads a
+	// CONTINUOUS quantity, and the continuous unknowns are the ODE states --
+	// derived from the equations now, not read off a declared type
+	// (esm-spec 6.3.1).
 	stateVars := make(map[string]bool)
-	for varName, variable := range model.Variables {
-		if variable.Type == VarTypeState {
-			stateVars[varName] = true
-		}
+	for _, varName := range ODEStatesIn(s.file, model) {
+		stateVars[varName] = true
 	}
 
 	// seen dedupes exact (code|path|discriminator) findings so a single defect
