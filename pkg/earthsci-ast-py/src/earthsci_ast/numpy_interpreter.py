@@ -2359,19 +2359,72 @@ class _JoinGate:
     candidates: broad_phase.OverlapIndex | None = None
 
 
+def _same_binding(a: Any, b: Any) -> bool:
+    """True when two registry entries are the SAME binding under two spellings.
+
+    Object identity for arrays — a coupling ``variable_map`` surfaces ONE loader
+    array under both its loader key and its model name by REFERENCE (see
+    :func:`pushdown_rewrite._inject_pushdown_aliases`, which never copies), so
+    ``is`` is exact and O(1). Deliberately NOT elementwise equality: two arrays
+    that happen to hold the same numbers today are two independent bindings, and
+    comparing their contents would make name resolution depend on data.
+
+    For the non-array registries (a declared shape is a ``list`` of index-set
+    names) plain equality is the right test: two spellings of one variable
+    declare one shape.
+    """
+    if a is b:
+        return True
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+        return False
+    try:
+        return bool(a == b)
+    except Exception:  # noqa: BLE001 — an exotic value is simply not the same
+        return False
+
+
 def _scoped_array_name(name: str, registry: Any) -> str | None:
     """``name`` as it is keyed in a runtime registry, or ``None``.
 
     A ``join`` clause names its key columns / envelope factors with the name the
     AUTHOR wrote, while flattening prefixes every variable with its owning model
-    (``px`` → ``ISRM.px``). Exact name wins; otherwise a UNIQUE dot-suffix match
-    binds — the same reconciliation :func:`_resolve_join_key_column` applies to
-    an ``on`` key column (the intra-model-reference namespacing gap, RFC §5.3).
+    (``px`` → ``ISRM.px``). Exact name wins; otherwise a dot-suffix match binds —
+    the same reconciliation :func:`_resolve_join_key_column` applies to an ``on``
+    key column (the intra-model-reference namespacing gap, RFC §5.3).
+
+    SEVERAL suffix matches are not automatically an ambiguity, and treating them
+    as one was a live defect. Two rules break the tie, in this order — the SAME
+    two the value-invention front-door applies when it surfaces const arrays
+    under their bare tails (``simulation_array._materialize_join_key_buffers``),
+    stated once here so the two sites cannot drift apart again:
+
+      1. **Shallowest scope wins.** ``ISRM.src_W`` outranks
+         ``ISRM.Sub.src_W`` — a name written inside a model means that model's
+         variable, not a nested one that happens to share a tail.
+      2. **One array under two names is one binding.** A coupling
+         ``variable_map`` publishes a loader array under both the loader key and
+         the consuming model's name (``ISRM_Grid.src_W`` and ``ISRM.src_W`` are
+         one object, by reference). Before a document could declare its own
+         ``select`` only the model name reached this registry, so every tail
+         resolved by uniqueness and this case never arose; once it did, the
+         plain-uniqueness rule reported a factor bound TWICE to the same array as
+         "not bound at all" — the projection-pushdown rewrite's MIRROR arm keeps
+         the document's own full-grid rect factors (``src_W``…), so this is the
+         path every per-record binning aggregate takes.
+
+    A genuine ambiguity — two DIFFERENT arrays at the same depth — still returns
+    ``None`` and the caller still raises its named error.
     """
     if name in registry:
         return name
     cands = [k for k in registry if k.endswith("." + name)]
-    return cands[0] if len(cands) == 1 else None
+    if len(cands) <= 1:
+        return cands[0] if cands else None
+    mindepth = min(k.count(".") for k in cands)
+    best = sorted(k for k in cands if k.count(".") == mindepth)
+    if len(best) > 1 and all(_same_binding(registry[k], registry[best[0]]) for k in best):
+        best = best[:1]
+    return best[0] if len(best) == 1 else None
 
 
 def _overlap_env_array(name: str, ctx: EvalContext) -> np.ndarray:
