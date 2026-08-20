@@ -315,7 +315,7 @@ fn walk_top_level(
 ///   subsystems) are absolutized against the LEAF's dir, and the edge's imports
 ///   against THIS document's dir, so both resolve after the model lands in a
 ///   parent whose directory differs;
-/// * the leaf's `function_tables` / `data_loaders` / `enums` are merged in
+/// * the leaf's `function_tables` / `data_sources` / `enums` are merged in
 ///   (parent wins on a key clash).
 ///
 /// The injected discretization is NOT resolved here — it is left as model-level
@@ -403,7 +403,7 @@ fn inline_toplevel_model_refs(
             .and_then(|v| v.as_object_mut())
             .expect("models map present")
             .insert(name, model);
-        for blk in ["function_tables", "data_loaders", "enums"] {
+        for blk in ["function_tables", "data_sources", "enums"] {
             let Some(src) = comp.get(blk).and_then(|v| v.as_object()) else {
                 continue;
             };
@@ -748,7 +748,7 @@ fn resolve_value(
 /// A referenced file must contain exactly one top-level model, reaction
 /// system, or data loader. Extract that single entry as a JSON value to inline
 /// into the caller's subsystem slot. Precedence is models -> reaction_systems
-/// -> data_loaders.
+/// -> data_sources.
 fn extract_single_system(value: Value, source: &Path) -> Result<Value, DiagnosticError> {
     let obj = value.as_object().ok_or_else(|| {
         err(
@@ -761,13 +761,13 @@ fn extract_single_system(value: Value, source: &Path) -> Result<Value, Diagnosti
     // it is not a per-kind question.
     //
     // The previous chain asked each kind in turn (`models` → `reaction_systems`
-    // → `data_loaders`) and took the first that happened to hold exactly one
+    // → `data_sources`) and took the first that happened to hold exactly one
     // entry. A file with TWO models and ONE data loader therefore fell past the
     // ambiguous `models` map and silently mounted the LOADER — the caller asked
     // for a subsystem and got a completely different object, with no diagnostic.
     // That is precisely tests/invalid/subsystem_ref_ambiguous.esm (2 models +
     // 1 loader), and it is a worse failure than the error it was avoiding.
-    let systems: Vec<&Value> = ["models", "reaction_systems", "data_loaders"]
+    let systems: Vec<&Value> = ["models", "reaction_systems", "data_sources"]
         .iter()
         .filter_map(|key| obj.get(*key).and_then(|v| v.as_object()))
         .flat_map(|m| m.values())
@@ -850,14 +850,14 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_local_data_loader_ref() {
-        // A subsystem ref to a LOADER-ONLY file (top-level `data_loaders` with
+    fn test_resolve_local_data_source_ref() {
+        // A subsystem ref to a LOADER-ONLY file (top-level `data_sources` with
         // exactly one entry, no `models`) must resolve to the loader object.
         let dir = TempDir::new().unwrap();
         let loader = json!({
             "esm": "0.1.0",
             "metadata": { "name": "loader-only" },
-            "data_loaders": {
+            "data_sources": {
                 "MetData": {
                     "kind": "grid",
                     "source": {

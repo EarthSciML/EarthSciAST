@@ -1641,7 +1641,7 @@ pub fn simulate_with_providers_inspect(
     let compiled = build_array_compiled(file)?;
 
     // Provider management via the ONE RefreshExecutor (the same executor the
-    // model-declared `data_loaders` seam uses): classify each provider by cadence,
+    // model-declared `data_sources` seam uses): classify each provider by cadence,
     // seed the CONST forcings once, take the DISCRETE refresh anchors as the
     // driver's segment boundaries, and re-slice the DISCRETE forcings per segment.
     // `from_providers` classifies by `refresh_times()` — the cross-language

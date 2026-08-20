@@ -137,7 +137,7 @@ pub mod prepare;
 // OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
 // EarthSciIO — the two rigs stay decoupled, exactly as on the Python side
-// (`earthsci_ast.data_loaders.esio_provider`), and a caller opts in.
+// (`earthsci_ast.data_sources.esio_provider`), and a caller opts in.
 #[cfg(feature = "esio")]
 pub mod esio_provider;
 
@@ -201,8 +201,8 @@ pub use template_imports::{
 };
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole, DaeInfo,
-    DataLoader, DataLoaderDeterminism, DataLoaderKind, DataLoaderMetadata, DataLoaderSource,
-    DataLoaderTemporal, DataLoaderVariable, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
+    DataSource, DataSourceDeterminism, DataSourceKind, DataSourceMetadata, DataSourceSource,
+    DataSourceTemporal, DataSourceBinding, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
     EsmFile, Expr, ExpressionNode, FunctionalAffect, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, Reaction, ReactionSystem, RecordsPerFile, Species,
     StoichiometricEntry, TimeSpan, Tolerance, UnitConversion, VariableMapTransform, VariableType,

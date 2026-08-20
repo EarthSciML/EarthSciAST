@@ -7,7 +7,7 @@
 //! module is that adapter, behind the optional `esio` feature so the default
 //! build still does not link EarthSciIO.
 //!
-//! It mirrors the Python binding's `earthsci_ast.data_loaders.esio_provider`:
+//! It mirrors the Python binding's `earthsci_ast.data_sources.esio_provider`:
 //! opt-in, caller-selected, never the default. Wiring it unconditionally would
 //! couple ESS to EarthSciIO and to whichever formats that crate happens to
 //! register.
@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use earthsciio::format::{ArrayData, AxisSelect, NativeField as EsioField, Selection};
-use earthsciio::{Cache, DataLoader, Provider, Window};
+use earthsciio::{Cache, DataSource, Provider, Window};
 use indexmap::IndexMap;
 use ndarray::{ArrayD, Axis, IxDyn};
 use time::OffsetDateTime;
@@ -183,7 +183,7 @@ fn to_ess_field(
 /// one after another by `prepare`, and the second one must not re-read.
 struct RecordTable {
     loader_name: String,
-    loader: DataLoader,
+    loader: DataSource,
     cache: Arc<Cache>,
     columns: Vec<ColumnSpec>,
     /// Loader variables whose non-finite cells drop the record.
@@ -500,7 +500,7 @@ enum SelectApplication {
 
 /// Builder for [`EsioProvider`].
 pub struct EsioProviderBuilder {
-    loader: DataLoader,
+    loader: DataSource,
     cache: Arc<Cache>,
     window: Option<Window>,
     var_map: IndexMap<String, String>,
@@ -645,7 +645,7 @@ pub struct EsioProvider {
 
 impl EsioProvider {
     /// Start building a provider for `loader`, fetching through `cache`.
-    pub fn builder(loader: DataLoader, cache: Arc<Cache>) -> EsioProviderBuilder {
+    pub fn builder(loader: DataSource, cache: Arc<Cache>) -> EsioProviderBuilder {
         EsioProviderBuilder {
             loader,
             cache,
@@ -905,9 +905,9 @@ mod prepare_impl {
     }
 
     /// Document-declared provider construction — the Rust mirror of the Python
-    /// `earthsci_ast.data_loaders.esio_provider.providers_from_document` (and
+    /// `earthsci_ast.data_sources.esio_provider.providers_from_document` (and
     /// the Julia EarthSciIO extension's namesake). The document's
-    /// `data_loaders` say WHAT to read (`source.url_template`, `variables`)
+    /// `data_sources` say WHAT to read (`source.url_template`, `variables`)
     /// and `metadata.esio_format` says HOW (the EarthSciIO format-registry
     /// name); the runner no longer hand-constructs providers — it asks the
     /// document.
@@ -929,9 +929,9 @@ mod prepare_impl {
         url_overrides: &HashMap<String, String>,
     ) -> Result<Vec<(String, EsioProvider)>, PrepareError> {
         let dls = doc
-            .get("data_loaders")
+            .get("data_sources")
             .and_then(|v| v.as_object())
-            .ok_or_else(|| perr("providers_from_document: the document declares no data_loaders"))?;
+            .ok_or_else(|| perr("providers_from_document: the document declares no data_sources"))?;
         let mut out = Vec::new();
         for (lname, ld) in dls {
             if let Some(want) = loaders
@@ -948,7 +948,7 @@ mod prepare_impl {
                     continue;
                 }
                 return Err(perr(format!(
-                    "providers_from_document: data_loaders.{lname} declares no \
+                    "providers_from_document: data_sources.{lname} declares no \
                      metadata.esio_format — cannot construct a provider for it"
                 )));
             };
@@ -962,7 +962,7 @@ mod prepare_impl {
                 })
                 .ok_or_else(|| {
                     perr(format!(
-                        "providers_from_document: data_loaders.{lname} has no \
+                        "providers_from_document: data_sources.{lname} has no \
                          source.url_template (and no url_overrides entry)"
                     ))
                 })?;
@@ -982,7 +982,7 @@ mod prepare_impl {
                 .and_then(serde_json::Value::as_object)
                 .cloned()
                 .unwrap_or_default();
-            let loader_select = parse_declared_select(doc, &format!("data_loaders.{lname}"), ld)?;
+            let loader_select = parse_declared_select(doc, &format!("data_sources.{lname}"), ld)?;
             let extent_mp = ld
                 .get("extent")
                 .and_then(|e| e.get("metaparameter"))
@@ -1008,7 +1008,7 @@ mod prepare_impl {
                 columns.push(ColumnSpec {
                     name: vname.clone(),
                     file_variable: fv.to_string(),
-                    codes: parse_codes(&format!("data_loaders.{lname}.variables.{vname}"), vd)?,
+                    codes: parse_codes(&format!("data_sources.{lname}.variables.{vname}"), vd)?,
                     unit_conversion: parse_unit_conversion(
                         vd.get("unit_conversion"),
                         &format!("{lname}.{vname}"),
@@ -1025,7 +1025,7 @@ mod prepare_impl {
                 file_vars.dedup();
                 Some(Arc::new(RecordTable {
                     loader_name: lname.clone(),
-                    loader: DataLoader::new(lname.clone(), fmt, url)
+                    loader: DataSource::new(lname.clone(), fmt, url)
                         .variables(file_vars)
                         .reader_options(reader_options.clone()),
                     cache: cache.clone(),
@@ -1040,14 +1040,14 @@ mod prepare_impl {
             for spec in &columns {
                 let key = format!("{lname}.{}", spec.name);
                 let vd = &variables[&spec.name];
-                let loader = DataLoader::new(lname.clone(), fmt, url)
+                let loader = DataSource::new(lname.clone(), fmt, url)
                     .variables([spec.file_variable.clone()])
                     .reader_options(reader_options.clone());
                 let mut builder = EsioProvider::builder(loader, cache.clone())
                     .var(spec.file_variable.clone(), key.clone());
                 let select = parse_declared_select(
                     doc,
-                    &format!("data_loaders.{lname}.variables.{}", spec.name),
+                    &format!("data_sources.{lname}.variables.{}", spec.name),
                     vd,
                 )?
                 .or_else(|| loader_select.clone());

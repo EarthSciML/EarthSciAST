@@ -56,7 +56,7 @@ const APPLY_OP: &str = "apply_expression_template";
 const LIBRARY_FORBIDDEN_KEYS: [&str; 5] = [
     "models",
     "reaction_systems",
-    "data_loaders",
+    "data_sources",
     "coupling",
     "domain",
 ];
@@ -2500,7 +2500,7 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
     let loader_keys: std::collections::HashSet<String> = root_obj
-        .get("data_loaders")
+        .get("data_sources")
         .and_then(Value::as_object)
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();

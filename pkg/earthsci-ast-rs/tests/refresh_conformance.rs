@@ -14,7 +14,7 @@
 //! TWO-VIEW contract: the loader-fed `F_src`/`scale_src` are declared
 //! `discrete`+`data_ingest` for the cadence classifier ([`RefreshExecutor`] reads
 //! the RAW doc), but the typed RHS compiler has no Discrete VariableType — this
-//! adapter STRIPS them (and `data_loaders`) from the doc for the simulate view, so
+//! adapter STRIPS them (and `data_sources`) from the doc for the simulate view, so
 //! they resolve through the forcing buffer the executor writes. The native 6-cell
 //! forcing lands in the buffer unchanged; the in-model `W` contraction regrids it
 //! in the RHS. Two bands are asserted: the regridded fields (`F_tgt`/`scale_tgt`,
@@ -105,14 +105,14 @@ impl CadenceProvider for GoldenProvider {
 }
 
 /// The simulate view: strip the loader-fed `discrete` declarations (`F_src`,
-/// `scale_src`) and the `data_loaders` block so the typed compiler resolves them
+/// `scale_src`) and the `data_sources` block so the typed compiler resolves them
 /// as forcing names. Returns the stripped JSON string.
 fn simulate_view(raw: &Value) -> String {
     let mut doc = raw.clone();
     let vars = doc["models"]["M"]["variables"].as_object_mut().unwrap();
     vars.remove("F_src");
     vars.remove("scale_src");
-    doc.as_object_mut().unwrap().remove("data_loaders");
+    doc.as_object_mut().unwrap().remove("data_sources");
     serde_json::to_string(&doc).unwrap()
 }
 

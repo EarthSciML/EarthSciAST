@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "EDGARv81_Fixture",
-    "description": "EarthSciData.jl EDGAR v8.1 monthly emissions loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/edgar_v81_monthly.jl — struct EDGARv81MonthlyEmisFileSet (lines 91-140) with relpath (lines 148-152) and the EDGAR_V81_SUBSTANCES table (lines 3-5). Upstream files are delivered as a per-substance, per-sector ZIP containing one .nc per year; the runtime unpacks the ZIP and opens the yearly files as a single multi-year dataset. That unpack step is runtime behavior, so the url_template below points at the per-year NC file after extraction (the runtime is free to substitute the ZIP path if it handles unpacking).",
+    "description": "EarthSciData.jl EDGAR v8.1 monthly emissions loader expressed in the STAC-like DataSource schema. Corresponds to EarthSciData.jl src/edgar_v81_monthly.jl — struct EDGARv81MonthlyEmisFileSet (lines 91-140) with relpath (lines 148-152) and the EDGAR_V81_SUBSTANCES table (lines 3-5). Upstream files are delivered as a per-substance, per-sector ZIP containing one .nc per year; the runtime unpacks the ZIP and opens the yearly files as a single multi-year dataset. That unpack step is runtime behavior, so the url_template below points at the per-year NC file after extraction (the runtime is free to substitute the ZIP path if it handles unpacking).",
     "authors": [
       "ESM Rust binding acceptance suite"
     ],

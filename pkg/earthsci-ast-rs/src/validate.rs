@@ -103,7 +103,7 @@ pub enum StructuralErrorCode {
     /// System referenced but not declared
     UndefinedSystem,
     /// Data loader variable not provided
-    DataLoaderVariableMissing,
+    DataSourceBindingMissing,
     /// Operator variable not available
     OperatorVariableMissing,
     /// Circular dependency detected
@@ -177,7 +177,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UndefinedOperator => "undefined_operator",
             Self::InvalidDiscreteParam => "invalid_discrete_param",
             Self::UndefinedSystem => "undefined_system",
-            Self::DataLoaderVariableMissing => "data_loader_variable_missing",
+            Self::DataSourceBindingMissing => "data_source_variable_missing",
             Self::OperatorVariableMissing => "operator_variable_missing",
             Self::CircularDependency => "circular_dependency",
             Self::UnitInconsistency => "unit_inconsistency",
@@ -289,7 +289,7 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
     // reference integrity applies to it (§4.9.5). It is applied to the loaded
     // value and may name any declared symbol in the document, so it resolves
     // against the document-wide declared set.
-    crate::structural::validate_data_loader_unit_conversions(
+    crate::structural::validate_data_source_unit_conversions(
         esm_file,
         &system_refs,
         &mut structural_errors,
@@ -506,10 +506,10 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
         }
     }
 
-    // Add data loaders. Schema-level variable names (keys of DataLoader.variables)
+    // Add data loaders. Schema-level variable names (keys of DataSource.variables)
     // are what coupling `from`/`to` references point at, so they go in `variables`.
-    if let Some(ref data_loaders) = esm_file.data_loaders {
-        for (name, loader) in data_loaders {
+    if let Some(ref data_sources) = esm_file.data_sources {
+        for (name, loader) in data_sources {
             let variables: HashSet<String> = loader.variables.keys().cloned().collect();
             systems.insert(
                 name.clone(),
@@ -642,7 +642,7 @@ mod tests {
             },
             models: None,
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -727,7 +727,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -840,7 +840,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -895,7 +895,7 @@ mod tests {
             },
             models: None,
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -976,7 +976,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1115,7 +1115,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1292,7 +1292,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1407,7 +1407,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1523,7 +1523,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1625,7 +1625,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1700,7 +1700,7 @@ mod tests {
             },
             models: None,
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 

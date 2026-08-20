@@ -57,7 +57,7 @@ fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
         metadata: empty_metadata(),
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 

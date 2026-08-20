@@ -96,7 +96,7 @@ fn model_only_subset(file: &EsmFile, model_key: &str) -> EsmFile {
         metadata: empty_metadata(),
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 
@@ -123,7 +123,7 @@ fn reaction_system_only_subset(file: &EsmFile, rs_key: &str) -> EsmFile {
         metadata: empty_metadata(),
         models: None,
         reaction_systems: Some(rs),
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 

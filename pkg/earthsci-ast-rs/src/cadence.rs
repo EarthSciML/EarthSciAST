@@ -80,7 +80,7 @@ const RELATIONAL_OPS: [&str; 6] = ["distinct", "join", "skolem", "rank", "argmin
 // === Leaf seeds + classification ==========================================
 
 /// True iff `var` is a discrete variable whose `data_ingest` refresh names a
-/// DataLoader — found in the document's top-level `data_loaders`, attached to the
+/// DataSource — found in the document's top-level `data_sources`, attached to the
 /// model by [`model_with_loaders`] — that declares no `temporal` block. Such a
 /// loader describes non-time-varying data, so its output variable seeds `Const`
 /// (folds at bind), not `Discrete` (RFC pure-io-data-loaders §4.6 / §5.7.2).
@@ -95,7 +95,7 @@ fn loader_without_temporal(var: &Value, model: &Value) -> bool {
     else {
         return false;
     };
-    match model.get("data_loaders").and_then(|l| l.get(source)) {
+    match model.get("data_sources").and_then(|l| l.get(source)) {
         Some(loader) => loader.is_object() && loader.get("temporal").is_none(),
         None => false,
     }
@@ -610,7 +610,7 @@ fn output_label(eq: &Value, rhs: &Map<String, Value>) -> Option<String> {
     args.first().and_then(|v| v.as_str()).map(str::to_string)
 }
 
-/// Attach the document's top-level `data_loaders` and `index_sets` to a model
+/// Attach the document's top-level `data_sources` and `index_sets` to a model
 /// object so the model-scoped passes see them. The loader-seeded cadence
 /// refinement (§5.7.2) resolves a `discrete` variable's `data_ingest` source
 /// loader (DISCRETE if it has `temporal`, else CONST); the acyclic-index-set
@@ -623,8 +623,8 @@ fn output_label(eq: &Value, rhs: &Map<String, Value>) -> Option<String> {
 pub fn model_with_loaders(model: &Value, doc: &Value) -> Value {
     let mut model = model.clone();
     if let Value::Object(map) = &mut model {
-        if let Some(loaders) = doc.get("data_loaders") {
-            map.entry("data_loaders".to_string())
+        if let Some(loaders) = doc.get("data_sources") {
+            map.entry("data_sources".to_string())
                 .or_insert_with(|| loaders.clone());
         }
         if let Some(index_sets) = doc.get("index_sets") {
@@ -640,7 +640,7 @@ pub fn model_with_loaders(model: &Value, doc: &Value) -> Value {
 /// (expect-cadence agreement, no `CONTINUOUS` relational, acyclic `≤DISCRETE`
 /// graph), and report the three execution outputs' emptiness. The model is the
 /// inner `models.<name>` object (use [`model_with_loaders`] to attach the
-/// document's `data_loaders` first when the model reads loader-seeded variables).
+/// document's `data_sources` first when the model reads loader-seeded variables).
 pub fn partition_model(model: &Value) -> Result<Partition, CadenceError> {
     let empty = Vec::new();
     let equations = model
@@ -835,14 +835,14 @@ mod tests {
         // Loader WITH temporal → DISCRETE (refreshes on each ingest).
         let with_temporal = json!({
             "variables": variables.clone(),
-            "data_loaders": {"bc_loader": {"kind": "grid", "temporal": {"frequency": "PT6H"}}}
+            "data_sources": {"bc_loader": {"kind": "grid", "temporal": {"frequency": "PT6H"}}}
         });
         assert_eq!(classify(&bc, &with_temporal).unwrap(), Cadence::Discrete);
 
         // Loader WITHOUT temporal → CONST (non-time-varying, folds at bind).
         let no_temporal = json!({
             "variables": variables.clone(),
-            "data_loaders": {"bc_loader": {"kind": "static"}}
+            "data_sources": {"bc_loader": {"kind": "static"}}
         });
         assert_eq!(classify(&bc, &no_temporal).unwrap(), Cadence::Const);
 
@@ -856,19 +856,19 @@ mod tests {
     fn model_with_loaders_attaches_top_level_loaders() {
         let doc = json!({
             "models": {"M": {"variables": {}, "equations": []}},
-            "data_loaders": {"bc_loader": {"kind": "static"}}
+            "data_sources": {"bc_loader": {"kind": "static"}}
         });
         let model = model_with_loaders(&doc["models"]["M"], &doc);
         assert!(
             model
-                .get("data_loaders")
+                .get("data_sources")
                 .and_then(|l| l.get("bc_loader"))
                 .is_some()
         );
         // A document with no loaders leaves the model untouched.
         let doc2 = json!({ "models": {"M": {"variables": {}}} });
         let model2 = model_with_loaders(&doc2["models"]["M"], &doc2);
-        assert!(model2.get("data_loaders").is_none());
+        assert!(model2.get("data_sources").is_none());
     }
 
     #[test]

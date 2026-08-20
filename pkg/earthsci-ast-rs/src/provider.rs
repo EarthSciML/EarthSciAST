@@ -179,7 +179,7 @@ pub struct LoaderBinding {
 /// [`crate::cadence::seed_leaf`] over [`crate::cadence::model_with_loaders`]: a
 /// variable whose source loader declares a `temporal` block seeds `Discrete`
 /// (refreshes at the cadence); without one it seeds `Const` (folds once at bind).
-/// `doc` supplies the top-level `data_loaders` the rule resolves against.
+/// `doc` supplies the top-level `data_sources` the rule resolves against.
 ///
 /// Returns the bindings in loader-first-seen order. A loader whose variables
 /// disagree on cadence is an error (its `temporal` block must decide one cadence
@@ -336,7 +336,7 @@ pub struct RefreshExecutor {
 
 impl RefreshExecutor {
     /// Build the executor: classify each loader-fed variable in `model` (with
-    /// `doc`'s `data_loaders`) CONST/DISCRETE, and pair each classified loader with
+    /// `doc`'s `data_sources`) CONST/DISCRETE, and pair each classified loader with
     /// its provider from `providers` (keyed by loader name). Every classified
     /// loader must have a provider; an unclassified extra provider is ignored.
     pub fn new(
@@ -599,7 +599,7 @@ mod tests {
                 "elev": {"type": "discrete", "shape": ["i"],
                          "refresh": {"kind": "data_ingest", "source": "topo"}}
             }}},
-            "data_loaders": {
+            "data_sources": {
                 "met":  {"kind": "grid", "temporal": {"frequency": "PT6H"}},
                 "topo": {"kind": "static"}
             }
@@ -628,7 +628,7 @@ mod tests {
                 "a": {"type": "discrete", "refresh": {"kind": "data_ingest", "source": "met"}},
                 "b": {"type": "discrete", "refresh": {"kind": "data_ingest", "source": "met"}}
             }}},
-            "data_loaders": {"met": {"kind": "grid", "temporal": {"frequency": "PT1H"}}}
+            "data_sources": {"met": {"kind": "grid", "temporal": {"frequency": "PT1H"}}}
         });
         let bindings = classify_loader_bindings(&doc["models"]["M"], &doc).unwrap();
         assert_eq!(bindings.len(), 1);
@@ -649,7 +649,7 @@ mod tests {
                 "sched": {"type": "discrete",
                           "refresh": {"kind": "schedule", "times": [1.0, 2.0]}}
             }}},
-            "data_loaders": {}
+            "data_sources": {}
         });
         let bindings = classify_loader_bindings(&doc["models"]["M"], &doc).unwrap();
         assert!(bindings.is_empty(), "no data_ingest loader-fed variable");
@@ -700,7 +700,7 @@ mod tests {
                 "bc":   {"type": "discrete", "refresh": {"kind": "data_ingest", "source": "bcs"}},
                 "elev": {"type": "discrete", "refresh": {"kind": "data_ingest", "source": "topo"}}
             }}},
-            "data_loaders": {
+            "data_sources": {
                 "met":  {"kind": "grid", "temporal": {"frequency": "PT6H"}},
                 "bcs":  {"kind": "grid", "temporal": {"frequency": "PT3H"}},
                 "topo": {"kind": "static"}
@@ -873,7 +873,7 @@ mod tests {
         use crate::simulate_array::ArrayCompiled;
 
         // (a) The ArrayCompiled model: `wind` appears only in the RHS, resolved by
-        // name through the forcing buffer (PR-1). No `data_loaders` needed here.
+        // name through the forcing buffer (PR-1). No `data_sources` needed here.
         let model_json = r#"{
          "esm": "0.1.0",
          "metadata": {"name": "r1_forcing"},
@@ -900,7 +900,7 @@ mod tests {
                 "wind": {"type": "discrete", "shape": ["i"],
                          "refresh": {"kind": "data_ingest", "source": "met"}}
             }}},
-            "data_loaders": {"met": {"kind": "grid", "temporal": {"frequency": "PT6H"}}}
+            "data_sources": {"met": {"kind": "grid", "temporal": {"frequency": "PT6H"}}}
         });
 
         // The forcing is a shaped [3] field matching i∈[1,3] — distinct per cell so

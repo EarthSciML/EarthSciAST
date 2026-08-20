@@ -135,7 +135,7 @@ fn classification_doc() -> Value {
             "scale": {"type": "discrete", "shape": ["i"],
                       "refresh": {"kind": "data_ingest", "source": "factors"}}
         }}},
-        "data_loaders": {
+        "data_sources": {
             "emis":    {"kind": "grid", "temporal": {"frequency": "PT1H"}},
             "factors": {"kind": "static"}
         }

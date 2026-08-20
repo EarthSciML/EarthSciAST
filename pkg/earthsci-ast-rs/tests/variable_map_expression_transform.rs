@@ -50,7 +50,7 @@ fn empty_file() -> EsmFile {
         metadata: empty_metadata(),
         models: None,
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
         coupling: None,

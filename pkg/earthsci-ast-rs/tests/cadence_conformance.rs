@@ -49,7 +49,7 @@ fn rust_partition_matches_golden() {
         let model_name = fx["model"].as_str().expect("model name");
 
         let doc = load_json(rel);
-        // Attach the document's `data_loaders` so loader-seeded discrete
+        // Attach the document's `data_sources` so loader-seeded discrete
         // variables resolve to DISCRETE (temporal) / CONST (no temporal), §5.7.2.
         let model = model_with_loaders(&doc["models"][model_name], &doc);
         let partition =

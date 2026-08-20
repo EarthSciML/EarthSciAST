@@ -1632,7 +1632,7 @@ fn run_extract(
         index_sets: esm_file.index_sets.clone(),
         models: None,
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
         coupling: None,
@@ -1657,12 +1657,12 @@ fn run_extract(
         extracted_esm.reaction_systems = Some(extracted_rs);
     }
 
-    if let Some(ref data_loaders) = esm_file.data_loaders
-        && let Some(dl) = data_loaders.get(&component)
+    if let Some(ref data_sources) = esm_file.data_sources
+        && let Some(dl) = data_sources.get(&component)
     {
         let mut extracted_dl = HashMap::new();
         extracted_dl.insert(component.clone(), dl.clone());
-        extracted_esm.data_loaders = Some(extracted_dl);
+        extracted_esm.data_sources = Some(extracted_dl);
     }
 
     if let Some(ref operators) = esm_file.operators
@@ -1788,7 +1788,7 @@ fn run_graph(
                         let shape = match node.component_type {
                             earthsci_ast::graph::ComponentType::Model => "ellipse",
                             earthsci_ast::graph::ComponentType::ReactionSystem => "box",
-                            earthsci_ast::graph::ComponentType::DataLoader => "diamond",
+                            earthsci_ast::graph::ComponentType::DataSource => "diamond",
                         };
                         println!(
                             "  \"{}\" [label=\"{}\", shape={}];",
@@ -1816,12 +1816,12 @@ fn run_graph(
                         let shape_open = match node.component_type {
                             earthsci_ast::graph::ComponentType::Model => "(",
                             earthsci_ast::graph::ComponentType::ReactionSystem => "[",
-                            earthsci_ast::graph::ComponentType::DataLoader => "{",
+                            earthsci_ast::graph::ComponentType::DataSource => "{",
                         };
                         let shape_close = match node.component_type {
                             earthsci_ast::graph::ComponentType::Model => ")",
                             earthsci_ast::graph::ComponentType::ReactionSystem => "]",
-                            earthsci_ast::graph::ComponentType::DataLoader => "}",
+                            earthsci_ast::graph::ComponentType::DataSource => "}",
                         };
                         println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
                     }
@@ -1837,7 +1837,7 @@ fn run_graph(
                             "type": match n.component_type {
                                 earthsci_ast::graph::ComponentType::Model => "model",
                                 earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
-                                earthsci_ast::graph::ComponentType::DataLoader => "data_loader",
+                                earthsci_ast::graph::ComponentType::DataSource => "data_source",
                             },
                             "name": n.name
                         })).collect::<Vec<_>>(),
@@ -1919,7 +1919,7 @@ fn run_analyze(file: PathBuf, analysis_type: String) -> Result<(), Box<dyn std::
                 .map(|rs| rs.len())
                 .unwrap_or(0);
             let dl_count = esm_file
-                .data_loaders
+                .data_sources
                 .as_ref()
                 .map(|dl| dl.len())
                 .unwrap_or(0);
@@ -2129,8 +2129,8 @@ fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(ref data_loaders) = esm_file.data_loaders {
-        println!("Data Loaders: {} component(s)", data_loaders.len());
+    if let Some(ref data_sources) = esm_file.data_sources {
+        println!("Data Loaders: {} component(s)", data_sources.len());
     }
 
     if let Some(ref operators) = esm_file.operators {
@@ -2266,7 +2266,7 @@ fn run_performance_profile(
                 .map(|rs| rs.len())
                 .unwrap_or(0);
             let _dl_count = esm_file
-                .data_loaders
+                .data_sources
                 .as_ref()
                 .map(|dl| dl.len())
                 .unwrap_or(0);
@@ -2930,7 +2930,7 @@ fn collect_subsystem_ref_errors(
 
                 // "Exactly one top-level system" counts models, reaction systems
                 // and data loaders TOGETHER (mirrors `extract_single_system`).
-                let count = ["models", "reaction_systems", "data_loaders"]
+                let count = ["models", "reaction_systems", "data_sources"]
                     .iter()
                     .filter_map(|k| doc.get(*k).and_then(|v| v.as_object()))
                     .map(|m| m.len())

@@ -144,15 +144,15 @@ fn test_coupling_round_trip() {
 
 /// Test round-trip for data loaders
 #[test]
-fn test_data_loaders_round_trip() {
-    let fixture = include_str!("../../../tests/valid/data_loaders_comprehensive.esm");
+fn test_data_sources_round_trip() {
+    let fixture = include_str!("../../../tests/valid/data_sources_comprehensive.esm");
 
     let parsed: EsmFile = load(fixture).expect("Failed to parse data loaders");
     let serialized = save(&parsed).expect("Failed to serialize data loaders");
     let reparsed: EsmFile = load(&serialized).expect("Failed to reparse data loaders");
 
     assert_eq!(parsed.esm, reparsed.esm);
-    if let (Some(loaders1), Some(loaders2)) = (&parsed.data_loaders, &reparsed.data_loaders) {
+    if let (Some(loaders1), Some(loaders2)) = (&parsed.data_sources, &reparsed.data_sources) {
         assert_eq!(loaders1.len(), loaders2.len());
     }
 }

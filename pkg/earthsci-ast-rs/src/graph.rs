@@ -41,7 +41,7 @@ pub enum ComponentType {
     /// Reaction system
     ReactionSystem,
     /// Data loader
-    DataLoader,
+    DataSource,
 }
 
 /// Kind of coupling relationship represented by an edge
@@ -115,11 +115,11 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
     }
 
     // Add data loader nodes
-    if let Some(ref data_loaders) = esm_file.data_loaders {
-        for id in sorted_keys(data_loaders) {
+    if let Some(ref data_sources) = esm_file.data_sources {
+        for id in sorted_keys(data_sources) {
             nodes.push(ComponentNode {
                 id: id.clone(),
-                component_type: ComponentType::DataLoader,
+                component_type: ComponentType::DataSource,
                 name: None, // Data loaders typically don't have human names
             });
         }
@@ -228,8 +228,8 @@ pub fn get_component_type(esm_file: &EsmFile, component_id: &str) -> Option<Comp
         Some(ComponentType::Model)
     } else if contains(&esm_file.reaction_systems, component_id) {
         Some(ComponentType::ReactionSystem)
-    } else if contains(&esm_file.data_loaders, component_id) {
-        Some(ComponentType::DataLoader)
+    } else if contains(&esm_file.data_sources, component_id) {
+        Some(ComponentType::DataSource)
     } else {
         None
     }
@@ -692,7 +692,7 @@ impl ComponentGraph {
             let shape = match node.component_type {
                 ComponentType::Model => "ellipse",
                 ComponentType::ReactionSystem => "box",
-                ComponentType::DataLoader => "diamond",
+                ComponentType::DataSource => "diamond",
             };
 
             let label = node.name.as_ref().unwrap_or(&node.id);
@@ -733,7 +733,7 @@ impl ComponentGraph {
             let shape = match node.component_type {
                 ComponentType::Model => ("(", ")"),
                 ComponentType::ReactionSystem => ("[", "]"),
-                ComponentType::DataLoader => ("{", "}"),
+                ComponentType::DataSource => ("{", "}"),
             };
 
             let label = node.name.as_ref().unwrap_or(&node.id);
@@ -899,7 +899,7 @@ mod tests {
             },
             models: None,
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -975,7 +975,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1040,7 +1040,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1112,7 +1112,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: Some(reaction_systems),
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -1277,7 +1277,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 

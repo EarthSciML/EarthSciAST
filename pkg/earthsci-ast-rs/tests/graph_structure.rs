@@ -98,7 +98,7 @@ fn test_component_graph_generation() {
         metadata,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 
@@ -179,7 +179,7 @@ fn test_component_graph_exports() {
         metadata,
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 
@@ -440,7 +440,7 @@ fn test_component_existence() {
         metadata,
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 

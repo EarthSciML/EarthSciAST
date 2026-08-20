@@ -78,7 +78,7 @@ fn test_undefined_variable_in_model() {
         },
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 
@@ -189,7 +189,7 @@ fn test_equation_count_mismatch() {
         },
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 
@@ -283,7 +283,7 @@ fn test_undefined_species_in_reaction() {
         },
         models: None,
         reaction_systems: Some(reaction_systems),
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 
@@ -402,7 +402,7 @@ fn test_valid_file_passes() {
         },
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 

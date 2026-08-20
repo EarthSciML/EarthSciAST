@@ -68,7 +68,7 @@ pub struct EsmFile {
 
     /// External data source registrations (by reference)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_loaders: Option<HashMap<String, DataLoader>>,
+    pub data_sources: Option<HashMap<String, DataSource>>,
 
     /// Registered runtime operators (by reference)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,7 +86,7 @@ pub struct EsmFile {
 
     /// Coupling-library formal component roles (esm-spec §10.9). Present only
     /// in a coupling-library file, which pairs it with a role-scoped `coupling`
-    /// array and declares no models/reaction_systems/data_loaders/domain/
+    /// array and declares no models/reaction_systems/data_sources/domain/
     /// index_sets/metaparameters/expression_templates. Presence of this key is
     /// the sole positive identifier of the coupling-library file kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1976,34 +1976,34 @@ fn default_stoichiometry() -> f64 {
 
 /// Generic, runtime-agnostic description of an external data source.
 ///
-/// A `DataLoader` is pure I/O (RFC pure-io-data-loaders §4.1): it carries
+/// A `DataSource` is pure I/O (RFC pure-io-data-loaders §4.1): it carries
 /// enough structural information to locate files, map timestamps to files, and
 /// describe variable semantics — rather than pointing at a runtime handler.
 /// Grid geometry, reprojection, and regridding are expressed as ordinary data
 /// and `aggregate` FAQ expressions downstream, not on the loader. Authentication
 /// and algorithm-specific tuning are runtime-only and not part of the schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataLoader {
+pub struct DataSource {
     /// Structural kind of the dataset. Scientific role (emissions,
     /// meteorology, elevation, ...) is not schema-validated and belongs in
     /// `metadata.tags`.
-    pub kind: DataLoaderKind,
+    pub kind: DataSourceKind,
 
     /// File discovery configuration.
-    pub source: DataLoaderSource,
+    pub source: DataSourceSource,
 
     /// Temporal coverage and record layout.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temporal: Option<DataLoaderTemporal>,
+    pub temporal: Option<DataSourceTemporal>,
 
     /// Reproducibility contract — endian / float_format / integer_width
     /// (esm-spec §8.9.2). A binding that cannot honor the declared
     /// contract MUST reject the file at load.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub determinism: Option<DataLoaderDeterminism>,
+    pub determinism: Option<DataSourceDeterminism>,
 
     /// Variables exposed by this loader, keyed by schema-level variable name.
-    pub variables: HashMap<String, DataLoaderVariable>,
+    pub variables: HashMap<String, DataSourceBinding>,
 
     /// Academic citation or data source reference.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2011,13 +2011,13 @@ pub struct DataLoader {
 
     /// Free-form metadata about the data source. Tags convey scientific role.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<DataLoaderMetadata>,
+    pub metadata: Option<DataSourceMetadata>,
 }
 
 /// Structural kind of a data loader dataset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DataLoaderKind {
+pub enum DataSourceKind {
     /// Gridded dataset.
     Grid,
     /// Point / observational dataset.
@@ -2029,7 +2029,7 @@ pub enum DataLoaderKind {
 /// Reproducibility contract a loader advertises to bindings
 /// (esm-spec §8.9.2).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DataLoaderDeterminism {
+pub struct DataSourceDeterminism {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub endian: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -2041,7 +2041,7 @@ pub struct DataLoaderDeterminism {
 /// File discovery configuration. Describes how to locate data files at
 /// runtime via URL templates with date/variable substitutions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataLoaderSource {
+pub struct DataSourceSource {
     /// Jinja-style URL template with substitutions. Supported:
     /// `{date:<strftime>}` (e.g. `{date:%Y%m%d}`), `{var}`, `{sector}`,
     /// `{species}`. Custom substitutions are allowed and must be passed
@@ -2055,7 +2055,7 @@ pub struct DataLoaderSource {
 
 /// Temporal coverage and record layout for a data source.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DataLoaderTemporal {
+pub struct DataSourceTemporal {
     /// ISO 8601 datetime — first timestamp available from this source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start: Option<String>,
@@ -2103,7 +2103,7 @@ pub enum AutoRecords {
 
 /// A variable exposed by a data loader, mapped from a source-file variable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataLoaderVariable {
+pub struct DataSourceBinding {
     /// Name of the variable inside the source file. May differ from the
     /// schema-level variable name.
     pub file_variable: String,
@@ -2147,7 +2147,7 @@ pub enum UnitConversion {
 /// (e.g. `"emissions"`, `"reanalysis"`) and is not schema-validated.
 /// Additional fields are preserved as raw JSON via `extra`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DataLoaderMetadata {
+pub struct DataSourceMetadata {
     /// Scientific role tags (freeform).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,

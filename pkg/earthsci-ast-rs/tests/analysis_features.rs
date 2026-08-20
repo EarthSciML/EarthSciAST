@@ -162,7 +162,7 @@ fn test_analysis_features_integration() {
         metadata,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 

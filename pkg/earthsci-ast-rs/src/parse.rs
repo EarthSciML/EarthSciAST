@@ -596,7 +596,7 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
     if let Some(obj) = json_value.as_object() {
         check_version_compatibility(obj, &mut errors);
         check_metadata_formats(obj, &mut errors);
-        check_data_loader_temporal_durations(obj, &mut errors);
+        check_data_source_temporal_durations(obj, &mut errors);
         check_model_state_has_derivatives(obj, &mut errors);
         check_coupling_references(obj, &mut errors);
         check_circular_model_dependencies_typed(json_value, &mut errors);
@@ -744,14 +744,14 @@ fn check_metadata_formats(obj: &serde_json::Map<String, Value>, errors: &mut Vec
     }
 }
 
-/// Any duration string inside `data_loader.temporal` (`file_period` or
+/// Any duration string inside `data_source.temporal` (`file_period` or
 /// `frequency`), if present, must be a valid ISO 8601 duration. The schema
 /// types these as `string` but does not enforce the grammar.
-fn check_data_loader_temporal_durations(
+fn check_data_source_temporal_durations(
     obj: &serde_json::Map<String, Value>,
     errors: &mut Vec<String>,
 ) {
-    let Some(loaders) = obj.get("data_loaders").and_then(|v| v.as_object()) else {
+    let Some(loaders) = obj.get("data_sources").and_then(|v| v.as_object()) else {
         return;
     };
     for (dname, dv) in loaders {
@@ -765,7 +765,7 @@ fn check_data_loader_temporal_durations(
                 && !is_iso8601_duration(res)
             {
                 errors.push(format!(
-                    "data_loaders/{dname}/temporal/{field}: '{res}' is not a valid ISO 8601 duration"
+                    "data_sources/{dname}/temporal/{field}: '{res}' is not a valid ISO 8601 duration"
                 ));
             }
         }
@@ -1207,7 +1207,7 @@ fn collect_variable_refs(expr: &Value, out: &mut Vec<String>) {
 }
 
 struct SymbolTables {
-    /// Names of all top-level systems (models + reaction_systems + data_loaders).
+    /// Names of all top-level systems (models + reaction_systems + data_sources).
     all_systems: std::collections::HashSet<String>,
     /// Per-system: the set of variable names declared in that system.
     per_system: std::collections::HashMap<String, std::collections::HashSet<String>>,
@@ -1260,7 +1260,7 @@ fn build_symbol_tables(obj: &serde_json::Map<String, Value>) -> SymbolTables {
         }
     }
 
-    if let Some(loaders) = obj.get("data_loaders").and_then(|v| v.as_object()) {
+    if let Some(loaders) = obj.get("data_sources").and_then(|v| v.as_object()) {
         for (name, d) in loaders {
             all_systems.insert(name.clone());
             per_system.insert(name.clone(), variable_keys(d));

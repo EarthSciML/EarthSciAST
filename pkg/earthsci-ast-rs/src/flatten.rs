@@ -33,7 +33,7 @@
 //! reached flatten without being discretized.
 
 use crate::types::{
-    ContinuousEvent, CouplingEntry, DataLoader, DiscreteEvent, Domain, Equation, EsmFile, Expr,
+    ContinuousEvent, CouplingEntry, DataSource, DiscreteEvent, Domain, Equation, EsmFile, Expr,
     ExpressionNode, IndexSet, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec,
     ReactionSystem, VariableMapTransform, VariableType,
 };
@@ -197,14 +197,14 @@ pub enum FlattenError {
     )]
     MalformedConnectorEquation { systems: String, side: String },
 
-    /// A model subsystem that structurally declares itself a [`DataLoader`] —
+    /// A model subsystem that structurally declares itself a [`DataSource`] —
     /// it carries the discriminating `kind` / `source` keys — failed to
     /// deserialize as one. Distinguished from a nested model or a
     /// `{ "ref": … }` reference, which are legitimately not loaders and are
     /// left for the array runtime (esm-spec §4.6; RFC `pure-io-data-loaders`
     /// §4.3).
     #[error(
-        "Malformed data-loader subsystem '{subsystem}' in model '{system}': carries loader keys but did not deserialize as a DataLoader: {reason}"
+        "Malformed data-loader subsystem '{subsystem}' in model '{system}': carries loader keys but did not deserialize as a DataSource: {reason}"
     )]
     MalformedLoaderSubsystem {
         system: String,
@@ -631,7 +631,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
 
 /// Phase 5a of [`flatten`]: apply post-collection `variable_map` parameter
 /// removals. A `param_to_var` that binds a LOADED field (its producer's
-/// owning system is a top-level `data_loaders` entry) onto a grid-shaped
+/// owning system is a top-level `data_sources` entry) onto a grid-shaped
 /// consumer parameter records the producer name + rank so the pointwise lift
 /// indexes the loaded field per grid cell (esm-spec §11.5 "BCs from data").
 /// The loaded producer is NOT added to `parameters`: it is served at runtime
@@ -644,7 +644,7 @@ fn apply_variable_map_removals(
     parts: &mut AssembledParts,
 ) -> HashMap<String, usize> {
     let loader_names: HashSet<String> = file
-        .data_loaders
+        .data_sources
         .as_ref()
         .map(|dl| dl.keys().cloned().collect())
         .unwrap_or_default();
@@ -784,7 +784,7 @@ pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
         index_sets: None,
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
         coupling: None,
@@ -815,7 +815,7 @@ struct SystemBlock {
     discrete_events: Vec<DiscreteEvent>,
 }
 
-/// Lower every DataLoader mounted as a model subsystem (esm-spec §4.6; RFC
+/// Lower every DataSource mounted as a model subsystem (esm-spec §4.6; RFC
 /// `pure-io-data-loaders` §4.3; CONFORMANCE_SPEC §5.11) into const-array-backed
 /// observeds named `<system>.<sub>.<var>` — one per exposed loader variable,
 /// carrying **no defining expression**: their values are pure-I/O external
@@ -828,7 +828,7 @@ struct SystemBlock {
 /// Returns `(observeds, subsys_keys)`. `subsys_keys` is the set of loader
 /// subsystem names whose bare dotted references (`raw.k`) must be
 /// model-namespaced (`Box.raw.k`) by [`namespace_expr_with_subsys`]. A nested
-/// MODEL subsystem — one that structurally is not a [`DataLoader`] (it carries
+/// MODEL subsystem — one that structurally is not a [`DataSource`] (it carries
 /// none of the discriminating `kind` / `source` loader keys) — is left
 /// untouched here (and out of `subsys_keys`); the array runtime mounts those via
 /// its own `mount_subsystems`. A subsystem that DOES declare itself a loader
@@ -848,15 +848,15 @@ fn lower_loader_subsystems(
     let mut sub_names: Vec<&String> = subs.keys().collect();
     sub_names.sort();
     for sub_name in sub_names {
-        // A DataLoader subsystem round-trips through `DataLoader`; a nested
+        // A DataSource subsystem round-trips through `DataSource`; a nested
         // model or a `{ "ref": … }` does not. Distinguish a deserialize failure
         // on something that DECLARES itself a loader (discriminating `kind` /
         // `source` keys) — a real error — from a subsystem that structurally
         // isn't one, which is legitimately skipped here.
-        let loader = match serde_json::from_value::<DataLoader>(subs[sub_name].clone()) {
+        let loader = match serde_json::from_value::<DataSource>(subs[sub_name].clone()) {
             Ok(loader) => loader,
             Err(err) => {
-                if declares_data_loader(&subs[sub_name]) {
+                if declares_data_source(&subs[sub_name]) {
                     return Err(FlattenError::MalformedLoaderSubsystem {
                         system: system_name.to_string(),
                         subsystem: sub_name.clone(),
@@ -894,12 +894,12 @@ fn lower_loader_subsystems(
     Ok((observeds, keys))
 }
 
-/// Heuristic: a subsystem JSON value "declares itself" a [`DataLoader`] when it
+/// Heuristic: a subsystem JSON value "declares itself" a [`DataSource`] when it
 /// carries a discriminating loader key (`kind` or `source`) — both required by
 /// the loader schema and absent from a nested model or a `{ "ref": … }`
 /// reference. Used to tell an invalid-fields loader apart from a subsystem that
 /// is legitimately not a loader.
-fn declares_data_loader(value: &serde_json::Value) -> bool {
+fn declares_data_source(value: &serde_json::Value) -> bool {
     value.get("kind").is_some() || value.get("source").is_some()
 }
 
@@ -910,7 +910,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     let mut brownian_vars = IndexMap::new();
     let mut discrete_vars = IndexMap::new();
 
-    // Lower each DataLoader mounted as a subsystem into const-array-backed
+    // Lower each DataSource mounted as a subsystem into const-array-backed
     // observeds `<system>.<sub>.<var>` (RFC `pure-io-data-loaders` §4.3). Their
     // bare references (`raw.k`) must be model-namespaced (`Box.raw.k`), which the
     // generic `namespace_expr` — treating any dotted reference as
@@ -2265,7 +2265,7 @@ mod tests {
             metadata: make_metadata(),
             models: None,
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 

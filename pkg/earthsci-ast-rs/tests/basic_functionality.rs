@@ -125,7 +125,7 @@ fn test_structural_validation() {
         },
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 
@@ -278,7 +278,7 @@ fn test_component_graph() {
         metadata,
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
 

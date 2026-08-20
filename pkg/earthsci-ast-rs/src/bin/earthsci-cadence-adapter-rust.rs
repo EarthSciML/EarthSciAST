@@ -64,7 +64,7 @@ fn run(manifest_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::erro
             .get("models")
             .and_then(|m| m.get(model_name))
             .ok_or_else(|| format!("{rel}: model {model_name:?} not found"))?;
-        // Attach the document's `data_loaders` so the loader-seeded cadence
+        // Attach the document's `data_sources` so the loader-seeded cadence
         // refinement (§5.7.2) can resolve a discrete variable's data_ingest source.
         let model = cadence::model_with_loaders(model, &doc);
 

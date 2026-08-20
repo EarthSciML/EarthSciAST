@@ -1545,7 +1545,7 @@ fn pushdown_gate_axes(
     mrank: usize,
 ) -> Result<Vec<GateAxis>, PushdownRewriteError> {
     let tpl = doc
-        .get("data_loaders")
+        .get("data_sources")
         .and_then(|d| d.get(loader))
         .and_then(|l| l.get("metadata"))
         .and_then(|m| m.get("x_esd"))
@@ -1554,7 +1554,7 @@ fn pushdown_gate_axes(
         .and_then(Value::as_array);
     if let Some(tpl) = tpl {
         let axes = parse_select_axes(
-            &format!("data_loaders.{loader} gated_select template"),
+            &format!("data_sources.{loader} gated_select template"),
             tpl,
             Some(gset),
         )?;
@@ -1574,7 +1574,7 @@ fn pushdown_gate_axes(
         }
         if gpos != gaxis {
             return Err(PushdownRewriteError(format!(
-                "data_loaders.{loader} gated_select template puts the gated axis at \
+                "data_sources.{loader} gated_select template puts the gated axis at \
                  non-fixed position {gpos}, but the rewrite record gates model axis \
                  {gaxis} — the loader template and the rewritten arrays disagree"
             )));
@@ -1594,7 +1594,7 @@ fn pushdown_gate_axes(
 /// Provider-key ⇒ engine gate, derived from `doc`'s rewrite record
 /// (`metadata.x_esd.pushdown.gated_select`).
 ///
-/// A provider is GATED when its key names a `data_loaders` variable
+/// A provider is GATED when its key names a `data_sources` variable
 /// (`"<Loader>"` or `"<Loader>.<var>"`) that a coupling `variable_map` routes
 /// onto one of the record's `applies_to` model arrays. The gate's per-NATIVE-
 /// axis `axes` come from the loader's own `metadata.x_esd.gated_select.axes`

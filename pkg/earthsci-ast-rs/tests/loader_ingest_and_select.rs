@@ -4,7 +4,7 @@
 //! zip and a Zarr v2 store, both over the `file` transport — no network).
 //!
 //! The document under test is the committed fixture
-//! `tests/valid/data_loaders_ingest_and_select.esm`; only its two
+//! `tests/valid/data_sources_ingest_and_select.esm`; only its two
 //! `url_template`s are patched onto the temporary fixtures, so what the
 //! validation sweep checks and what this file runs are the same declaration.
 //!
@@ -156,13 +156,13 @@ fn write_grid_store(dir: &Path, n: usize) -> String {
 /// The committed fixture with its two placeholder URLs pointed at `dir`.
 fn document(dir: &Path) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/valid/data_loaders_ingest_and_select.esm");
+        .join("../../tests/valid/data_sources_ingest_and_select.esm");
     let mut doc: Value = serde_json::from_str(
-        &fs::read_to_string(&path).expect("read data_loaders_ingest_and_select.esm"),
+        &fs::read_to_string(&path).expect("read data_sources_ingest_and_select.esm"),
     )
     .expect("fixture parses");
-    doc["data_loaders"]["EGU_Emis"]["source"]["url_template"] = json!(write_ff10_zip(dir));
-    doc["data_loaders"]["Grid"]["source"]["url_template"] = json!(write_grid_store(dir, 10));
+    doc["data_sources"]["EGU_Emis"]["source"]["url_template"] = json!(write_ff10_zip(dir));
+    doc["data_sources"]["Grid"]["source"]["url_template"] = json!(write_grid_store(dir, 10));
     doc
 }
 
@@ -305,7 +305,7 @@ fn a_caller_binding_that_contradicts_the_discovered_extent_is_an_error() {
 fn a_text_column_with_no_codes_map_is_a_boundary_error() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
-    doc["data_loaders"]["EGU_Emis"]["variables"]["pollutant"]
+    doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"]
         .as_object_mut()
         .unwrap()
         .remove("codes");
@@ -346,7 +346,7 @@ fn a_range_select_over_a_filtered_table_counts_surviving_records() {
     let mut doc = document(tmp.path());
     // A loader-level select is the default for every variable of the loader —
     // which is what keeps a truncated table aligned.
-    doc["data_loaders"]["EGU_Emis"]["select"] =
+    doc["data_sources"]["EGU_Emis"]["select"] =
         json!({"axes": [{"range": {"start": 0, "stop": 2}}]});
     let cache = tmp.path().join("cache");
 
@@ -364,7 +364,7 @@ fn a_range_select_over_a_filtered_table_counts_surviving_records() {
 fn a_truncated_table_re_discovers_its_own_smaller_extent() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
-    doc["data_loaders"]["EGU_Emis"]["select"] =
+    doc["data_sources"]["EGU_Emis"]["select"] =
         json!({"axes": [{"range": {"start": 0, "stop": 2}}]});
     let providers = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build")
@@ -429,13 +429,13 @@ fn the_selected_prefix_reaches_the_model_as_its_own_axis() {
 
 /// FORMAT-08-A-006: a mis-typed decode option cannot quietly select nothing.
 /// The Julia/Python mirrors of this file have asserted it since they were
-/// written; Rust could not, because `DataLoader` had no `reader_options` to
+/// written; Rust could not, because `DataSource` had no `reader_options` to
 /// mis-type.
 #[test]
 fn an_unrecognised_reader_option_is_refused_at_construction() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
-    doc["data_loaders"]["EGU_Emis"]["reader_options"]["member_filter"] = json!("*egu*");
+    doc["data_sources"]["EGU_Emis"]["reader_options"]["member_filter"] = json!("*egu*");
     let e = match providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
     {
         Ok(_) => panic!("a mis-typed reader option must not build a provider"),
@@ -451,7 +451,7 @@ fn an_unrecognised_reader_option_is_refused_at_construction() {
 fn reader_options_are_load_bearing_not_decorative() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
-    doc["data_loaders"]["EGU_Emis"]["reader_options"] = json!({});
+    doc["data_sources"]["EGU_Emis"]["reader_options"] = json!({});
     let mut provs =
         providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
             .expect("providers build");
@@ -469,7 +469,7 @@ fn reader_options_are_load_bearing_not_decorative() {
 fn an_unrecognised_axis_selector_is_refused_at_construction() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
-    doc["data_loaders"]["Grid"]["variables"]["src_W"]["select"] = json!({"axes": [{"prefix": 4}]});
+    doc["data_sources"]["Grid"]["variables"]["src_W"]["select"] = json!({"axes": [{"prefix": 4}]});
     let e = match providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new()) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("an unknown selector must not be ignored"),

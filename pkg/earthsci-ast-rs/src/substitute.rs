@@ -609,7 +609,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -693,7 +693,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -780,7 +780,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 
@@ -882,7 +882,7 @@ mod tests {
             },
             models: Some(models),
             reaction_systems: None,
-            data_loaders: None,
+            data_sources: None,
             operators: None,
             enums: None,
 

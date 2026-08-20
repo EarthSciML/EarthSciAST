@@ -313,7 +313,7 @@ fn validate_pairwise_systems(
                     details: serde_json::json!({
                         "system": system,
                         "coupling_type": coupling_type,
-                        "expected_in": "models, reaction_systems, data_loaders, operators"
+                        "expected_in": "models, reaction_systems, data_sources, operators"
                     }),
                 });
             }

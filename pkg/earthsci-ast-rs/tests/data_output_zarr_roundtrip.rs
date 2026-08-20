@@ -25,7 +25,7 @@ use earthsci_ast::{EsmFile, derive_output_plan, load};
 use earthsciio::format::{
     ArrayData, NativeField, OutputSchema, WriteCoord, WriteVar, write_zarr_v3,
 };
-use earthsciio::{Cache, DataLoader, Provider};
+use earthsciio::{Cache, DataSource, Provider};
 
 const GRID_COORDS: &str =
     include_str!("../../EarthSciAST.jl/test/fixtures/streaming_decay_grid_coords.esm");
@@ -137,7 +137,7 @@ fn a_derived_plan_writes_and_reads_back_through_zarr_v3() {
             .build()
             .expect("cache"),
     );
-    let loader = DataLoader::new("plan-roundtrip", "zarr", &base_url).variables([
+    let loader = DataSource::new("plan-roundtrip", "zarr", &base_url).variables([
         var_name.as_str(),
         "time",
         "lon",

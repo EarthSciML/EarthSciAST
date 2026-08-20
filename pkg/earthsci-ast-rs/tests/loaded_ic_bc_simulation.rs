@@ -45,7 +45,7 @@ fn line(v: &[f64]) -> ArrayD<f64> {
 }
 
 /// The manifest `inputs`, keyed `<Loader>.<variable>` exactly as declared in the
-/// fixture's `data_loaders`.
+/// fixture's `data_sources`.
 fn manifest_inputs() -> HashMap<String, ArrayD<f64>> {
     let mut m = HashMap::new();
     m.insert(

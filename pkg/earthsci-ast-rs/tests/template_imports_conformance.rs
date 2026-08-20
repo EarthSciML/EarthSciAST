@@ -529,7 +529,7 @@ fn template_library_round_trips_to_itself() {
             [
                 "models",
                 "reaction_systems",
-                "data_loaders",
+                "data_sources",
                 "operators",
                 "expression_templates"
             ]

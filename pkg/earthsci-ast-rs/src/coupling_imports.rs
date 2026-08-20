@@ -27,7 +27,7 @@ use std::collections::HashSet;
 const LIBRARY_FORBIDDEN_KEYS: [&str; 7] = [
     "models",
     "reaction_systems",
-    "data_loaders",
+    "data_sources",
     "domain",
     "index_sets",
     "metaparameters",
@@ -500,7 +500,7 @@ fn expand_one(
 }
 
 /// Resolve a `bind` value as a component path (esm-spec §10.10.1) — a system or
-/// loader node, walking `models`/`reaction_systems`/`data_loaders` then nested
+/// loader node, walking `models`/`reaction_systems`/`data_sources` then nested
 /// `subsystems`, never terminating on a variable.
 fn resolves_to_component(file: &EsmFile, value: &str) -> bool {
     let segs: Vec<&str> = value.split('.').collect();
@@ -517,7 +517,7 @@ fn resolves_to_component(file: &EsmFile, value: &str) -> bool {
                 .and_then(|v| serde_json::to_value(v).ok())
         })
         .or_else(|| {
-            file.data_loaders
+            file.data_sources
                 .as_ref()
                 .and_then(|m| m.get(top))
                 .and_then(|v| serde_json::to_value(v).ok())

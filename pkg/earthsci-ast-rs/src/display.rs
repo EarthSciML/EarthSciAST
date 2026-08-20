@@ -1894,15 +1894,15 @@ impl fmt::Display for EsmFile {
         }
 
         // Display data loaders
-        if let Some(ref data_loaders) = self.data_loaders
-            && !data_loaders.is_empty()
+        if let Some(ref data_sources) = self.data_sources
+            && !data_sources.is_empty()
         {
             writeln!(f, "  Data Loaders:")?;
-            for (name, loader) in data_loaders {
+            for (name, loader) in data_sources {
                 let kind = match loader.kind {
-                    crate::DataLoaderKind::Grid => "grid",
-                    crate::DataLoaderKind::Points => "points",
-                    crate::DataLoaderKind::Static => "static",
+                    crate::DataSourceKind::Grid => "grid",
+                    crate::DataSourceKind::Points => "points",
+                    crate::DataSourceKind::Static => "static",
                 };
                 writeln!(
                     f,
@@ -2180,7 +2180,7 @@ mod tests {
             operators: None,
             enums: None,
 
-            data_loaders: None,
+            data_sources: None,
             coupling: None,
             function_tables: None,
         };

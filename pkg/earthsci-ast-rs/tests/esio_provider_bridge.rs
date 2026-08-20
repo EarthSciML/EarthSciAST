@@ -23,7 +23,7 @@ use std::sync::Arc;
 use earthsci_ast::esio_provider::EsioProvider;
 use earthsci_ast::provider::CadenceProvider;
 use earthsciio::format::{AxisSelect, Selection};
-use earthsciio::{Cache, DataLoader};
+use earthsciio::{Cache, DataSource};
 
 /// Write an UNCOMPRESSED Zarr v2 array: `.zarray` + `.zattrs` + raw
 /// little-endian f64 chunks. Uncompressed keeps the fixture dependency-free —
@@ -88,7 +88,7 @@ fn cache(tmp: &Path) -> Arc<Cache> {
 fn materialize_renames_to_the_model_variable() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let base = fixture(tmp.path());
-    let loader = DataLoader::new("ISRM_SR", "zarr", base).variables(["SOA"]);
+    let loader = DataSource::new("ISRM_SR", "zarr", base).variables(["SOA"]);
 
     let mut p = EsioProvider::builder(loader, cache(tmp.path()))
         .var("SOA", "SR_SOA")
@@ -113,7 +113,7 @@ fn materialize_renames_to_the_model_variable() {
 fn an_undeclared_variable_keeps_its_on_disk_name() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let base = fixture(tmp.path());
-    let loader = DataLoader::new("ISRM_SR", "zarr", base).variables(["SOA"]);
+    let loader = DataSource::new("ISRM_SR", "zarr", base).variables(["SOA"]);
 
     // No `.var(...)` mapping — the common case where the loader already names
     // variables the way the model refers to them.
@@ -129,7 +129,7 @@ fn an_undeclared_variable_keeps_its_on_disk_name() {
 fn a_selection_is_pushed_down_to_the_reader() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let base = fixture(tmp.path());
-    let loader = DataLoader::new("ISRM_SR", "zarr", base).variables(["SOA"]);
+    let loader = DataSource::new("ISRM_SR", "zarr", base).variables(["SOA"]);
 
     let mut p = EsioProvider::builder(loader, cache(tmp.path()))
         .var("SOA", "SR_SOA")
@@ -162,7 +162,7 @@ fn a_selection_is_pushed_down_to_the_reader() {
 fn a_const_loader_schedules_no_refreshes() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let base = fixture(tmp.path());
-    let loader = DataLoader::new("ISRM_SR", "zarr", base).variables(["SOA"]);
+    let loader = DataSource::new("ISRM_SR", "zarr", base).variables(["SOA"]);
     let p = EsioProvider::builder(loader, cache(tmp.path()))
         .build()
         .expect("provider builds");
@@ -175,7 +175,7 @@ fn a_const_loader_schedules_no_refreshes() {
 fn array_shape_reads_metadata_without_a_chunk() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let base = fixture(tmp.path());
-    let loader = DataLoader::new("ISRM_SR", "zarr", base).variables(["SOA"]);
+    let loader = DataSource::new("ISRM_SR", "zarr", base).variables(["SOA"]);
     let p = EsioProvider::builder(loader, cache(tmp.path()))
         .build()
         .expect("provider builds");
@@ -187,7 +187,7 @@ fn array_shape_reads_metadata_without_a_chunk() {
 #[test]
 fn an_unknown_format_fails_at_construction_not_mid_solve() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let loader = DataLoader::new("bogus", "not-a-format", "file:///nowhere");
+    let loader = DataSource::new("bogus", "not-a-format", "file:///nowhere");
     let built = EsioProvider::builder(loader, cache(tmp.path())).build();
     assert!(built.is_err(), "an unresolvable reader must fail at build()");
 }
@@ -198,7 +198,7 @@ fn an_unknown_format_fails_at_construction_not_mid_solve() {
 fn usable_as_a_boxed_cadence_provider() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let base = fixture(tmp.path());
-    let loader = DataLoader::new("ISRM_SR", "zarr", base).variables(["SOA"]);
+    let loader = DataSource::new("ISRM_SR", "zarr", base).variables(["SOA"]);
     let p = EsioProvider::builder(loader, cache(tmp.path()))
         .var("SOA", "SR_SOA")
         .build()

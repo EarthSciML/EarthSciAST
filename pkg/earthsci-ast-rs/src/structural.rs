@@ -51,7 +51,7 @@ pub(crate) fn validate_model(
     defined_vars.extend(implicitly_declared_symbols(esm_file));
 
     // Scoped references this model's equations may use that are NOT top-level
-    // systems: the `<sub>.<var>` fields of each DataLoader mounted as a
+    // systems: the `<sub>.<var>` fields of each DataSource mounted as a
     // subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
     let local_scoped = loader_subsystem_scoped_refs(model);
 
@@ -508,12 +508,12 @@ pub(crate) fn coupled_system_names(esm_file: &EsmFile) -> HashSet<String> {
 /// consuming model), so it resolves against the DOCUMENT-WIDE declared set
 /// rather than the loader's own variables alone. Nothing checked this field at
 /// all, so a typo'd conversion factor silently produced a wrongly-scaled input.
-pub(crate) fn validate_data_loader_unit_conversions(
+pub(crate) fn validate_data_source_unit_conversions(
     esm_file: &EsmFile,
     system_refs: &HashMap<String, SystemInfo>,
     errors: &mut Vec<StructuralError>,
 ) {
-    let Some(loaders) = &esm_file.data_loaders else {
+    let Some(loaders) = &esm_file.data_sources else {
         return;
     };
 
@@ -532,7 +532,7 @@ pub(crate) fn validate_data_loader_unit_conversions(
                 &scope,
                 system_refs,
                 &empty,
-                &format!("/data_loaders/{loader_name}/variables/{var_name}/unit_conversion"),
+                &format!("/data_sources/{loader_name}/variables/{var_name}/unit_conversion"),
                 0,
                 errors,
             );
@@ -578,7 +578,7 @@ fn document_declared_names(esm_file: &EsmFile) -> HashSet<String> {
         names.extend(rs.species.keys().cloned());
         names.extend(rs.parameters.keys().cloned());
     }
-    for loader in esm_file.data_loaders.iter().flatten().map(|(_, l)| l) {
+    for loader in esm_file.data_sources.iter().flatten().map(|(_, l)| l) {
         names.extend(loader.variables.keys().cloned());
     }
     names
@@ -1844,11 +1844,11 @@ fn validate_rate_expression(
     }
 }
 
-/// The full scoped references `<sub>.<var>` exposed by each DataLoader mounted as
+/// The full scoped references `<sub>.<var>` exposed by each DataSource mounted as
 /// a subsystem of `model` (RFC pure-io-data-loaders §4.3). `flatten` lowers each
 /// to a const-array-backed observed `<model>.<sub>.<var>`, so the owning model's
 /// own equations may reference it (`raw.k`, `index(raw.wind, …)`) even though
-/// `raw` is not a top-level system. A nested MODEL subsystem is not a DataLoader
+/// `raw` is not a top-level system. A nested MODEL subsystem is not a DataSource
 /// and contributes nothing. Empty for a model with no subsystems.
 fn loader_subsystem_scoped_refs(model: &crate::Model) -> HashSet<String> {
     let mut refs = HashSet::new();
@@ -1857,9 +1857,9 @@ fn loader_subsystem_scoped_refs(model: &crate::Model) -> HashSet<String> {
     };
     for (sub_name, value) in subs {
         // ANY mounted subsystem exposes `<sub>.<var>` to the owning model — a
-        // DataLoader (RFC pure-io-data-loaders §4.3) and equally a MODEL mounted
+        // DataSource (RFC pure-io-data-loaders §4.3) and equally a MODEL mounted
         // by `ref` (§4.7 subsystem inclusion, e.g. `Solar` from lib/solar.esm,
-        // read as `Solar.solar_zenith_angle`). Matching only the DataLoader
+        // read as `Solar.solar_zenith_angle`). Matching only the DataSource
         // SHAPE meant a ref-mounted model subsystem resolved to nothing, and
         // every reference into it was reported `unresolved_scoped_ref` — which
         // rejected both standard-library inclusion fixtures. The ref resolver
@@ -1897,7 +1897,7 @@ pub(crate) fn validate_expression_references_with_systems(
                 return; // These are always valid
             }
 
-            // A model-local scoped reference — a DataLoader mounted as a
+            // A model-local scoped reference — a DataSource mounted as a
             // subsystem exposes `<sub>.<var>` to the owning model's equations
             // (RFC pure-io-data-loaders §4.3). It is not a top-level system, so
             // it would otherwise be flagged UnresolvedScopedRef.

@@ -13,7 +13,7 @@
 //! ## What this locks for the Rust binding
 //!
 //! Previously the Rust flattener left `Model.subsystems` opaque, so a
-//! DataLoader-subsystem field was never materialized/bound. `flatten` now lowers
+//! DataSource-subsystem field was never materialized/bound. `flatten` now lowers
 //! each loader variable to a const-array-backed observed `Box.raw.<var>` with no
 //! defining expression, and namespaces the owner's bare `raw.<var>` references to
 //! `Box.raw.<var>`. Both then resolve at the RHS through the same

@@ -118,39 +118,39 @@ fn test_metadata_validation_errors() {
 
 /// Test data loader validation errors
 #[test]
-fn test_data_loader_validation_errors() {
+fn test_data_source_validation_errors() {
     let fixtures = [
         (
             "missing_type",
-            include_str!("../../../tests/invalid/data_loader_missing_type.esm"),
+            include_str!("../../../tests/invalid/data_source_missing_type.esm"),
         ),
         (
             "missing_loader_id",
-            include_str!("../../../tests/invalid/data_loader_missing_loader_id.esm"),
+            include_str!("../../../tests/invalid/data_source_missing_loader_id.esm"),
         ),
         (
             "missing_provides",
-            include_str!("../../../tests/invalid/data_loader_missing_provides.esm"),
+            include_str!("../../../tests/invalid/data_source_missing_provides.esm"),
         ),
         (
             "invalid_type",
-            include_str!("../../../tests/invalid/data_loader_invalid_type.esm"),
+            include_str!("../../../tests/invalid/data_source_invalid_type.esm"),
         ),
         (
             "undefined_reference",
-            include_str!("../../../tests/invalid/data_loader_undefined_reference.esm"),
+            include_str!("../../../tests/invalid/data_source_undefined_reference.esm"),
         ),
         (
             "config_schema_violation",
-            include_str!("../../../tests/invalid/data_loader_config_schema_violation.esm"),
+            include_str!("../../../tests/invalid/data_source_config_schema_violation.esm"),
         ),
         (
             "provides_missing_units",
-            include_str!("../../../tests/invalid/data_loader_provides_missing_units.esm"),
+            include_str!("../../../tests/invalid/data_source_provides_missing_units.esm"),
         ),
         (
             "provides_missing_description",
-            include_str!("../../../tests/invalid/data_loader_provides_missing_description.esm"),
+            include_str!("../../../tests/invalid/data_source_provides_missing_description.esm"),
         ),
     ];
 
@@ -232,14 +232,14 @@ fn test_coupling_validation_errors() {
     }
 }
 
-/// Test that a loader-only document (top-level `data_loaders` as the sole
+/// Test that a loader-only document (top-level `data_sources` as the sole
 /// component, no `models`/`reaction_systems`) validates and loads.
 #[test]
 fn test_loader_only_document_loads() {
     let fixture = r#"{
         "esm": "0.1.0",
         "metadata": { "name": "loader-only" },
-        "data_loaders": {
+        "data_sources": {
             "MetData": {
                 "kind": "grid",
                 "source": {
@@ -259,9 +259,9 @@ fn test_loader_only_document_loads() {
     let result = load(fixture);
     let esm = result.expect("loader-only document should validate and load");
     let loaders = esm
-        .data_loaders
+        .data_sources
         .as_ref()
-        .expect("loader-only document must expose data_loaders");
+        .expect("loader-only document must expose data_sources");
     assert_eq!(loaders.len(), 1);
     assert!(loaders.contains_key("MetData"));
     assert!(

@@ -110,7 +110,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
         index_sets: None,
         models: Some(models),
         reaction_systems: None,
-        data_loaders: None,
+        data_sources: None,
         operators: None,
         enums: None,
         coupling: None,

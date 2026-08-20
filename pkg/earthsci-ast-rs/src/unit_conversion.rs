@@ -20,7 +20,7 @@
 //! than "the variable called X". A closed expression (no free variables) folds
 //! to a constant and takes the same multiply path as a bare factor.
 //!
-//! The Rust peer of the Python `earthsci_ast.data_loaders.variables`
+//! The Rust peer of the Python `earthsci_ast.data_sources.variables`
 //! (`parse_unit_conversion` / `apply_unit_conversion`) and the Julia
 //! `EarthSciAST.parse_unit_conversion` / `apply_unit_conversion!`. All three
 //! must agree bit for bit: the conversion is the last thing that touches a
