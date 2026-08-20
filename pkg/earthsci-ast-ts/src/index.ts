@@ -30,6 +30,34 @@ export type { SaveOptions } from './serialize.js'
 export { validate } from './validate.js'
 export type { ValidationError, ValidationResult } from './validate.js'
 
+// The esm 1.0.0 classification API (esm-spec §6.3.1). Two variable types are
+// declared; everything a solver needs beyond that is DERIVED by these. Spelled
+// camelCase here and snake_case in the other bindings.
+export {
+  odeStates,
+  observedUnknowns,
+  algebraicUnknowns,
+  isOdeState,
+  brownianParameters,
+  discreteParameters,
+  sampledParameters,
+  constantParameters,
+  systemKind,
+  declaredSystemKind,
+  parameterClass,
+  updateRules,
+  classifyModel,
+  classifyDocument,
+  unknowns,
+  parameters,
+} from './classification.js'
+export type {
+  ParameterClass,
+  UnknownClass,
+  SystemKind,
+  ModelClassification,
+} from './classification.js'
+
 // Export graph utilities
 export {
   component_graph,
