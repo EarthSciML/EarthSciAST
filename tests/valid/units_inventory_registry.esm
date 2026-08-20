@@ -1,5 +1,5 @@
 {
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "UnitsInventoryRegistry",
     "description": "Cross-binding pin for the esm-spec §4.8.1 registry entries an EMISSION INVENTORY needs: `ft`, `ft/s` and `short_ton/yr`. The EPA FF10 point-source format -- the input every US air-quality model reads -- stores stack height and diameter in FEET, stack velocity in FEET PER SECOND, and the annual total in SHORT TONS PER YEAR. Before these entries existed a document had two choices, and both were wrong: declare the column in a unit it is not stored in (`kg/yr` on a short-ton column, which is dimensionally perfect and numerically wrong by 907.18474, so no dimensional checker can see it), or declare it truthfully as `ton/yr` and be REJECTED. isrm.esm did the first, then the second, and the second made the same document load in one binding and fail in another. NOTE what is NOT here: there is no `ton` and no `t`. A bare `ton` is three different masses -- short 907.18474 kg, metric 1000 kg, long 1016.0469088 kg -- and a table whose purpose is to make a declared unit mean ONE thing cannot hold a name that means three, so both tons are spelled in full (`short_ton`, `tonne`) and tests/conformance/unit_registry pins that `ton`, `t`, `foot`, `feet` and `metric_ton` all fail to resolve. Every observed here is a DISCRIMINATOR: its declared units are only satisfiable if the binding resolves `ft` as EXACTLY 0.3048 m and `short_ton` as EXACTLY 907.18474 kg, so a binding that guesses a rounding fails rather than silently mis-scaling an inventory.",
@@ -23,7 +23,7 @@
       },
       "variables": {
         "burden": {
-          "type": "state",
+          "type": "unknown",
           "units": "short_ton",
           "default": 0.0,
           "description": "The single integrated unknown: mass emitted so far, in the unit the inventory is written in. Its only role is to give the model one well-formed ODE whose rhs is the emission rate."
@@ -53,40 +53,19 @@
           "description": "FF10 STKVEL, in feet per second as the column stores it."
         },
         "stack_area": {
-          "type": "observed",
+          "type": "unknown",
           "units": "ft^2",
-          "description": "DISCRIMINATOR: ft × ft. Fails unless `ft` is a length, which is the check that catches a binding typing an unknown symbol as dimensionless.",
-          "expression": {
-            "op": "*",
-            "args": [
-              "stack_diameter",
-              "stack_diameter"
-            ]
-          }
+          "description": "DISCRIMINATOR: ft × ft. Fails unless `ft` is a length, which is the check that catches a binding typing an unknown symbol as dimensionless."
         },
         "volume_flow": {
-          "type": "observed",
+          "type": "unknown",
           "units": "ft^3/s",
-          "description": "DISCRIMINATOR: ft^2 × ft/s. Composition of an imperial length with a per-second rate.",
-          "expression": {
-            "op": "*",
-            "args": [
-              "stack_area",
-              "stack_velocity"
-            ]
-          }
+          "description": "DISCRIMINATOR: ft^2 × ft/s. Composition of an imperial length with a per-second rate."
         },
         "plume_over_stack": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "DISCRIMINATOR: `ft` and `m` are COMMENSURATE, so their ratio is dimensionless. A binding that admitted `ft` on some axis other than [length] fails here.",
-          "expression": {
-            "op": "/",
-            "args": [
-              "stack_height",
-              "reference_height"
-            ]
-          }
+          "description": "DISCRIMINATOR: `ft` and `m` are COMMENSURATE, so their ratio is dimensionless. A binding that admitted `ft` on some axis other than [length] fails here."
         },
         "reference_height": {
           "type": "parameter",
@@ -95,16 +74,9 @@
           "description": "The same height in metres (250 ft = 76.2 m exactly), so the ratio above is exactly 1 when `ft` carries its defined scale."
         },
         "emission_rate": {
-          "type": "observed",
+          "type": "unknown",
           "units": "short_ton/s",
-          "description": "DISCRIMINATOR: short_ton/yr ÷ (s/yr). The unit that pairs the inventory's mass with the model's time base.",
-          "expression": {
-            "op": "/",
-            "args": [
-              "emis_annual",
-              "seconds_per_year"
-            ]
-          }
+          "description": "DISCRIMINATOR: short_ton/yr ÷ (s/yr). The unit that pairs the inventory's mass with the model's time base."
         },
         "seconds_per_year": {
           "type": "parameter",
@@ -113,16 +85,9 @@
           "description": "One Julian year in seconds, as a unit RATIO — `s/yr` is dimensionless in dimension and carries the scale."
         },
         "tonnage_ratio": {
-          "type": "observed",
+          "type": "unknown",
           "units": "1",
-          "description": "DISCRIMINATOR: short_ton ÷ tonne is dimensionless, and the two are DIFFERENT masses. A binding that aliased both to one entry still passes the dimension check here — which is exactly why tests/conformance/unit_registry pins the SCALES as well.",
-          "expression": {
-            "op": "/",
-            "args": [
-              "burden",
-              "metric_burden"
-            ]
-          }
+          "description": "DISCRIMINATOR: short_ton ÷ tonne is dimensionless, and the two are DIFFERENT masses. A binding that aliased both to one entry still passes the dimension check here — which is exactly why tests/conformance/unit_registry pins the SCALES as well."
         },
         "metric_burden": {
           "type": "parameter",
@@ -141,6 +106,56 @@
             "wrt": "t"
           },
           "rhs": "emission_rate"
+        },
+        {
+          "lhs": "emission_rate",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "emis_annual",
+              "seconds_per_year"
+            ]
+          }
+        },
+        {
+          "lhs": "plume_over_stack",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "stack_height",
+              "reference_height"
+            ]
+          }
+        },
+        {
+          "lhs": "stack_area",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "stack_diameter",
+              "stack_diameter"
+            ]
+          }
+        },
+        {
+          "lhs": "tonnage_ratio",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "burden",
+              "metric_burden"
+            ]
+          }
+        },
+        {
+          "lhs": "volume_flow",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "stack_area",
+              "stack_velocity"
+            ]
+          }
         }
       ]
     }
