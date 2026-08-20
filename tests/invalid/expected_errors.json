@@ -1647,7 +1647,7 @@
   "event_error_conditions.esm": {
     "schema_errors": [
       {
-        "path": "/models/ErrorTestModel/discrete_events/1/trigger/type",
+        "path": "/models/ErrorTestModel/discrete_events/1/trigger",
         "message": "Value 'invalid_trigger_type' matches no DiscreteTrigger branch",
         "keyword": "oneOf"
       },
