@@ -2865,5 +2865,29 @@
     ],
     "is_valid": false,
     "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code."
+  },
+  "parameter_update_singleton_array.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/TestModel/variables/counter/update",
+        "message": "Array has fewer than 2 items",
+        "keyword": "minItems"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "esm-schema.json ParameterUpdateSpec: a single rule MUST be the OBJECT form; the array form is `minItems: 2`. The point is REPRESENTATION UNIQUENESS -- without it `{...}` and `[{...}]` would be two spellings of one update set, and an emitter that wrapped every update in an array would round-trip a document into a different one, breaking the idempotent-re-save contract (CONFORMANCE_SPEC). The wrapped rule is itself valid, so the array wrapper is the only defect. Companion negative to parameter_update_wiener_in_array.esm."
+  },
+  "parameter_update_wiener_in_array.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/TestModel/variables/eps/update/0",
+        "message": "A 'wiener' rule is not allowed inside an update array",
+        "keyword": "not"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "esm-schema.json ParameterUpdateSpec admits `wiener` only as the object form. A driving noise process is the parameter's WHOLE value -- redrawn every step with sqrt(dt) scaling -- so there is no defined meaning for a scheduled `expression` layered on top of it; the combination is incoherent rather than merely unusual. Both rules are individually well-formed and `eps` carries the `distribution` that `wiener` requires, so the sole defect is `wiener` appearing in an array. Note the pointer is to the ELEMENT (`/update/0`), not the array: the restriction is per-rule. Companion negative to parameter_update_singleton_array.esm; together they pin both array-form restrictions introduced with the update array in d7012036."
   }
 }

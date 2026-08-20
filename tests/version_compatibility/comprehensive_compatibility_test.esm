@@ -55,6 +55,7 @@
           "units": "K",
           "default": 298.15,
           "description": "Temperature",
+          "shape": [],
           "update": {
             "kind": "data",
             "source": "WeatherData",
@@ -67,6 +68,7 @@
           "units": "Pa",
           "default": 101325.0,
           "description": "Pressure",
+          "shape": [],
           "update": {
             "kind": "data",
             "source": "WeatherData",

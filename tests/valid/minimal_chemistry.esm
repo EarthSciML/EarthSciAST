@@ -38,6 +38,7 @@
           "units": "K",
           "default": 298.15,
           "description": "Temperature",
+          "shape": [],
           "update": {
             "kind": "data",
             "source": "GEOSFP",

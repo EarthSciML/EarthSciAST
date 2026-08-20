@@ -1,0 +1,62 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ParameterUpdateWienerInArray",
+    "description": "Invalid: a `wiener` rule appears INSIDE an `update` array. esm-schema.json ParameterUpdateSpec admits `wiener` only as the object form, because a driving noise process is the parameter's WHOLE value -- combining it with scheduled writes is incoherent, not merely unusual: there is no defined answer to what a scheduled `expression` should mean for a quantity redrawn every step with sqrt(dt) scaling. Both rules here are individually well-formed, and `eps` carries the `distribution` that `wiener` requires, so the ONLY defect is that `wiener` is in an array at all. Companion to parameter_update_singleton_array.esm; together they pin the two array-form restrictions.",
+    "authors": [
+      "Test Suite"
+    ],
+    "created": "2026-08-19T00:00:00Z"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "ODE state driven by the noise."
+        },
+        "eps": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "shape": [],
+          "distribution": {
+            "kind": "normal",
+            "mean": 0.0,
+            "std": 1.0
+          },
+          "update": [
+            {
+              "kind": "wiener"
+            },
+            {
+              "kind": "schedule",
+              "interval": 3600.0,
+              "expression": 0.0
+            }
+          ],
+          "description": "A Brownian driver that also claims an hourly scheduled reset -- the defect."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "eps",
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

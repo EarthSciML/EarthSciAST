@@ -1,0 +1,62 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ParameterUpdateSingletonArray",
+    "description": "Invalid: a parameter's `update` is a ONE-ELEMENT array. esm-schema.json ParameterUpdateSpec admits either a single rule as the OBJECT form or an ordered array of TWO OR MORE rules (`minItems: 2`); a one-element array is rejected so that the representation of any given update set is unique and the round-trip is stable. Without this rule `{...}` and `[{...}]` would be two spellings of the same thing, and an emitter that wrapped every update in an array would round-trip to a different document than it read. The rule inside is otherwise well-formed -- a valid `schedule` rule with an `interval` and an `expression` -- so the ONLY defect is the array wrapper.",
+    "authors": [
+      "Test Suite"
+    ],
+    "created": "2026-08-19T00:00:00Z"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "ODE state."
+        },
+        "counter": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 60.0,
+              "expression": {
+                "op": "+",
+                "args": [
+                  "counter",
+                  1.0
+                ]
+              }
+            }
+          ],
+          "description": "A single rule wrapped in an array -- the defect. It MUST be written as the bare object."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x",
+              "counter"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

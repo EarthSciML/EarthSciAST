@@ -97,6 +97,7 @@
           "units": "1/s",
           "default": 1e-05,
           "description": "O3 photolysis rate",
+          "shape": [],
           "update": {
             "kind": "data",
             "source": "PhotolysisRates",
@@ -109,6 +110,7 @@
           "units": "1/s",
           "default": 0.005,
           "description": "NO2 photolysis rate",
+          "shape": [],
           "update": {
             "kind": "data",
             "source": "PhotolysisRates",
@@ -121,6 +123,7 @@
           "units": "1/s",
           "default": 0.002,
           "description": "NO3 photolysis rate",
+          "shape": [],
           "update": {
             "kind": "data",
             "source": "PhotolysisRates",
@@ -133,6 +136,7 @@
           "units": "1/s",
           "default": 1e-06,
           "description": "H2O2 photolysis rate",
+          "shape": [],
           "update": {
             "kind": "data",
             "source": "PhotolysisRates",
