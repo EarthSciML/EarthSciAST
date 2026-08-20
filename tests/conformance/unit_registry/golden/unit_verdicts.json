@@ -1,0 +1,178 @@
+{
+  "accept": [
+    {
+      "canonical": "m",
+      "scale_to_canonical": 0.3048,
+      "units": "ft",
+      "why": "esm-spec 4.8.1 registry addition: the international foot, exact at 0.3048 m. FF10 STKHGT/STKDIAM are stored in it."
+    },
+    {
+      "canonical": "m/s",
+      "scale_to_canonical": 0.3048,
+      "units": "ft/s",
+      "why": "FF10 STKVEL. `ft` composes like any other table symbol."
+    },
+    {
+      "canonical": "kg",
+      "scale_to_canonical": 907.18474,
+      "units": "short_ton",
+      "why": "esm-spec 4.8.1 registry addition: exactly 2000 international pounds. NOT spelled `ton`."
+    },
+    {
+      "canonical": "kg/s",
+      "scale_to_canonical": 2.874694970466702e-05,
+      "units": "short_ton/yr",
+      "why": "The FF10 ANN_VALUE column's unit. The scale is exactly InMAP's 907184740000 ug / (3600*8760 s) emission-conversion constant divided by 1e9."
+    },
+    {
+      "canonical": "kg",
+      "scale_to_canonical": 1000.0,
+      "units": "tonne",
+      "why": "esm-spec 4.8.1 registry addition: the metric ton, 1000 kg. Present so the short/metric choice is one a document MAKES."
+    },
+    {
+      "canonical": "kg/s",
+      "scale_to_canonical": 3.168808781402895e-08,
+      "units": "kg/yr",
+      "why": "Control: the spelling `short_ton/yr` replaced in isrm.esm. Same dimension, different scale by 907.18474 -- which is exactly why the wrong one is invisible to a dimensional checker."
+    },
+    {
+      "canonical": "kg/m^3",
+      "scale_to_canonical": 1e-09,
+      "units": "ug/m^3",
+      "why": "The concentration unit of the whole air-quality corpus."
+    },
+    {
+      "canonical": "s/m^3",
+      "scale_to_canonical": 0.031557600000000005,
+      "units": "ug/m^3/(kg/yr)",
+      "why": "SOLIDUS ASSOCIATIVITY (4.8.2): `/` is left-to-right, so this is (ug/m^3)/(kg/yr) and the parenthesised denominator is REQUIRED."
+    },
+    {
+      "canonical": "(s/m)^(1/3)",
+      "scale_to_canonical": 1.0,
+      "units": "(m/s)^(-1/3)",
+      "why": "RATIONAL EXPONENT in its only unambiguous spelling. `(m/s)^-1/3` -- the spelling isrm.esm carried -- is a DIFFERENT string: the grammar reads it as ((m/s)^-1)/3, a scaling factor, and the three bindings disagreed about what that means."
+    },
+    {
+      "canonical": "s^-0.5",
+      "scale_to_canonical": 1.0,
+      "units": "1/s^0.5",
+      "why": "DECIMAL exponent: the intensity of a Wiener noise term."
+    },
+    {
+      "canonical": "m^-3",
+      "scale_to_canonical": 999999.9999999999,
+      "units": "molec/cm^3",
+      "why": "COUNTS ARE DIMENSIONLESS: a number density is [length]^-3, never [substance]."
+    },
+    {
+      "canonical": "1",
+      "scale_to_canonical": 0.01,
+      "units": "%",
+      "why": "`%` must lex as a symbol token even though it is not alphanumeric."
+    },
+    {
+      "canonical": "m^-2",
+      "scale_to_canonical": 2.6867e+20,
+      "units": "DU",
+      "why": "The Dobson unit: dimension m^-2, scale EXACTLY 2.6867e20."
+    },
+    {
+      "canonical": "rad^2",
+      "scale_to_canonical": 1.0,
+      "units": "sr",
+      "why": "The steradian is the angle axis SQUARED, not a ninth axis."
+    },
+    {
+      "canonical": "s",
+      "scale_to_canonical": 31557600.0,
+      "units": "yr",
+      "why": "The JULIAN year, 31557600 s exactly (365.25 days). Pinned because one binding shipped a 365-day year -- 0.0685% short, and INVISIBLE to dimensional analysis, which sees [time] either way."
+    },
+    {
+      "canonical": "1/s",
+      "scale_to_canonical": 3.168808781402895e-08,
+      "units": "1/year",
+      "why": "The same value in the composition the ecological fixtures use."
+    },
+    {
+      "canonical": "K",
+      "scale_to_canonical": null,
+      "units": "degF"
+    }
+  ],
+  "kind": "unit_registry_verdicts",
+  "reject": [
+    {
+      "units": "ton",
+      "why": "AMBIGUOUS BY CONSTRUCTION: short, metric and long tons are three different masses. 4.8.1 admits `short_ton` and `tonne` and neither is spelled `ton`."
+    },
+    {
+      "units": "ton/yr",
+      "why": "The spelling isrm.esm carried before this change. Rejected everywhere, so the document had to say which ton it meant."
+    },
+    {
+      "units": "tons/year",
+      "why": "A plural is not an alias. `year` IS a table key; `tons` is not."
+    },
+    {
+      "units": "t",
+      "why": "A one-letter mass symbol reads as tera- to half its readers -- excluded for the same reason `d` is."
+    },
+    {
+      "units": "t/yr",
+      "why": "Same, in composition."
+    },
+    {
+      "units": "foot",
+      "why": "`ft` has no long-form alias: the table grows by demonstrated need and nothing declares `foot`."
+    },
+    {
+      "units": "feet",
+      "why": "As `foot`."
+    },
+    {
+      "units": "metric_ton",
+      "why": "`tonne` is the spelling; there is deliberately one."
+    },
+    {
+      "units": "short_tons",
+      "why": "A plural is not an alias."
+    },
+    {
+      "units": "d",
+      "why": "4.8.1 excludes a bare `d`: it reads as deci- or as a differential. The day is `day`."
+    },
+    {
+      "units": "cm3",
+      "why": "4.8.2: a digit run not separated by `^` is a DIFFERENT symbol, not an implicit exponent. Write `cm^3`."
+    },
+    {
+      "units": "m/s2",
+      "why": "As `cm3`. Write `m/s^2`."
+    },
+    {
+      "units": "kmolec",
+      "why": "There is NO SI-prefix mechanism (4.8.1). `molec` is a table key; `kmolec` is not."
+    },
+    {
+      "units": "not_a_unit",
+      "why": "The corpus-canonical unparseable string."
+    }
+  ],
+  "reject_scaling_factor": [
+    {
+      "units": "(m/s)^-1/3",
+      "why": "THE STRING THAT STARTED THIS. 4.8.2 reads it as ((m/s)^-1)/3 -- a SCALING FACTOR -- and the bindings gave it three different meanings (magnitude dropped / retained / whole string rejected). Now rejected everywhere, so `^(-1/3)` is the only spelling of that unit."
+    },
+    {
+      "units": "1000/s",
+      "why": "A numeric atom other than 1 is a scaling factor, not a unit."
+    },
+    {
+      "units": "0.5 m",
+      "why": "Whitespace is multiplication, so this is a scaled metre."
+    }
+  ]
+}

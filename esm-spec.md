@@ -871,9 +871,9 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Group | Symbols |
 |---|---|
 | SI base | `m` `kg` `s` `mol` `K` `A` `cd` `rad` |
-| Mass | `g` `mg` `ug` |
-| Length | `dm` `cm` `mm` `um` `nm` `km` |
-| Time | `ms` `us` `ns` `min` `h` `hr` `day` `yr` `year` |
+| Mass | `g` `mg` `ug` `short_ton` `tonne` |
+| Length | `dm` `cm` `mm` `um` `nm` `km` `ft` |
+| Time | `ms` `us` `ns` `min` `h` `hr` `day` `yr` `year` (`yr` = `year` = the **Julian** year, `31557600` s exactly = 365.25 × 86400 — pinned because one binding shipped a 365-day year, 0.0685% short, and a scale error is invisible to dimensional analysis) |
 | Volume | `L` `l` `mL` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
 | Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` |
@@ -888,6 +888,10 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Column amount | `Dobson` `DU` |
 | Long-form aliases | `meter` `meters` → `m` · `hour` → `h` · `Celsius` → `degC` · `percent` → `%` · `degree` `degrees` → `deg` |
 | Dimensionless spellings | `""` · `"1"` · `"dimensionless"` |
+
+**`ft`, `short_ton` and `tonne` are in the table because emission inventories are written in them.** The EPA FF10 point-source format — the input every US air-quality model reads — stores stack height and stack diameter in **feet**, stack velocity in **feet per second**, and the annual emission total in **short tons per year**. A format for air-quality models that cannot spell the units its own input files use forces every such column to be declared in a unit it is not stored in, and that lie is invisible to a dimensional checker: `ft` declared as `m` is dimensionally perfect and numerically wrong by 3.28. `ft` is exact by definition (1 ft = 0.3048 m, since 1959) and is the ONLY imperial length in the table — `in`, `yd`, `mi` are absent, and the table grows only by demonstrated need.
+
+**There is deliberately no `ton` and no `t`.** A bare `ton` is three different masses — short (907.18474 kg, = 2000 international pounds), metric (1000 kg), long (1016.0469088 kg) — and a table whose entire purpose is to make a declared unit mean ONE thing cannot hold a name that means three. Both tons are therefore spelled in full: **`short_ton`** (exactly `2000 * 0.45359237` kg — this is what a US emissions inventory means by "tons", and exactly InMAP's `907184740000` µg-per-short-ton emission-conversion constant) and **`tonne`** (the metric ton, 1000 kg). `t` is excluded for the same reason `d` is: a one-letter mass symbol reads as the tera- prefix to half its readers. A document that means short tons MUST write `short_ton`; there is no spelling under which it can be mistaken.
 
 **Unit strings carry DIMENSIONS ONLY — never species tags.** A trailing chemical species is NOT part of a unit. `"kg C/m^2"` for "kilograms of carbon per square metre" is ILLEGAL: whitespace is multiplication (§4.8.2), so it parses as kg·coulomb·m⁻², a *silently wrong dimension* rather than an error, and no checker can catch it. The same trap holds for `"kg N/ha"`, `"mg C/m^3/d"`, `"ug S/m^3"`. **The species belongs in the variable's name or `description`; the unit is `"kg/m^2"`.**
 
@@ -928,9 +932,10 @@ Superscripts normalise **positionally**: a run of `⁻`? followed by superscript
 unit     := term (('*' | '/')? term)*
 term     := atom (('^' | '**') exponent)?
 exponent := integer | decimal | '(' integer '/' integer ')'
-atom     := number | symbol | '(' unit ')'
+atom     := '1' | symbol | '(' unit ')'
 ```
 
+- **A numeric atom is legal ONLY when its value is exactly `1`.** The leading `1` of `"1/s"` is the whole reason `atom` admits a number at all; any OTHER number is a **scaling factor**, and a unit string denotes a *unit*, not a *quantity*. `"1000/s"` and `"0.5 m"` are hard errors. This is pinned because the alternative produced three different answers for one string: an author writing `"(m/s)^-1/3"` — reaching for a rational exponent — gets `((m/s)^-1)/3` under this grammar, and the bindings variously **dropped** the 1/3 (leaving `s/m`), **retained** it (leaving `s/m` scaled by 1/3), or **rejected** the whole string. None of the three is what the author meant. With the scaling factor illegal, `"(m/s)^(-1/3)"` is the only spelling of that unit and the mistake is a diagnostic instead of a silently wrong dimension. The diagnostic MUST say that a number other than 1 is a scaling factor and that a rational exponent is spelled `^(p/q)`.
 - **Exponents are RATIONAL, not integer.** `2`, `-1`, `0.5`, `1.5`, `(1/2)` are all admissible. An integer-only grammar cannot express `1/s^0.5` — the intensity of a Wiener noise term, which is the unit of every `brownian` variable in an SDE (`tests/fixtures/sde/*.esm`) — and under the §4.8.4 hard-error severity an integer-only parser would FALSELY REJECT every conforming SDE file in the corpus. A *symbolic* exponent in a unit string remains inadmissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
 - **Whitespace between terms means MULTIPLICATION**, as in pint and UDUNITS — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`. This is what makes a species tag (§4.8.1) illegal rather than merely discouraged.
 - **`*` and `/` are ONE precedence level, evaluated LEFT to RIGHT.** `"J/mol*K"` is `(J/mol)*K` = `J·mol⁻¹·K`, NOT `J/(mol·K)`. A parser that gives `*` a higher precedence than `/` silently negates the exponent of every symbol after the first `/` — it read `J/mol*K` as `J·mol⁻¹·K⁻¹` — and, because the result is a *plausible* dimension, nothing downstream can detect it. Likewise `"kg/m*s"` is `kg·m⁻¹·s`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.

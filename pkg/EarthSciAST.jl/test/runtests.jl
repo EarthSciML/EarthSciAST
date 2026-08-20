@@ -142,6 +142,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # esm-spec §8.5 `unit_conversion` on the ESIO provider path — the
     # manifest-driven cross-binding conformance adapter.
     include("loader_unit_conversion_conformance_test.jl")
+    include("unit_registry_conformance_test.jl")
     # Streaming output sinks (Wave 2): end-to-end ZarrSink write → ZarrReader
     # read-back round-trip through the EarthSciIO write boundary (RFC §16).
     include("zarr_sink_e2e_test.jl")

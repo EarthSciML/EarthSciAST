@@ -110,6 +110,15 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   g: { dims: { kg: 1 }, scale: 1e-3 },
   mg: { dims: { kg: 1 }, scale: 1e-6 },
   ug: { dims: { kg: 1 }, scale: 1e-9 },
+  // The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare
+  // `ton` is three different masses (short 907.18474 kg, metric 1000 kg, long
+  // 1016.0469088 kg), and a table whose job is to make a declared unit mean ONE
+  // thing cannot hold a name that means three. `t` is excluded for the same
+  // reason `d` is. `short_ton` is exactly 2000 international pounds -- what a US
+  // emissions inventory means by "tons", and exactly InMAP's 907184740000
+  // ug/short-ton emission-conversion constant.
+  short_ton: { dims: { kg: 1 }, scale: 907.18474 },
+  tonne: { dims: { kg: 1 }, scale: 1e3 },
 
   // ---- Length ----
   dm: { dims: { m: 1 }, scale: 1e-1 },
@@ -118,6 +127,14 @@ const UNIT_TABLE: Record<string, UnitSpec> = {
   um: { dims: { m: 1 }, scale: 1e-6 },
   nm: { dims: { m: 1 }, scale: 1e-9 },
   km: { dims: { m: 1 }, scale: 1e3 },
+  // The international foot, exact by definition since 1959: 1 ft = 0.3048 m.
+  // Emission inventories are written in it -- the EPA FF10 point-source format
+  // stores STKHGT and STKDIAM in feet -- and a format for air-quality models
+  // that cannot spell the unit its own input files use forces every such column
+  // to be declared in a unit it is not stored in. `ft` is the ONLY imperial
+  // length in the table; `in`, `yd` and `mi` are absent because nothing in the
+  // corpus declares them.
+  ft: { dims: { m: 1 }, scale: 0.3048 },
 
   // ---- Time ----
   ms: { dims: { s: 1 }, scale: 1e-3 },
@@ -344,7 +361,7 @@ function normalizeUnitString(s: string): string {
  *   unit     := term ( ('*' | '/')? term )*
  *   term     := atom ( ('^' | '**') exponent )?
  *   exponent := integer | decimal | '(' integer '/' integer ')'
- *   atom     := number | symbol | '(' unit ')'
+ *   atom     := '1' | symbol | '(' unit ')'
  * ```
  *
  * EXPONENTS ARE RATIONAL, not integral: `1/s^0.5` (an SDE noise intensity) and
@@ -509,7 +526,7 @@ class UnitParser {
     return powerParsed(atom, this.parseExponent())
   }
 
-  /** atom := number | symbol | '(' unit ')' */
+  /** atom := '1' | symbol | '(' unit ')' */
   private parseAtom(): ParsedUnit {
     this.skipSpace()
     if (this.pos >= this.src.length) {
@@ -528,8 +545,17 @@ class UnitParser {
       return inner
     }
 
-    // A bare number is a dimensionless scalar factor ("1" → identity, and e.g.
-    // the leading "1" of "1/s").
+    // A numeric atom is admissible ONLY when its value is exactly 1 -- the
+    // leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
+    // denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
+    // reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
+    // and the five bindings gave it three different meanings (magnitude dropped,
+    // magnitude retained, whole string rejected). Rejecting the scaling factor makes
+    // `^(-1/3)` the only spelling of that unit, so the same string cannot silently
+    // mean two things.
+    //
+    // Before this rule TypeScript RETAINED the magnitude here, so "1000/s" came
+    // out as 1/s scaled by 1000 while Julia read the same string as a bare 1/s.
     if (isDigit(c)) {
       const start = this.pos
       while (
@@ -543,7 +569,12 @@ class UnitParser {
       if (!Number.isFinite(value)) {
         throw new UnitConversionError(`Cannot parse unit "${this.src}": invalid number "${text}"`)
       }
-      return { dims: {}, scale: value }
+      if (value !== 1) {
+        throw new UnitConversionError(
+          `Cannot parse unit "${this.src}": a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)`,
+        )
+      }
+      return { dims: {}, scale: 1 }
     }
 
     if (!isIdentStart(c)) {

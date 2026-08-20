@@ -2636,6 +2636,22 @@
     ],
     "is_valid": false
   },
+  "units_discriminator_scaling_factor.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadUnitsModel/variables/wind_minus_third",
+        "code": "unit_parse_error",
+        "message": "Unit string '(m/s)^-1/3' is not a recognised unit",
+        "details": {
+          "variable": "wind_minus_third",
+          "units": "(m/s)^-1/3"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.2: a numeric atom is legal only when its value is exactly 1. Any other number is a SCALING FACTOR, and a unit string denotes a unit, not a quantity. This string is the one an author writes when reaching for a rational exponent; the grammar reads it as ((m/s)^-1)/3, so `^(-1/3)` is the correct spelling. Four bindings used to accept it and they did NOT agree on what it meant \u2014 Julia dropped the 1/3, Rust/Go/TypeScript retained it, Python rejected the string \u2014 and the two answers that differ only in scale differ invisibly, because a dimensional checker cannot see a scale. Found in isrm.esm, where it made the same document load in Julia and fail in Python."
+  },
   "units_discriminator_rational_exponent.esm": {
     "schema_errors": [],
     "structural_errors": [

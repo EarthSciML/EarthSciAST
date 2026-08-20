@@ -200,7 +200,7 @@ describe('unit-conversion', () => {
     // string associates:
     //   unit := term ( ('*'|'/')? term )*
     //   term := atom ( ('^'|'**') int )?
-    //   atom := number | symbol | '(' unit ')'
+    //   atom := '1' | symbol | '(' unit ')'
     describe('grammar', () => {
       it('divides LEFT-associatively', () => {
         // a/b/c == a/(b*c), NOT a/(b/c).

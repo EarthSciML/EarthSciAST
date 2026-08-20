@@ -1,0 +1,23 @@
+{
+  "category": "unit_registry",
+  "version": "1.0",
+  "description": "Cross-binding conformance for the esm-spec §4.8 unit CONTRACT at the level a document actually meets it: a unit STRING. Every other units fixture in the corpus is a `.esm` document, so it can only pin the verdict a whole file gets; this one pins, string by string, (a) whether the string resolves at all, (b) the DIMENSION it resolves to, and (c) its SCALE. All three are needed: `short_ton` and `tonne` have the same dimension and differ only in scale, and a binding that defined `short_ton` as 1000 kg would pass a dimension-only check while silently mis-scaling every US emissions inventory by 10%. The `reject` list is the half a valid-only fixture cannot express -- a binding that resolves `ton` has not merely added a synonym, it has made a document mean three different masses depending on who reads it.",
+  "reference_binding": "analytic",
+  "bindings_required": ["julia", "python", "rust"],
+  "scope_excluded": {
+    "go": "the same table is asserted by pkg/esm/units_test.go; no adapter written yet",
+    "typescript": "the same table is asserted by src/unit-conversion.test.ts; no adapter written yet"
+  },
+  "golden": "conformance/unit_registry/golden/unit_verdicts.json",
+  "contract": [
+    "For every entry in `accept`: the binding's unit parser MUST resolve `units`; the result MUST have the same DIMENSION as the parser's own result for `canonical`; and when `scale_to_canonical` is non-null, converting 1 `units` to `canonical` MUST give that factor to a relative tolerance of 1e-12. `scale_to_canonical` is null exactly for the affine units, whose offset §4.8.1 deliberately does not model, so their pure multiplicative factor is not a physically meaningful conversion.",
+    "For every entry in `reject`: the binding's unit parser MUST NOT resolve `units`. The severity of the resulting FINDING is §4.8.4's (a hard `unit_parse_error`); this manifest pins only that the string does not resolve.",
+    "For every entry in `reject_scaling_factor`: the binding MUST NOT resolve `units`, AND the diagnostic MUST contain the substring `scaling factor`. The message text is pinned here and nowhere else because this is the one rejection whose REASON a document author cannot guess: the string looks like a rational exponent and the grammar reads it as a division by a number."
+  ],
+  "known_divergences_not_pinned_here": [
+    "Rust (pkg/earthsci-ast-rs/src/units.rs, `parse_si_prefixed`) still HAS an SI-prefix mechanism, which §4.8.1 says a binding MUST disable or gate on the table. It therefore resolves `Tm`, `dam`, `dg`, `PW`, `fs` and friends, which every other binding rejects. Those strings are deliberately absent from `reject` so this fixture stays green; the divergence is real and is its own fix.",
+    "Go's table is missing `degree` (it has `deg` and `degrees`), so `units: \"degree\"` is a hard error in Go alone.",
+    "TypeScript's table carries nine names §4.8.1 does not list (`sec`, `second`, `seconds`, `minute`, `Kelvin`, `liter`, `ratio`, `kHz`, `MHz`).",
+    "WHICH ENTRY POINT enforces §4.8.4 differs: `esm-libraries-spec.md` §2.1a says `load()` MUST succeed for a file that passes schema validation and fails structural validation, and Julia/Rust/Go/TS obey it while Python's `load()` hard-rejects. Every binding agrees at `validate()`. That is a divergence about the API, not about the unit table, and it is not this fixture's subject."
+  ]
+}

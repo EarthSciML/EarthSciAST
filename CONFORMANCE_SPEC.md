@@ -2477,7 +2477,7 @@ An undeterminable dimension MUST NOT be reported as *dimensionless* — that man
 false mismatches against well-formed files. An incomplete unit registry MUST NOT be
 worked around by downgrading a severity; extend the registry.
 
-Six further pins from esm-spec §4.8, each of which a binding has violated:
+Eight further pins from esm-spec §4.8, each of which a binding has violated:
 
 | Pin | esm-spec | What went wrong |
 |---|---|---|
@@ -2487,6 +2487,8 @@ Six further pins from esm-spec §4.8, each of which a binding has violated:
 | **Unit strings carry dimensions only** — no species tags | §4.8.1 | `kg C/m^2` parses (whitespace = multiplication) as kg·coulomb·m⁻², a silently WRONG dimension. The species goes in the name/description. |
 | **Counts are dimensionless**; the axes are exactly `m kg s mol K A cd rad` | §4.8.1 | A binding delegating to `pint` typed `molec` as substance and the unit `units` as micro-nit (a luminance), so `units/L` became `cd·m⁻⁵`. |
 | **`DU` = 2.6867e20 m⁻²**, exactly; **no SI-prefix mechanism** | §4.8.1 | Two bindings shipped different Dobson roundings (2.6867e20 vs 2.69e20) and one compared to 1e-9 tolerance, so the same file errored in one and not the other. |
+| A **numeric atom is legal only when its value is exactly `1`** | §4.8.2 | `(m/s)^-1/3` — what an author writes reaching for a rational exponent — parses as `((m/s)^-1)/3`, and FOUR bindings accepted it with THREE different meanings: Julia dropped the 1/3, Rust/Go/TS retained it, Python rejected the string. Two of those differ only in SCALE, which a dimensional checker cannot see. `^(-1/3)` is now the only spelling, and the diagnostic must say "scaling factor". Fixtures: `tests/invalid/units_discriminator_scaling_factor.esm`, `tests/conformance/unit_registry`. |
+| The registry holds **`ft`, `short_ton`, `tonne`** — and deliberately **no `ton`, no `t`** | §4.8.1 | The FF10 point-source format stores stack geometry in feet and the annual total in short tons. Without those entries a document must either lie (`kg/yr` on a short-ton column: dimensionally perfect, wrong by 907.18474, invisible) or be rejected. `ton` is excluded because it is three different masses; `t` because a one-letter mass symbol reads as tera-. Scales are pinned EXACTLY (`ft` = 0.3048 m, `short_ton` = 907.18474 kg): `short_ton` and `tonne` share a dimension, so only the scale distinguishes them. Fixtures: `tests/valid/units_inventory_registry.esm`, `tests/conformance/unit_registry`. |
 
 ### 7.1.3 Checker semantics that MUST NOT re-diverge
 

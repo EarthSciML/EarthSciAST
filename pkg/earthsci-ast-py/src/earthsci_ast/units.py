@@ -73,6 +73,21 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "g = 1e-3 kg",
     "mg = 1e-6 kg",
     "ug = 1e-9 kg",
+    # The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`.
+    # A bare `ton` is three different masses depending on the country and the
+    # decade (short 907.18474 kg, metric 1000 kg, long 1016.0469088 kg), and a
+    # unit table whose job is to make a declared unit mean ONE thing cannot
+    # contain a name that means three. `t` is excluded for the same reason `d`
+    # is: a one-letter mass symbol reads as tera- to half its readers.
+    #   * `short_ton` — exactly 2000 international pounds
+    #     (2000 * 0.45359237 kg). This is what a US emissions inventory means by
+    #     "tons": the FF10 ANN_VALUE column, and InMAP's own
+    #     907184740000 ug/short_ton emission-conversion constant.
+    #   * `tonne` — the metric ton, 1000 kg, which is what the rest of the world
+    #     means. Present so that the disambiguation is a CHOICE a document makes
+    #     rather than a unit it cannot express.
+    "short_ton = 907.18474 kg",
+    "tonne = 1e3 kg",
     # --- length -------------------------------------------------------------
     "dm = 1e-1 m",
     "cm = 1e-2 m",
@@ -80,6 +95,17 @@ _CONTRACT_DEFINITIONS: tuple[str, ...] = (
     "um = 1e-6 m",
     "nm = 1e-9 m",
     "km = 1e3 m",
+    # The international foot, exact by definition (1959): 1 ft is exactly
+    # 0.3048 m. It is in the table because emission inventories are written in
+    # it — the EPA FF10 point-source format stores STKHGT and STKDIAM in feet —
+    # and a format for air-quality models that cannot spell the unit its own
+    # input files use forces every such column to be declared in a unit it is
+    # not stored in, which is a lie the dimensional checker cannot catch.
+    # `ft` is the ONLY imperial length here, and it has no long-form alias: the
+    # rest of the family (in, yd, mi) and the spellings `foot`/`feet` are absent
+    # because nothing in the corpus declares them. The table grows by
+    # demonstrated need, one line at a time — that is what keeps it pinnable.
+    "ft = 0.3048 m",
     # --- time ---------------------------------------------------------------
     "ms = 1e-3 s",
     "us = 1e-6 s",
@@ -342,7 +368,7 @@ def normalize_unit_string(unit: str) -> str:
 #     unit     := term (('*' | '/')? term)*        # a bare space is '*'
 #     term     := atom (('^' | '**') exponent)?
 #     exponent := sign? (integer | decimal) | '(' sign? int '/' sign? int ')'
-#     atom     := number | symbol | '(' unit ')'
+#     atom     := '1' | symbol | '(' unit ')'
 #
 # pint's own parser is LOOSER than this in ways that matter. It evaluates the
 # string as Python, so `kg**2**3` silently means `kg**8` (right-associative
@@ -468,7 +494,21 @@ class _UnitGrammar:
             self.take()
             return
         if kind == "number":
-            self.take()
+            _, text = self.take()
+            # A numeric atom is admissible ONLY when its value is exactly 1 —
+            # the leading `1` of `1/s`. Any other number is a SCALING FACTOR,
+            # and a unit string denotes a UNIT, not a quantity. `(m/s)^-1/3` —
+            # an author reaching for a rational exponent — parses under this
+            # grammar as `((m/s)^-1)/3`, and the five bindings gave it three
+            # different meanings (magnitude dropped, magnitude retained, whole
+            # string rejected). Rejecting the scaling factor makes `^(-1/3)` the
+            # only spelling of that unit. Python already refused it, but only
+            # DOWNSTREAM in pint ("Unit expression cannot have a scaling
+            # factor"), which named neither the rule nor the fix.
+            if float(text) != 1.0:
+                self.fail(
+                    "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"
+                )
             return
         if kind == "symbol":
             _, name = self.take()

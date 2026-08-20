@@ -1371,11 +1371,26 @@ fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
         return Ok(base_unit.power_rational(power));
     }
 
-    // A bare numeric atom is a dimensionless scale factor (`1000`, `0.5`).
+    // A numeric atom is admissible ONLY when its value is exactly 1 -- the
+    // leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
+    // denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
+    // reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
+    // and the five bindings gave it three different meanings (magnitude dropped,
+    // magnitude retained, whole string rejected). Rejecting the scaling factor makes
+    // `^(-1/3)` the only spelling of that unit, so the same string cannot silently
+    // mean two things.
+    //
+    // Before this rule Rust RETAINED the magnitude here, so `"1000/s"` came out
+    // as 1/s scaled by 1000 while Julia read the same string as a bare 1/s.
     if let Ok(v) = s.parse::<f64>() {
+        if v != 1.0 {
+            return Err(UnitError::ParseError(format!(
+                "unit \"{original}\": a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"
+            )));
+        }
         return Ok(Unit {
             dimensions: HashMap::new(),
-            scale: v,
+            scale: 1.0,
         });
     }
 
@@ -1539,6 +1554,14 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("mm".to_string(), Unit::base(Dimension::Length, 1, 0.001));
     units.insert("meter".to_string(), Unit::base(Dimension::Length, 1, 1.0));
     units.insert("meters".to_string(), Unit::base(Dimension::Length, 1, 1.0));
+    // The international foot, exact by definition since 1959: 1 ft = 0.3048 m.
+    // Emission inventories are written in it — the EPA FF10 point-source format
+    // stores STKHGT and STKDIAM in feet — and a format for air-quality models
+    // that cannot spell the unit its own input files use forces every such
+    // column to be declared in a unit it is not stored in. `ft` is the ONLY
+    // imperial length in the table; `in`, `yd` and `mi` are absent because
+    // nothing in the corpus declares them.
+    units.insert("ft".to_string(), Unit::base(Dimension::Length, 1, 0.3048));
 
     // Time units
     units.insert("s".to_string(), Unit::base(Dimension::Time, 1, 1.0));
@@ -1554,6 +1577,18 @@ fn build_base_units() -> HashMap<String, Unit> {
     // Mass units
     units.insert("kg".to_string(), Unit::base(Dimension::Mass, 1, 1.0));
     units.insert("g".to_string(), Unit::base(Dimension::Mass, 1, 0.001));
+    // The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare
+    // `ton` is three different masses (short 907.18474 kg, metric 1000 kg, long
+    // 1016.0469088 kg), and a table whose job is to make a declared unit mean
+    // ONE thing cannot hold a name that means three. `t` is excluded for the
+    // same reason `d` is. `short_ton` is exactly 2000 international pounds —
+    // what a US emissions inventory means by "tons", and exactly InMAP's
+    // 907184740000 ug/short-ton emission-conversion constant.
+    units.insert(
+        "short_ton".to_string(),
+        Unit::base(Dimension::Mass, 1, 907.18474),
+    );
+    units.insert("tonne".to_string(), Unit::base(Dimension::Mass, 1, 1000.0));
 
     // Amount units
     units.insert("mol".to_string(), Unit::base(Dimension::Amount, 1, 1.0));
@@ -1608,13 +1643,21 @@ fn build_base_units() -> HashMap<String, Unit> {
         Unit::base(Dimension::Temperature, 1, 1.0),
     );
 
-    // Year — the Julian-ish 365-day year used by the corpus's ecological
-    // fixtures (`km^2/year`, `1/year`).
+    // Year — the JULIAN year, 365.25 days = 31_557_600 s exactly. That is the
+    // astronomical/climate convention and it is what Julia, Python, Go and
+    // TypeScript all carry; Rust alone had 3.1536e7 (a 365-day year), which is
+    // 0.0685% short. A scale error is INVISIBLE to dimensional analysis — the
+    // dimension is [time] either way — so nothing in the corpus could see it
+    // until `tests/conformance/unit_registry` started pinning scales, which is
+    // exactly what that fixture is for.
     units.insert(
         "year".to_string(),
-        Unit::base(Dimension::Time, 1, 3.153_6e7),
+        Unit::base(Dimension::Time, 1, 31_557_600.0),
     );
-    units.insert("yr".to_string(), Unit::base(Dimension::Time, 1, 3.153_6e7));
+    units.insert(
+        "yr".to_string(),
+        Unit::base(Dimension::Time, 1, 31_557_600.0),
+    );
 
     // Derived units
     // Velocity: m/s

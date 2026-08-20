@@ -303,6 +303,15 @@ func buildUnitRegistry() map[string]Unit {
 	r["g"] = Unit{Dim: r["kg"].Dim, Scale: 1e-3}
 	r["mg"] = Unit{Dim: r["kg"].Dim, Scale: 1e-6}
 	r["ug"] = Unit{Dim: r["kg"].Dim, Scale: 1e-9}
+	// The two tons, both spelled UNAMBIGUOUSLY and neither spelled "ton". A bare
+	// "ton" is three different masses (short 907.18474 kg, metric 1000 kg, long
+	// 1016.0469088 kg), and a table whose job is to make a declared unit mean
+	// ONE thing cannot hold a name that means three. "t" is excluded for the
+	// same reason "d" is. short_ton is exactly 2000 international pounds --
+	// what a US emissions inventory means by "tons", and exactly InMAP's
+	// 907184740000 ug/short-ton emission-conversion constant.
+	r["short_ton"] = Unit{Dim: r["kg"].Dim, Scale: 907.18474}
+	r["tonne"] = Unit{Dim: r["kg"].Dim, Scale: 1e3}
 
 	// Length scales.
 	r["dm"] = Unit{Dim: r["m"].Dim, Scale: 1e-1}
@@ -311,6 +320,14 @@ func buildUnitRegistry() map[string]Unit {
 	r["um"] = Unit{Dim: r["m"].Dim, Scale: 1e-6}
 	r["nm"] = Unit{Dim: r["m"].Dim, Scale: 1e-9}
 	r["km"] = Unit{Dim: r["m"].Dim, Scale: 1e3}
+	// The international foot, exact by definition since 1959: 1 ft = 0.3048 m.
+	// Emission inventories are written in it -- the EPA FF10 point-source format
+	// stores STKHGT and STKDIAM in feet -- and a format for air-quality models
+	// that cannot spell the unit its own input files use forces every such
+	// column to be declared in a unit it is not stored in. "ft" is the ONLY
+	// imperial length in the table; "in", "yd" and "mi" are absent because
+	// nothing in the corpus declares them.
+	r["ft"] = Unit{Dim: r["m"].Dim, Scale: 0.3048}
 
 	// Time scales.
 	r["ms"] = Unit{Dim: r["s"].Dim, Scale: 1e-3}
@@ -408,6 +425,12 @@ func buildUnitRegistry() map[string]Unit {
 	// expression to discriminate its dimension.
 	r["deg"] = Unit{Dim: r["rad"].Dim, Scale: math.Pi / 180}
 	r["degrees"] = r["deg"]
+	// `degree` (SINGULAR) is a §4.8.1 long-form alias and Go alone was missing it,
+	// so `units: "degree"` was a hard error in this binding and legal in the other
+	// four -- it rejected the shared VALID fixture
+	// tests/valid/data_loaders_ingest_and_select.esm. A missing table entry is a
+	// FALSE REJECTION of a conforming file, which §4.8.1 says must be fixed by
+	// extending the table.
 	r["degree"] = r["deg"]
 
 	// Solid angle — the steradian, sr = rad^2 (esm-spec §4.8.1). rad is the
@@ -572,7 +595,7 @@ func superscriptASCII(r rune) byte { return superscriptTable[r] }
 //	unit     := term ( ('*'|'/')? term )*
 //	term     := atom ( ('^'|'**') exponent )?
 //	exponent := integer | decimal | '(' integer '/' integer ')'
-//	atom     := number | symbol | '%' | '(' unit ')' | '1'
+//	atom     := '1' | symbol | '%' | '(' unit ')'
 //
 // EXPONENTS ARE RATIONAL. "1/s^0.5" (SDE noise intensity), "s^(-1/2)" and
 // "m^(3/2)" are legitimate corpus units; an integer-only exponent grammar
@@ -723,7 +746,17 @@ func (p *unitParser) parseAtom() (Unit, error) {
 		p.pos++
 		return unitRegistry["%"], nil
 	}
-	// Bare integer "1" is dimensionless; any other bare number is a scalar factor.
+	// A numeric atom is admissible ONLY when its value is exactly 1 -- the
+	// leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
+	// denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
+	// reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
+	// and the five bindings gave it three different meanings (magnitude dropped,
+	// magnitude retained, whole string rejected). Rejecting the scaling factor makes
+	// `^(-1/3)` the only spelling of that unit, so the same string cannot silently
+	// mean two things.
+	//
+	// Before this rule Go RETAINED the magnitude here, so "1000/s" came out as
+	// 1/s scaled by 1000 while Julia read the same string as a bare 1/s.
 	if c >= '0' && c <= '9' {
 		start := p.pos
 		for p.pos < len(p.src) && ((p.src[p.pos] >= '0' && p.src[p.pos] <= '9') || p.src[p.pos] == '.') {
@@ -733,7 +766,10 @@ func (p *unitParser) parseAtom() (Unit, error) {
 		if err != nil {
 			return Unit{}, fmt.Errorf("invalid number %q", p.src[start:p.pos])
 		}
-		return Unit{Scale: val}, nil
+		if val != 1 {
+			return Unit{}, fmt.Errorf("a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)")
+		}
+		return Unit{Scale: 1}, nil
 	}
 	// Identifier: letters followed by letters/digits/underscore.
 	if !isIdentStart(c) {

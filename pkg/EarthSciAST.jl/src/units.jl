@@ -53,18 +53,44 @@ Unitful.@unit _u_uatm "uatm" MicroAtmosphere 1e-6 * Unitful.u"atm" false
 # `molec/m^2` is exact.
 Unitful.@unit _u_dobson "DU" DobsonUnit 2.6867e20 * Unitful.u"m"^-2 false
 
+# The international foot, exact by definition since 1959: 1 ft = 0.3048 m. It is
+# in the table because emission inventories are WRITTEN in it — the EPA FF10
+# point-source format stores STKHGT and STKDIAM in feet — and a format for
+# air-quality models that cannot spell the unit its own input files use forces
+# every such column to be declared in a unit it is not stored in. Spelled out
+# here rather than taken from Unitful so this table stays the only statement of
+# what `ft` means. `ft` is the ONLY imperial length in the registry: `in`, `yd`
+# and `mi` are absent because nothing in the corpus declares them.
+Unitful.@unit _u_ft "ft" InternationalFoot 0.3048 * Unitful.u"m" false
+
+# The two tons, both spelled UNAMBIGUOUSLY and neither spelled `ton`. A bare
+# `ton` is three different masses (short 907.18474 kg, metric 1000 kg, long
+# 1016.0469088 kg), and a table whose job is to make a declared unit mean ONE
+# thing cannot hold a name that means three. `t` is excluded for the same reason
+# `d` is: a one-letter mass symbol reads as tera- to half its readers.
+#
+# `short_ton` is exactly 2000 international pounds (2000 × 0.45359237 kg) —
+# what a US emissions inventory means by "tons", and exactly InMAP's
+# 907184740000 µg/short-ton emission-conversion constant. `tonne` is the metric
+# ton, so that choosing between them is something a document DOES rather than
+# something it cannot express.
+Unitful.@unit _u_short_ton "short_ton" ShortTon 907.18474 * Unitful.u"kg" false
+Unitful.@unit _u_tonne "tonne" MetricTon 1000 * Unitful.u"kg" false
+
 # The flat table, grouped exactly as esm-spec §4.8.1 lists it.
 const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
     # SI base.
     "m" => u"m", "kg" => u"kg", "s" => u"s", "mol" => u"mol",
     "K" => u"K", "A" => u"A", "cd" => u"cd", "rad" => u"rad",
 
-    # Mass.
+    # Mass. `short_ton` / `tonne` are spelled in full on purpose (see above);
+    # `ton` and `t` are deliberately NOT registry symbols.
     "g" => u"g", "mg" => u"mg", "ug" => u"μg",
+    "short_ton" => _u_short_ton, "tonne" => _u_tonne,
 
     # Length.
     "dm" => u"dm", "cm" => u"cm", "mm" => u"mm", "um" => u"μm",
-    "nm" => u"nm", "km" => u"km",
+    "nm" => u"nm", "km" => u"km", "ft" => _u_ft,
 
     # Time. `h` is the HOUR here, not Unitful's Planck constant.
     #
@@ -292,7 +318,7 @@ function _up_term!(p::_UnitParser)
     return _u_pow(u, _up_exponent!(p))
 end
 
-# atom := number | symbol | '(' unit ')'
+# atom := '1' | symbol | '(' unit ')'
 function _up_atom!(p::_UnitParser)
     _up_skip_space!(p)
     _up_eof(p) && throw(_UnitParseError("unexpected end of input"))
@@ -312,14 +338,21 @@ function _up_atom!(p::_UnitParser)
             p.pos += 1
         end
         tok = String(p.src[start:(p.pos - 1)])
-        tryparse(Float64, tok) === nothing && throw(_UnitParseError("invalid number '$tok'"))
-        # A numeric atom is DIMENSIONALLY the dimensionless unit. Its magnitude
-        # is not carried: a `Unitful.Units` object cannot hold a free scalar
-        # factor, so `"1000/s"` resolves to the dimension 1/s with the 1000
-        # dropped. That is exact for the only numeric atom the grammar really
-        # needs (`"1"`), and dimensionally correct for any other; only a
-        # CONVERSION-factor check would notice the missing magnitude, and no
-        # unit string in the corpus carries one.
+        val = tryparse(Float64, tok)
+        val === nothing && throw(_UnitParseError("invalid number '$tok'"))
+        # A numeric atom is admissible ONLY when its value is exactly 1 -- the
+        # leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
+        # denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
+        # reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
+        # and the five bindings gave it three different meanings (magnitude dropped,
+        # magnitude retained, whole string rejected). Rejecting the scaling factor makes
+        # `^(-1/3)` the only spelling of that unit, so the same string cannot silently
+        # mean two things.
+        #
+        # Before this rule Julia returned `Unitful.NoUnits` here and SILENTLY
+        # DROPPED the magnitude, so `"1000/s"` resolved to the dimension 1/s.
+        val == 1 || throw(_UnitParseError(
+            "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"))
         return Unitful.NoUnits
     end
 
@@ -400,6 +433,34 @@ function _up_signed_int!(p::_UnitParser)
 end
 
 """
+    parse_units_reason(unit_str) -> Union{String, Nothing}
+
+WHY [`parse_units`](@ref) returned `nothing`, or `nothing` when it did not.
+
+`parse_units` is deliberately silent — the caller owns the severity (§4.8.4) —
+but one rejection has a reason an author cannot guess from the string: a
+numeric SCALING FACTOR. `"(m/s)^-1/3"` LOOKS like a rational exponent and the
+§4.8.2 grammar reads it as `((m/s)^-1)/3`. This accessor exists so that reason
+can be surfaced and pinned (`tests/conformance/unit_registry`) without changing
+the corpus-pinned `unit_parse_error` message text.
+"""
+function parse_units_reason(unit_str::AbstractString)::Union{String, Nothing}
+    s = strip(unit_str)
+    (isempty(s) || s == "dimensionless" || s == "1") && return nothing
+    p = _UnitParser(collect(_normalize_unit_string(s)), 1)
+    try
+        _up_unit!(p)
+        _up_skip_space!(p)
+        _up_eof(p) || throw(_UnitParseError("unexpected trailing input"))
+        return nothing
+    catch e
+        e isa _UnitParseError && return e.msg
+        e isa ArgumentError && return sprint(showerror, e)
+        rethrow()
+    end
+end
+
+"""
     parse_units(unit_str) -> Union{Unitful.Units, Nothing}
 
 Resolve a unit string against the ESM registry (esm-spec §4.8.1) using the ESM
@@ -408,7 +469,7 @@ grammar (§4.8.2):
     unit     := term (('*' | '/')? term)*
     term     := atom (('^' | '**') exponent)?
     exponent := integer | decimal | '(' integer '/' integer ')'
-    atom     := number | symbol | '(' unit ')'
+    atom     := '1' | symbol | '(' unit ')'
 
 Whitespace between terms is multiplication (`"ppb^-1 s^-1"`); division is
 LEFT-associative (`"L/mol/s"` is L·mol⁻¹·s⁻¹); parentheses group a compound
