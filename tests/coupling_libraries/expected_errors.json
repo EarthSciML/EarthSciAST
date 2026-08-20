@@ -20,7 +20,7 @@
     },
     "full_surface_lib.esm": {
       "kind": "coupling_library",
-      "note": "Exercises every §10.10.2 occurrence site (variable_map apply_expression_template bindings values, couple systems+connector, operator_compose translate keys+values, event conditions/affects/discrete_parameters)."
+      "note": "Exercises every §10.10.2 occurrence site (variable_map apply_expression_template bindings values, couple systems+connector, operator_compose translate keys+values, event conditions/affects)."
     },
     "assembly_full_surface.esm": {
       "kind": "assembly",

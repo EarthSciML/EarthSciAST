@@ -33,13 +33,70 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event counter"
+          "description": "Event counter",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "x",
+                  0.5
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter"
+                    ]
+                  },
+                  100
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "y",
+                  1.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter"
+                    ]
+                  },
+                  10
+                ]
+              }
+            }
+          ]
         },
         "priority_flag": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Priority processing flag"
+          "description": "Priority processing flag",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "x",
+                0.5
+              ]
+            },
+            "expression": 1
+          }
         }
       },
       "equations": [
@@ -120,40 +177,6 @@
       ],
       "continuous_events": [
         {
-          "name": "simultaneous_zero_crossing_1",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "x",
-                0.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter"
-                    ]
-                  },
-                  100
-                ]
-              }
-            },
-            {
-              "lhs": "priority_flag",
-              "rhs": 1
-            }
-          ],
-          "description": "First event in simultaneous firing (higher priority due to alphabetical ordering)"
-        },
-        {
           "name": "simultaneous_zero_crossing_2",
           "conditions": [
             {
@@ -165,21 +188,6 @@
             }
           ],
           "affects": [
-            {
-              "lhs": "event_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter"
-                    ]
-                  },
-                  10
-                ]
-              }
-            },
             {
               "lhs": "z",
               "rhs": {
@@ -276,7 +284,77 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Precision event counter"
+          "description": "Precision event counter",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "position",
+                  0.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "precision_counter"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "temperature",
+                  273.15
+                ]
+              },
+              "direction": "up",
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "precision_counter"
+                    ]
+                  },
+                  10
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "temperature",
+                  273.15
+                ]
+              },
+              "direction": "down",
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "precision_counter"
+                    ]
+                  },
+                  20
+                ]
+              }
+            }
+          ]
         },
         "epsilon": {
           "type": "parameter",
@@ -364,37 +442,6 @@
       ],
       "continuous_events": [
         {
-          "name": "exact_zero_crossing",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "position",
-                0.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "precision_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "precision_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Event at exactly zero (tests numerical precision)"
-        },
-        {
           "name": "near_zero_tolerance",
           "conditions": [
             {
@@ -417,53 +464,6 @@
             }
           ],
           "description": "Snap to zero when velocity is within machine epsilon"
-        },
-        {
-          "name": "freezing_point_hysteresis",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "temperature",
-                273.15
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "precision_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "precision_counter"
-                    ]
-                  },
-                  10
-                ]
-              }
-            }
-          ],
-          "affect_neg": [
-            {
-              "lhs": "precision_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "precision_counter"
-                    ]
-                  },
-                  20
-                ]
-              }
-            }
-          ],
-          "description": "Different behavior for warming vs cooling past freezing point"
         }
       ]
     },
@@ -479,7 +479,23 @@
           "type": "parameter",
           "units": "1",
           "default": 5.0,
-          "description": "Parameter shared across systems"
+          "description": "Parameter shared across systems",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "BoundaryConditionSystem.position",
+                -1e-10
+              ]
+            },
+            "expression": {
+              "op": "Pre",
+              "args": [
+                "BoundaryConditionSystem.precision_counter"
+              ]
+            }
+          }
         },
         "observed_value": {
           "type": "unknown",
@@ -532,30 +548,6 @@
       ],
       "continuous_events": [
         {
-          "name": "cross_system_reference_test",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "BoundaryConditionSystem.position",
-                -1e-10
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "shared_param",
-              "rhs": {
-                "op": "Pre",
-                "args": [
-                  "BoundaryConditionSystem.precision_counter"
-                ]
-              }
-            }
-          ],
-          "description": "Event that references variables from another system"
-        },
-        {
           "name": "observed_variable_in_condition",
           "conditions": [
             {
@@ -599,25 +591,136 @@
           "type": "parameter",
           "units": "1",
           "default": 1.0,
-          "description": "First parameter in chain"
+          "description": "First parameter in chain",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": ">",
+              "args": [
+                "state_var",
+                5.0
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "param_a"
+                  ]
+                },
+                2
+              ]
+            }
+          }
         },
         "param_b": {
           "type": "parameter",
           "units": "1",
           "default": 2.0,
-          "description": "Second parameter in chain"
+          "description": "Second parameter in chain",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "==",
+              "args": [
+                "chain_trigger",
+                1
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "param_b"
+                  ]
+                },
+                {
+                  "op": "Pre",
+                  "args": [
+                    "param_a"
+                  ]
+                }
+              ]
+            }
+          }
         },
         "param_c": {
           "type": "parameter",
           "units": "1",
           "default": 3.0,
-          "description": "Third parameter in chain"
+          "description": "Third parameter in chain",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "==",
+              "args": [
+                "chain_trigger",
+                2
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "param_c"
+                  ]
+                },
+                {
+                  "op": "Pre",
+                  "args": [
+                    "param_b"
+                  ]
+                }
+              ]
+            }
+          }
         },
         "chain_trigger": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Chain trigger flag"
+          "description": "Chain trigger flag",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  "state_var",
+                  5.0
+                ]
+              },
+              "expression": 1
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "==",
+                "args": [
+                  "chain_trigger",
+                  1
+                ]
+              },
+              "expression": 2
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "==",
+                "args": [
+                  "chain_trigger",
+                  2
+                ]
+              },
+              "expression": 0
+            }
+          ]
         }
       },
       "equations": [
@@ -653,136 +756,7 @@
           "rhs": 0.0
         }
       ],
-      "discrete_events": [
-        {
-          "name": "parameter_chain_step1",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": ">",
-              "args": [
-                "state_var",
-                5.0
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "param_a",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "param_a"
-                    ]
-                  },
-                  2
-                ]
-              }
-            },
-            {
-              "lhs": "chain_trigger",
-              "rhs": 1
-            }
-          ],
-          "discrete_parameters": [
-            "param_a",
-            "chain_trigger"
-          ],
-          "reinitialize": true,
-          "description": "First step in parameter modification chain"
-        },
-        {
-          "name": "parameter_chain_step2",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "==",
-              "args": [
-                "chain_trigger",
-                1
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "param_b",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "param_b"
-                    ]
-                  },
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "param_a"
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "lhs": "chain_trigger",
-              "rhs": 2
-            }
-          ],
-          "discrete_parameters": [
-            "param_b",
-            "chain_trigger"
-          ],
-          "description": "Second step triggered by first step's parameter change"
-        },
-        {
-          "name": "parameter_chain_step3",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "==",
-              "args": [
-                "chain_trigger",
-                2
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "param_c",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "param_c"
-                    ]
-                  },
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "param_b"
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "lhs": "chain_trigger",
-              "rhs": 0
-            }
-          ],
-          "discrete_parameters": [
-            "param_c",
-            "chain_trigger"
-          ],
-          "description": "Final step in parameter chain, resets trigger"
-        }
-      ]
+      "discrete_events": []
     },
     "FunctionalAffectEdgeCases": {
       "variables": {
@@ -802,19 +776,144 @@
           "type": "parameter",
           "units": "1",
           "default": 0.0,
-          "description": "Internal controller state"
+          "description": "Internal controller state",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 0.1,
+            "initial_offset": 0.0,
+            "handler": {
+              "handler_id": "AdvancedPIDController",
+              "read_vars": [
+                "input_signal",
+                "output_signal"
+              ],
+              "read_params": [
+                "setpoint",
+                "error_accumulator"
+              ],
+              "config": {
+                "kp": 2.0,
+                "ki": 0.5,
+                "kd": 0.1,
+                "anti_windup": true,
+                "output_limits": [
+                  -10.0,
+                  10.0
+                ],
+                "derivative_filter": 0.8,
+                "deadband": 0.01
+              }
+            }
+          }
         },
         "error_accumulator": {
           "type": "parameter",
           "units": "V*s",
           "default": 0.0,
-          "description": "Error integral"
+          "description": "Error integral",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 0.1,
+            "initial_offset": 0.0,
+            "handler": {
+              "handler_id": "AdvancedPIDController",
+              "read_vars": [
+                "input_signal",
+                "output_signal"
+              ],
+              "read_params": [
+                "setpoint",
+                "error_accumulator"
+              ],
+              "config": {
+                "kp": 2.0,
+                "ki": 0.5,
+                "kd": 0.1,
+                "anti_windup": true,
+                "output_limits": [
+                  -10.0,
+                  10.0
+                ],
+                "derivative_filter": 0.8,
+                "deadband": 0.01
+              }
+            }
+          }
         },
         "setpoint": {
           "type": "parameter",
           "units": "V",
           "default": 5.0,
-          "description": "Target setpoint"
+          "description": "Target setpoint",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  {
+                    "op": "abs",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "input_signal",
+                          "setpoint"
+                        ]
+                      }
+                    ]
+                  },
+                  1.0
+                ]
+              },
+              "handler": {
+                "handler_id": "AdaptiveSetpointController",
+                "read_vars": [
+                  "input_signal",
+                  "output_signal"
+                ],
+                "read_params": [
+                  "setpoint",
+                  "controller_state"
+                ],
+                "config": {
+                  "adaptation_rate": 0.1,
+                  "stability_threshold": 0.05,
+                  "max_setpoint_change": 0.5
+                }
+              }
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "DiscreteParameterChainSystem.param_c",
+                      50.0
+                    ]
+                  },
+                  {
+                    "op": "<",
+                    "args": [
+                      "BoundaryConditionSystem.position",
+                      1e-12
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "Pre",
+                "args": [
+                  "VariableScopingSystem.shared_param"
+                ]
+              }
+            }
+          ]
         }
       },
       "equations": [
@@ -881,89 +980,7 @@
           "rhs": 0.0
         }
       ],
-      "discrete_events": [
-        {
-          "name": "complex_pid_controller",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.1,
-            "initial_offset": 0.0
-          },
-          "functional_affect": {
-            "handler_id": "AdvancedPIDController",
-            "read_vars": [
-              "input_signal",
-              "output_signal"
-            ],
-            "read_params": [
-              "setpoint",
-              "error_accumulator"
-            ],
-            "modified_params": [
-              "controller_state",
-              "error_accumulator"
-            ],
-            "config": {
-              "kp": 2.0,
-              "ki": 0.5,
-              "kd": 0.1,
-              "anti_windup": true,
-              "output_limits": [
-                -10.0,
-                10.0
-              ],
-              "derivative_filter": 0.8,
-              "deadband": 0.01
-            }
-          },
-          "reinitialize": false,
-          "description": "Complex PID controller with anti-windup and filtering"
-        },
-        {
-          "name": "adaptive_setpoint",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": ">",
-              "args": [
-                {
-                  "op": "abs",
-                  "args": [
-                    {
-                      "op": "-",
-                      "args": [
-                        "input_signal",
-                        "setpoint"
-                      ]
-                    }
-                  ]
-                },
-                1.0
-              ]
-            }
-          },
-          "functional_affect": {
-            "handler_id": "AdaptiveSetpointController",
-            "read_vars": [
-              "input_signal",
-              "output_signal"
-            ],
-            "read_params": [
-              "setpoint",
-              "controller_state"
-            ],
-            "modified_params": [
-              "setpoint"
-            ],
-            "config": {
-              "adaptation_rate": 0.1,
-              "stability_threshold": 0.05,
-              "max_setpoint_change": 0.5
-            }
-          },
-          "description": "Adaptive setpoint adjustment based on system performance"
-        }
-      ]
+      "discrete_events": []
     }
   },
   "coupling": [
@@ -1001,47 +1018,6 @@
         }
       ],
       "description": "Cross-system event affecting multiple systems simultaneously"
-    },
-    {
-      "type": "event",
-      "event_type": "discrete",
-      "trigger": {
-        "type": "condition",
-        "expression": {
-          "op": "and",
-          "args": [
-            {
-              "op": ">",
-              "args": [
-                "DiscreteParameterChainSystem.param_c",
-                50.0
-              ]
-            },
-            {
-              "op": "<",
-              "args": [
-                "BoundaryConditionSystem.position",
-                1e-12
-              ]
-            }
-          ]
-        }
-      },
-      "affects": [
-        {
-          "lhs": "FunctionalAffectEdgeCases.setpoint",
-          "rhs": {
-            "op": "Pre",
-            "args": [
-              "VariableScopingSystem.shared_param"
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "FunctionalAffectEdgeCases.setpoint"
-      ],
-      "description": "Complex cross-system discrete event with compound conditions"
     }
   ],
   "domain": {

@@ -27,25 +27,258 @@
           "type": "parameter",
           "units": "1",
           "default": 0.05,
-          "description": "Risk-free interest rate"
+          "description": "Risk-free interest rate",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": ">",
+              "args": [
+                "volatility",
+                0.8
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "interest_rate"
+                  ]
+                },
+                1.2
+              ]
+            }
+          }
         },
         "market_sentiment": {
           "type": "parameter",
           "units": "1",
           "default": 0.0,
-          "description": "Market sentiment (-1 to 1)"
+          "description": "Market sentiment (-1 to 1)",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "times": [
+                10.0,
+                25.0,
+                40.0
+              ],
+              "expression": 0.6
+            },
+            {
+              "kind": "schedule",
+              "times": [
+                15.0,
+                35.0,
+                55.0
+              ],
+              "expression": -0.4
+            },
+            {
+              "kind": "schedule",
+              "interval": 5.0,
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "market_sentiment"
+                    ]
+                  },
+                  0.8
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "<",
+                "args": [
+                  "daily_return",
+                  -0.1
+                ]
+              },
+              "expression": -0.8
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "ClimateSystemModel.global_temperature",
+                      290.0
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      "ClimateSystemModel.tipping_cascade",
+                      1
+                    ]
+                  }
+                ]
+              },
+              "expression": -0.5
+            }
+          ]
         },
         "shock_magnitude": {
           "type": "parameter",
           "units": "1",
           "default": 0.0,
-          "description": "Current shock magnitude"
+          "description": "Current shock magnitude",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "times": [
+                10.0,
+                25.0,
+                40.0
+              ],
+              "expression": 0.15
+            },
+            {
+              "kind": "schedule",
+              "times": [
+                15.0,
+                35.0,
+                55.0
+              ],
+              "expression": -0.12
+            },
+            {
+              "kind": "schedule",
+              "interval": 5.0,
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "shock_magnitude"
+                    ]
+                  },
+                  0.9
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "<",
+                "args": [
+                  "daily_return",
+                  -0.1
+                ]
+              },
+              "expression": -0.2
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "<",
+                "args": [
+                  "asset_price",
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "Pre",
+                        "args": [
+                          "asset_price"
+                        ]
+                      },
+                      0.85
+                    ]
+                  }
+                ]
+              },
+              "expression": 0.0
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "ClimateSystemModel.global_temperature",
+                      290.0
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      "ClimateSystemModel.tipping_cascade",
+                      1
+                    ]
+                  }
+                ]
+              },
+              "expression": -0.1
+            }
+          ]
         },
         "circuit_breaker": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Circuit breaker status (0=off, 1=active)"
+          "description": "Circuit breaker status (0=off, 1=active)",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": "==",
+                    "args": [
+                      "circuit_breaker",
+                      1
+                    ]
+                  },
+                  {
+                    "op": "<",
+                    "args": [
+                      "volatility",
+                      0.3
+                    ]
+                  }
+                ]
+              },
+              "expression": 0
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "<",
+                "args": [
+                  "asset_price",
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "Pre",
+                        "args": [
+                          "asset_price"
+                        ]
+                      },
+                      0.85
+                    ]
+                  }
+                ]
+              },
+              "expression": 1
+            }
+          ]
         },
         "daily_return": {
           "type": "unknown",
@@ -182,30 +415,6 @@
       ],
       "continuous_events": [
         {
-          "name": "price_crash",
-          "conditions": [
-            {
-              "op": "<",
-              "args": [
-                "daily_return",
-                -0.1
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "market_sentiment",
-              "rhs": -0.8
-            },
-            {
-              "lhs": "shock_magnitude",
-              "rhs": -0.2
-            }
-          ],
-          "reinitialize": true,
-          "description": "Market crash triggers negative sentiment"
-        },
-        {
           "name": "circuit_breaker_trigger",
           "conditions": [
             {
@@ -229,14 +438,6 @@
           ],
           "affects": [
             {
-              "lhs": "circuit_breaker",
-              "rhs": 1
-            },
-            {
-              "lhs": "shock_magnitude",
-              "rhs": 0.0
-            },
-            {
               "lhs": "volatility",
               "rhs": {
                 "op": "*",
@@ -254,172 +455,9 @@
           ],
           "reinitialize": true,
           "description": "Circuit breaker halts trading on 15% drop"
-        },
-        {
-          "name": "volatility_spike",
-          "conditions": [
-            {
-              "op": ">",
-              "args": [
-                "volatility",
-                0.8
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "interest_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "interest_rate"
-                    ]
-                  },
-                  1.2
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Central bank raises rates during high volatility"
         }
       ],
-      "discrete_events": [
-        {
-          "name": "news_shock_positive",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              10.0,
-              25.0,
-              40.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "shock_magnitude",
-              "rhs": 0.15
-            },
-            {
-              "lhs": "market_sentiment",
-              "rhs": 0.6
-            }
-          ],
-          "discrete_parameters": [
-            "shock_magnitude",
-            "market_sentiment"
-          ],
-          "description": "Positive news shocks"
-        },
-        {
-          "name": "news_shock_negative",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              15.0,
-              35.0,
-              55.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "shock_magnitude",
-              "rhs": -0.12
-            },
-            {
-              "lhs": "market_sentiment",
-              "rhs": -0.4
-            }
-          ],
-          "discrete_parameters": [
-            "shock_magnitude",
-            "market_sentiment"
-          ],
-          "description": "Negative news shocks"
-        },
-        {
-          "name": "sentiment_decay",
-          "trigger": {
-            "type": "periodic",
-            "interval": 5.0
-          },
-          "affects": [
-            {
-              "lhs": "market_sentiment",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "market_sentiment"
-                    ]
-                  },
-                  0.8
-                ]
-              }
-            },
-            {
-              "lhs": "shock_magnitude",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "shock_magnitude"
-                    ]
-                  },
-                  0.9
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "market_sentiment",
-            "shock_magnitude"
-          ],
-          "description": "Gradual decay of sentiment and shock effects"
-        },
-        {
-          "name": "circuit_breaker_reset",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "and",
-              "args": [
-                {
-                  "op": "==",
-                  "args": [
-                    "circuit_breaker",
-                    1
-                  ]
-                },
-                {
-                  "op": "<",
-                  "args": [
-                    "volatility",
-                    0.3
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "circuit_breaker",
-              "rhs": 0
-            }
-          ],
-          "discrete_parameters": [
-            "circuit_breaker"
-          ],
-          "description": "Reset circuit breaker when volatility subsides"
-        }
-      ]
+      "discrete_events": []
     },
     "ClimateSystemModel": {
       "variables": {
@@ -451,25 +489,173 @@
           "type": "parameter",
           "units": "1",
           "default": 0.3,
-          "description": "Ice-albedo feedback strength"
+          "description": "Ice-albedo feedback strength",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "<",
+              "args": [
+                "arctic_ice_extent",
+                0.5
+              ]
+            },
+            "expression": 0.1
+          }
         },
         "carbon_sensitivity": {
           "type": "parameter",
           "units": "K/(ppm)",
           "default": 0.01,
-          "description": "Climate sensitivity to CO2"
+          "description": "Climate sensitivity to CO2",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "atmospheric_co2",
+                      800.0
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      "tipping_cascade",
+                      2
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "carbon_sensitivity"
+                    ]
+                  },
+                  3.0
+                ]
+              }
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "==",
+                "args": [
+                  "FinancialMarketModel.circuit_breaker",
+                  1
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "carbon_sensitivity"
+                    ]
+                  },
+                  0.95
+                ]
+              }
+            }
+          ]
         },
         "tipping_cascade": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Tipping point cascade counter"
+          "description": "Tipping point cascade counter",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "<",
+                "args": [
+                  "arctic_ice_extent",
+                  0.5
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "tipping_cascade"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": ">",
+                "args": [
+                  "global_temperature",
+                  275.15
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "tipping_cascade"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "<",
+                "args": [
+                  "ocean_ph",
+                  7.8
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "tipping_cascade"
+                    ]
+                  },
+                  1
+                ]
+              }
+            }
+          ]
         },
         "permafrost_state": {
           "type": "parameter",
           "units": "1",
           "default": 1,
-          "description": "Permafrost stability (1=stable, 0=melted)"
+          "description": "Permafrost stability (1=stable, 0=melted)",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": ">",
+              "args": [
+                "global_temperature",
+                275.15
+              ]
+            },
+            "expression": 0
+          }
         }
       },
       "equations": [
@@ -641,152 +827,7 @@
           "rhs": 0.0
         }
       ],
-      "continuous_events": [
-        {
-          "name": "arctic_ice_collapse",
-          "conditions": [
-            {
-              "op": "<",
-              "args": [
-                "arctic_ice_extent",
-                0.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "albedo_feedback",
-              "rhs": 0.1
-            },
-            {
-              "lhs": "tipping_cascade",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "tipping_cascade"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Arctic ice collapse reduces albedo feedback"
-        },
-        {
-          "name": "permafrost_melting",
-          "conditions": [
-            {
-              "op": ">",
-              "args": [
-                "global_temperature",
-                275.15
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "permafrost_state",
-              "rhs": 0
-            },
-            {
-              "lhs": "tipping_cascade",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "tipping_cascade"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Permafrost melting releases stored carbon"
-        },
-        {
-          "name": "ocean_acidification_critical",
-          "conditions": [
-            {
-              "op": "<",
-              "args": [
-                "ocean_ph",
-                7.8
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "tipping_cascade",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "tipping_cascade"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Critical ocean acidification threshold"
-        },
-        {
-          "name": "runaway_greenhouse",
-          "conditions": [
-            {
-              "op": "and",
-              "args": [
-                {
-                  "op": ">",
-                  "args": [
-                    "atmospheric_co2",
-                    800.0
-                  ]
-                },
-                {
-                  "op": ">",
-                  "args": [
-                    "tipping_cascade",
-                    2
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "carbon_sensitivity",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "carbon_sensitivity"
-                    ]
-                  },
-                  3.0
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Runaway greenhouse effect after multiple tipping points"
-        }
-      ],
+      "continuous_events": [],
       "discrete_events": [
         {
           "name": "volcanic_eruption",
@@ -872,91 +913,12 @@
               }
             }
           ],
-          "discrete_parameters": [
-            "atmospheric_co2"
-          ],
           "description": "Methane pulse from permafrost melting (CO2 equivalent)"
         }
       ]
     }
   },
-  "coupling": [
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "conditions": [
-        {
-          "op": "and",
-          "args": [
-            {
-              "op": ">",
-              "args": [
-                "ClimateSystemModel.global_temperature",
-                290.0
-              ]
-            },
-            {
-              "op": ">",
-              "args": [
-                "ClimateSystemModel.tipping_cascade",
-                1
-              ]
-            }
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "FinancialMarketModel.market_sentiment",
-          "rhs": -0.5
-        },
-        {
-          "lhs": "FinancialMarketModel.shock_magnitude",
-          "rhs": -0.1
-        }
-      ],
-      "discrete_parameters": [
-        "FinancialMarketModel.market_sentiment",
-        "FinancialMarketModel.shock_magnitude"
-      ],
-      "description": "Climate tipping points impact financial markets"
-    },
-    {
-      "type": "event",
-      "event_type": "discrete",
-      "trigger": {
-        "type": "condition",
-        "expression": {
-          "op": "==",
-          "args": [
-            "FinancialMarketModel.circuit_breaker",
-            1
-          ]
-        }
-      },
-      "affects": [
-        {
-          "lhs": "ClimateSystemModel.carbon_sensitivity",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "ClimateSystemModel.carbon_sensitivity"
-                ]
-              },
-              0.95
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "ClimateSystemModel.carbon_sensitivity"
-      ],
-      "description": "Financial crisis reduces climate investment"
-    }
-  ],
+  "coupling": [],
   "domain": {
     "temporal": {
       "start": "2024-01-01T00:00:00Z",

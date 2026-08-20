@@ -241,7 +241,43 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Number of samples taken"
+          "description": "Number of samples taken",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  "temperature",
+                  "sample_threshold"
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  "sample_count",
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "<",
+                "args": [
+                  "temperature",
+                  "sample_threshold"
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  "sample_count",
+                  1
+                ]
+              }
+            }
+          ]
         },
         "heating_rate": {
           "units": "°C/min",
@@ -293,56 +329,7 @@
           }
         }
       ],
-      "discrete_events": [
-        {
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": ">",
-              "args": [
-                "temperature",
-                "sample_threshold"
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "sample_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  "sample_count",
-                  1
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "<",
-              "args": [
-                "temperature",
-                "sample_threshold"
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "sample_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  "sample_count",
-                  1
-                ]
-              }
-            }
-          ]
-        }
-      ]
+      "discrete_events": []
     },
     "ConditionalEvent": {
       "reference": {
@@ -365,7 +352,61 @@
           "type": "parameter",
           "units": "1",
           "default": 1.0,
-          "description": "System activity flag"
+          "description": "System activity flag",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "x",
+                      3
+                    ]
+                  },
+                  {
+                    "op": "<",
+                    "args": [
+                      "y",
+                      2
+                    ]
+                  },
+                  "active"
+                ]
+              },
+              "expression": 0
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": "not",
+                    "args": [
+                      "active"
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      {
+                        "op": "+",
+                        "args": [
+                          "x",
+                          "y"
+                        ]
+                      },
+                      4
+                    ]
+                  }
+                ]
+              },
+              "expression": 1
+            }
+          ]
         },
         "rate_x": {
           "units": "1/s",
@@ -443,51 +484,12 @@
           },
           "affects": [
             {
-              "lhs": "active",
-              "rhs": 0
-            },
-            {
               "lhs": "x",
               "rhs": 0
             },
             {
               "lhs": "y",
               "rhs": 5
-            }
-          ]
-        },
-        {
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "and",
-              "args": [
-                {
-                  "op": "not",
-                  "args": [
-                    "active"
-                  ]
-                },
-                {
-                  "op": ">",
-                  "args": [
-                    {
-                      "op": "+",
-                      "args": [
-                        "x",
-                        "y"
-                      ]
-                    },
-                    4
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "active",
-              "rhs": 1
             }
           ]
         }

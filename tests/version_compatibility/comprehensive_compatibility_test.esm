@@ -83,12 +83,40 @@
         "jNO2": {
           "units": "1/s",
           "default": 0.005,
-          "description": "NO2 photolysis rate"
+          "description": "NO2 photolysis rate",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 86400,
+            "initial_offset": 21600,
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                1,
+                0.01,
+                0.001
+              ]
+            }
+          }
         },
         "jO3": {
           "units": "1/s",
           "default": 0.0001,
-          "description": "O3 photolysis rate"
+          "description": "O3 photolysis rate",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 86400,
+            "initial_offset": 21600,
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                1,
+                0.0002,
+                5e-05
+              ]
+            }
+          }
         }
       },
       "reactions": [
@@ -192,40 +220,7 @@
           }
         }
       ],
-      "discrete_events": [
-        {
-          "name": "daylight_switch",
-          "trigger": {
-            "type": "periodic",
-            "interval": 86400,
-            "initial_offset": 21600
-          },
-          "affects": [
-            {
-              "lhs": "jNO2",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  1,
-                  0.01,
-                  0.001
-                ]
-              }
-            },
-            {
-              "lhs": "jO3",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  1,
-                  0.0002,
-                  5e-05
-                ]
-              }
-            }
-          ]
-        }
-      ]
+      "discrete_events": []
     }
   },
   "models": {

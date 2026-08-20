@@ -371,26 +371,142 @@
           "units": "mol/mol/s",
           "default": 1e-11,
           "description": "NOx emission rate",
-          "update": {
-            "kind": "data",
-            "source": "EmissionInventory",
-            "from": {
-              "file_variable": "NOx_emission_rate"
+          "update": [
+            {
+              "kind": "data",
+              "source": "EmissionInventory",
+              "from": {
+                "file_variable": "NOx_emission_rate"
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "AtmosphericChemistry.O3",
+                  8e-08
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "NOx_emission_rate"
+                    ]
+                  },
+                  0.5
+                ]
+              }
             }
-          },
+          ],
           "shape": []
         },
         "diurnal_factor": {
           "type": "parameter",
           "units": "dimensionless",
           "default": 1.0,
-          "description": "Diurnal emission scaling factor"
+          "description": "Diurnal emission scaling factor",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "expression": {
+              "op": "+",
+              "args": [
+                1.0,
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    {
+                      "op": "sin",
+                      "args": [
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                2,
+                                3.14159,
+                                "t"
+                              ]
+                            },
+                            86400
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
         },
         "weekday_factor": {
           "type": "parameter",
           "units": "dimensionless",
           "default": 1.0,
-          "description": "Weekday/weekend scaling factor"
+          "description": "Weekday/weekend scaling factor",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": ">=",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "floor",
+                      "args": [
+                        {
+                          "op": "/",
+                          "args": [
+                            "t",
+                            86400
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "floor",
+                          "args": [
+                            {
+                              "op": "/",
+                              "args": [
+                                {
+                                  "op": "floor",
+                                  "args": [
+                                    {
+                                      "op": "/",
+                                      "args": [
+                                        "t",
+                                        86400
+                                      ]
+                                    }
+                                  ]
+                                },
+                                7
+                              ]
+                            }
+                          ]
+                        },
+                        7
+                      ]
+                    }
+                  ]
+                },
+                5
+              ]
+            },
+            "expression": 0.7
+          }
         }
       },
       "equations": [
@@ -412,55 +528,7 @@
           }
         }
       ],
-      "discrete_events": [
-        {
-          "name": "hourly_emission_update",
-          "trigger": {
-            "type": "periodic",
-            "interval": 3600.0
-          },
-          "affects": [
-            {
-              "lhs": "diurnal_factor",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  1.0,
-                  {
-                    "op": "*",
-                    "args": [
-                      0.5,
-                      {
-                        "op": "sin",
-                        "args": [
-                          {
-                            "op": "/",
-                            "args": [
-                              {
-                                "op": "*",
-                                "args": [
-                                  2,
-                                  3.14159,
-                                  "t"
-                                ]
-                              },
-                              86400
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "diurnal_factor"
-          ],
-          "description": "Update diurnal emission pattern every hour"
-        }
-      ]
+      "discrete_events": []
     }
   },
   "data_sources": {
@@ -561,108 +629,6 @@
         "update_frequency": 600.0
       },
       "description": "Update photolysis rates based on solar conditions"
-    },
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "name": "ozone_threshold_emission_cutoff",
-      "conditions": [
-        {
-          "op": "-",
-          "args": [
-            "AtmosphericChemistry.O3",
-            8e-08
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "EmissionSources.NOx_emission_rate",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "EmissionSources.NOx_emission_rate"
-                ]
-              },
-              0.5
-            ]
-          }
-        }
-      ],
-      "description": "Reduce NOx emissions when ozone exceeds 80 ppb"
-    },
-    {
-      "type": "event",
-      "event_type": "discrete",
-      "name": "weekend_emission_reduction",
-      "trigger": {
-        "type": "condition",
-        "expression": {
-          "op": ">=",
-          "args": [
-            {
-              "op": "-",
-              "args": [
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        "t",
-                        86400
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "op": "*",
-                  "args": [
-                    {
-                      "op": "floor",
-                      "args": [
-                        {
-                          "op": "/",
-                          "args": [
-                            {
-                              "op": "floor",
-                              "args": [
-                                {
-                                  "op": "/",
-                                  "args": [
-                                    "t",
-                                    86400
-                                  ]
-                                }
-                              ]
-                            },
-                            7
-                          ]
-                        }
-                      ]
-                    },
-                    7
-                  ]
-                }
-              ]
-            },
-            5
-          ]
-        }
-      },
-      "affects": [
-        {
-          "lhs": "EmissionSources.weekday_factor",
-          "rhs": 0.7
-        }
-      ],
-      "discrete_parameters": [
-        "EmissionSources.weekday_factor"
-      ],
-      "description": "Reduce emissions on weekends (days 5-6 of week)"
     }
   ],
   "domain": {

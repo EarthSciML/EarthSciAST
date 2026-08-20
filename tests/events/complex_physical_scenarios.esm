@@ -33,19 +33,86 @@
           "type": "parameter",
           "units": "1",
           "default": 0.01,
-          "description": "Air resistance coefficient"
+          "description": "Air resistance coefficient",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "and",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "total_energy",
+                    0.01
+                  ]
+                },
+                {
+                  "op": "<",
+                  "args": [
+                    "height",
+                    0.001
+                  ]
+                }
+              ]
+            },
+            "expression": 1000.0
+          }
         },
         "restitution": {
           "type": "parameter",
           "units": "1",
           "default": 0.8,
-          "description": "Coefficient of restitution"
+          "description": "Coefficient of restitution",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": ">",
+              "args": [
+                "bounce_count",
+                5
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "restitution"
+                  ]
+                },
+                0.95
+              ]
+            }
+          }
         },
         "bounce_count": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Number of bounces"
+          "description": "Number of bounces",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                0.0,
+                "height"
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "bounce_count"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "total_energy": {
           "type": "unknown",
@@ -56,7 +123,53 @@
           "type": "parameter",
           "units": "J/s",
           "default": 0.0,
-          "description": "Energy loss tracking"
+          "description": "Energy loss tracking",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                0.0,
+                "height"
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                0.5,
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        1.0,
+                        {
+                          "op": "^",
+                          "args": [
+                            "restitution",
+                            2
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "^",
+                      "args": [
+                        {
+                          "op": "Pre",
+                          "args": [
+                            "velocity"
+                          ]
+                        },
+                        2
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -178,60 +291,6 @@
                   }
                 ]
               }
-            },
-            {
-              "lhs": "bounce_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "bounce_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            },
-            {
-              "lhs": "energy_loss_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  0.5,
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "-",
-                        "args": [
-                          1.0,
-                          {
-                            "op": "^",
-                            "args": [
-                              "restitution",
-                              2
-                            ]
-                          }
-                        ]
-                      },
-                      {
-                        "op": "^",
-                        "args": [
-                          {
-                            "op": "Pre",
-                            "args": [
-                              "velocity"
-                            ]
-                          },
-                          2
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
             }
           ],
           "reinitialize": true,
@@ -265,52 +324,13 @@
             {
               "lhs": "velocity",
               "rhs": 0.0
-            },
-            {
-              "lhs": "drag_coefficient",
-              "rhs": 1000.0
             }
           ],
           "reinitialize": true,
           "description": "Stop simulation when energy becomes negligible"
         }
       ],
-      "discrete_events": [
-        {
-          "name": "restitution_degradation",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": ">",
-              "args": [
-                "bounce_count",
-                5
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "restitution",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "restitution"
-                    ]
-                  },
-                  0.95
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "restitution"
-          ],
-          "description": "Degrade restitution coefficient after multiple bounces"
-        }
-      ]
+      "discrete_events": []
     },
     "ChemicalReactorController": {
       "variables": {
@@ -330,25 +350,158 @@
           "type": "parameter",
           "units": "L/min",
           "default": 5.0,
-          "description": "Coolant flow rate"
+          "description": "Coolant flow rate",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "temperature",
+                  400.0
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "cooling_flow"
+                    ]
+                  },
+                  2.0
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "temperature",
+                  450.0
+                ]
+              },
+              "expression": 50.0
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  380.0,
+                  "temperature"
+                ]
+              },
+              "expression": 5.0
+            }
+          ]
         },
         "heating_power": {
           "type": "parameter",
           "units": "W",
           "default": 100.0,
-          "description": "Heater power"
+          "description": "Heater power",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 3600.0,
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "heating_power"
+                    ]
+                  },
+                  0.99
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "temperature",
+                  450.0
+                ]
+              },
+              "expression": 0.0
+            }
+          ]
         },
         "setpoint_temp": {
           "type": "parameter",
           "units": "K",
           "default": 350.0,
-          "description": "Temperature setpoint"
+          "description": "Temperature setpoint",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "<",
+              "args": [
+                "concentration",
+                0.1
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "setpoint_temp"
+                  ]
+                },
+                10.0
+              ]
+            }
+          }
         },
         "safety_state": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Safety system state (0=normal, 1=warning, 2=emergency)"
+          "description": "Safety system state (0=normal, 1=warning, 2=emergency)",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "temperature",
+                  400.0
+                ]
+              },
+              "expression": 1
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "temperature",
+                  450.0
+                ]
+              },
+              "expression": 2
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  380.0,
+                  "temperature"
+                ]
+              },
+              "expression": 0
+            }
+          ]
         },
         "reaction_rate": {
           "type": "unknown",
@@ -474,159 +627,8 @@
           }
         }
       ],
-      "continuous_events": [
-        {
-          "name": "temperature_warning",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "temperature",
-                400.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "safety_state",
-              "rhs": 1
-            },
-            {
-              "lhs": "cooling_flow",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "cooling_flow"
-                    ]
-                  },
-                  2.0
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Activate warning and increase cooling at high temperature"
-        },
-        {
-          "name": "emergency_shutdown",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "temperature",
-                450.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "safety_state",
-              "rhs": 2
-            },
-            {
-              "lhs": "heating_power",
-              "rhs": 0.0
-            },
-            {
-              "lhs": "cooling_flow",
-              "rhs": 50.0
-            }
-          ],
-          "reinitialize": true,
-          "description": "Emergency shutdown at critical temperature"
-        },
-        {
-          "name": "temperature_recovery",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                380.0,
-                "temperature"
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "safety_state",
-              "rhs": 0
-            },
-            {
-              "lhs": "cooling_flow",
-              "rhs": 5.0
-            }
-          ],
-          "reinitialize": true,
-          "description": "Reset to normal operation when temperature drops"
-        }
-      ],
-      "discrete_events": [
-        {
-          "name": "periodic_maintenance",
-          "trigger": {
-            "type": "periodic",
-            "interval": 3600.0
-          },
-          "affects": [
-            {
-              "lhs": "heating_power",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "heating_power"
-                    ]
-                  },
-                  0.99
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "heating_power"
-          ],
-          "description": "Gradual efficiency degradation over time"
-        },
-        {
-          "name": "setpoint_optimization",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "<",
-              "args": [
-                "concentration",
-                0.1
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "setpoint_temp",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "setpoint_temp"
-                    ]
-                  },
-                  10.0
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "setpoint_temp"
-          ],
-          "description": "Increase setpoint when concentration is low"
-        }
-      ]
+      "continuous_events": [],
+      "discrete_events": []
     },
     "EpidemicModel": {
       "variables": {
@@ -652,7 +654,86 @@
           "type": "parameter",
           "units": "1/day",
           "default": 0.0003,
-          "description": "Transmission rate"
+          "description": "Transmission rate",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "infected",
+                  100.0
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "transmission_rate"
+                    ]
+                  },
+                  0.7
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "infected",
+                  1000.0
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "transmission_rate"
+                    ]
+                  },
+                  0.3
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "infected",
+                  2500.0
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "transmission_rate"
+                    ]
+                  },
+                  0.1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  50.0,
+                  "infected"
+                ]
+              },
+              "expression": 0.0003
+            }
+          ]
         },
         "recovery_rate": {
           "type": "parameter",
@@ -664,7 +745,53 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Intervention intensity (0-3)"
+          "description": "Intervention intensity (0-3)",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "infected",
+                  100.0
+                ]
+              },
+              "expression": 1
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "infected",
+                  1000.0
+                ]
+              },
+              "expression": 2
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "infected",
+                  2500.0
+                ]
+              },
+              "expression": 3
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  50.0,
+                  "infected"
+                ]
+              },
+              "expression": 0
+            }
+          ]
         },
         "total_population": {
           "type": "unknown",
@@ -775,137 +902,7 @@
           }
         }
       ],
-      "continuous_events": [
-        {
-          "name": "epidemic_threshold",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "infected",
-                100.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "intervention_level",
-              "rhs": 1
-            },
-            {
-              "lhs": "transmission_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "transmission_rate"
-                    ]
-                  },
-                  0.7
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Light interventions when infections exceed 100"
-        },
-        {
-          "name": "severe_outbreak",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "infected",
-                1000.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "intervention_level",
-              "rhs": 2
-            },
-            {
-              "lhs": "transmission_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "transmission_rate"
-                    ]
-                  },
-                  0.3
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Strong interventions for severe outbreak"
-        },
-        {
-          "name": "lockdown_threshold",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "infected",
-                2500.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "intervention_level",
-              "rhs": 3
-            },
-            {
-              "lhs": "transmission_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "transmission_rate"
-                    ]
-                  },
-                  0.1
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Lockdown for extremely severe outbreak"
-        },
-        {
-          "name": "intervention_relaxation",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                50.0,
-                "infected"
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "intervention_level",
-              "rhs": 0
-            },
-            {
-              "lhs": "transmission_rate",
-              "rhs": 0.0003
-            }
-          ],
-          "reinitialize": true,
-          "description": "Relax interventions when infections drop below 50"
-        }
-      ],
+      "continuous_events": [],
       "discrete_events": [
         {
           "name": "vaccination_campaign",
@@ -960,10 +957,6 @@
               }
             }
           ],
-          "discrete_parameters": [
-            "susceptible",
-            "recovered"
-          ],
           "reinitialize": true,
           "description": "Vaccination campaigns reduce susceptible population"
         }
@@ -993,19 +986,127 @@
           "type": "parameter",
           "units": "1",
           "default": 2000.0,
-          "description": "Environmental carrying capacity"
+          "description": "Environmental carrying capacity",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "and",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "disturbance_intensity",
+                    0.1
+                  ]
+                },
+                {
+                  "op": ">",
+                  "args": [
+                    "vegetation_cover",
+                    0.9
+                  ]
+                }
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "carrying_capacity"
+                  ]
+                },
+                1.1
+              ]
+            }
+          }
         },
         "disturbance_intensity": {
           "type": "parameter",
           "units": "1",
           "default": 0.0,
-          "description": "Current disturbance intensity"
+          "description": "Current disturbance intensity",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "times": [
+                50.0,
+                150.0,
+                300.0
+              ],
+              "expression": 0.8
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "prey_population",
+                  {
+                    "op": "*",
+                    "args": [
+                      "carrying_capacity",
+                      1.5
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "disturbance_intensity"
+                    ]
+                  },
+                  0.2
+                ]
+              }
+            }
+          ]
         },
         "recovery_rate": {
           "type": "parameter",
           "units": "1/day",
           "default": 0.01,
-          "description": "Ecosystem recovery rate"
+          "description": "Ecosystem recovery rate",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "and",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "disturbance_intensity",
+                    0.1
+                  ]
+                },
+                {
+                  "op": ">",
+                  "args": [
+                    "vegetation_cover",
+                    0.9
+                  ]
+                }
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "recovery_rate"
+                  ]
+                },
+                1.5
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -1154,43 +1255,6 @@
           ],
           "reinitialize": true,
           "description": "Predator extinction when population drops too low"
-        },
-        {
-          "name": "prey_overpopulation",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "prey_population",
-                {
-                  "op": "*",
-                  "args": [
-                    "carrying_capacity",
-                    1.5
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "disturbance_intensity",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "disturbance_intensity"
-                    ]
-                  },
-                  0.2
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Increased disturbance due to overpopulation pressure"
         }
       ],
       "discrete_events": [
@@ -1249,82 +1313,10 @@
                   0.5
                 ]
               }
-            },
-            {
-              "lhs": "disturbance_intensity",
-              "rhs": 0.8
             }
-          ],
-          "discrete_parameters": [
-            "vegetation_cover",
-            "prey_population",
-            "predator_population",
-            "disturbance_intensity"
           ],
           "reinitialize": true,
           "description": "Periodic fire disturbances"
-        },
-        {
-          "name": "recovery_acceleration",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "and",
-              "args": [
-                {
-                  "op": "<",
-                  "args": [
-                    "disturbance_intensity",
-                    0.1
-                  ]
-                },
-                {
-                  "op": ">",
-                  "args": [
-                    "vegetation_cover",
-                    0.9
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "recovery_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "recovery_rate"
-                    ]
-                  },
-                  1.5
-                ]
-              }
-            },
-            {
-              "lhs": "carrying_capacity",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "carrying_capacity"
-                    ]
-                  },
-                  1.1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "recovery_rate",
-            "carrying_capacity"
-          ],
-          "description": "Accelerate recovery when ecosystem is healthy"
         }
       ]
     }

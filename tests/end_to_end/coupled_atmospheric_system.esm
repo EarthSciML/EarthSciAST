@@ -118,7 +118,29 @@
           "type": "parameter",
           "units": "1/s",
           "default": 0.008,
-          "description": "NO2 photolysis rate coefficient"
+          "description": "NO2 photolysis rate coefficient",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "O3",
+                7e-08
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "jNO2"
+                  ]
+                },
+                1.2
+              ]
+            }
+          }
         },
         "jHCHO": {
           "type": "parameter",
@@ -431,38 +453,7 @@
           }
         }
       ],
-      "continuous_events": [
-        {
-          "name": "ozone_exceedance_alert",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "O3",
-                7e-08
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "jNO2",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "jNO2"
-                    ]
-                  },
-                  1.2
-                ]
-              }
-            }
-          ],
-          "description": "Increase photolysis when ozone exceeds 70 ppb (pollution episode)"
-        }
-      ]
+      "continuous_events": []
     },
     "AtmosphericTransport": {
       "reference": {
@@ -519,7 +510,29 @@
           "type": "parameter",
           "units": "m^2/s",
           "default": 10.0,
-          "description": "Vertical diffusivity"
+          "description": "Vertical diffusivity",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "SurfaceExchange.boundary_layer_height",
+                100.0
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "K_z"
+                  ]
+                },
+                0.1
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -727,13 +740,37 @@
           "units": "mol/mol/s",
           "default": 2e-11,
           "description": "Base NOx emission rate",
-          "update": {
-            "kind": "data",
-            "source": "EmissionInventories",
-            "from": {
-              "file_variable": "NOx_emission_rate"
+          "update": [
+            {
+              "kind": "data",
+              "source": "EmissionInventories",
+              "from": {
+                "file_variable": "NOx_emission_rate"
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "AtmosphericChemistry.O3",
+                  8e-08
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "NOx_emission_rate"
+                    ]
+                  },
+                  0.6
+                ]
+              }
             }
-          },
+          ],
           "shape": []
         },
         "VOC_emission_rate": {
@@ -754,7 +791,49 @@
           "type": "parameter",
           "units": "dimensionless",
           "default": 1.0,
-          "description": "Diurnal emission scaling"
+          "description": "Diurnal emission scaling",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "expression": {
+              "op": "+",
+              "args": [
+                1.0,
+                {
+                  "op": "*",
+                  "args": [
+                    0.8,
+                    {
+                      "op": "sin",
+                      "args": [
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                2,
+                                3.14159,
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "t",
+                                    21600
+                                  ]
+                                }
+                              ]
+                            },
+                            86400
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
         },
         "temperature_factor": {
           "type": "parameter",
@@ -766,7 +845,63 @@
           "type": "parameter",
           "units": "dimensionless",
           "default": 1.0,
-          "description": "Weekday vs weekend scaling"
+          "description": "Weekday vs weekend scaling",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": ">=",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "floor",
+                      "args": [
+                        {
+                          "op": "/",
+                          "args": [
+                            "t",
+                            86400
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "floor",
+                          "args": [
+                            {
+                              "op": "/",
+                              "args": [
+                                {
+                                  "op": "floor",
+                                  "args": [
+                                    {
+                                      "op": "/",
+                                      "args": [
+                                        "t",
+                                        86400
+                                      ]
+                                    }
+                                  ]
+                                },
+                                7
+                              ]
+                            }
+                          ]
+                        },
+                        7
+                      ]
+                    }
+                  ]
+                },
+                5
+              ]
+            },
+            "expression": 0.75
+          }
         }
       },
       "equations": [
@@ -805,61 +940,7 @@
           }
         }
       ],
-      "discrete_events": [
-        {
-          "name": "hourly_diurnal_update",
-          "trigger": {
-            "type": "periodic",
-            "interval": 3600.0
-          },
-          "affects": [
-            {
-              "lhs": "diurnal_factor",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  1.0,
-                  {
-                    "op": "*",
-                    "args": [
-                      0.8,
-                      {
-                        "op": "sin",
-                        "args": [
-                          {
-                            "op": "/",
-                            "args": [
-                              {
-                                "op": "*",
-                                "args": [
-                                  2,
-                                  3.14159,
-                                  {
-                                    "op": "-",
-                                    "args": [
-                                      "t",
-                                      21600
-                                    ]
-                                  }
-                                ]
-                              },
-                              86400
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "diurnal_factor"
-          ],
-          "description": "Update diurnal pattern: peak at 15:00 local time"
-        }
-      ]
+      "discrete_events": []
     }
   },
   "data_sources": {
@@ -989,146 +1070,6 @@
         "transition_hours": 2
       },
       "description": "Scale anthropogenic emissions by day of week"
-    },
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "name": "high_ozone_emission_control",
-      "conditions": [
-        {
-          "op": "-",
-          "args": [
-            "AtmosphericChemistry.O3",
-            8e-08
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "EmissionSources.NOx_emission_rate",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "EmissionSources.NOx_emission_rate"
-                ]
-              },
-              0.6
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "EmissionSources.NOx_emission_rate"
-      ],
-      "description": "Reduce NOx emissions during high ozone episodes (>80 ppb)"
-    },
-    {
-      "type": "event",
-      "event_type": "discrete",
-      "name": "weekend_emission_reduction",
-      "trigger": {
-        "type": "condition",
-        "expression": {
-          "op": ">=",
-          "args": [
-            {
-              "op": "-",
-              "args": [
-                {
-                  "op": "floor",
-                  "args": [
-                    {
-                      "op": "/",
-                      "args": [
-                        "t",
-                        86400
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "op": "*",
-                  "args": [
-                    {
-                      "op": "floor",
-                      "args": [
-                        {
-                          "op": "/",
-                          "args": [
-                            {
-                              "op": "floor",
-                              "args": [
-                                {
-                                  "op": "/",
-                                  "args": [
-                                    "t",
-                                    86400
-                                  ]
-                                }
-                              ]
-                            },
-                            7
-                          ]
-                        }
-                      ]
-                    },
-                    7
-                  ]
-                }
-              ]
-            },
-            5
-          ]
-        }
-      },
-      "affects": [
-        {
-          "lhs": "EmissionSources.weekday_factor",
-          "rhs": 0.75
-        }
-      ],
-      "discrete_parameters": [
-        "EmissionSources.weekday_factor"
-      ],
-      "description": "Reduce weekday emission factors on Saturday and Sunday"
-    },
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "name": "boundary_layer_collapse_mixing_reduction",
-      "conditions": [
-        {
-          "op": "-",
-          "args": [
-            "SurfaceExchange.boundary_layer_height",
-            100.0
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "AtmosphericTransport.K_z",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "AtmosphericTransport.K_z"
-                ]
-              },
-              0.1
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "AtmosphericTransport.K_z"
-      ],
-      "description": "Reduce vertical mixing when PBL height drops below 100m"
     }
   ],
   "domain": {

@@ -1,9 +1,9 @@
 {
   "event_error_conditions.esm": {
-    "description": "Expected validation errors for invalid event system configurations",
+    "description": "Expected validation errors for invalid event system configurations (esm 1.0.0: events affect UNKNOWNS ONLY; a parameter that changes during a run carries its own `update` block — esm-spec §5.4)",
     "schema_errors": [
       {
-        "path": "models.ErrorTestModel.discrete_events[0].trigger.type",
+        "path": "models.ErrorTestModel.discrete_events[1].trigger.type",
         "code": "enum",
         "message": "Value 'invalid_trigger_type' is not one of the allowed trigger types: ['condition', 'periodic', 'preset_times']"
       },
@@ -18,9 +18,9 @@
         "message": "Preset times array must contain at least one time value"
       },
       {
-        "path": "models.ErrorTestModel.discrete_events[6]",
-        "code": "oneOf",
-        "message": "Event must have either 'affects' or 'functional_affect', but not both"
+        "path": "models.ErrorTestModel.discrete_events[4]",
+        "code": "required",
+        "message": "Discrete event is missing required field 'affects' (esm 1.0.0 removed the `functional_affect` alternative)"
       }
     ],
     "structural_errors": [
@@ -43,28 +43,22 @@
         "context": "invalid_pre_in_condition"
       },
       {
-        "code": "undeclared_discrete_parameter",
+        "code": "event_affects_parameter",
         "path": "models.ErrorTestModel.continuous_events[3].affects[0]",
-        "message": "Event modifies parameter 'valid_param' but parameter is not listed in discrete_parameters",
-        "context": "parameter_not_declared_discrete"
+        "message": "Event affect targets the parameter 'valid_param'; an event may affect unknowns only",
+        "context": "continuous_event_writes_parameter"
       },
       {
-        "code": "undefined_discrete_parameter",
-        "path": "models.ErrorTestModel.discrete_events[0].discrete_parameters[1]",
-        "message": "discrete_parameters includes undefined parameter 'nonexistent_param'",
-        "context": "conflicting_discrete_parameters"
+        "code": "event_affects_parameter",
+        "path": "models.ErrorTestModel.discrete_events[0].affects[0]",
+        "message": "Event affect targets the parameter 'valid_param'; an event may affect unknowns only",
+        "context": "discrete_event_writes_parameter"
       },
       {
         "code": "undefined_variable",
-        "path": "models.ErrorTestModel.discrete_events[4].functional_affect.read_vars[1]",
-        "message": "Functional affect read_vars includes undefined variable 'undefined_variable'",
-        "context": "functional_affect_errors"
-      },
-      {
-        "code": "undefined_parameter",
-        "path": "models.ErrorTestModel.discrete_events[4].functional_affect.modified_params[0]",
-        "message": "Functional affect modified_params includes undefined parameter 'another_undefined_param'",
-        "context": "functional_affect_errors"
+        "path": "models.ErrorTestModel.variables.handler_output.update.handler.read_vars[1]",
+        "message": "Update handler read_vars includes undefined variable 'undefined_variable'",
+        "context": "handler_update_errors"
       },
       {
         "code": "undefined_system",
@@ -73,10 +67,10 @@
         "context": "cross_system_undefined_model"
       },
       {
-        "code": "undeclared_discrete_parameter",
+        "code": "event_affects_parameter",
         "path": "coupling[1].affects[0]",
-        "message": "Cross-system event modifies parameter 'ErrorTestModel.valid_param' but missing discrete_parameters declaration",
-        "context": "cross_system_missing_discrete_params"
+        "message": "Cross-system event affect targets the parameter 'ErrorTestModel.valid_param'; coupling-level events narrow to unknowns the same way (esm-spec §5.6)",
+        "context": "cross_system_writes_parameter"
       }
     ],
     "runtime_errors": [
@@ -92,8 +86,8 @@
       },
       {
         "code": "infinite_event_loop",
-        "message": "Chained discrete parameter modifications may create infinite event loops",
-        "context": "Events that trigger other events through parameter changes require cycle detection"
+        "message": "Chained parameter `update` blocks may create infinite refresh loops",
+        "context": "A `condition` update whose expression re-triggers another parameter's `when` requires cycle detection"
       }
     ]
   }

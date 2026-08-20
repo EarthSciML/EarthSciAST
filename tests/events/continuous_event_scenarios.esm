@@ -33,13 +33,149 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event occurrence log"
+          "description": "Event occurrence log",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "x",
+                  0.5
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_log"
+                    ]
+                  },
+                  100
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "x",
+                  -0.5
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_log"
+                    ]
+                  },
+                  200
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "x",
+                      0.8
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "y",
+                      1.0
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_log"
+                    ]
+                  },
+                  1000
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "or",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "z",
+                      -0.05
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "y",
+                      2.0
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_log"
+                    ]
+                  },
+                  10000
+                ]
+              }
+            }
+          ]
         },
         "zero_cross_count": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Zero crossing counter"
+          "description": "Zero crossing counter",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "x",
+                0
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "zero_cross_count"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -124,185 +260,7 @@
           "rhs": 0.0
         }
       ],
-      "continuous_events": [
-        {
-          "name": "simple_zero_crossing",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "x",
-                0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "zero_cross_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "zero_cross_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Count all zero crossings of oscillating variable"
-        },
-        {
-          "name": "positive_direction_only",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "x",
-                0.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_log",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_log"
-                    ]
-                  },
-                  100
-                ]
-              }
-            }
-          ],
-          "root_find": "right",
-          "description": "Only trigger on upward crossing of x = 0.5"
-        },
-        {
-          "name": "negative_direction_only",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "x",
-                -0.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_log",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_log"
-                    ]
-                  },
-                  200
-                ]
-              }
-            }
-          ],
-          "root_find": "left",
-          "description": "Only trigger on downward crossing of x = -0.5"
-        },
-        {
-          "name": "compound_condition_and",
-          "conditions": [
-            {
-              "op": "and",
-              "args": [
-                {
-                  "op": "-",
-                  "args": [
-                    "x",
-                    0.8
-                  ]
-                },
-                {
-                  "op": "-",
-                  "args": [
-                    "y",
-                    1.0
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_log",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_log"
-                    ]
-                  },
-                  1000
-                ]
-              }
-            }
-          ],
-          "description": "Event triggered when both x > 0.8 AND y > 1.0"
-        },
-        {
-          "name": "compound_condition_or",
-          "conditions": [
-            {
-              "op": "or",
-              "args": [
-                {
-                  "op": "-",
-                  "args": [
-                    "z",
-                    -0.05
-                  ]
-                },
-                {
-                  "op": "-",
-                  "args": [
-                    "y",
-                    2.0
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_log",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_log"
-                    ]
-                  },
-                  10000
-                ]
-              }
-            }
-          ],
-          "description": "Event triggered when z > -0.05 OR y > 2.0"
-        }
-      ]
+      "continuous_events": []
     },
     "MultipleEventsSystem": {
       "variables": {
@@ -316,13 +274,105 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Priority event counter"
+          "description": "Priority event counter",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "state_var",
+                  1.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "priority_counter"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "state_var",
+                  2.5
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "priority_counter"
+                    ]
+                  },
+                  10
+                ]
+              }
+            }
+          ]
         },
         "normal_counter": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Normal event counter"
+          "description": "Normal event counter",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "state_var",
+                  1.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "normal_counter"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "state_var",
+                  2.5
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "normal_counter"
+                    ]
+                  },
+                  10
+                ]
+              }
+            }
+          ]
         }
       },
       "equations": [
@@ -366,21 +416,6 @@
           ],
           "affects": [
             {
-              "lhs": "priority_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "priority_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
-            },
-            {
               "lhs": "state_var",
               "rhs": {
                 "op": "*",
@@ -398,96 +433,6 @@
           ],
           "reinitialize": true,
           "description": "High priority event with state modification"
-        },
-        {
-          "name": "normal_priority_event",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "state_var",
-                1.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "normal_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "normal_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "description": "Lower priority event (should not fire if high priority fires)"
-        },
-        {
-          "name": "simultaneous_event_1",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "state_var",
-                2.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "priority_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "priority_counter"
-                    ]
-                  },
-                  10
-                ]
-              }
-            }
-          ],
-          "description": "First simultaneous event at t=2.5"
-        },
-        {
-          "name": "simultaneous_event_2",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "state_var",
-                2.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "normal_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "normal_counter"
-                    ]
-                  },
-                  10
-                ]
-              }
-            }
-          ],
-          "description": "Second simultaneous event at t=2.5"
         }
       ]
     },
@@ -503,19 +448,113 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Positive crossing count"
+          "description": "Positive crossing count",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "oscillator",
+                0.5
+              ]
+            },
+            "direction": "up",
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "positive_hits"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "negative_hits": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Negative crossing count"
+          "description": "Negative crossing count",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "oscillator",
+                0.5
+              ]
+            },
+            "direction": "down",
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "negative_hits"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "coefficient": {
           "type": "parameter",
           "units": "1",
           "default": 1.0,
-          "description": "Damping coefficient"
+          "description": "Damping coefficient",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator",
+                  0.5
+                ]
+              },
+              "direction": "up",
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "coefficient"
+                    ]
+                  },
+                  0.95
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator",
+                  0.5
+                ]
+              },
+              "direction": "down",
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "coefficient"
+                    ]
+                  },
+                  1.05
+                ]
+              }
+            }
+          ]
         }
       },
       "equations": [
@@ -567,85 +606,7 @@
           "rhs": 0.0
         }
       ],
-      "continuous_events": [
-        {
-          "name": "threshold_crossing",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator",
-                0.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "positive_hits",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "positive_hits"
-                    ]
-                  },
-                  1
-                ]
-              }
-            },
-            {
-              "lhs": "coefficient",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "coefficient"
-                    ]
-                  },
-                  0.95
-                ]
-              }
-            }
-          ],
-          "affect_neg": [
-            {
-              "lhs": "negative_hits",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "negative_hits"
-                    ]
-                  },
-                  1
-                ]
-              }
-            },
-            {
-              "lhs": "coefficient",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "coefficient"
-                    ]
-                  },
-                  1.05
-                ]
-              }
-            }
-          ],
-          "description": "Different actions for positive vs negative crossings"
-        }
-      ]
+      "continuous_events": []
     },
     "NestedEventChain": {
       "variables": {
@@ -665,13 +626,59 @@
           "type": "parameter",
           "units": "1",
           "default": 0.0,
-          "description": "Final cascade variable"
+          "description": "Final cascade variable",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "secondary",
+                3.0
+              ]
+            },
+            "expression": 10.0
+          }
         },
         "chain_depth": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Chain depth counter"
+          "description": "Chain depth counter",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "primary",
+                  1.0
+                ]
+              },
+              "expression": 1
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "secondary",
+                  3.0
+                ]
+              },
+              "expression": 2
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "tertiary",
+                  8.0
+                ]
+              },
+              "expression": 3
+            }
+          ]
         }
       },
       "equations": [
@@ -734,40 +741,12 @@
           ],
           "affects": [
             {
-              "lhs": "chain_depth",
-              "rhs": 1
-            },
-            {
               "lhs": "secondary",
               "rhs": 5.0
             }
           ],
           "reinitialize": true,
           "description": "First level of event cascade"
-        },
-        {
-          "name": "cascade_level_2",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "secondary",
-                3.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "chain_depth",
-              "rhs": 2
-            },
-            {
-              "lhs": "tertiary",
-              "rhs": 10.0
-            }
-          ],
-          "reinitialize": true,
-          "description": "Second level triggered by first level"
         },
         {
           "name": "cascade_level_3",
@@ -781,10 +760,6 @@
             }
           ],
           "affects": [
-            {
-              "lhs": "chain_depth",
-              "rhs": 3
-            },
             {
               "lhs": "primary",
               "rhs": 0.0

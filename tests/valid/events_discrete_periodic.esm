@@ -202,7 +202,6 @@
               }
             }
           ],
-          "discrete_parameters": [],
           "reinitialize": false,
           "description": "Regular drug administration every dosing interval"
         }
@@ -229,7 +228,25 @@
           "type": "parameter",
           "units": "dimensionless",
           "default": 0,
-          "description": "Number of samples taken"
+          "description": "Number of samples taken",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 1.0,
+            "initial_offset": 0.5,
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "sample_count"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "emission_rate": {
           "units": "ppm/h",
@@ -304,34 +321,6 @@
       ],
       "discrete_events": [
         {
-          "name": "periodic_sampling",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0,
-            "initial_offset": 0.5
-          },
-          "affects": [
-            {
-              "lhs": "sample_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "sample_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [],
-          "reinitialize": false,
-          "description": "Regular environmental sampling"
-        },
-        {
           "name": "maintenance_calibration",
           "trigger": {
             "type": "periodic",
@@ -355,7 +344,6 @@
               }
             }
           ],
-          "discrete_parameters": [],
           "reinitialize": false,
           "description": "Periodic sensor calibration and maintenance"
         }
@@ -388,7 +376,34 @@
           "units": "dimensionless",
           "default": 1.0,
           "description": "Seasonal growth modifier",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 1.0,
+              "initial_offset": 0.0,
+              "expression": "spring_modifier"
+            },
+            {
+              "kind": "schedule",
+              "interval": 1.0,
+              "initial_offset": 0.0,
+              "expression": "summer_modifier"
+            },
+            {
+              "kind": "schedule",
+              "interval": 1.0,
+              "initial_offset": 0.0,
+              "expression": "autumn_modifier"
+            },
+            {
+              "kind": "schedule",
+              "interval": 1.0,
+              "initial_offset": 0.0,
+              "expression": "winter_modifier"
+            }
+          ]
         },
         "nutrient_uptake_rate": {
           "units": "m^2/(kg*day)",
@@ -494,84 +509,7 @@
           }
         }
       ],
-      "discrete_events": [
-        {
-          "name": "spring_transition",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0,
-            "initial_offset": 0.0
-          },
-          "affects": [
-            {
-              "lhs": "seasonal_growth_modifier",
-              "rhs": "spring_modifier"
-            }
-          ],
-          "discrete_parameters": [
-            "seasonal_growth_modifier"
-          ],
-          "reinitialize": true,
-          "description": "Transition to spring growing season"
-        },
-        {
-          "name": "summer_transition",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0,
-            "initial_offset": 0.0
-          },
-          "affects": [
-            {
-              "lhs": "seasonal_growth_modifier",
-              "rhs": "summer_modifier"
-            }
-          ],
-          "discrete_parameters": [
-            "seasonal_growth_modifier"
-          ],
-          "reinitialize": true,
-          "description": "Transition to summer season"
-        },
-        {
-          "name": "autumn_transition",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0,
-            "initial_offset": 0.0
-          },
-          "affects": [
-            {
-              "lhs": "seasonal_growth_modifier",
-              "rhs": "autumn_modifier"
-            }
-          ],
-          "discrete_parameters": [
-            "seasonal_growth_modifier"
-          ],
-          "reinitialize": true,
-          "description": "Transition to autumn season"
-        },
-        {
-          "name": "winter_transition",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0,
-            "initial_offset": 0.0
-          },
-          "affects": [
-            {
-              "lhs": "seasonal_growth_modifier",
-              "rhs": "winter_modifier"
-            }
-          ],
-          "discrete_parameters": [
-            "seasonal_growth_modifier"
-          ],
-          "reinitialize": true,
-          "description": "Transition to winter dormancy"
-        }
-      ]
+      "discrete_events": []
     }
   },
   "domain": {
