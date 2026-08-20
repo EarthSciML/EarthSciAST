@@ -17,12 +17,12 @@ use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
 /// A wrap + ghost stencil with a CONST-tier observed — enough structure that
 /// a genuine divergence between the two paths would be caught.
 const MODEL: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "tape_check_mode"},
  "models": {
   "M": {
    "variables": {
-     "u": {"type": "state", "shape": ["i"]},
+     "u": {"type": "unknown", "shape": ["i"]},
      "g": {"type": "observed", "shape": ["i"],
            "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
                "ranges": {"i": [1, 8]},

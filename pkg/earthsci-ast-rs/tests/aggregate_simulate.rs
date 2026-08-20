@@ -45,11 +45,11 @@ fn build(
     };
     format!(
         r#"{{
-          "esm": "0.6.0",
+          "esm": "1.0.0",
           "metadata": {{ "name": "aggregate_eval_test" }},
           {index_sets_field}
           "models": {{ "M": {{
-            "variables": {{ "{var}": {{ "type": "state", "shape": ["i"] }} }},
+            "variables": {{ "{var}": {{ "type": "unknown", "shape": ["i"] }} }},
             "equations": [{{
               "lhs": {{ "op": "{op}", "args": [], "output_idx": ["i"],
                         "expr": {{ "op": "D",
@@ -371,7 +371,7 @@ fn shared_invalid_undeclared_from_fixture_is_rejected() {
 #[test]
 fn ragged_index_set_drives_dynamic_reduction_bound() {
     let model = r#"{
-      "esm": "0.6.0",
+      "esm": "1.0.0",
       "metadata": { "name": "ragged_dynamic_bound" },
       "index_sets": {
         "cells": { "kind": "interval", "size": 2 },
@@ -380,8 +380,8 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
       },
       "models": { "M": {
         "variables": {
-          "y": { "type": "state", "shape": ["i"] },
-          "nedges": { "type": "state", "shape": ["i"] }
+          "y": { "type": "unknown", "shape": ["i"] },
+          "nedges": { "type": "unknown", "shape": ["i"] }
         },
         "equations": [
           { "lhs": { "op": "aggregate", "args": [], "output_idx": ["i"],

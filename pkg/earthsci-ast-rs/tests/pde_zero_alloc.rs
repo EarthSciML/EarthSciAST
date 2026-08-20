@@ -59,11 +59,11 @@ static GLOBAL: CountingAlloc = CountingAlloc;
 /// `fixtures/arrayop/15_discretized_1d_heat.esm`.
 fn heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "heat1d_zero_alloc"},
  "models": {
   "Heat1D": {
-   "variables": {"u": {"type": "state", "shape": ["i"]}},
+   "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
      "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
@@ -102,11 +102,11 @@ fn heat1d_json(n: usize) -> String {
 /// parameterized by grid size — the ess-p9s einsum stencil shape.
 fn einsum_heat1d_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "einsum_heat1d_zero_alloc"},
  "models": {
   "Heat1DEinsum": {
-   "variables": {"u": {"type": "state", "shape": ["i"]}},
+   "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
      "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
@@ -132,11 +132,11 @@ fn einsum_heat1d_json(n: usize) -> String {
 /// latitude, parameterized by grid size — the ess-p9s periodic-wrap shape.
 fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "latlon_heat_zero_alloc"},
  "models": {
   "HeatLatLon": {
-   "variables": {"u": {"type": "state", "shape": ["i", "j"]}},
+   "variables": {"u": {"type": "unknown", "shape": ["i", "j"]}},
    "equations": [
     {
      "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "j"],

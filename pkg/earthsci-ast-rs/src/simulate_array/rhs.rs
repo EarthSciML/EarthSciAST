@@ -1184,7 +1184,7 @@ mod elementwise_array_observed_tests {
     #[test]
     fn elementwise_array_observed_chain_drives_state_per_cell() {
         let doc = json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "ew_obs"},
             "index_sets": {"c": {"kind": "interval", "size": 3}},
             "models": {"M": {

@@ -11,11 +11,11 @@ use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
 
 const MODEL: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "tape_kill_switch"},
  "models": {
   "Decay": {
-   "variables": {"u": {"type": "state", "shape": ["i"]}},
+   "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
      "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],

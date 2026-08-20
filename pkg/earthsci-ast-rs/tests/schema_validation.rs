@@ -243,7 +243,7 @@ fn test_coupling_validation_errors() {
 #[test]
 fn test_loader_only_document_loads() {
     let fixture = r#"{
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": { "name": "loader-only" },
         "data_sources": {
             "MetData": {

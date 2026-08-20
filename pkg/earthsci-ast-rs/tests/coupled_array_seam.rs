@@ -36,11 +36,11 @@ use std::collections::HashMap;
 /// Closed form with `u(0) = [1, 2, 3]`, `w(0) = 0`:
 ///   `u[i](t) = u0[i]·e^{-t}`,  `w[i](t) = u0[i]·(1 - e^{-t})`.
 const COUPLED_ARRAY_JSON: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "coupled_array_seam"},
  "models": {
   "Src": {
-   "variables": {"u": {"type": "state", "shape": ["i"]}},
+   "variables": {"u": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
      "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
@@ -51,7 +51,7 @@ const COUPLED_ARRAY_JSON: &str = r#"{
    ]
   },
   "Snk": {
-   "variables": {"w": {"type": "state", "shape": ["i"]}},
+   "variables": {"w": {"type": "unknown", "shape": ["i"]}},
    "equations": [
     {
      "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
@@ -270,11 +270,11 @@ fn single_model_array_path_unchanged() {
     // A single-model array file keeps the byte-identical `from_file` path: the
     // dispatcher's `model_count > 1` guard leaves it on the raw entry point.
     let json = r#"{
-     "esm": "0.1.0",
+     "esm": "1.0.0",
      "metadata": {"name": "single_array_decay"},
      "models": {
       "Only": {
-       "variables": {"u": {"type": "state", "shape": ["i"]}},
+       "variables": {"u": {"type": "unknown", "shape": ["i"]}},
        "equations": [
         {
          "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},

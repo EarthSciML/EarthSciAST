@@ -168,7 +168,7 @@ fn point_in_rect_micro_fixture_members_match_julia_golden() {
     // The producer: point-in-rect over points x cells, overlap gate + strict
     // rectangle-interior narrow filter (X-W)(E-X)(Y-S)(N-Y) > 0.
     let doc: Value = serde_json::json!({
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": { "name": "overlap_gate_point_in_rect_micro" },
         "index_sets": {
             "points": { "kind": "interval", "size": 5 },
@@ -183,7 +183,7 @@ fn point_in_rect_micro_fixture_members_match_julia_golden() {
                 "S": { "type": "parameter", "shape": ["cells"] },
                 "E": { "type": "parameter", "shape": ["cells"] },
                 "N": { "type": "parameter", "shape": ["cells"] },
-                "cell_present": { "type": "state", "shape": ["present_cells"] }
+                "cell_present": { "type": "unknown", "shape": ["present_cells"] }
             },
             "equations": [ {
                 "lhs": { "op": "index", "args": ["cell_present", "m"] },

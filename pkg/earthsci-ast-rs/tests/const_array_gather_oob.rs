@@ -106,16 +106,19 @@ fn a_state_or_observed_gather_keeps_the_zero_ghost_convention() {
 #[test]
 fn off_the_end_flat_gather_through_prepare_fails_closed() {
     let doc = json!({
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": {"name": "const_array_oob"},
         "index_sets": {"k": {"kind": "interval", "size": 4}},
         "models": {"Gather": {
             "variables": {
                 "M": {"type": "parameter", "shape": ["k"]},
                 "shifted": {
-                    "type": "observed",
-                    "shape": ["k"],
-                    "expression": {
+                    "type": "unknown",
+                    "shape": ["k"]
+                }
+            },
+            "equations": [
+                    {"lhs": "shifted", "rhs": {
                         "op": "aggregate",
                         "output_idx": ["i"],
                         "ranges": {"i": {"from": "k"}},
@@ -123,10 +126,7 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
                         "expr": {"op": "index", "args": [
                             "M", {"op": "+", "args": ["i", 4]}
                         ]}
-                    }
-                }
-            },
-            "equations": []
+                    }}]
         }}
     });
     let opts = PrepareOptions {

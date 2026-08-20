@@ -70,7 +70,7 @@ fn get_schema_value() -> &'static Value {
 ///
 /// let json = r#"
 /// {
-///   "esm": "0.1.0",
+///   "esm": "1.0.0",
 ///   "metadata": {
 ///     "name": "test_model"
 ///   },
@@ -1487,7 +1487,7 @@ mod tests {
     fn test_load_minimal_model() {
         let json = r#"
         {
-          "esm": "0.1.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "test_model"
           },
@@ -1562,7 +1562,7 @@ mod tests {
     fn test_load_missing_content() {
         let json = r#"
         {
-          "esm": "0.1.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "test_model"
           }
@@ -1583,7 +1583,7 @@ mod tests {
 
         let json = r#"
         {
-          "esm": "0.1.0",
+          "esm": "1.0.0",
           "metadata": {
             "name": "test_model"
           },

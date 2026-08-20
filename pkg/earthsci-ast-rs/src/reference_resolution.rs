@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn no_references_empty_graph() {
         let model = json!({
-            "variables": {"u": {"type": "state"}},
+            "variables": {"u": {"type": "unknown"}},
             "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": -1}]
         });
         let g = build_reference_graph(&model, "M").unwrap();

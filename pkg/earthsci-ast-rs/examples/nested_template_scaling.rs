@@ -42,7 +42,7 @@ fn doc(depth: usize) -> Value {
         );
     }
     json!({
-        "esm": "0.4.0",
+        "esm": "1.0.0",
         "metadata": {"name": "nested_template_scaling", "authors": ["repro"]},
         "reaction_systems": {
             "chem": {

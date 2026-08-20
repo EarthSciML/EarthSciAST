@@ -231,14 +231,14 @@ mod tests {
                 "M": {
                     "variables": {
                         "s": {
-                            "type": "observed",
-                            "expression": {
-                                "op": "enum",
-                                "args": ["season", "summer"]
-                            }
+                            "type": "unknown"
                         }
                     },
-                    "equations": []
+                    "equations": [
+                    {"lhs": "s", "rhs": {
+                                "op": "enum",
+                                "args": ["season", "summer"]
+                            }}]
                 }
             }
         });
@@ -260,18 +260,18 @@ mod tests {
                 "M": {
                     "variables": {
                         "r": {
-                            "type": "observed",
-                            "expression": {
+                            "type": "unknown"
+                        }
+                    },
+                    "equations": [
+                    {"lhs": "r", "rhs": {
                                 "op": "index",
                                 "args": [
                                     {"op": "const", "args": [], "value": [[1, 2, 3]]},
                                     {"op": "enum", "args": ["season", "summer"]},
                                     {"op": "enum", "args": ["land_use", "forest"]}
                                 ]
-                            }
-                        }
-                    },
-                    "equations": []
+                            }}]
                 }
             }
         });
@@ -290,10 +290,10 @@ mod tests {
             "enums": {"season": {"summer": 3}},
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "observed",
-                    "expression": {"op": "enum", "args": ["weekday", "monday"]}
+                    "type": "unknown"
                 }},
-                "equations": []
+                "equations": [
+                    {"lhs": "x", "rhs": {"op": "enum", "args": ["weekday", "monday"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -307,10 +307,10 @@ mod tests {
             "enums": {"season": {"summer": 3}},
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "observed",
-                    "expression": {"op": "enum", "args": ["season", "winter"]}
+                    "type": "unknown"
                 }},
-                "equations": []
+                "equations": [
+                    {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "winter"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -324,10 +324,10 @@ mod tests {
         let mut v = json!({
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "observed",
-                    "expression": {"op": "enum", "args": ["season", "summer"]}
+                    "type": "unknown"
                 }},
-                "equations": []
+                "equations": [
+                    {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "summer"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -340,10 +340,10 @@ mod tests {
             "enums": {"season": {"summer": 3}},
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "observed",
-                    "expression": {"op": "enum", "args": ["season"]}
+                    "type": "unknown"
                 }},
-                "equations": []
+                "equations": [
+                    {"lhs": "x", "rhs": {"op": "enum", "args": ["season"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -354,7 +354,7 @@ mod tests {
     fn no_enums_no_change() {
         let input = json!({
             "models": {"M": {
-                "variables": {"x": {"type": "state", "default": 0.0}},
+                "variables": {"x": {"type": "unknown", "default": 0.0}},
                 "equations": [{
                     "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                     "rhs": {"op": "*", "args": [0.1, "x"]}
@@ -402,10 +402,10 @@ mod tests {
                 "subsystems": {
                     "Inner": {
                         "variables": {"y": {
-                            "type": "observed",
-                            "expression": {"op": "enum", "args": ["season", "summer"]}
+                            "type": "unknown"
                         }},
-                        "equations": []
+                        "equations": [
+                    {"lhs": "y", "rhs": {"op": "enum", "args": ["season", "summer"]}}]
                     }
                 }
             }}

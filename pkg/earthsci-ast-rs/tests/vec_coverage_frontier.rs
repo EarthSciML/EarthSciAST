@@ -118,11 +118,11 @@ fn check(name: &str, json: &str, expect_vectorized: bool) {
 fn rule_model(n: usize, rhs_expr: &str) -> String {
     format!(
         r#"{{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {{"name": "vec_frontier"}},
  "models": {{
   "M": {{
-   "variables": {{"u": {{"type": "state", "shape": ["i"]}}}},
+   "variables": {{"u": {{"type": "unknown", "shape": ["i"]}}}},
    "equations": [
     {{
      "lhs": {{"op": "aggregate", "args": [], "output_idx": ["i"],
@@ -293,12 +293,12 @@ fn frontier_indirect_gather_falls_back() {
     // rather than a literal, so the fixture isolates the GATHER and does not
     // also trip the array-valued-`const` gate below.
     let json = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "vec_frontier_gather"},
  "models": {
   "M": {
    "variables": {
-     "u": {"type": "state", "shape": ["i"]},
+     "u": {"type": "unknown", "shape": ["i"]},
      "nbr": {"type": "observed", "shape": ["i"],
              "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
                             "ranges": {"i": [1, 6]},

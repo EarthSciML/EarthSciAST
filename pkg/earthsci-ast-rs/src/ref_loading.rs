@@ -799,7 +799,7 @@ mod tests {
     #[test]
     fn test_resolve_no_refs() {
         let mut value = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "test" },
             "models": {
                 "Main": { "variables": {}, "equations": [] }
@@ -813,7 +813,7 @@ mod tests {
     fn test_resolve_local_subsystem_ref() {
         let dir = TempDir::new().unwrap();
         let inner = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "inner" },
             "models": {
                 "Inner": {
@@ -829,7 +829,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -855,7 +855,7 @@ mod tests {
         // exactly one entry, no `models`) must resolve to the loader object.
         let dir = TempDir::new().unwrap();
         let loader = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "loader-only" },
             "data_sources": {
                 "MetData": {
@@ -893,7 +893,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -924,7 +924,7 @@ mod tests {
     #[test]
     fn test_reject_remote_ref() {
         let mut value = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -951,7 +951,7 @@ mod tests {
     fn test_circular_ref_detection() {
         let dir = TempDir::new().unwrap();
         let a = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "a" },
             "models": {
                 "A": {
@@ -962,7 +962,7 @@ mod tests {
             }
         });
         let b = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "b" },
             "models": {
                 "B": {
@@ -984,7 +984,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Root": {
@@ -1004,7 +1004,7 @@ mod tests {
     fn test_nonexistent_ref() {
         let dir = TempDir::new().unwrap();
         let mut value = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "main" },
             "models": {
                 "Outer": {
@@ -1031,7 +1031,7 @@ mod tests {
     fn test_resolves_inside_reaction_systems() {
         let dir = TempDir::new().unwrap();
         let sub = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "sub" },
             "reaction_systems": {
                 "Sub": {
@@ -1048,7 +1048,7 @@ mod tests {
         .unwrap();
 
         let mut value = json!({
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": { "name": "main" },
             "reaction_systems": {
                 "Main": {

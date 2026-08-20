@@ -308,15 +308,16 @@ fn factor_with_expression_transform_rejected_by_load() {
     // NAMED transforms, so an object-valued transform alongside `factor`
     // fails schema validation inside `load`.
     let doc = json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "factor_expr_reject", "authors": ["t"]},
         "models": {
-            "Src": {"variables": {"F": {"type": "observed", "expression": 4.0}}, "equations": []},
+            "Src": {"variables": {"F": {"type": "unknown"}}, "equations": [
+                    {"lhs": "F", "rhs": 4.0}]},
             "Sink": {
                 "variables": {
                     "offset": {"type": "parameter", "default": 1.5},
                     "F_in": {"type": "parameter"},
-                    "u": {"type": "state", "default": 0.0}
+                    "u": {"type": "unknown", "default": 0.0}
                 },
                 "equations": [
                     {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "F_in"}
@@ -434,18 +435,19 @@ fn flatten_expression_transform_missing_from_reference_errors() {
 #[test]
 fn lower_templates_expands_coupling_transform_against_receiving_component() {
     let mut doc = json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "coupling_transform_templates", "authors": ["t"]},
         "models": {
             "Src": {
-                "variables": {"F": {"type": "observed", "expression": 4.0}},
-                "equations": []
+                "variables": {"F": {"type": "unknown"}},
+                "equations": [
+                    {"lhs": "F", "rhs": 4.0}]
             },
             "Sink": {
                 "variables": {
                     "offset": {"type": "parameter", "default": 1.5},
                     "F_in": {"type": "parameter"},
-                    "u": {"type": "state", "default": 0.0}
+                    "u": {"type": "unknown", "default": 0.0}
                 },
                 "expression_templates": {
                     "double_plus": {
@@ -496,23 +498,24 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
     let transform =
         json!({"op": "+", "args": [{"op": "*", "args": [2.0, "Src.F"]}, "Sink.offset"]});
     let mut doc = json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "no_templates_coupling", "authors": ["t"]},
         "models": {
             "Src": {
-                "variables": {"F": {"type": "observed", "expression": 4.0}},
+                "variables": {"F": {"type": "unknown"}},
                 // Give Src a template so the pass has machinery to run — the
                 // RECEIVING component (Sink) still has none.
                 "expression_templates": {
                     "quadruple": {"params": ["x"], "body": {"op": "*", "args": [4.0, "x"]}}
                 },
-                "equations": []
+                "equations": [
+                    {"lhs": "F", "rhs": 4.0}]
             },
             "Sink": {
                 "variables": {
                     "offset": {"type": "parameter", "default": 1.5},
                     "F_in": {"type": "parameter"},
-                    "u": {"type": "state", "default": 0.0}
+                    "u": {"type": "unknown", "default": 0.0}
                 },
                 "equations": [
                     {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "F_in"}

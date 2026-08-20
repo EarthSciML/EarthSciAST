@@ -230,7 +230,7 @@ impl std::fmt::Display for StructuralErrorCode {
 ///
 /// let json_str = r#"
 /// {
-///   "esm": "0.1.0",
+///   "esm": "1.0.0",
 ///   "metadata": {"name": "test"},
 ///   "models": {"simple": {"variables": {}, "equations": []}}
 /// }
@@ -1137,10 +1137,10 @@ mod tests {
     }
 
     #[test]
-    fn test_json_serialization_with_observed_expression() {
-        // Test that we can serialize and deserialize observed variables with expressions
+    fn test_json_serialization_with_observed_definition() {
+        // An observed unknown and its DEFINING EQUATION round-trip.
         let json_str = r#"{
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "TestModel",
                 "description": "Test observed variables with expressions"
@@ -1148,12 +1148,11 @@ mod tests {
             "models": {
                 "TestModel": {
                     "variables": {
-                        "x": { "type": "state", "units": "m", "default": 1.0 },
+                        "x": { "type": "unknown", "units": "m", "default": 1.0 },
                         "k": { "type": "parameter", "units": "1/s", "default": 0.1 },
                         "rate": {
-                            "type": "observed",
+                            "type": "unknown",
                             "units": "m/s",
-                            "expression": { "op": "*", "args": ["k", "x"] },
                             "description": "Rate of change"
                         }
                     },
@@ -1161,6 +1160,10 @@ mod tests {
                         {
                             "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
                             "rhs": "rate"
+                        },
+                        {
+                            "lhs": "rate",
+                            "rhs": { "op": "*", "args": ["k", "x"] }
                         }
                     ]
                 }
@@ -1709,7 +1712,7 @@ mod tests {
         // JSON that should fail schema validation (has invalid variable type)
         let invalid_json = r#"
         {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "test"
             },
@@ -1764,7 +1767,7 @@ mod tests {
         // Test the new validate_complete function that should detect schema errors
         let invalid_json = r#"
         {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "test"
             },
@@ -1817,7 +1820,7 @@ mod tests {
         // Test validate_complete with valid JSON
         let valid_json = r#"
         {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "test"
             },
@@ -1825,7 +1828,7 @@ mod tests {
                 "test_model": {
                     "variables": {
                         "x": {
-                            "type": "state",
+                            "type": "unknown",
                             "units": "m",
                             "default": 1.0
                         }
@@ -1893,19 +1896,22 @@ mod tests {
     // Issue #101 — `broadcast.fn` must be validated, not silently discarded.
     // -----------------------------------------------------------------------
 
-    /// A one-model document whose observed `y` is defined by `expr`.
+    /// A one-model document whose observed unknown `y` is defined by the
+    /// equation `y ~ <expr>` (esm-spec §6.3: an unknown's behaviour is stated
+    /// by an equation and nowhere else).
     fn doc_with_observed_expr(expr: &str) -> String {
         format!(
             r#"{{
-              "esm": "0.1.0",
+              "esm": "1.0.0",
               "metadata": {{"name": "bcast"}},
               "models": {{"M": {{
                 "variables": {{
-                  "x": {{"type": "state", "units": "1", "default": 1.0}},
-                  "y": {{"type": "observed", "units": "1", "expression": {expr}}}
+                  "x": {{"type": "unknown", "units": "1", "default": 1.0}},
+                  "y": {{"type": "unknown", "units": "1"}}
                 }},
                 "equations": [
-                  {{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}}, "rhs": "y"}}
+                  {{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}}, "rhs": "y"}},
+                  {{"lhs": "y", "rhs": {expr}}}
                 ]
               }}}}
             }}"#
@@ -1948,7 +1954,7 @@ mod tests {
         );
         let found = broadcast_findings(expr);
         assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
-        assert_eq!(found[0].path, "/models/M/variables/y/expression");
+        assert_eq!(found[0].path, "/models/M/equations/1/rhs");
         assert!(
             found[0].message.contains("not_a_real_op"),
             "the message must name the offending fn: {}",
@@ -2038,6 +2044,6 @@ mod tests {
                        "expr": {"op": "broadcast", "fn": "nope", "args": ["x"]}}"#;
         let found = broadcast_findings(expr);
         assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
-        assert_eq!(found[0].path, "/models/M/variables/y/expression");
+        assert_eq!(found[0].path, "/models/M/equations/1/rhs");
     }
 }

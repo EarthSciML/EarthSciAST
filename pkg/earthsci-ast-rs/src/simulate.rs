@@ -22,7 +22,7 @@
 //! use earthsci_ast::{load, simulate, SimulateOptions};
 //! use std::collections::HashMap;
 //!
-//! let file = load(r#"{"esm":"0.1.0","metadata":{},"models":{}}"#).unwrap();
+//! let file = load(r#"{"esm":"1.0.0","metadata":{},"models":{}}"#).unwrap();
 //! let params = HashMap::new();
 //! let ic = HashMap::new();
 //! let opts = SimulateOptions::default();
@@ -2601,14 +2601,14 @@ mod tests {
         // Two algebraic states a, b form a cycle: a = b + 1, b = a * 2.
         // dx/dt = a is a non-cyclic ODE that anchors the system.
         let json = r#"{
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "TestFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "x": {"type": "state", "default": 0.0},
-                        "a": {"type": "state", "default": 1.0},
-                        "b": {"type": "state", "default": 1.0}
+                        "x": {"type": "unknown", "default": 0.0},
+                        "a": {"type": "unknown", "default": 1.0},
+                        "b": {"type": "unknown", "default": 1.0}
                     },
                     "equations": [
                         {
@@ -2648,12 +2648,12 @@ mod tests {
         // dx/dt = looked_up, x(0) = 0. At code = 2.0 the lookup is the exact
         // knot 40.0, so x(1) = 40.0.
         let json = r#"{
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "FnFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "x": {"type": "state", "default": 0.0},
+                        "x": {"type": "unknown", "default": 0.0},
                         "code": {"type": "parameter", "default": 2.0},
                         "looked_up": {"type": "observed", "expression": {
                             "op": "fn", "name": "interp.linear", "args": [
@@ -2712,12 +2712,12 @@ mod tests {
         // yr = datetime.year(946684800) = 2000 (2000-01-01T00:00:00Z).
         // dx/dt = yr, x(0) = 0, so x(1) = 2000.
         let json = r#"{
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "DatetimeFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "x": {"type": "state", "default": 0.0},
+                        "x": {"type": "unknown", "default": 0.0},
                         "yr": {"type": "observed", "expression": {
                             "op": "fn", "name": "datetime.year", "args": [946684800.0]}}
                     },
@@ -2766,13 +2766,13 @@ mod tests {
     fn a_bare_lhs_state_is_algebraic_and_a_derivative_one_is_not() {
         let names = algebraic_names_of(
             r#"{
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "TestFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "D": {"type": "state", "default": 1.0},
-                        "G": {"type": "state"},
+                        "D": {"type": "unknown", "default": 1.0},
+                        "G": {"type": "unknown"},
                         "k": {"type": "parameter", "default": 1.0}
                     },
                     "equations": [
@@ -2796,12 +2796,12 @@ mod tests {
         // a genuinely settable initial condition from its Run UI.
         let names = algebraic_names_of(
             r#"{
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "TestFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "x": {"type": "state", "default": 1.0},
+                        "x": {"type": "unknown", "default": 1.0},
                         "k": {"type": "parameter", "default": 1.0}
                     },
                     "equations": [
@@ -2821,12 +2821,12 @@ mod tests {
         // it has no slot in the state vector to hide from an IC editor.
         let names = algebraic_names_of(
             r#"{
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "TestFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "x": {"type": "state", "default": 1.0},
+                        "x": {"type": "unknown", "default": 1.0},
                         "obs": {"type": "observed", "expression": "x"},
                         "k": {"type": "parameter", "default": 1.0}
                     },
@@ -2856,13 +2856,13 @@ mod tests {
         // placeholder before calling simulate, so a model that ran in a browser
         // failed on a server calling this function directly.
         let json = r#"{
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "TestFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "D": {"type": "state", "default": 1.0},
-                        "G": {"type": "state"},
+                        "D": {"type": "unknown", "default": 1.0},
+                        "G": {"type": "unknown"},
                         "k": {"type": "parameter", "default": 1.0}
                     },
                     "equations": [
@@ -2905,12 +2905,12 @@ mod tests {
     #[test]
     fn a_defaultless_differential_state_is_still_refused() {
         let json = r#"{
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "TestFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "D": {"type": "state"},
+                        "D": {"type": "unknown"},
                         "k": {"type": "parameter", "default": 1.0}
                     },
                     "equations": [
@@ -2939,13 +2939,13 @@ mod tests {
         // G's default is deliberately wrong (99.0) to prove the IC pass
         // overrides it from the algebraic body.
         let json = r#"{
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "TestFixture"},
             "models": {
                 "M": {
                     "variables": {
-                        "D": {"type": "state", "default": 1.0},
-                        "G": {"type": "state", "default": 99.0},
+                        "D": {"type": "unknown", "default": 1.0},
+                        "G": {"type": "unknown", "default": 99.0},
                         "k": {"type": "parameter", "default": 1.0}
                     },
                     "equations": [

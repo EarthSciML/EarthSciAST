@@ -1095,7 +1095,7 @@ fn pd_apply(
     // --- member state var + member_factor param ---
     mv.insert(
         memvar.clone(),
-        json!({"type": "state", "shape": [setname.clone()]}),
+        json!({"type": "unknown", "shape": [setname.clone()]}),
     );
     mv.insert(
         mfactor.clone(),

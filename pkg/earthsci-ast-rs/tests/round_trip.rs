@@ -574,13 +574,13 @@ fn test_tests_analyses_comprehensive_round_trip() {
 #[test]
 fn test_inline_multi_y_schema_validation() {
     let esm = r#"{
-        "esm": "0.5.0",
+        "esm": "1.0.0",
         "metadata": { "name": "multi_y_test" },
         "models": {
             "AB": {
                 "variables": {
-                    "A": { "type": "state", "default": 1.0 },
-                    "B": { "type": "state", "default": 0.0 }
+                    "A": { "type": "unknown", "default": 1.0 },
+                    "B": { "type": "unknown", "default": 0.0 }
                 },
                 "equations": [
                     { "lhs": { "op": "D", "args": ["A"], "wrt": "t" }, "rhs": { "op": "*", "args": [-0.1, "A"] } },

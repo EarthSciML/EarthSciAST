@@ -112,8 +112,19 @@ impl<'a> LeafSeeds<'a> {
     fn build(model: &'a Value) -> Result<LeafSeeds<'a>, CadenceError> {
         // The cadence pass receives a model object that `model_with_loaders`
         // has augmented with a `data_sources` key; `Model` ignores unknown
-        // fields, so it round-trips.
-        let typed: crate::types::Model = serde_json::from_value(model.clone())
+        // fields, so it round-trips. Several call sites (the provider
+        // classifier, the relational guards) pass a PARTIAL model carrying only
+        // the block they care about, so the two required members are defaulted
+        // rather than demanded — a model with no equations classifies every
+        // unknown as algebraic, which is the right answer for a fragment.
+        let mut owned = model.clone();
+        if let Value::Object(map) = &mut owned {
+            map.entry("variables".to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            map.entry("equations".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+        }
+        let typed: crate::types::Model = serde_json::from_value(owned)
             .map_err(|e| err(format!("cadence: model does not deserialize: {e}")))?;
 
         let observed_defs = model
@@ -1006,9 +1017,10 @@ mod tests {
         // block — DISCRETE when the loader is time-varying, CONST (folds at bind)
         // when it is not. The SAME variable declaration; only the loader differs.
         let variables = json!({
-            "c": {"type": "state", "shape": ["cells"]},
-            "bc": {"type": "discrete", "shape": ["cells"],
-                   "refresh": {"kind": "data_ingest", "source": "bc_loader"}}
+            "c": {"type": "unknown", "shape": ["cells"]},
+            "bc": {"type": "parameter", "shape": ["cells"], "default": 0.0,
+                   "update": {"kind": "data", "source": "bc_loader",
+                              "from": {"file_variable": "bc"}}}
         });
         let bc = json!({"op": "index", "args": ["bc", "i"]});
 
@@ -1122,7 +1134,7 @@ mod tests {
     fn neg_continuous_relational_is_rejected() {
         // A distinct aggregate whose key reads state `u` classifies CONTINUOUS.
         let bad = json!({
-            "variables": {"u": {"type": "state"}, "lo": {"type": "parameter"}},
+            "variables": {"u": {"type": "unknown"}, "lo": {"type": "parameter"}},
             "index_sets": {"faces": {"kind": "interval", "size": 4}},
             "equations": [{
                 "lhs": {"op": "index", "args": ["edge_exists", "e"]},

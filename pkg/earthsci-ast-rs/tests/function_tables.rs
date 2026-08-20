@@ -4,7 +4,7 @@
 use earthsci_ast::{EsmFile, Expr, load};
 
 const FIXTURE: &str = r#"{
-  "esm": "0.4.0",
+  "esm": "1.0.0",
   "metadata": {"name": "ft_smoke", "authors": ["test"]},
   "function_tables": {
     "sigma_O3": {
@@ -32,8 +32,8 @@ const FIXTURE: &str = r#"{
   "models": {
     "M": {
       "variables": {
-        "k_O3":   {"type": "state",     "default": 0.0},
-        "j_NO2":  {"type": "state",     "default": 0.0},
+        "k_O3":   {"type": "unknown",     "default": 0.0},
+        "j_NO2":  {"type": "unknown",     "default": 0.0},
         "P_atm":  {"type": "parameter", "default": 101325.0},
         "cos_sza":{"type": "parameter", "default": 0.5}
       },

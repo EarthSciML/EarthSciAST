@@ -22,11 +22,11 @@ mod common;
 /// negative by default rather than negated in the expression, which keeps the
 /// document free of any unary-minus encoding.
 const DECAY: &str = r#"{
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": { "name": "progress_decay" },
   "models": { "M": {
     "variables": {
-      "y": { "type": "state", "default": 1.0 },
+      "y": { "type": "unknown", "default": 1.0 },
       "k": { "type": "parameter", "default": -1.0 }
     },
     "equations": [
@@ -39,10 +39,10 @@ const DECAY: &str = r#"{
 /// `D(y[i])/dt = Σ_{j∈1..3} i*j` over `i ∈ 1..2` — a constant-RHS contraction
 /// that routes through the array runtime rather than the scalar interpreter.
 const ARRAY: &str = r#"{
-  "esm": "0.6.0",
+  "esm": "1.0.0",
   "metadata": { "name": "progress_array" },
   "models": { "M": {
-    "variables": { "y": { "type": "state", "shape": ["i"], "default": 0.0 } },
+    "variables": { "y": { "type": "unknown", "shape": ["i"], "default": 0.0 } },
     "equations": [{
       "lhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
                "ranges": { "i": [1, 2] },

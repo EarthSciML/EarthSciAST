@@ -21,13 +21,13 @@ use earthsci_ast::simulate_array::ArrayCompiled;
 ///   * `h[i] := u[i] * 2`  — reads the integrated state `u` → CONTINUOUS.
 /// plus the state `D(u[i]) = g[i] + h[i]`.
 const MODEL: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "cadence_tiers"},
  "models": {"M": {
    "variables": {
-     "u": {"type": "state", "shape": ["i"]},
-     "g": {"type": "state", "shape": ["i"]},
-     "h": {"type": "state", "shape": ["i"]}
+     "u": {"type": "unknown", "shape": ["i"]},
+     "g": {"type": "unknown", "shape": ["i"]},
+     "h": {"type": "unknown", "shape": ["i"]}
    },
    "equations": [
     {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],

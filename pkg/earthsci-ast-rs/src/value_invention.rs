@@ -2178,8 +2178,8 @@ mod tests {
                 "tags": {"kind": "derived", "from_faq": "tag_set"}
             },
             "variables": {
-                "u": {"type": "state", "shape": ["items"]},
-                "tag": {"type": "state", "shape": ["tags"]}
+                "u": {"type": "unknown", "shape": ["items"]},
+                "tag": {"type": "unknown", "shape": ["tags"]}
             },
             "equations": [{
                 "lhs": {"op": "index", "args": ["tag", "p"]},
@@ -2202,7 +2202,7 @@ mod tests {
     #[test]
     fn no_op_for_plain_model() {
         let plain: Value = serde_json::json!({
-            "variables": {"x": {"type": "state", "shape": []}},
+            "variables": {"x": {"type": "unknown", "shape": []}},
             "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": -1.0}]
         });
         let vi =
@@ -2270,7 +2270,7 @@ mod tests {
             "variables": {
                 "gx": {"type": "parameter", "shape": ["generators"]},
                 "px": {"type": "parameter", "shape": ["points"]},
-                "far": {"type": "state", "shape": ["points"]}
+                "far": {"type": "unknown", "shape": ["points"]}
             },
             "equations": [{
                 "lhs": {"op": "index", "args": ["far", "i"]},
@@ -2306,7 +2306,7 @@ mod tests {
             "variables": {
                 "gx": {"type": "parameter", "shape": ["generators"]},
                 "px": {"type": "parameter", "shape": ["points"]},
-                "assign": {"type": "state", "shape": ["points"]}
+                "assign": {"type": "unknown", "shape": ["points"]}
             },
             "equations": [{
                 "lhs": {"op": "index", "args": ["assign", "i"]},
@@ -2341,9 +2341,9 @@ mod tests {
                 "generators": {"kind": "interval", "size": 2}
             },
             "variables": {
-                "gx": {"type": "state", "shape": ["generators"]},
+                "gx": {"type": "unknown", "shape": ["generators"]},
                 "px": {"type": "parameter", "shape": ["points"]},
-                "assign": {"type": "state", "shape": ["points"]}
+                "assign": {"type": "unknown", "shape": ["points"]}
             },
             "equations": [{
                 "lhs": {"op": "index", "args": ["assign", "i"]},
@@ -2600,9 +2600,9 @@ mod tests {
             "variables": {
                 "gx": {"type": "parameter", "shape": ["generators"]},
                 "px": {"type": "parameter", "shape": ["points"]},
-                "rho": {"type": "state", "shape": ["points"]},
-                "assign": {"type": "state", "shape": ["points"]},
-                "num": {"type": "state", "shape": ["generators"]}
+                "rho": {"type": "unknown", "shape": ["points"]},
+                "assign": {"type": "unknown", "shape": ["points"]},
+                "num": {"type": "unknown", "shape": ["generators"]}
             },
             "equations": [
                 {"lhs": {"op": "index", "args": ["assign", "i"]},

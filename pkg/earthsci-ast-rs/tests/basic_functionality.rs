@@ -11,7 +11,7 @@ use std::collections::HashMap;
 fn test_basic_round_trip() {
     let json = r#"
     {
-      "esm": "0.1.0",
+      "esm": "1.0.0",
       "metadata": {
         "name": "test_model"
       },

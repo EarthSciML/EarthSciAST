@@ -223,12 +223,12 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
         idx("v", json!({"op": "+", "args": ["i", 1]}))
     ]});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_stencil"},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i"]},
-                "v": {"type": "state", "shape": ["i"]}
+                "u": {"type": "unknown", "shape": ["i"]},
+                "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
                 d_eq("u", n, agg(n, lap_wrap)),
@@ -257,10 +257,10 @@ fn ab_nested_aggregate() {
         idx("u", json!("j"))
     ]}});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_nested"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]})))
             ]
@@ -290,10 +290,10 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
         idx("u", json!("i"))
     ]}});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_nested_shadow"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]})))
             ]
@@ -341,10 +341,10 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
         "values": [interior, left, right]});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_nested_makearray_agg"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "index", "args": [ma, "i"]})))
             ]
@@ -372,12 +372,12 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_falls_back() {
     "ranges": {"j": [1, n]},
     "expr": {"op": "*", "args": [idx("u", json!("j")), "i"]}});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_nested_capture"},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i"]},
-                "v": {"type": "state", "shape": ["i"]}
+                "u": {"type": "unknown", "shape": ["i"]},
+                "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]}))),
@@ -413,10 +413,10 @@ fn ab_makearray_regions() {
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
         "values": [interior, 0.5, {"op": "*", "args": [2.0, idx("u", json!("i"))]}]});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_makearray"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "index", "args": [ma, "i"]})))
             ]
@@ -432,10 +432,10 @@ fn ab_makearray_regions() {
 fn ab_contraction_weights() {
     let n = 8;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_einsum"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, json!({"op": "aggregate", "args": [], "output_idx": ["i"],
                     "reduce": "+",
@@ -457,10 +457,10 @@ fn ab_contraction_weights() {
 fn ab_contraction_with_filter_mask() {
     let n = 6;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_filter"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, json!({"op": "aggregate", "args": [], "output_idx": ["i"],
                     "reduce": "+",
@@ -499,11 +499,11 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
     ]});
     let safe = json!({"op": "*", "args": [3.0, idx("u", json!("i"))]});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_shortcircuit"},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i"]},
+                "u": {"type": "unknown", "shape": ["i"]},
                 "p": {"type": "parameter", "default": 2.0}
             },
             "equations": [
@@ -579,10 +579,10 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
 fn ab_select_nan_semantics() {
     let n = 8;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_select_nan"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "ifelse", "args": [
                     {"op": ">=", "args": [idx("u", json!("i")), 0.0]},
@@ -629,10 +629,10 @@ fn ab_select_nan_semantics() {
 fn ab_signed_zero() {
     let n = 4;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_signed_zero"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "+", "args": [
                     {"op": "*", "args": [-0.0, idx("u", json!("i"))]},
@@ -653,10 +653,10 @@ fn ab_signed_zero() {
 fn ab_nary_fold_order() {
     let n = 6;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_fold_order"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "+", "args": [
                     0.1, 0.2, 0.3,
@@ -678,10 +678,10 @@ fn ab_nary_fold_order() {
 #[test]
 fn ab_subblock_dy_scatter() {
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_subblock"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 {
                     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
@@ -717,20 +717,20 @@ fn ab_observed_chain_and_broadcast() {
     let ni = 5;
     let nj = 4;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_obs"},
         "models": {"M": {
             "variables": {
-                "w": {"type": "state", "shape": ["i", "j"]},
-                "x": {"type": "state"},
-                "c": {"type": "observed", "shape": ["j"],
-                      "expression": {"op": "aggregate", "args": [], "output_idx": ["j"],
-                          "ranges": {"j": [1, nj]},
-                          "expr": {"op": "cos", "args": [{"op": "*", "args": [0.3, "j"]}]}}},
-                "s": {"type": "observed",
-                      "expression": {"op": "*", "args": [2.0, "x"]}}
+                "w": {"type": "unknown", "shape": ["i", "j"]},
+                "x": {"type": "unknown"},
+                "c": {"type": "unknown", "shape": ["j"]},
+                "s": {"type": "unknown"}
             },
             "equations": [
+                    {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
+                    {"lhs": "c", "rhs": {"op": "aggregate", "args": [], "output_idx": ["j"],
+                          "ranges": {"j": [1, nj]},
+                          "expr": {"op": "cos", "args": [{"op": "*", "args": [0.3, "j"]}]}}},
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                  "rhs": {"op": "*", "args": [{"op": "neg", "args": ["s"]}, "x"]}},
                 {
@@ -775,18 +775,18 @@ fn ab_observed_chain_and_broadcast() {
 fn ab_fallback_rule_interop() {
     let n = 3;
     let doc = json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_fallback"},
         "index_sets": {"c": {"kind": "interval", "size": n}},
         "models": {"M": {
             "variables": {
-                "psi": {"type": "state", "shape": ["c"]},
-                "k": {"type": "observed", "shape": ["c"],
-                      "expression": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
-                "a": {"type": "observed", "shape": ["c"],
-                      "expression": {"op": "+", "args": ["psi", "k"]}}
+                "psi": {"type": "unknown", "shape": ["c"]},
+                "k": {"type": "unknown", "shape": ["c"]},
+                "a": {"type": "unknown", "shape": ["c"]}
             },
             "equations": [
+                    {"lhs": "a", "rhs": {"op": "+", "args": ["psi", "k"]}},
+                    {"lhs": "k", "rhs": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
                 {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
                 {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
                  "rhs": {"op": "-", "args": ["a"]}}
@@ -846,12 +846,12 @@ fn ab_fallback_rule_interop() {
 #[test]
 fn ab_scalar_rules() {
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_scalar"},
         "models": {"M": {
             "variables": {
-                "x": {"type": "state"},
-                "y": {"type": "state"},
+                "x": {"type": "unknown"},
+                "y": {"type": "unknown"},
                 "r": {"type": "parameter", "default": 0.5}
             },
             "equations": [
@@ -879,10 +879,10 @@ fn ab_scalar_rules() {
 fn coloring_invariants() {
     let n = 8;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_coloring"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, json!({"op": "aggregate", "args": [], "output_idx": ["i"],
                     "reduce": "+",
@@ -964,10 +964,10 @@ fn value_numbering_scope_behaviour() {
     let d = json!({"op": "-", "args": [idx("u", json!("i")),
                                        idx("u", json!({"op": "-", "args": ["i", 1]}))]});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_vn"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "*", "args": [d, d]})))
             ]
@@ -1004,10 +1004,10 @@ fn value_numbering_scope_behaviour() {
 fn tape_build_is_side_effect_free() {
     let n = 6;
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_pure_build"},
         "models": {"M": {
-            "variables": {"u": {"type": "state", "shape": ["i"]}},
+            "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
                 d_eq("u", n, agg(n, json!({"op": "*", "args": [2.0, idx("u", json!("i"))]})))
             ]
@@ -1028,14 +1028,15 @@ fn tape_build_is_side_effect_free() {
 #[test]
 fn exports_materialize_as_observed_arrays() {
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_export_shape"},
         "models": {"M": {
             "variables": {
-                "x": {"type": "state"},
-                "s": {"type": "observed", "expression": {"op": "*", "args": [2.0, "x"]}}
+                "x": {"type": "unknown"},
+                "s": {"type": "unknown"}
             },
             "equations": [
+                    {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                  "rhs": {"op": "neg", "args": ["s"]}}
             ]
@@ -1075,17 +1076,17 @@ fn ab_prefix_scan_observeds() {
             "expr": {"op": "*", "args": [0.3, {"op": "index", "args": ["u", "i", "m"]}]}})
     };
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_scan"},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i", "k"]},
-                "P": {"type": "observed", "shape": ["i", "k"],
-                      "expression": scan_obs("<=")},
-                "Q": {"type": "observed", "shape": ["i", "k"],
-                      "expression": scan_obs("<")}
+                "u": {"type": "unknown", "shape": ["i", "k"]},
+                "P": {"type": "unknown", "shape": ["i", "k"]},
+                "Q": {"type": "unknown", "shape": ["i", "k"]}
             },
             "equations": [
+                    {"lhs": "Q", "rhs": scan_obs("<")},
+                    {"lhs": "P", "rhs": scan_obs("<=")},
                 {
                     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "k"],
                             "expr": {"op": "D", "args": [
@@ -1132,24 +1133,24 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
         "ranges": {"i": [n, n]},
         "expr": {"op": "*", "args": [2.0, idx("u", json!("i"))]}});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_wholesale"},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i"]},
-                "g": {"type": "observed", "shape": ["i"],
-                      "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                          "ranges": {"i": [1, n]},
-                          "expr": {"op": "sin", "args": [{"op": "*", "args": [0.5, "i"]}]}}},
-                "q": {"type": "observed", "shape": ["i"],
-                      "expression": {"op": "makearray", "args": [],
-                          "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
-                          "values": [interior, 1.5, top]}},
-                "h": {"type": "observed", "shape": ["i"],
-                      "expression": {"op": "+", "args": [
-                          {"op": "*", "args": [2.0, "u"]}, "g", "q"]}}
+                "u": {"type": "unknown", "shape": ["i"]},
+                "g": {"type": "unknown", "shape": ["i"]},
+                "q": {"type": "unknown", "shape": ["i"]},
+                "h": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
+                    {"lhs": "h", "rhs": {"op": "+", "args": [
+                          {"op": "*", "args": [2.0, "u"]}, "g", "q"]}},
+                    {"lhs": "q", "rhs": {"op": "makearray", "args": [],
+                          "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
+                          "values": [interior, 1.5, top]}},
+                    {"lhs": "g", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                          "ranges": {"i": [1, n]},
+                          "expr": {"op": "sin", "args": [{"op": "*", "args": [0.5, "i"]}]}}},
                 d_eq("u", n, agg(n, json!({"op": "neg", "args": [
                     {"op": "index", "args": ["h", "i"]}]})))
             ]
@@ -1292,21 +1293,21 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
                "ranges": {"i": [1, ni], "j": [1, nj]}, "expr": body})
     };
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_fold"},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i", "j"]},
-                "v": {"type": "state", "shape": ["i", "j"]},
-                "w": {"type": "state", "shape": ["i", "j"]},
+                "u": {"type": "unknown", "shape": ["i", "j"]},
+                "v": {"type": "unknown", "shape": ["i", "j"]},
+                "w": {"type": "unknown", "shape": ["i", "j"]},
                 // s[i] = 0.5 * w[i, 3]: a linear (strided) slice read.
-                "s": {"type": "observed", "shape": ["i"],
-                      "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                          "ranges": {"i": [1, ni]},
-                          "expr": {"op": "*", "args": [0.5,
-                              {"op": "index", "args": ["w", "i", 3]}]}}}
+                "s": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
+                    {"lhs": "s", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                          "ranges": {"i": [1, ni]},
+                          "expr": {"op": "*", "args": [0.5,
+                              {"op": "index", "args": ["w", "i", 3]}]}}},
                 d2("u", agg2(json!({"op": "*", "args": [0.25, lap_wrap]}))),
                 d2("v", agg2(json!({"op": "*", "args": [0.25, lap_ghost]}))),
                 d2("w", agg2(json!({"op": "*", "args": [
@@ -1348,14 +1349,15 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
 #[test]
 fn export_demotion_skips_unread_publishes() {
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_export_demote"},
         "models": {"M": {
             "variables": {
-                "x": {"type": "state"},
-                "s": {"type": "observed", "expression": {"op": "*", "args": [2.0, "x"]}}
+                "x": {"type": "unknown"},
+                "s": {"type": "unknown"}
             },
             "equations": [
+                    {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                  "rhs": {"op": "neg", "args": ["s"]}}
             ]
@@ -1453,12 +1455,12 @@ fn ab_superop_bin3_and_extended_pairs() {
         u.clone()
     ]});
     let doc = json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "tape_superops"},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i"]},
-                "v": {"type": "state", "shape": ["i"]}
+                "u": {"type": "unknown", "shape": ["i"]},
+                "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
                 d_eq("u", n, agg(n, chain)),
@@ -1557,15 +1559,15 @@ fn ab_superop_bin3_and_extended_pairs() {
 /// whole point of #101 is that the three evaluators disagreed.
 fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     json!({
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": name},
         "models": {"M": {
             "variables": {
-                "u": {"type": "state", "shape": ["i"]},
-                "s": {"type": "observed", "shape": ["i"],
-                      "expression": agg(n, json!({"op": "*", "args": [0.5, idx("u", json!("i"))]}))}
+                "u": {"type": "unknown", "shape": ["i"]},
+                "s": {"type": "unknown", "shape": ["i"]}
             },
-            "equations": [d_eq("u", n, agg(n, rhs))]
+            "equations": [
+                    {"lhs": "s", "rhs": agg(n, json!({"op": "*", "args": [0.5, idx("u", json!("i"))]}))},d_eq("u", n, agg(n, rhs))]
         }}
     })
 }

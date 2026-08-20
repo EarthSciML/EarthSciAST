@@ -331,11 +331,11 @@ fn json_float_literals_round_trip_bit_exact() {
     // End-to-end through the crate load→emit: a const carrying the full-precision
     // coordinates survives parse→emit verbatim (AST byte identity).
     let doc = r#"{
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": {"name": "ulp"},
       "models": {"M": {
         "variables": {
-          "x": {"type": "state", "units": "1", "default": 0.5},
+          "x": {"type": "unknown", "units": "1", "default": 0.5},
           "pt": {"type": "observed", "units": "1",
                   "expression": {"op": "const", "args": [],
                                  "value": [-104.52369275835723, 42.059133583516356]}}
@@ -612,11 +612,11 @@ fn invalid_fixtures_fail_with_exact_codes() {
 fn model_json(extra_model_fields: &str, top_fields: &str) -> String {
     format!(
         r#"{{
-  "esm": "0.8.0",
+  "esm": "1.0.0",
   "metadata": {{"name": "t"}},{top_fields}
   "models": {{
     "M": {{{extra_model_fields}
-      "variables": {{"x": {{"type": "state", "units": "1", "default": 0.5}}}},
+      "variables": {{"x": {{"type": "unknown", "units": "1", "default": 0.5}}}},
       "equations": [{{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}},
                      "rhs": {{"op": "-", "args": ["x"]}}}}]
     }}
@@ -669,7 +669,7 @@ fn only_filters_visibility_not_internal_wiring() {
     std::fs::write(
         dir.path().join("lib.esm"),
         serde_json::to_string(&json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "lib"},
             "expression_templates": {
                 "t_inner": {"params": [], "body": 7},
@@ -728,7 +728,7 @@ fn diamond_with_conflicting_edge_bindings_is_rejected() {
     std::fs::write(
         dir.path().join("grid.esm"),
         serde_json::to_string(&json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "grid"},
             "metaparameters": {"NC": {"type": "integer"}},
             "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
@@ -778,7 +778,7 @@ fn edge_bindings_unknown_names_and_non_integer_values() {
     std::fs::write(
         dir.path().join("lib.esm"),
         serde_json::to_string(&json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "lib"},
             "metaparameters": {"N": {"type": "integer", "default": 8}},
             "expression_templates": {"n": {"params": [], "body": "N"}}
@@ -818,14 +818,14 @@ fn metaparameter_fold_ranges_regions_size_exact() {
         dir.path(),
         r#"
     {
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": {"name": "fold"},
       "metaparameters": {"N": {"type": "integer", "default": 6}},
       "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
       "models": {
         "M": {
           "variables": {
-            "x": {"type": "state", "units": "1", "default": 0.5},
+            "x": {"type": "unknown", "units": "1", "default": 0.5},
             "agg": {"type": "observed", "units": "1",
               "expression": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
                 "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
@@ -886,13 +886,13 @@ fn expression_position_substitution_never_folds() {
         dir.path(),
         r#"
     {
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": {"name": "subst"},
       "metaparameters": {"N": {"type": "integer", "default": 144}},
       "models": {
         "M": {
           "variables": {
-            "x": {"type": "state", "units": "1", "default": 0.5},
+            "x": {"type": "unknown", "units": "1", "default": 0.5},
             "dlon": {"type": "observed", "units": "1",
                      "expression": {"op": "/", "args": [360, "N"]}}
           },
@@ -925,11 +925,11 @@ fn chain_doc(n: usize) -> Value {
         tpl.insert(name, decl);
     }
     json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "chain"},
         "models": {"M": {
             "expression_templates": Value::Object(tpl),
-            "variables": {"x": {"type": "state", "default": 0.5}},
+            "variables": {"x": {"type": "unknown", "default": 0.5}},
             "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                            "rhs": {"op": "-", "args": ["x"]}}]
         }}
@@ -940,7 +940,7 @@ fn chain_doc(n: usize) -> Value {
 fn body_composition_inlines_and_depth_bound_is_exact() {
     // A 3-deep local chain inlines through the §9.6.3 fixpoint untouched.
     let mut doc = json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "chain3"},
         "models": {"M": {
             "expression_templates": {
@@ -950,11 +950,11 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
                     {"op": "apply_expression_template", "args": [], "name": "c3", "bindings": {}}]}},
                 "c3": {"params": [], "body": 3}
             },
-            "variables": {"x": {"type": "state", "units": "1", "default": 0.5},
-                          "y": {"type": "observed", "units": "1",
-                                "expression": {"op": "apply_expression_template",
-                                               "args": [], "name": "c1", "bindings": {}}}},
-            "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+            "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
+                          "y": {"type": "unknown", "units": "1"}},
+            "equations": [
+                    {"lhs": "y", "rhs": {"op": "apply_expression_template",
+                                               "args": [], "name": "c1", "bindings": {}}},{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                            "rhs": {"op": "-", "args": ["x"]}}]
         }}
     });
@@ -1015,8 +1015,8 @@ fn version_gate_flags_every_9_7_construct() {
         r#""expression_templates": {"t": {"params": [], "body": 1}},"#,
     ] {
         let doc: Value = serde_json::from_str(&format!(
-            r#"{{"esm": "0.7.0", "metadata": {{"name": "old"}},{snippet}
-             "models": {{"M": {{"variables": {{"x": {{"type": "state", "default": 0.5}}}},
+            r#"{{"esm": "1.0.0", "metadata": {{"name": "old"}},{snippet}
+             "models": {{"M": {{"variables": {{"x": {{"type": "unknown", "default": 0.5}}}},
                               "equations": []}}}}}}"#
         ))
         .unwrap();
@@ -1025,7 +1025,7 @@ fn version_gate_flags_every_9_7_construct() {
     }
     // 0.8.0 files pass the gate.
     let ok: Value = serde_json::from_str(
-        r#"{"esm": "0.8.0", "metadata": {"name": "new"},
+        r#"{"esm": "1.0.0", "metadata": {"name": "new"},
             "metaparameters": {"N": {"type": "integer", "default": 1}},
             "expression_templates": {"t": {"params": [], "body": 1}}}"#,
     )

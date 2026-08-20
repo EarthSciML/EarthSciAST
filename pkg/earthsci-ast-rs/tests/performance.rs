@@ -111,7 +111,7 @@ fn test_fast_parse() {
 
     let json_data = r#"
     {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {
             "name": "test"
         }
@@ -676,7 +676,7 @@ fn test_model_allocator_large_allocations() {
 fn test_fast_parse_complete_esm_file() {
     let complex_json = r#"
     {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {
             "name": "complex_model",
             "description": "A complex test model"
@@ -685,7 +685,7 @@ fn test_fast_parse_complete_esm_file() {
             "chemistry": {
                 "variables": {
                     "temperature": {
-                        "type": "state",
+                        "type": "unknown",
                         "units": "K",
                         "description": "Temperature"
                     }

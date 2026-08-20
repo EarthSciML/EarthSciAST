@@ -58,7 +58,7 @@ fn enums_block_round_trips_through_save_reload() {
 #[test]
 fn unknown_enum_rejected_at_load() {
     let bad = r#"{
-      "esm": "0.3.0",
+      "esm": "1.0.0",
       "metadata": {"name": "BadEnum"},
       "enums": {"season": {"summer": 3}},
       "models": {
@@ -84,7 +84,7 @@ fn unknown_enum_rejected_at_load() {
 #[test]
 fn unknown_enum_symbol_rejected_at_load() {
     let bad = r#"{
-      "esm": "0.3.0",
+      "esm": "1.0.0",
       "metadata": {"name": "BadEnumSym"},
       "enums": {"season": {"summer": 3}},
       "models": {

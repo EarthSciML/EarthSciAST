@@ -171,13 +171,13 @@ fn coordinates_registry_round_trips() {
 // --------------------------------------------------------------------------
 
 const OBSERVED_DOC: &str = r#"{
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "metadata": { "name": "ObservedGating" },
   "domain": { "independent_variable": "t" },
   "models": {
     "M": {
       "variables": {
-        "x":  { "type": "state",     "units": "kg",   "default": 1.0 },
+        "x":  { "type": "unknown",     "units": "kg",   "default": 1.0 },
         "k":  { "type": "parameter", "units": "1/s",  "default": 0.5 },
         "y":  { "type": "observed",  "units": "kg/s", "description": "flux",
                 "expression": { "op": "*", "args": ["k", "x"] } },

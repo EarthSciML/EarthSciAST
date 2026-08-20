@@ -58,11 +58,11 @@ use std::collections::HashMap;
 /// names (they namespace to `Box.scale`/`Box.src` post-flatten and resolve
 /// through the forcing buffer); `Box.c` is the dotted reference Sink couples to.
 const COUPLED_FORCED_JSON: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "segmented_refresh_coupled"},
  "models": {
   "Box": {
-   "variables": {"c": {"type": "state", "shape": ["i"], "default": 0.0}},
+   "variables": {"c": {"type": "unknown", "shape": ["i"], "default": 0.0}},
    "equations": [
     {
      "lhs": {"op": "arrayop", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
@@ -76,7 +76,7 @@ const COUPLED_FORCED_JSON: &str = r#"{
    ]
   },
   "Sink": {
-   "variables": {"d": {"type": "state", "shape": ["i"], "default": 0.0}},
+   "variables": {"d": {"type": "unknown", "shape": ["i"], "default": 0.0}},
    "equations": [
     {
      "lhs": {"op": "arrayop", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
@@ -96,12 +96,14 @@ const COUPLED_FORCED_JSON: &str = r#"{
 fn classification_doc() -> Value {
     json!({
         "models": {"Box": {"variables": {
-            "src":   {"type": "discrete", "shape": ["i"],
-                      "refresh": {"kind": "data_ingest", "source": "emis"}},
-            "scale": {"type": "discrete", "shape": ["i"],
-                      "refresh": {"kind": "data_ingest", "source": "factors"}}
+            "src":   {"type": "parameter", "shape": ["i"], "default": 0.0,
+                      "update": {"kind": "data", "source": "emis",
+                                 "from": {"file_variable": "f"}}},
+            "scale": {"type": "parameter", "shape": ["i"], "default": 0.0,
+                      "update": {"kind": "data", "source": "factors",
+                                 "from": {"file_variable": "f"}}}
         }}},
-        "data_loaders": {
+        "data_sources": {
             "emis":    {"kind": "grid", "temporal": {"frequency": "PT1H"}},
             "factors": {"kind": "static"}
         }

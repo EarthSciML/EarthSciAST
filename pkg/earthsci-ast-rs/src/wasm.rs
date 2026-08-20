@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn test_new_wasm_exports_compile() {
         let json = r#"{
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "Test Model",
                 "description": "A simple test model for WASM exports"
@@ -565,7 +565,7 @@ mod tests {
             "models": {
                 "SimpleModel": {
                     "variables": {
-                        "x": {"type": "state", "units": "m", "default": 1.0},
+                        "x": {"type": "unknown", "units": "m", "default": 1.0},
                         "k": {"type": "parameter", "default": 0.5}
                     },
                     "equations": [

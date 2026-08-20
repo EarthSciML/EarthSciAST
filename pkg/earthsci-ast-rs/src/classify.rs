@@ -462,7 +462,8 @@ mod tests {
         let m = model(serde_json::json!({
             "variables": {
                 "p_cond": { "type": "parameter", "units": "1", "default": 0.0,
-                            "update": { "kind": "condition", "when": true,
+                            "update": { "kind": "condition",
+                                        "when": { "op": ">", "args": ["t", 1.0] },
                                         "expression": 1.0 } },
                 "p_data": { "type": "parameter", "units": "1", "default": 0.0,
                             "shape": [],
@@ -483,8 +484,12 @@ mod tests {
             "variables": {
                 "p": { "type": "parameter", "units": "1", "default": 0.0,
                        "update": [
-                           { "kind": "condition", "when": true, "expression": 1.0 },
-                           { "kind": "condition", "when": false, "expression": 2.0 }
+                           { "kind": "condition",
+                             "when": { "op": ">", "args": ["t", 1.0] },
+                             "expression": 1.0 },
+                           { "kind": "condition",
+                             "when": { "op": ">", "args": ["t", 2.0] },
+                             "expression": 2.0 }
                        ] }
             },
             "equations": []
@@ -508,7 +513,7 @@ mod tests {
                            "args": [{ "op": "index", "args": ["u", "i"] }],
                            "wrt": "t" },
                   "rhs": 0.0 },
-                { "lhs": { "op": "aggregate", "output_idx": ["i"],
+                { "lhs": { "op": "aggregate", "output_idx": ["i"], "args": ["v"],
                            "expr": { "op": "D", "args": ["v"], "wrt": "t" } },
                   "rhs": 0.0 }
             ]

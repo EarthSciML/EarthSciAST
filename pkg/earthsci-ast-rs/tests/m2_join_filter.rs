@@ -30,10 +30,10 @@ use std::collections::HashMap;
 fn contraction_model(rhs_extra: &str) -> String {
     format!(
         r#"{{
-          "esm": "0.6.0",
+          "esm": "1.0.0",
           "metadata": {{ "name": "m2_join_filter_test" }},
           "models": {{ "M": {{
-            "variables": {{ "y": {{ "type": "state", "shape": ["i"] }} }},
+            "variables": {{ "y": {{ "type": "unknown", "shape": ["i"] }} }},
             "equations": [{{
               "lhs": {{ "op": "aggregate", "args": [], "output_idx": ["i"],
                         "expr": {{ "op": "D",

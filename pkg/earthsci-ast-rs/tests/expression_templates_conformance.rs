@@ -154,11 +154,11 @@ fn unlowered_integral_loads_but_is_gated_before_evaluation() {
 fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
     let src = r#"
     {
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": {"name": "attrs_match", "authors": ["t"]},
       "models": {"m": {
         "variables": {
-          "u": {"type": "state", "units": "1", "default": 0.0},
+          "u": {"type": "unknown", "units": "1", "default": 0.0},
           "y": {"type": "observed", "units": "1",
             "expression": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
         },

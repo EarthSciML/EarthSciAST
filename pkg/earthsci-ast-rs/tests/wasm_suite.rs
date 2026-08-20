@@ -27,12 +27,12 @@ use earthsci_ast::{
 /// Scalar exponential-decay ODE: `dx/dt = k·x`, `k = -1`, `x(0) = 1` ⇒
 /// `x(t) = e^{-t}`. Exercises the pure-ODE (diffsol/Faer) path in wasm.
 const SCALAR_ODE: &str = r#"{
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": { "name": "decay", "description": "scalar exponential decay" },
   "models": {
     "Decay": {
       "variables": {
-        "x": { "type": "state", "default": 1.0 },
+        "x": { "type": "unknown", "default": 1.0 },
         "k": { "type": "parameter", "default": -1.0 }
       },
       "equations": [
@@ -48,7 +48,7 @@ const HEAT_1D: &str = include_str!("../../../tests/fixtures/arrayop/15_discretiz
 
 /// Minimal reaction system `A → B` for the stoichiometry subsystem.
 const REACTIONS: &str = r#"{
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": { "name": "chem", "description": "minimal A -> B reaction" },
   "reaction_systems": {
     "Chem": {

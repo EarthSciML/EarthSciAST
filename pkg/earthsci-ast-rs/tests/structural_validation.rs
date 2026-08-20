@@ -251,7 +251,7 @@ fn test_ic_in_reaction_system() {
 #[test]
 fn test_reaction_system_non_ic_constraint_ok() {
     let json = r#"{
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "ok"},
         "reaction_systems": {
             "Chemistry": {
@@ -683,7 +683,7 @@ fn test_circular_dependency_detection() {
 fn test_valid_cross_model_references() {
     // Test a valid model with cross-references but no circular dependencies
     let json_str = r#"{
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {
             "name": "ValidCrossModelTest",
             "description": "Test file with valid cross-model references (no cycles)"
@@ -692,7 +692,7 @@ fn test_valid_cross_model_references() {
             "SourceModel": {
                 "variables": {
                     "source_var": {
-                        "type": "state",
+                        "type": "unknown",
                         "units": "mol/mol",
                         "default": 1.0
                     }
@@ -707,7 +707,7 @@ fn test_valid_cross_model_references() {
             "SinkModel": {
                 "variables": {
                     "sink_var": {
-                        "type": "state",
+                        "type": "unknown",
                         "units": "mol/mol",
                         "default": 0.0
                     }
@@ -838,7 +838,7 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
     let doc = |rhs_extra: &str, lhs_idx: &str| {
         format!(
             r#"{{
-              "esm": "0.8.0",
+              "esm": "1.0.0",
               "metadata": {{ "name": "G", "description": "bound index scope" }},
               "index_sets": {{ "points": {{ "kind": "interval", "size": 3 }} }},
               "models": {{ "M": {{
@@ -896,10 +896,10 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
 fn reference_integrity_reaches_every_expression_bearing_block() {
     // A ghost inside an `initialization_equations` RHS.
     let init = r#"{
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": { "name": "H", "description": "ghost in initialization_equations" },
       "models": { "M": {
-        "variables": { "x": { "type": "state", "units": "m", "default": 1.0 } },
+        "variables": { "x": { "type": "unknown", "units": "m", "default": 1.0 } },
         "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
                         "rhs": { "op": "-", "args": ["x"] } }],
         "initialization_equations": [{ "lhs": "x", "rhs": "GHOST_INIT" }]
@@ -921,12 +921,12 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
     // A ghost buried in an aggregate's `expr` SIDECAR of an observed expression —
     // invisible to any walk that descends only `args`.
     let sidecar = r#"{
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": { "name": "H2", "description": "ghost in a sidecar" },
       "index_sets": { "cells": { "kind": "interval", "size": 3 } },
       "models": { "M": {
         "variables": {
-          "x": { "type": "state", "units": "m", "default": 1.0 },
+          "x": { "type": "unknown", "units": "m", "default": 1.0 },
           "obs": { "type": "observed", "units": "m",
             "expression": { "op": "aggregate", "args": [], "output_idx": [],
                             "ranges": { "k": { "from": "cells" } },
@@ -977,7 +977,7 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
     // `Advection` names `u` (supplied by its partner) and carries one equation
     // for zero of its own unknowns. Coupled ⇒ both checks stand down.
     let coupled = r#"{
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": { "name": "C", "description": "coupled" },
       "models": {
         "Advection": {
@@ -1079,13 +1079,13 @@ fn default_units_must_match_declared_units() {
     let doc = |default_units: &str| {
         format!(
             r#"{{
-              "esm": "0.8.0",
+              "esm": "1.0.0",
               "metadata": {{ "name": "U", "description": "default units" }},
               "models": {{ "M": {{
                 "variables": {{
                   "temperature": {{ "type": "parameter", "units": "K",
                                     "default": 25.0, "default_units": "{default_units}" }},
-                  "x": {{ "type": "state", "units": "m", "default": 0.0 }}
+                  "x": {{ "type": "unknown", "units": "m", "default": 0.0 }}
                 }},
                 "equations": [{{ "lhs": {{ "op": "D", "args": ["x"], "wrt": "t" }}, "rhs": 1 }}]
               }} }}
@@ -1128,14 +1128,14 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
     let doc = |declared: &str, factor: &str, src_units: &str| {
         format!(
             r#"{{
-              "esm": "0.8.0",
+              "esm": "1.0.0",
               "metadata": {{ "name": "F", "description": "conversion factor" }},
               "models": {{ "M": {{
                 "variables": {{
                   "src": {{ "type": "parameter", "units": "{src_units}", "default": 1.0 }},
                   "out": {{ "type": "observed", "units": "{declared}",
                             "expression": {{ "op": "*", "args": [{factor}, "src"] }} }},
-                  "x": {{ "type": "state", "units": "m", "default": 0.0 }}
+                  "x": {{ "type": "unknown", "units": "m", "default": 0.0 }}
                 }},
                 "equations": [{{ "lhs": {{ "op": "D", "args": ["x"], "wrt": "t" }}, "rhs": 1 }}]
               }} }}

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 /// A coupling-library file: roles + role-scoped edges, no models/loaders.
 fn lib() -> Value {
     json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": { "name": "RothermelFuelCoupling" },
         "coupling_roles": {
             "Fuel": { "description": "fuel-property source" },
@@ -32,7 +32,7 @@ fn lib() -> Value {
 /// An assembly mounting the two components the library wires.
 fn assembly(coupling: Value) -> EsmFile {
     let doc = json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": { "name": "wildfire" },
         "models": {
             "FuelModelLookup": {
@@ -85,7 +85,7 @@ fn import_entry(bind: Value) -> Value {
 #[test]
 fn identifies_a_coupling_library_by_top_level_coupling_roles() {
     assert!(is_coupling_library_doc(&lib()));
-    assert!(!is_coupling_library_doc(&json!({ "esm": "0.8.0", "models": {} })));
+    assert!(!is_coupling_library_doc(&json!({ "esm": "1.0.0", "models": {} })));
     assert!(!is_coupling_library_doc(&Value::Null));
 }
 
@@ -209,7 +209,7 @@ fn not_library_when_the_ref_is_not_a_coupling_library() {
     let file = assembly(import_entry(json!({
         "Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"
     })));
-    let opts = opts_for(json!({ "esm": "0.8.0", "metadata": { "name": "x" }, "models": {} }));
+    let opts = opts_for(json!({ "esm": "1.0.0", "metadata": { "name": "x" }, "models": {} }));
     assert_eq!(
         err_code(expand_coupling_imports(&file, &opts)),
         "coupling_import_not_library"
@@ -298,10 +298,10 @@ fn subsystem_ref_targeting_a_coupling_library_is_rejected() {
     )
     .unwrap();
     let wrapper = r#"{
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": { "name": "t" },
         "models": { "M": {
-            "variables": { "x": { "type": "state", "units": "1", "default": 0.5 } },
+            "variables": { "x": { "type": "unknown", "units": "1", "default": 0.5 } },
             "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
                             "rhs": { "op": "-", "args": ["x"] } }],
             "subsystems": { "Sub": { "ref": "clib.esm" } }
@@ -324,11 +324,11 @@ fn template_import_targeting_a_coupling_library_is_rejected() {
     )
     .unwrap();
     let wrapper = r#"{
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": { "name": "t" },
         "models": { "M": {
             "expression_template_imports": [{ "ref": "clib.esm" }],
-            "variables": { "x": { "type": "state", "units": "1", "default": 0.5 } },
+            "variables": { "x": { "type": "unknown", "units": "1", "default": 0.5 } },
             "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
                             "rhs": { "op": "-", "args": ["x"] } }]
         } }

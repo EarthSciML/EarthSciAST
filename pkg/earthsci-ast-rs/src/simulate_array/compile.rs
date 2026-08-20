@@ -3072,7 +3072,7 @@ mod subsystem_ragged_and_inspection_tests {
     /// contraction (a silently unresolved offsets factor) cannot pass.
     fn ragged_miniature_doc() -> serde_json::Value {
         json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "ragged_subsystem_miniature"},
             "index_sets": {
                 "cells": {"kind": "interval", "size": 2},
@@ -3084,36 +3084,37 @@ mod subsystem_ragged_and_inspection_tests {
             },
             "models": {"M": {
                 "subsystems": {"mesh": {
-                    "esm": "0.8.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "mini_mesh"},
                     "models": {"MiniMesh": {
                         "variables": {
-                            "nEdgesOnCell": {"type": "observed", "shape": ["cells"],
-                                "expression": {"op": "const", "value": [2, 3], "args": []}},
-                            "edgesOnCell": {"type": "observed", "shape": ["cells", "maxEdges"],
-                                "expression": {"op": "const", "value": [[1, 2, 0], [1, 2, 3]], "args": []}},
-                            "w": {"type": "observed", "shape": ["edges"],
-                                "expression": {"op": "const", "value": [10.0, 20.0, 30.0], "args": []}}
+                            "nEdgesOnCell": {"type": "unknown", "shape": ["cells"]},
+                            "edgesOnCell": {"type": "unknown", "shape": ["cells", "maxEdges"]},
+                            "w": {"type": "unknown", "shape": ["edges"]}
                         },
-                        "equations": []
+                        "equations": [
+                    {"lhs": "w", "rhs": {"op": "const", "value": [10.0, 20.0, 30.0], "args": []}},
+                    {"lhs": "edgesOnCell", "rhs": {"op": "const", "value": [[1, 2, 0], [1, 2, 3]], "args": []}},
+                    {"lhs": "nEdgesOnCell", "rhs": {"op": "const", "value": [2, 3], "args": []}}]
                     }}
                 }},
                 "variables": {
-                    "u": {"type": "state", "units": "1", "shape": ["cells"]},
-                    "nEdgesOnCell": {"type": "observed", "shape": ["cells"],
-                        "expression": "mesh.nEdgesOnCell"},
-                    "edgesOnCell": {"type": "observed", "shape": ["cells", "maxEdges"],
-                        "expression": "mesh.edgesOnCell"},
-                    "s": {"type": "observed", "shape": ["cells"], "expression": {
+                    "u": {"type": "unknown", "units": "1", "shape": ["cells"]},
+                    "nEdgesOnCell": {"type": "unknown", "shape": ["cells"]},
+                    "edgesOnCell": {"type": "unknown", "shape": ["cells", "maxEdges"]},
+                    "s": {"type": "unknown", "shape": ["cells"]}
+                },
+                "equations": [
+                    {"lhs": "s", "rhs": {
                         "op": "aggregate", "args": ["edgesOnCell", "mesh.w"],
                         "output_idx": ["i"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "cells"},
                                     "k": {"from": "edges_of_cell", "of": ["i"]}},
                         "expr": {"op": "index", "args": ["mesh.w",
                                  {"op": "index", "args": ["edgesOnCell", "i", "k"]}]}
-                    }}
-                },
-                "equations": [
+                    }},
+                    {"lhs": "edgesOnCell", "rhs": "mesh.edgesOnCell"},
+                    {"lhs": "nEdgesOnCell", "rhs": "mesh.nEdgesOnCell"},
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
                     {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "s"}
                 ]
@@ -3301,7 +3302,7 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn exact_rational_overlap_weights_through_inspection() {
         let doc = json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "inspect_overlap"},
             "index_sets": {
                 "src_cells": {"kind": "interval", "size": 2},
@@ -3309,31 +3310,17 @@ mod subsystem_ragged_and_inspection_tests {
             },
             "models": {"R": {
                 "variables": {
-                    "q": {"type": "state", "units": "1", "shape": ["tgt_cells"],
+                    "q": {"type": "unknown", "units": "1", "shape": ["tgt_cells"],
                           "default": 0.0},
                     "atol": {"type": "parameter", "units": "1", "default": 1e-12},
-                    "src_poly": {"type": "observed",
-                        "expression": {"op": "const", "args": [], "value": [
-                            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]]}},
-                    "tgt_poly": {"type": "observed",
-                        "expression": {"op": "const", "args": [], "value": [
-                            [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]}},
-                    "A_ij": {"type": "observed", "expression": {
-                        "op": "aggregate", "args": ["src_poly", "tgt_poly"],
-                        "output_idx": ["i", "j"], "semiring": "sum_product",
-                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
-                        "expr": {"op": "polygon_intersection_area", "manifold": "planar",
-                                 "args": [{"op": "index", "args": ["src_poly", "i"]},
-                                          {"op": "index", "args": ["tgt_poly", "j"]}]}}},
-                    "A_j": {"type": "observed", "expression": {
-                        "op": "aggregate", "args": ["A_ij"],
-                        "output_idx": ["j"], "semiring": "sum_product",
-                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
-                        "filter": {"op": ">", "args": [
-                            {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
-                        "expr": {"op": "index", "args": ["A_ij", "i", "j"]}}},
-                    "W_ij": {"type": "observed", "expression": {
+                    "src_poly": {"type": "unknown"},
+                    "tgt_poly": {"type": "unknown"},
+                    "A_ij": {"type": "unknown"},
+                    "A_j": {"type": "unknown"},
+                    "W_ij": {"type": "unknown"}
+                },
+                "equations": [
+                    {"lhs": "W_ij", "rhs": {
                         "op": "aggregate", "args": ["A_ij", "A_j"],
                         "output_idx": ["i", "j"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
@@ -3341,9 +3328,26 @@ mod subsystem_ragged_and_inspection_tests {
                             {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
                         "expr": {"op": "/", "args": [
                             {"op": "index", "args": ["A_ij", "i", "j"]},
-                            {"op": "index", "args": ["A_j", "j"]}]}}}
-                },
-                "equations": [
+                            {"op": "index", "args": ["A_j", "j"]}]}}},
+                    {"lhs": "A_j", "rhs": {
+                        "op": "aggregate", "args": ["A_ij"],
+                        "output_idx": ["j"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
+                        "filter": {"op": ">", "args": [
+                            {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
+                        "expr": {"op": "index", "args": ["A_ij", "i", "j"]}}},
+                    {"lhs": "A_ij", "rhs": {
+                        "op": "aggregate", "args": ["src_poly", "tgt_poly"],
+                        "output_idx": ["i", "j"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
+                        "expr": {"op": "polygon_intersection_area", "manifold": "planar",
+                                 "args": [{"op": "index", "args": ["src_poly", "i"]},
+                                          {"op": "index", "args": ["tgt_poly", "j"]}]}}},
+                    {"lhs": "tgt_poly", "rhs": {"op": "const", "args": [], "value": [
+                            [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]}},
+                    {"lhs": "src_poly", "rhs": {"op": "const", "args": [], "value": [
+                            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]]}},
                     {"lhs": {"op": "D", "args": ["q"], "wrt": "t"}, "rhs": 0.0}
                 ]
             }}

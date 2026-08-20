@@ -32,12 +32,12 @@ use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 /// ```
 fn geom_json(n: usize) -> String {
     const TEMPLATE: &str = r#"{
- "esm": "0.1.0",
+ "esm": "1.0.0",
  "metadata": {"name": "tape_const_geom"},
  "models": {
   "Geom": {
    "variables": {
-     "u": {"type": "state", "shape": ["i"]},
+     "u": {"type": "unknown", "shape": ["i"]},
      "a_geom": {"type": "parameter", "units": "1", "default": 3.0},
      "b_geom": {"type": "parameter", "units": "1", "default": 0.5},
      "c": {"type": "observed", "shape": ["i"],

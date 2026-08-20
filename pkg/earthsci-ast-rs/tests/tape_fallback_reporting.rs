@@ -29,12 +29,12 @@ use earthsci_ast::{SimulateOptions, load, simulate};
 /// the nested-aggregate shadowing this release taught the admission test about:
 /// this fixture must keep falling back for the assertion to mean anything.
 const FALLBACK_MODEL: &str = r#"{
- "esm": "0.8.0",
+ "esm": "1.0.0",
  "metadata": {"name": "fallback_reporting"},
  "index_sets": {"c": {"kind": "interval", "size": 3}},
  "models": {"M": {
    "variables": {
-     "psi": {"type": "state", "shape": ["c"], "default": 1.0},
+     "psi": {"type": "unknown", "shape": ["c"], "default": 1.0},
      "k": {"type": "observed", "shape": ["c"],
            "expression": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
      "a": {"type": "observed", "shape": ["c"],
@@ -51,12 +51,12 @@ const FALLBACK_MODEL: &str = r#"{
 /// the output index instead of an array literal: fully vectorizable, hence
 /// fully taped.
 const TAPED_MODEL: &str = r#"{
- "esm": "0.8.0",
+ "esm": "1.0.0",
  "metadata": {"name": "taped_reporting"},
  "index_sets": {"c": {"kind": "interval", "size": 3}},
  "models": {"M": {
    "variables": {
-     "psi": {"type": "state", "shape": ["c"], "default": 1.0},
+     "psi": {"type": "unknown", "shape": ["c"], "default": 1.0},
      "k": {"type": "observed", "shape": ["c"],
            "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
                           "ranges": {"i": [1, 3]}, "expr": "i"}},

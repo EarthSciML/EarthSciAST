@@ -1414,11 +1414,11 @@ mod forcing_channel_tests {
     /// (the new lowest-precedence binding), precisely the channel PR-1 adds.
     fn forced_model() -> ArrayCompiled {
         let json = r#"{
-         "esm": "0.1.0",
+         "esm": "1.0.0",
          "metadata": {"name": "forcing_channel"},
          "models": {
           "Forced": {
-           "variables": {"u": {"type": "state", "shape": ["i"], "default": 0.0}},
+           "variables": {"u": {"type": "unknown", "shape": ["i"], "default": 0.0}},
            "equations": [
             {
              "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
@@ -1514,12 +1514,12 @@ mod forcing_channel_tests {
         // *unrelated* forcing entry does not perturb it, because forcing is
         // resolved last and only fills otherwise-unbound names.
         let json = r#"{
-         "esm": "0.1.0",
+         "esm": "1.0.0",
          "metadata": {"name": "param_path"},
          "models": {
           "P": {
            "variables": {
-             "u": {"type": "state", "shape": ["i"]},
+             "u": {"type": "unknown", "shape": ["i"]},
              "k": {"type": "parameter"}
            },
            "equations": [
@@ -1569,12 +1569,12 @@ mod forcing_channel_tests {
         // NaN-ed out and poisoned the whole RHS. At code = 2.0 the lookup is
         // the exact knot 40.0, so both cells' derivative must be 40.0.
         let json = r#"{
-         "esm": "0.8.0",
+         "esm": "1.0.0",
          "metadata": {"name": "fn_array_path"},
          "models": {
           "F": {
            "variables": {
-             "u": {"type": "state", "shape": ["i"]},
+             "u": {"type": "unknown", "shape": ["i"]},
              "code": {"type": "parameter"},
              "looked_up": {"type": "observed", "expression": {
                 "op": "fn", "name": "interp.linear", "args": [

@@ -55,7 +55,7 @@ fn sq_dist() -> &'static str {
 fn argmin_model() -> String {
     format!(
         r#"{{
-      "esm": "0.6.0",
+      "esm": "1.0.0",
       "metadata": {{ "name": "argmin_simulate" }},
       "index_sets": {{
         "points":     {{ "kind": "interval", "size": 4 }},
@@ -67,8 +67,8 @@ fn argmin_model() -> String {
           "gy": {{ "type": "observed", "shape": ["generators"], "expression": {{ "op": "const", "args": [], "value": [0.0, 0.0, 0.0] }} }},
           "px": {{ "type": "observed", "shape": ["points"],     "expression": {{ "op": "const", "args": [], "value": [0.0, 1.0, 1.5, 2.0] }} }},
           "py": {{ "type": "observed", "shape": ["points"],     "expression": {{ "op": "const", "args": [], "value": [0.0, 0.5, 0.0, 0.0] }} }},
-          "assign": {{ "type": "state", "shape": ["points"], "description": "nearest-generator index (argmin arg-witness output)" }},
-          "u":      {{ "type": "state", "shape": ["points"], "description": "integrated witness: D(u[i]) = assign[i]" }}
+          "assign": {{ "type": "unknown", "shape": ["points"], "description": "nearest-generator index (argmin arg-witness output)" }},
+          "u":      {{ "type": "unknown", "shape": ["points"], "description": "integrated witness: D(u[i]) = assign[i]" }}
         }},
         "equations": [
           {{
@@ -161,7 +161,7 @@ fn argmin_nearest_generator_simulates_end_to_end() {
 /// the numbers the `value_invention` front-door goldens assert.
 fn centroid_model() -> &'static str {
     r#"{
-      "esm": "0.6.0",
+      "esm": "1.0.0",
       "metadata": { "name": "centroid_simulate" },
       "index_sets": {
         "points":     { "kind": "interval", "size": 4 },
@@ -172,11 +172,11 @@ fn centroid_model() -> &'static str {
           "gx":  { "type": "observed", "shape": ["generators"], "expression": { "op": "const", "args": [], "value": [0.0, 1.0, 2.0] } },
           "px":  { "type": "observed", "shape": ["points"],     "expression": { "op": "const", "args": [], "value": [0.0, 0.75, 1.25, 2.0] } },
           "rho": { "type": "observed", "shape": ["points"],     "expression": { "op": "const", "args": [], "value": [1.0, 1.0, 3.0, 4.0] } },
-          "assign":   { "type": "state", "shape": ["points"] },
-          "num":      { "type": "state", "shape": ["generators"] },
-          "den":      { "type": "state", "shape": ["generators"] },
-          "centroid": { "type": "state", "shape": ["generators"] },
-          "cu":       { "type": "state", "shape": ["generators"], "description": "integrated centroid: D(cu[g]) = centroid[g]" }
+          "assign":   { "type": "unknown", "shape": ["points"] },
+          "num":      { "type": "unknown", "shape": ["generators"] },
+          "den":      { "type": "unknown", "shape": ["generators"] },
+          "centroid": { "type": "unknown", "shape": ["generators"] },
+          "cu":       { "type": "unknown", "shape": ["generators"], "description": "integrated centroid: D(cu[g]) = centroid[g]" }
         },
         "equations": [
           { "lhs": { "op": "index", "args": ["assign", "i"] },

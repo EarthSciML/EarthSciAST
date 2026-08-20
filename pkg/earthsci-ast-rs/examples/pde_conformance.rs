@@ -363,7 +363,7 @@ fn reproj_wrapper_doc(lib_file_name: &str, params: &Value) -> Result<Value, Stri
                "bindings": bindings})
     };
     Ok(json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "lambert_conformal_eval",
                      "description": "Runner-built template invocation (manifest fixture: null)."},
         "models": {"Reproject": {
@@ -373,16 +373,16 @@ fn reproj_wrapper_doc(lib_file_name: &str, params: &Value) -> Result<Value, Stri
                 "lat": {"type": "parameter", "units": "deg", "default": 0.0},
                 "x": {"type": "parameter", "units": "m", "default": 0.0},
                 "y": {"type": "parameter", "units": "m", "default": 0.0},
-                "fwd_x": {"type": "observed", "units": "m",
-                          "expression": mkapply("lambert_conformal_forward_x", ["lon", "lat"])},
-                "fwd_y": {"type": "observed", "units": "m",
-                          "expression": mkapply("lambert_conformal_forward_y", ["lon", "lat"])},
-                "inv_lon": {"type": "observed", "units": "deg",
-                            "expression": mkapply("lambert_conformal_inverse_lon", ["x", "y"])},
-                "inv_lat": {"type": "observed", "units": "deg",
-                            "expression": mkapply("lambert_conformal_inverse_lat", ["x", "y"])},
+                "fwd_x": {"type": "unknown", "units": "m"},
+                "fwd_y": {"type": "unknown", "units": "m"},
+                "inv_lon": {"type": "unknown", "units": "deg"},
+                "inv_lat": {"type": "unknown", "units": "deg"},
             },
-            "equations": []
+            "equations": [
+                    {"lhs": "inv_lat", "rhs": mkapply("lambert_conformal_inverse_lat", ["x", "y"])},
+                    {"lhs": "inv_lon", "rhs": mkapply("lambert_conformal_inverse_lon", ["x", "y"])},
+                    {"lhs": "fwd_y", "rhs": mkapply("lambert_conformal_forward_y", ["lon", "lat"])},
+                    {"lhs": "fwd_x", "rhs": mkapply("lambert_conformal_forward_x", ["lon", "lat"])}]
         }}
     }))
 }

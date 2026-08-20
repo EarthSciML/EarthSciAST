@@ -2866,7 +2866,7 @@ mod tests {
 
     fn arrhenius_fixture() -> Value {
         json!({
-          "esm": "0.4.0",
+          "esm": "1.0.0",
           "metadata": {"name": "expr_template_smoke", "authors": ["esm-giy"]},
           "reaction_systems": {
             "chem": {
@@ -2991,7 +2991,7 @@ mod tests {
             );
         }
         let mut v = json!({
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "deep_chain", "authors": ["t"]},
             "reaction_systems": {"chem": {
                 "species": {"A": {"default": 1.0}, "B": {"default": 0.5}},
@@ -3109,7 +3109,7 @@ mod tests {
     #[test]
     fn no_templates_block_is_a_noop() {
         let mut v = json!({
-            "esm": "0.4.0",
+            "esm": "1.0.0",
             "metadata": {"name": "no_templates", "authors": ["t"]},
             "reaction_systems": {
                 "chem": {
@@ -3138,11 +3138,11 @@ mod tests {
     #[test]
     fn match_rule_lowers_grad_operator() {
         let mut v = json!({
-          "esm": "0.4.0",
+          "esm": "1.0.0",
           "metadata": {"name": "grad_lowering", "authors": ["t"]},
           "models": {
             "Diff": {
-              "variables": {"u": {"type": "state"}},
+              "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
                 "central_grad_x": {
                   "params": ["f"],
@@ -3182,11 +3182,11 @@ mod tests {
     #[test]
     fn match_rule_binds_scalar_field_metavariable() {
         let mut v = json!({
-          "esm": "0.4.0",
+          "esm": "1.0.0",
           "metadata": {"name": "scalar_meta", "authors": ["t"]},
           "models": {
             "M": {
-              "variables": {"u": {"type": "state"}},
+              "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
                 "grad_to_deriv": {
                   "params": ["f", "d"],
@@ -3214,11 +3214,11 @@ mod tests {
     #[test]
     fn rejects_nonterminating_match_rule() {
         let mut v = json!({
-          "esm": "0.4.0",
+          "esm": "1.0.0",
           "metadata": {"name": "nonterm", "authors": ["t"]},
           "models": {
             "M": {
-              "variables": {"u": {"type": "state"}},
+              "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
                 "loop_rule": {
                   "params": ["f"],
@@ -3243,11 +3243,11 @@ mod tests {
     #[test]
     fn match_rules_apply_in_declaration_order() {
         let mut v = json!({
-          "esm": "0.4.0",
+          "esm": "1.0.0",
           "metadata": {"name": "order", "authors": ["t"]},
           "models": {
             "M": {
-              "variables": {"u": {"type": "state"}},
+              "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
                 "z_rule": {
                   "params": ["f"],
@@ -3277,11 +3277,11 @@ mod tests {
     #[test]
     fn higher_priority_rule_wins_over_earlier_declared() {
         let mut v = json!({
-          "esm": "0.8.0",
+          "esm": "1.0.0",
           "metadata": {"name": "prio", "authors": ["t"]},
           "models": {
             "M": {
-              "variables": {"u": {"type": "state"}},
+              "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
                 "low": {
                   "params": ["f"],
@@ -3314,11 +3314,11 @@ mod tests {
     #[test]
     fn produced_body_is_rescanned_in_a_later_pass() {
         let mut v = json!({
-          "esm": "0.8.0",
+          "esm": "1.0.0",
           "metadata": {"name": "fixpoint", "authors": ["t"]},
           "models": {
             "M": {
-              "variables": {"u": {"type": "state"}},
+              "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
                 "sugar": {
                   "params": ["f"],
@@ -3349,17 +3349,17 @@ mod tests {
 
     fn scalar_field_doc(templates: Value, bindings: Value, name: &str) -> Value {
         json!({
-          "esm": "0.8.0",
+          "esm": "1.0.0",
           "metadata": {"name": "scalar_field_param_unit", "authors": ["t"]},
           "models": {"M": {
             "variables": {
               "pa": {"type": "parameter"},
               "pb": {"type": "parameter"},
-              "area": {"type": "observed",
-                "expression": {"op": "apply_expression_template", "args": [],
-                  "name": name, "bindings": bindings}}
+              "area": {"type": "unknown"}
             },
-            "equations": [],
+            "equations": [
+                    {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
+                  "name": name, "bindings": bindings}}],
             "expression_templates": templates
           }}
         })

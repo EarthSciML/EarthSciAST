@@ -1067,12 +1067,12 @@ mod tests {
     fn decay_doc() -> serde_json::Value {
         let idx = json!({"op": "index", "args": ["u", "i"]});
         json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "pde_inline_decay"},
             "index_sets": {"x": {"kind": "interval", "size": N}},
             "models": {"M": {
                 "variables": {
-                    "u": {"type": "state", "units": "1", "shape": ["x"]},
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"]},
                 },
                 "equations": [
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": cos_pi_x()},
@@ -1360,18 +1360,18 @@ mod tests {
                        "expr": {"op": "+",
                                 "args": [{"op": "index", "args": ["u", "i"]}, 1]}});
         json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "observed_assertions"},
             "index_sets": {"x": {"kind": "interval", "size": 3}},
             "models": {"M": {
                 "variables": {
-                    "u": {"type": "state", "units": "1", "shape": ["x"]},
-                    "g": {"type": "observed", "units": "1", "shape": ["x"],
-                          "expression": g},
-                    "h": {"type": "observed", "units": "1", "shape": ["x"],
-                          "expression": h},
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "g": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "h": {"type": "unknown", "units": "1", "shape": ["x"]},
                 },
                 "equations": [
+                    {"lhs": "h", "rhs": h},
+                    {"lhs": "g", "rhs": g},
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
                     {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0},
                 ],
@@ -1485,10 +1485,10 @@ mod tests {
     fn run_pde_tests_coords_on_scalar_variable_rejected() {
         // coords on a scalar (0-D) variable is ill-formed per §6.6.5.
         let doc = json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "scalar_coords"},
             "models": {"M": {
-                "variables": {"z": {"type": "state", "units": "1", "default": 1.0}},
+                "variables": {"z": {"type": "unknown", "units": "1", "default": 1.0}},
                 "equations": [
                     {"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}],
                 "tests": [{
@@ -1528,12 +1528,12 @@ mod tests {
         let idx = json!({"op": "index", "args": ["u", "i", "j"]});
         let ranges = json!({"i": [1, 4], "j": [1, ny]});
         json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "pde_inline_2d"},
             "index_sets": {"x": {"kind": "interval", "size": 4},
                            "y": {"kind": "interval", "size": ny}},
             "models": {"M": {
-                "variables": {"u": {"type": "state", "units": "1",
+                "variables": {"u": {"type": "unknown", "units": "1",
                                     "shape": ["x", "y"]}},
                 "equations": [
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
@@ -1747,11 +1747,11 @@ mod tests {
                 "variables": {
                     "T": {"type": "parameter", "units": "K", "default": 10.0},
                     "a": {"type": "parameter", "units": "1", "default": a},
-                    "x": {"type": "state", "units": "1", "shape": ["s"]},
-                    "k": {"type": "observed", "units": "1",
-                          "expression": {"op": "*", "args": ["a", "T"]}},
+                    "x": {"type": "unknown", "units": "1", "shape": ["s"]},
+                    "k": {"type": "unknown", "units": "1"},
                 },
                 "equations": [
+                    {"lhs": "k", "rhs": {"op": "*", "args": ["a", "T"]}},
                     {"lhs": {"op": "ic", "args": ["x"]}, "rhs": 0.0},
                     {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
                              "ranges": {"i": [1, 1]},
@@ -1763,7 +1763,7 @@ mod tests {
             })
         };
         json!({
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "scalar_observed_param_override"},
             "index_sets": {"s": {"kind": "interval", "size": 1}},
             "models": {

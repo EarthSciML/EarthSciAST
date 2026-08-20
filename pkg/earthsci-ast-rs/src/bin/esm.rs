@@ -1159,7 +1159,7 @@ fn detect_coupling_antipatterns(
 /// can never scaffold a project its own `validate` rejects. `{name}` is
 /// replaced with the project name.
 const TEMPLATE_MINIMAL: &str = r#"{
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "{name}",
     "description": "A minimal ESM model",
@@ -1174,7 +1174,7 @@ const TEMPLATE_MINIMAL: &str = r#"{
 }"#;
 
 const TEMPLATE_ATMOSPHERIC: &str = r#"{
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "{name}",
     "description": "An atmospheric chemistry model",
@@ -1203,7 +1203,7 @@ const TEMPLATE_ATMOSPHERIC: &str = r#"{
 }"#;
 
 const TEMPLATE_ECOSYSTEM: &str = r#"{
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "{name}",
     "description": "An ecosystem model",
@@ -1212,7 +1212,7 @@ const TEMPLATE_ECOSYSTEM: &str = r#"{
   "models": {
     "ecosystem": {
       "variables": {
-        "biomass": {"type": "state", "units": "kg/m^2", "default": 1.0},
+        "biomass": {"type": "unknown", "units": "kg/m^2", "default": 1.0},
         "r": {"type": "parameter", "units": "1/s", "default": 0.1}
       },
       "equations": [
@@ -1226,7 +1226,7 @@ const TEMPLATE_ECOSYSTEM: &str = r#"{
 }"#;
 
 const TEMPLATE_COUPLING: &str = r#"{
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "{name}",
     "description": "A coupled system model",
@@ -1235,7 +1235,7 @@ const TEMPLATE_COUPLING: &str = r#"{
   "models": {
     "atmosphere": {
       "variables": {
-        "temperature": {"type": "state", "units": "K", "default": 288.0},
+        "temperature": {"type": "unknown", "units": "K", "default": 288.0},
         "relaxation": {"type": "parameter", "units": "1/s", "default": 0.01}
       },
       "equations": [
@@ -1247,7 +1247,7 @@ const TEMPLATE_COUPLING: &str = r#"{
     },
     "ocean": {
       "variables": {
-        "sea_temp": {"type": "state", "units": "K", "default": 285.0},
+        "sea_temp": {"type": "unknown", "units": "K", "default": 285.0},
         "heat_flux": {"type": "parameter", "units": "K", "default": 0.0}
       },
       "equations": [

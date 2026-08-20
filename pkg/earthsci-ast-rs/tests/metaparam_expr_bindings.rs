@@ -50,7 +50,7 @@ fn meta(pairs: &[(&str, i64)]) -> BTreeMap<String, i64> {
 
 fn lib_grid() -> Value {
     json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "lib_grid"},
         "metaparameters": {"GX": {"type": "integer", "default": 2}},
         "index_sets": {"cells": {"kind": "interval", "size": "GX"}},
@@ -62,7 +62,7 @@ fn lib_grid() -> Value {
 
 fn model_importing(binding: Value) -> Value {
     json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "model_import"},
         "metaparameters": {
             "NX": {"type": "integer", "default": 3},
@@ -108,7 +108,7 @@ fn import_edge_product_binding_folds_at_close() {
 
 fn child_regrid() -> Value {
     json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "child_regrid"},
         "metaparameters": {
             "NX": {"type": "integer", "default": 2},
@@ -136,7 +136,7 @@ fn child_regrid() -> Value {
 /// closing the child's metaparameters with this edge's `bindings`.
 fn parent_mount(bindings: Value) -> Value {
     json!({
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "parent_mount"},
         "metaparameters": {
             "NX": {"type": "integer", "default": 18},
