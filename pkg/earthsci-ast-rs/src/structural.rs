@@ -340,8 +340,10 @@ pub(crate) fn validate_model(
     var_names.sort();
     for var_name in var_names {
         let variable = &model.variables[var_name];
-        let path = format!("{model_path}/variables/{var_name}/update");
-        variable.for_each_expression(&mut |expr| check_refs(expr, &path, 0, errors));
+        let base = format!("{model_path}/variables/{var_name}/update");
+        variable.for_each_expression_at(&mut |expr, site| {
+            check_refs(expr, &format!("{base}{site}"), 0, errors)
+        });
     }
 
     // Validate discrete events

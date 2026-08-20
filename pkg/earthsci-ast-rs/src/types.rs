@@ -1710,6 +1710,43 @@ impl ModelVariable {
         }
     }
 
+    /// As [`ModelVariable::for_each_expression`], but also handing the callback
+    /// the JSON-pointer suffix of the SITE the expression came from, relative to
+    /// the variable's `update`.
+    ///
+    /// A diagnostic must name the field it is about. Reporting every one of a
+    /// parameter's update expressions at a bare `.../update` is ambiguous the
+    /// moment the ordered ARRAY form is used (esm-spec §5.4) — and that form
+    /// exists precisely because parameters written by two or more events are
+    /// common — so `when`, `expression` and `from/unit_conversion` all have to
+    /// be distinguishable, per rule. The suffixes match the other four
+    /// bindings: `""` for the single-rule object form and `/i` for entry `i` of
+    /// the array form, then the site (`/when`, `/expression`,
+    /// `/from/unit_conversion`).
+    pub fn for_each_expression_at(&self, f: &mut impl FnMut(&Expr, &str)) {
+        let Some(spec) = &self.update else { return };
+        let indexed = matches!(spec, ParameterUpdateSpec::Several(_));
+        for (i, rule) in spec.rules().iter().enumerate() {
+            let rule_path = if indexed {
+                format!("/{i}")
+            } else {
+                String::new()
+            };
+            if let Some(when) = rule.when() {
+                f(when, &format!("{rule_path}/when"));
+            }
+            let Some(value) = rule.value() else { continue };
+            if let Some(expr) = &value.expression {
+                f(expr, &format!("{rule_path}/expression"));
+            }
+            if let Some(UnitConversion::Expression(expr)) =
+                value.from.as_ref().and_then(|b| b.unit_conversion.as_ref())
+            {
+                f(expr, &format!("{rule_path}/from/unit_conversion"));
+            }
+        }
+    }
+
     /// Mutable counterpart of [`ModelVariable::for_each_expression`], for the
     /// namespacing / renaming / range-resolution passes.
     pub fn for_each_expression_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
