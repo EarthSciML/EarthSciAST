@@ -300,7 +300,7 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
     let rewritten = earthsci_ast::pushdown_rewrite::desugar_pushdown(&doc, Some("Fwd"))
         .expect("desugar")
         .into_owned();
-    let ov = &(*earthsci_ast::classification::observed_definition_json(&rewritten["models"]["Fwd"], "E").expect("E defining equation"))["join"][0]["overlap"];
+    let ov = &earthsci_ast::classification::observed_definition_json(&rewritten["models"]["Fwd"], "E").expect("E defining equation")["join"][0]["overlap"];
     assert_eq!(ov["src_env"], json!(["px", "py"]));
     assert_eq!(
         ov["tgt_env"],

@@ -3412,7 +3412,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            (*crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation")),
+            *crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation"),
             json!({"op": "polygon_intersection_area", "manifold": "planar",
                    "args": ["pa", "pb"]})
         );
@@ -3442,7 +3442,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            (*crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation")),
+            *crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation"),
             json!({"op": "*", "args": [
               {"op": "polygon_intersection_area", "manifold": "spherical",
                "args": ["pa", "pb"]},
@@ -3484,7 +3484,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            (*crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation"))["manifold"],
+            crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation")["manifold"],
             json!("spherical")
         );
     }

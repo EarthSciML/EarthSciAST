@@ -1,10 +1,11 @@
 //! Cadence-tier classification for observed materialization (the DISCRETE-tier
 //! fix). The array driver materializes observeds in three cadence tiers
 //! (`cadence.rs` lattice `CONST ⊏ DISCRETE ⊏ CONTINUOUS`):
-//!   * CONST      — once at setup;
-//!   * DISCRETE   — once per cadence segment (state-free & `t`-free, but reaches
-//!                  a refreshed forcing buffer, so constant *within* a segment);
-//!   * CONTINUOUS — every RHS step (reaches `t` or state).
+//!
+//! * CONST — once at setup;
+//! * DISCRETE — once per cadence segment (state-free and `t`-free, but reaches
+//!   a refreshed forcing buffer, so constant *within* a segment);
+//! * CONTINUOUS — every RHS step (reaches `t` or state).
 //!
 //! The bug this guards against: collapsing DISCRETE into CONTINUOUS, which
 //! recomputes the per-cell conservative-regrid observeds every solver step
@@ -15,11 +16,12 @@
 use earthsci_ast::load;
 use earthsci_ast::simulate_array::ArrayCompiled;
 
-/// A model with two algebraic (eliminated) array observeds:
-///   * `g[i] := f[i] * 2`  — `f` is an undeclared name (resolves via the forcing
-///     buffer at runtime); state-free & `t`-free → DISCRETE.
-///   * `h[i] := u[i] * 2`  — reads the integrated state `u` → CONTINUOUS.
-/// plus the state `D(u[i]) = g[i] + h[i]`.
+/// A model with two algebraic (eliminated) array observeds, plus the state
+/// `D(u[i]) = g[i] + h[i]`:
+///
+/// * `g[i] := f[i] * 2` — `f` is an undeclared name (resolves via the forcing
+///   buffer at runtime); state-free and `t`-free, so DISCRETE.
+/// * `h[i] := u[i] * 2` — reads the integrated state `u`, so CONTINUOUS.
 const MODEL: &str = r#"
     {
       "esm": "1.0.0",

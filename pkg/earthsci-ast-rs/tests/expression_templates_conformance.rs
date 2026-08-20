@@ -228,7 +228,7 @@ fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
         "#;
     let mut v: Value = serde_json::from_str(src).expect("parse attrs source");
     lower_expression_templates(&mut v).expect("lowering must converge");
-    let expr = &(*earthsci_ast::classification::observed_definition_json(&v["models"]["m"], "y").expect("y defining equation"));
+    let expr = earthsci_ast::classification::observed_definition_json(&v["models"]["m"], "y").expect("y defining equation");
     assert_eq!(*expr, json!({"op": "*", "args": [1.4, "u"]}));
 }
 

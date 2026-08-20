@@ -117,7 +117,7 @@ fn aggregate_int_ratio_golden_matches_golden() {
     );
     // The in-aggregate ratio and the standalone dx=1/8 both stay integers.
     let expanded = expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"]));
-    let dx = &(*earthsci_ast::classification::observed_definition_json(&expanded["models"]["M"], "dx").expect("dx defining equation"))["args"];
+    let dx = &earthsci_ast::classification::observed_definition_json(&expanded["models"]["M"], "dx").expect("dx defining equation")["args"];
     assert!(dx[0].is_i64() || dx[0].is_u64());
     assert!(dx[1].is_i64() || dx[1].is_u64());
 }
@@ -169,11 +169,11 @@ fn import_order_pins_tie_break_and_priority_flips_it() {
     // Winner sanity, independent of the goldens: earlier import wins the
     // equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
     assert_eq!(
-        (*earthsci_ast::classification::observed_definition_json(&d1["models"]["M"], "y").expect("y defining equation"))["args"][0],
+        earthsci_ast::classification::observed_definition_json(&d1["models"]["M"], "y").expect("y defining equation")["args"][0],
         json!(2)
     );
     assert_eq!(
-        (*earthsci_ast::classification::observed_definition_json(&d2["models"]["M"], "y").expect("y defining equation"))["args"][0],
+        earthsci_ast::classification::observed_definition_json(&d2["models"]["M"], "y").expect("y defining equation")["args"][0],
         json!(5)
     );
 }
@@ -420,15 +420,15 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         let sweep = &f.models.as_ref().expect("models")["Sweep"];
         let problem = &sweep.subsystems.as_ref().expect("subsystems")["Problem"];
         // Expression position: bare "N" substituted as an integer literal.
-        assert_eq!((*earthsci_ast::classification::observed_definition_json(&problem, "npts").expect("npts defining equation")), json!(n));
+        assert_eq!(*earthsci_ast::classification::observed_definition_json(problem, "npts").expect("npts defining equation"), json!(n));
         // Expression-position division stays an AST division (no folding).
         assert_eq!(
-            (*earthsci_ast::classification::observed_definition_json(&problem, "half").expect("half defining equation")),
+            *earthsci_ast::classification::observed_definition_json(problem, "half").expect("half defining equation"),
             json!({"op": "/", "args": [n, 2]})
         );
         // Structural site: the aggregate dense range folded exactly.
         assert_eq!(
-            (*earthsci_ast::classification::observed_definition_json(&problem, "ramp").expect("ramp defining equation"))["ranges"]["i"],
+            earthsci_ast::classification::observed_definition_json(problem, "ramp").expect("ramp defining equation")["ranges"]["i"],
             json!([1, n / 2])
         );
     }
@@ -629,11 +629,14 @@ fn invalid_fixtures_fail_with_exact_codes() {
         );
         seen_codes.insert(want.to_string());
     }
-    // The fixture set exercises the full §9.6.6 §9.7 code table (the 12th,
-    // template_import_unresolved, is exercised in the unit tests below — a
-    // missing file is not representable as a fixture).
+    // The fixture set exercises the §9.6.6 / §9.7 code table reachable through
+    // FIXTURES. Two codes are not: `template_import_unresolved` (a missing file
+    // is not representable as a fixture) and `template_import_version_too_old`
+    // (esm 1.0.0 rejects a pre-0.8.0 document at the major-version gate long
+    // before the §9.7 constructs are looked at, so no loadable fixture can
+    // reach it — its own fixture was retired for that reason). Both are pinned
+    // by the unit tests below, directly against the gate functions.
     for code in [
-        "template_import_version_too_old",
         "template_import_not_library",
         "subsystem_ref_is_template_library",
         "template_import_cycle",
@@ -1143,7 +1146,7 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
     lower_expression_templates(&mut doc).expect("lower");
     expand(&mut doc).expect("expand");
     assert_eq!(
-        (*earthsci_ast::classification::observed_definition_json(&doc["models"]["M"], "y").expect("y defining equation")),
+        *earthsci_ast::classification::observed_definition_json(&doc["models"]["M"], "y").expect("y defining equation"),
         json!({"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]})
     );
 
@@ -1194,8 +1197,13 @@ fn version_gate_flags_every_9_7_construct() {
         r#""metaparameters": {"N": {"type": "integer"}},"#,
         r#""expression_templates": {"t": {"params": [], "body": 1}},"#,
     ] {
+        // A genuinely pre-0.8.0 version string: this drives the GATE FUNCTION
+        // directly, which is the only way left to reach it. A document this old
+        // never survives `load()` under esm 1.0.0 — the major-version gate
+        // refuses it first — which is why the fixture for
+        // `template_import_version_too_old` was retired as unreachable.
         let doc: Value = serde_json::from_str(&format!(
-            r#"{{"esm": "1.0.0", "metadata": {{"name": "old"}},{snippet}
+            r#"{{"esm": "0.7.0", "metadata": {{"name": "old"}},{snippet}
              "models": {{"M": {{"variables": {{"x": {{"type": "unknown", "default": 0.5}}}},
                               "equations": []}}}}}}"#
         ))

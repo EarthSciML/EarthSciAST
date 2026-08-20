@@ -549,12 +549,26 @@ fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareEr
     Ok(ordered)
 }
 
-/// name → defining expression, for every OBSERVED unknown of `model`
-/// (esm-spec §6.3.1). From esm 1.0.0 the definition is the RHS of the equation
-/// whose LHS is the bare variable, not a `variables[v].expression` field.
+/// name → defining expression, for every OBSERVED unknown of `model` that this
+/// pass EVALUATES (esm-spec §6.3.1).
+///
+/// From esm 1.0.0 an observed's definition is the RHS of the equation whose LHS
+/// is the bare variable, not a `variables[v].expression` field — and that is
+/// also where a VALUE-INVENTION producer has always lived. Before the two
+/// merged, the field a definition sat in told them apart for free; now it does
+/// not, so the relational outputs are filtered out explicitly. Handing one to
+/// the array evaluator is not a small error: the `distinct` producer the
+/// projection-pushdown desugar emits carries a `{"op": "true"}` body, which has
+/// no evaluation rule at all (`unevaluable_operator`), because the relational
+/// engine — not the evaluator — is what materializes it.
 fn observed_defs(model: &Model) -> HashMap<String, Expr> {
     crate::classification::observed_definitions(model)
         .into_iter()
+        .filter(|(_, def)| {
+            serde_json::to_value(def).is_ok_and(|raw| {
+                !crate::value_invention::is_value_invention_assignment(&raw)
+            })
+        })
         .collect()
 }
 

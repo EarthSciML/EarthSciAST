@@ -1857,6 +1857,13 @@ pub type CovarianceMatrix = Vec<Vec<f64>>;
 /// every update set has exactly one spelling and the round trip is stable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+// The single form carries a whole `ParameterUpdate` inline while the array form
+// carries a `Vec`, so the variants differ in size. Boxing the single one would
+// pay an allocation on the COMMON spelling — most parameters carry one rule —
+// to shrink a type that lives once per variable and is never in a hot loop, and
+// it would cost the wire-facing `ParameterUpdateSpec::Single(rule)` match
+// ergonomics on the way. Same call as `DiscreteEventTrigger` above.
+#[allow(clippy::large_enum_variant)]
 pub enum ParameterUpdateSpec {
     /// The object form: exactly one rule.
     Single(ParameterUpdate),

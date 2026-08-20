@@ -157,14 +157,19 @@ fn test_data_sources_round_trip() {
     }
 }
 
-/// Test round-trip for version compatibility fixtures
+/// Round-trip the version-compatibility fixtures this library ACCEPTS.
+///
+/// The compatibility matrix keeps one fixture per version it describes, and
+/// this binding implements esm 1.0.0 — so only the major-1 fixtures load at
+/// all; the major-0 ones are rejected by the same
+/// `check_version_compatibility` gate that `test_major_version_rejection`
+/// pins from the other side (esm-libraries-spec §8). Round-tripping a document
+/// the loader refuses is not a thing this test can assert.
 #[test]
 fn test_version_compatibility_round_trip() {
     let fixtures = [
-        include_str!("../../../tests/version_compatibility/version_0_1_0_baseline.esm"),
-        include_str!("../../../tests/version_compatibility/version_0_2_0_minor_upgrade.esm"),
-        include_str!("../../../tests/version_compatibility/version_0_1_5_patch_upgrade.esm"),
-        include_str!("../../../tests/version_compatibility/version_0_0_1_backwards_compat.esm"),
+        include_str!("../../../tests/version_compatibility/version_1_0_0_major_upgrade.esm"),
+        include_str!("../../../tests/version_compatibility/comprehensive_compatibility_test.esm"),
     ];
 
     for (i, fixture) in fixtures.iter().enumerate() {

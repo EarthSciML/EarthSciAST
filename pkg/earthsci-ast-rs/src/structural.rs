@@ -562,6 +562,33 @@ pub(crate) fn validate_data_source_references(
     }
 }
 
+/// Every name DECLARED anywhere in the document: each model's `variables` and
+/// each reaction system's `species` and `parameters`.
+///
+/// A data SOURCE contributes nothing from esm 1.0.0 — it exposes no variables
+/// and is not a component (RFC unified-variable-model D2); the name belongs to
+/// the parameter that consumes it, which the models loop already counts.
+///
+/// Does NOT include the implicit symbols (`t`, coordinates, index sets, `_var`,
+/// callback-injected names) — combine with `implicitly_declared_symbols` for
+/// the full document scope. Mirrors Julia `_document_declared_names`, TS
+/// `documentDeclaredNames`, Go `documentWideScope`.
+fn document_declared_names(esm_file: &EsmFile) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for model in esm_file.models.iter().flatten().map(|(_, m)| m) {
+        names.extend(model.variables.keys().cloned());
+    }
+    for rs in esm_file.reaction_systems.iter().flatten().map(|(_, r)| r) {
+        names.extend(rs.species.keys().cloned());
+        names.extend(rs.parameters.keys().cloned());
+    }
+    // A data source declares NO names from esm 1.0.0 (RFC
+    // unified-variable-model D2): it exposes no variables and is not a
+    // component, so it contributes nothing to the document scope. The
+    // consuming parameter carries the name, and it is already counted above.
+    names
+}
+
 /// The symbols that are in scope in every model's expressions WITHOUT appearing
 /// in its `variables` map (esm-spec §4.9.1). None of these is an
 /// `undefined_variable`, and each rule here exists because rejecting one of them
@@ -585,28 +612,6 @@ pub(crate) fn validate_data_source_references(
 /// 3. **`_var`** — §6.4, the operator-model placeholder, legal wherever a state
 ///    variable is legal (equation LHS/RHS, a continuous event's
 ///    `affects`/`affect_neg`, a `functional_affect`'s `read_vars`).
-/// Every name DECLARED anywhere in the document: each model's `variables`, each
-/// reaction system's `species` and `parameters`, and each data loader's
-/// `variables`. Does NOT include the implicit symbols (`t`, coordinates, index
-/// sets, `_var`, callback-injected names) — combine with
-/// `implicitly_declared_symbols` for the full document scope. Mirrors Julia
-/// `_document_declared_names`, TS `documentDeclaredNames`, Go `documentWideScope`.
-fn document_declared_names(esm_file: &EsmFile) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for model in esm_file.models.iter().flatten().map(|(_, m)| m) {
-        names.extend(model.variables.keys().cloned());
-    }
-    for rs in esm_file.reaction_systems.iter().flatten().map(|(_, r)| r) {
-        names.extend(rs.species.keys().cloned());
-        names.extend(rs.parameters.keys().cloned());
-    }
-    // A data source declares NO names from esm 1.0.0 (RFC
-    // unified-variable-model D2): it exposes no variables and is not a
-    // component, so it contributes nothing to the document scope. The
-    // consuming parameter carries the name, and it is already counted above.
-    names
-}
-
 fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     let mut symbols = HashSet::new();
 

@@ -1321,48 +1321,71 @@ fn build_observed_rules(
     // rules are dependency-ordered below, so `grad_mag` materializes before
     // `U_n`/`S_n` read it.
     //
-    // The body is the RHS of the equation whose LHS is the bare variable —
-    // esm 1.0.0 states an unknown's behaviour in `equations` and nowhere else,
-    // so this reads `Classification::observed_definitions` rather than the
-    // removed `variables[..].expression` field. Cloning the body is O(1) for an
-    // operator tree (`Expr::Operator` holds an `Arc`), so moving it out of the
-    // model buys nothing now. `observed_names` preserves the sorted order
-    // `classify_variables` produced, so the rule order — and the stable
-    // dependency ordering below — is unchanged.
-    let observed_defs =
-        crate::classification::Classification::from_parts(&model.variables, &model.equations)
-            .observed_definitions;
-    for name in observed_names {
-        if let Some(expr) = observed_defs.get(name) {
-            observed_rules.push(lower_algebraic_body(
-                name,
-                expr.clone(),
-                &array_axes,
-                index_sets,
-            )?);
+    // The definition is the EQUATION whose LHS names the unknown — esm 1.0.0
+    // states an unknown's behaviour in `equations` and nowhere else, so this
+    // reads the equation rather than the removed `variables[..].expression`
+    // field. `observed_names` preserves the sorted order `classify_variables`
+    // produced, so the rule order — and the stable dependency ordering below —
+    // is unchanged.
+    //
+    // WHICH rule form it lowers to is decided by the LHS, and both forms matter:
+    //
+    // * an `aggregate` LHS (`aggregate{expr: w[i]} ~ aggregate{…}`) is a PER-CELL
+    //   definition and lowers to [`AlgebraicRule::ArrayLoop`], the form the
+    //   whole-array overlay vectorizes. Lowering it as a wholesale body instead
+    //   silently drops a varying array observed onto the per-cell oracle — the
+    //   dominant per-step cost for a coupled behaviour stack;
+    // * a bare-variable LHS lowers WHOLESALE through [`lower_algebraic_body`]:
+    //   `eval` materializes the body's arrays and broadcasts the elementwise ops
+    //   over them, so a readable intermediate decomposition runs as authored.
+    let mut def_eq: HashMap<String, &crate::types::Equation> = HashMap::new();
+    for eq in &model.equations {
+        if let crate::classification::LhsForm::Bare(name) =
+            crate::classification::lhs_form(&eq.lhs)
+        {
+            def_eq.entry(name).or_insert(eq);
         }
     }
-
-    // Algebraic arrayop equations for eliminated state variables.
-    for eq in &model.equations {
-        if let Some((var, idx_names, ranges, body)) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs)
-            && eliminated.contains(&var)
-        {
+    for name in observed_names {
+        let Some(eq) = def_eq.get(name.as_str()) else {
+            continue;
+        };
+        if let Some((var, idx_names, ranges, body)) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
             observed_rules.push(AlgebraicRule::ArrayLoop {
                 var,
                 output_idx_names: idx_names,
                 output_ranges: ranges,
                 body: Rc::new(body),
             });
+        } else {
+            observed_rules.push(lower_algebraic_body(
+                name,
+                eq.rhs.clone(),
+                &array_axes,
+                index_sets,
+            )?);
+        }
+    }
+
+    // Algebraic arrayop equations for ELIMINATED state variables — the same two
+    // forms, for a name the DAE pass removed from the state vector rather than
+    // one the classification calls observed. An observed's own defining equation
+    // was lowered above, so it is skipped here rather than emitted twice.
+    for eq in &model.equations {
+        if let Some((var, idx_names, ranges, body)) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
+            if eliminated.contains(&var) && !observed_names.contains(&var) {
+                observed_rules.push(AlgebraicRule::ArrayLoop {
+                    var,
+                    output_idx_names: idx_names,
+                    output_ranges: ranges,
+                    body: Rc::new(body),
+                });
+            }
             continue;
         }
-        // Also handle scalar algebraic: `var = rhs` (plain Variable LHS). An
-        // OBSERVED unknown's own defining equation has that same shape and was
-        // already lowered above, so it is skipped here rather than emitted
-        // twice.
         if let Expr::Variable(name) = &eq.lhs
             && eliminated.contains(name)
-            && !observed_defs.contains_key(name)
+            && !observed_names.iter().any(|n| n == name)
         {
             observed_rules.push(lower_algebraic_body(
                 name,

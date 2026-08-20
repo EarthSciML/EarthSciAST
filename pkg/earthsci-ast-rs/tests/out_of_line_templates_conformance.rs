@@ -240,7 +240,7 @@ fn eager_target_bearing_positive_and_negative() {
 #[test]
 fn opacity_negative_compound_does_not_see_through_reference() {
     let loaded = load_b("opacity_negative", "fixture.esm").unwrap();
-    let flux = normj(&(*earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux").expect("flux defining equation")));
+    let flux = normj(earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux").expect("flux defining equation"));
     assert_eq!(flux["op"], "D"); // compound did NOT fire (no marker 999)
     assert!(is_apply(&flux["args"][0])); // its arg is the surviving reference
     assert_eq!(flux["args"][0]["name"], "flux_prod");
@@ -258,7 +258,7 @@ fn opacity_negative_compound_does_not_see_through_reference() {
 #[test]
 fn opacity_priority_shadowing_generic_fires_compound_silently_does_not() {
     let loaded = load_b("opacity_priority_shadowing", "fixture.esm").unwrap();
-    let flux = normj(&(*earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux").expect("flux defining equation")));
+    let flux = normj(earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux").expect("flux defining equation"));
     assert_eq!(flux["op"], "*");
     assert_eq!(flux["args"][0], 1); // generic marker (NOT compound 999)
     assert!(is_apply(&flux["args"][1])); // reference bound WHOLE by metavariable f
@@ -295,10 +295,10 @@ fn flatten_registry_merge_dedup_and_collision_rename() {
         serde_json::json!({"op": "*", "args": [2, "f"]})
     );
     // references rewritten in lockstep
-    assert_eq!((*earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "za").expect("za defining equation"))["name"], "A.s");
-    assert_eq!((*earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "zb").expect("zb defining equation"))["name"], "B.s");
-    assert_eq!((*earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "ya").expect("ya defining equation"))["name"], "sten");
-    assert_eq!((*earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "yb").expect("yb defining equation"))["name"], "sten");
+    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "za").expect("za defining equation")["name"], "A.s");
+    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "zb").expect("zb defining equation")["name"], "B.s");
+    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "ya").expect("ya defining equation")["name"], "sten");
+    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "yb").expect("yb defining equation")["name"], "sten");
     // per-component blocks surrendered to the merged registry
     assert!(root["models"]["A"].get("expression_templates").is_none());
     assert!(root["models"]["B"].get("expression_templates").is_none());

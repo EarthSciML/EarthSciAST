@@ -139,16 +139,22 @@ fn without_the_caller_channel_the_gate_has_no_envelopes() {
 fn caller_arrays_win_over_document_const_factors() {
     let doc: Json = serde_json::from_str(FIXTURE).expect("fixture parses");
     let mut model_json = doc["models"]["ISRM"].clone();
-    // Give `X` a document `const` literal carrying the UNSHIFTED points. From
-    // esm 1.0.0 an unknown's defining expression is its EQUATION's RHS.
-    for eq in model_json["equations"]
+    // Give `X` a document `const` literal carrying the UNSHIFTED points.
+    //
+    // From esm 1.0.0 that means making `X` an OBSERVED unknown: only an unknown
+    // is defined by an equation, and a const-backed observed IS what a document
+    // literal factor is (esm-spec §6.3.1). The fixture declares `X` a bare
+    // parameter — a name the runner supplies — so the declaration is flipped
+    // alongside the equation, which is the whole point of the test: the
+    // document's literal is a placeholder the caller's array overrides.
+    model_json["variables"]["X"]["type"] = json!("unknown");
+    model_json["equations"]
         .as_array_mut()
         .expect("equations array")
-    {
-        if eq["lhs"] == json!("X") {
-            eq["rhs"] = json!({"op": "const", "args": [], "value": [1.0, 3.0, 1.0, 5.0, 1.5]});
-        }
-    }
+        .push(json!({
+            "lhs": "X",
+            "rhs": {"op": "const", "args": [], "value": [1.0, 3.0, 1.0, 5.0, 1.5]}
+        }));
     let model: Model = serde_json::from_value(model_json).expect("model deserializes");
     let index_sets: HashMap<String, IndexSet> =
         serde_json::from_value(doc["index_sets"].clone()).expect("index_sets deserialize");

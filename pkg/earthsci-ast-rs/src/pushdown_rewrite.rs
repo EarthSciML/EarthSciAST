@@ -1596,20 +1596,66 @@ pub struct ProviderGate {
     pub applies_to: Vec<String>,
 }
 
-/// The coupling `variable_map` (from, to) pairs of a raw document.
+/// The `(provider key, model variable)` pairs of a raw document: which external
+/// field feeds which declared array.
+///
+/// The provider key is `"<source>.<file_variable>"`, which is how a runner
+/// registers a provider and how [`pushdown_provider_gates`] finds the one to
+/// gate.
+///
+/// esm 1.0.0 moved where this is written. It used to be a `variable_map`
+/// coupling edge from a loader COMPONENT to a model parameter; a data source is
+/// no longer a component, so the binding is the consuming parameter's own
+/// `update: {kind: "data", source, from: {file_variable}}` (esm-spec §5.4,
+/// §8.5). Both spellings are read, because a document may still carry the
+/// coupling form for a NON-source producer — the pair is "what feeds what", and
+/// only the writing side changed.
 pub fn pushdown_coupling_pairs(doc: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let Some(cp) = doc.get("coupling").and_then(Value::as_array) else {
-        return out;
-    };
-    for c in cp {
-        if c.get("type").and_then(Value::as_str) != Some("variable_map") {
-            continue;
+
+    // (1) A parameter bound to a data source by its own `update` (1.0.0).
+    if let Some(models) = doc.get("models").and_then(Value::as_object) {
+        let mut mnames: Vec<&String> = models.keys().collect();
+        mnames.sort();
+        for mname in mnames {
+            let Some(vars) = models[mname].get("variables").and_then(Value::as_object) else {
+                continue;
+            };
+            let mut vnames: Vec<&String> = vars.keys().collect();
+            vnames.sort();
+            for vname in vnames {
+                let Ok(var) =
+                    serde_json::from_value::<crate::types::ModelVariable>(vars[vname].clone())
+                else {
+                    continue;
+                };
+                for rule in var.update.iter().flat_map(|spec| spec.rules()) {
+                    let (Some(source), Some(binding)) =
+                        (rule.data_source(), rule.value().and_then(|v| v.from.as_ref()))
+                    else {
+                        continue;
+                    };
+                    out.push((
+                        format!("{source}.{}", binding.file_variable),
+                        format!("{mname}.{vname}"),
+                    ));
+                }
+            }
         }
-        let frm = c.get("from").and_then(Value::as_str).unwrap_or("");
-        let to = c.get("to").and_then(Value::as_str).unwrap_or("");
-        if !frm.is_empty() && !to.is_empty() {
-            out.push((frm.to_string(), to.to_string()));
+    }
+
+    // (2) A `variable_map` coupling edge (the 0.x spelling, still admissible
+    //     between two ordinary components).
+    if let Some(cp) = doc.get("coupling").and_then(Value::as_array) {
+        for c in cp {
+            if c.get("type").and_then(Value::as_str) != Some("variable_map") {
+                continue;
+            }
+            let frm = c.get("from").and_then(Value::as_str).unwrap_or("");
+            let to = c.get("to").and_then(Value::as_str).unwrap_or("");
+            if !frm.is_empty() && !to.is_empty() {
+                out.push((frm.to_string(), to.to_string()));
+            }
         }
     }
     out

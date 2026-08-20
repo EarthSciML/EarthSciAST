@@ -204,6 +204,24 @@ enum NodeKind {
     None,
 }
 
+/// Is this assignment a VALUE-INVENTION output rather than an ordinary
+/// observed definition?
+///
+/// True for every node [`vi_node_kind`] recognises — a `distinct` producer, a
+/// `skolem` / arg-witness map, and a relational body — because all three leave
+/// the ODE and are materialized by this engine, never by the array evaluator.
+///
+/// Public because esm 1.0.0 made the question reachable from outside. Before
+/// it, a producer lived in `equations` while an ordinary observed definition
+/// lived in `variables[..].expression`, so the two were told apart by WHICH
+/// FIELD they sat in. Now both are equations with a bare-variable LHS and the
+/// node is the only thing that distinguishes them, so the test has to be
+/// shared rather than re-guessed by each consumer (`crate::prepare`'s
+/// `observed_defs` is the first).
+pub fn is_value_invention_assignment(rhs: &Value) -> bool {
+    vi_node_kind(rhs) != NodeKind::None
+}
+
 fn vi_node_kind(node: &Value) -> NodeKind {
     let Some(map) = obj(node) else {
         return NodeKind::None;

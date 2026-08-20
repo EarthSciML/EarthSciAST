@@ -84,7 +84,7 @@ fn get_schema_value() -> &'static Value {
 /// "#;
 ///
 /// let esm_file = load(json).expect("Failed to load ESM file");
-/// assert_eq!(esm_file.esm, "0.1.0");
+/// assert_eq!(esm_file.esm, "1.0.0");
 /// ```
 pub fn load(json_str: &str) -> Result<EsmFile, EsmError> {
     load_with_options(json_str, &LoadOptions::default())

@@ -242,7 +242,7 @@ mod tests {
             }
         });
         let out = lowered(input);
-        let expr = &(*crate::classification::observed_definition_json(&out["models"]["M"], "s").expect("s defining equation"));
+        let expr = crate::classification::observed_definition_json(&out["models"]["M"], "s").expect("s defining equation");
         assert_eq!(expr["op"], "const");
         assert_eq!(expr["value"], 3);
         assert_eq!(expr["args"], json!([]));
@@ -274,7 +274,7 @@ mod tests {
             }
         });
         let out = lowered(input);
-        let expr = &(*crate::classification::observed_definition_json(&out["models"]["M"], "r").expect("r defining equation"));
+        let expr = crate::classification::observed_definition_json(&out["models"]["M"], "r").expect("r defining equation");
         assert_eq!(expr["op"], "index");
         assert_eq!(expr["args"][1]["op"], "const");
         assert_eq!(expr["args"][1]["value"], 3);
@@ -404,7 +404,7 @@ mod tests {
             }}
         });
         let out = lowered(input);
-        let expr = &(*crate::classification::observed_definition_json(&out["models"]["Outer"]["subsystems"]["Inner"], "y").expect("y defining equation"));
+        let expr = crate::classification::observed_definition_json(&out["models"]["Outer"]["subsystems"]["Inner"], "y").expect("y defining equation");
         assert_eq!(expr["op"], "const");
         assert_eq!(expr["value"], 3);
     }

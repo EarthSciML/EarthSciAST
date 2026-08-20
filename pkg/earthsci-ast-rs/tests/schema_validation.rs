@@ -213,25 +213,25 @@ fn test_version_compatibility_validation_errors() {
 }
 
 /// A document whose MAJOR version this library does not implement is rejected
-/// (esm-libraries-spec §8).
-///
-/// Built inline rather than read from
-/// `tests/version_compatibility/version_2_5_1_major_rejection.esm`: that shared
-/// fixture was rewritten to `"esm": "1.0.0"` along with the rest of the corpus,
-/// so it no longer carries a rejectable major version and cannot pin this rule.
-/// See the SHARED FILE CHANGES NEEDED note in the port report.
+/// (esm-libraries-spec §8), on BOTH sides of the supported major.
 #[test]
 fn test_major_version_rejection() {
-    let fixture = r#"{
-        "esm": "2.5.1",
-        "metadata": { "name": "FutureMajor" },
-        "models": { "M": { "variables": {}, "equations": [] } }
-    }"#;
-
-    let result = load(fixture);
+    // Ahead of this library.
+    let ahead =
+        include_str!("../../../tests/version_compatibility/version_2_5_1_major_rejection.esm");
     assert!(
-        result.is_err(),
+        load(ahead).is_err(),
         "Expected major version 2.x.x to be rejected"
+    );
+
+    // ...and behind it. esm 1.0.0 is a clean break with no deprecation path, so
+    // a 0.x document is refused rather than half-read: its `state` / `observed`
+    // / `discrete` variable types and its `data_loaders` block no longer mean
+    // anything here.
+    let behind = include_str!("../../../tests/version_compatibility/version_0_1_0_baseline.esm");
+    assert!(
+        load(behind).is_err(),
+        "Expected major version 0.x.x to be rejected"
     );
 }
 
