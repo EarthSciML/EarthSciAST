@@ -2504,6 +2504,25 @@ ever emitted it, and the code had zero real coverage.
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |
 
+#### 7.1.0 List-valued diagnostic details are sorted
+
+A `details` field whose value is a list of names — `unknowns`,
+`missing_equations_for`, `available_sources`, and the like — is ordered
+**lexicographically by UTF-8 code point**, never in document declaration order.
+Same rule, and same reason, as the classification goldens
+(`tests/conformance/classification/manifest.json`): a cross-language contract
+cannot depend on an ordering that not every binding can produce.
+
+It is not merely inconvenient to require declaration order — for two of the five
+bindings it is unavailable. Go decodes `variables` into a plain
+`map[string]ModelVariable` and Rust into a `HashMap`; both discard JSON object
+key order at parse time. Preserving it into the validator's model would mean
+rebuilding those parsers around an ordered map, and the diagnostic's job is to
+NAME the offending unknowns, not to reproduce the order the author wrote them
+in. (This is separate from the round-trip contract, which does require key order
+to survive `emit ∘ load` — that is served on the serialization path, not by the
+validator's view of the document.)
+
 ### 7.1.1 Units severity contract
 
 Normative definition: **esm-spec §4.8**. Restated here because it is the contract the

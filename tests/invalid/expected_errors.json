@@ -45,7 +45,8 @@
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": " List-valued details are SORTED lexicographically, not in declaration order, matching tests/conformance/classification/manifest.json. Declaration order would force every binding to carry JSON object key order into its validator model: Go decodes `variables` into a plain map[string]ModelVariable and Rust into a HashMap, both of which discard it outright. The diagnostic's job is to NAME the unknowns, not to preserve authoring order, so the ordering requirement is dropped rather than five parsers being rebuilt around it."
   },
   "undefined_species.esm": {
     "schema_errors": [],
@@ -678,14 +679,14 @@
         "message": "Number of equations (1) does not match number of unknowns (3)",
         "details": {
           "unknowns": [
+            "observed_without_expr",
             "x",
-            "y",
-            "observed_without_expr"
+            "y"
           ],
           "equations": 1,
           "missing_equations_for": [
-            "y",
-            "observed_without_expr"
+            "observed_without_expr",
+            "y"
           ]
         }
       },
@@ -1094,14 +1095,14 @@
         "message": "Number of equations (1) does not match number of unknowns (3)",
         "details": {
           "unknowns": [
+            "observed_without_expr",
             "x",
-            "y",
-            "observed_without_expr"
+            "y"
           ],
           "equations": 1,
           "missing_equations_for": [
-            "y",
-            "observed_without_expr"
+            "observed_without_expr",
+            "y"
           ]
         }
       },
@@ -2805,8 +2806,8 @@
         "message": "Number of equations (1) does not match number of unknowns (2)",
         "details": {
           "unknowns": [
-            "x",
-            "total_rate"
+            "total_rate",
+            "x"
           ],
           "equations": 1,
           "missing_equations_for": [
@@ -2816,7 +2817,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code."
+    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code. List-valued details are SORTED lexicographically, not in declaration order, matching tests/conformance/classification/manifest.json. Declaration order would force every binding to carry JSON object key order into its validator model: Go decodes `variables` into a plain map[string]ModelVariable and Rust into a HashMap, both of which discard it outright. The diagnostic's job is to NAME the unknowns, not to preserve authoring order, so the ordering requirement is dropped rather than five parsers being rebuilt around it."
   },
   "unknown_without_equation_single.esm": {
     "schema_errors": [],
@@ -2827,8 +2828,8 @@
         "message": "Number of equations (1) does not match number of unknowns (2)",
         "details": {
           "unknowns": [
-            "x",
-            "total"
+            "total",
+            "x"
           ],
           "equations": 1,
           "missing_equations_for": [
@@ -2838,7 +2839,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code."
+    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code. List-valued details are SORTED lexicographically, not in declaration order, matching tests/conformance/classification/manifest.json. Declaration order would force every binding to carry JSON object key order into its validator model: Go decodes `variables` into a plain map[string]ModelVariable and Rust into a HashMap, both of which discard it outright. The diagnostic's job is to NAME the unknowns, not to preserve authoring order, so the ordering requirement is dropped rather than five parsers being rebuilt around it."
   },
   "unknown_without_equation_multiple.esm": {
     "schema_errors": [],
@@ -2849,22 +2850,22 @@
         "message": "Number of equations (3) does not match number of unknowns (5)",
         "details": {
           "unknowns": [
-            "x",
-            "y",
-            "total",
             "ratio",
-            "valid_observed"
+            "total",
+            "valid_observed",
+            "x",
+            "y"
           ],
           "equations": 3,
           "missing_equations_for": [
-            "total",
-            "ratio"
+            "ratio",
+            "total"
           ]
         }
       }
     ],
     "is_valid": false,
-    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code."
+    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code. List-valued details are SORTED lexicographically, not in declaration order, matching tests/conformance/classification/manifest.json. Declaration order would force every binding to carry JSON object key order into its validator model: Go decodes `variables` into a plain map[string]ModelVariable and Rust into a HashMap, both of which discard it outright. The diagnostic's job is to NAME the unknowns, not to preserve authoring order, so the ordering requirement is dropped rather than five parsers being rebuilt around it."
   },
   "parameter_update_singleton_array.esm": {
     "schema_errors": [
