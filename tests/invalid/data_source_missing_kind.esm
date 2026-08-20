@@ -1,0 +1,46 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceMissingKind",
+    "description": "Test case: data source missing required 'kind' field.",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "data_sources": {
+    "BadLoader": {
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.nc"
+      }
+    }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

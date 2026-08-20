@@ -57,24 +57,90 @@
           "type": "parameter",
           "units": "W/m^2",
           "default": 400.0,
-          "description": "Incoming solar radiation"
+          "description": "Incoming solar radiation",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "incoming_radiation"
+            }
+          },
+          "shape": []
         },
         "longwave_radiation": {
           "type": "parameter",
           "units": "W/m^2",
           "default": 350.0,
-          "description": "Incoming longwave radiation"
+          "description": "Incoming longwave radiation",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "longwave_radiation"
+            }
+          },
+          "shape": []
         },
         "precipitation": {
           "type": "parameter",
           "units": "kg/m^2/s",
           "default": 3e-06,
-          "description": "Precipitation rate"
+          "description": "Precipitation rate",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "precipitation"
+            }
+          },
+          "shape": []
         },
         "relative_humidity": {
           "type": "unknown",
           "units": "dimensionless",
           "description": "Relative humidity from temperature and specific humidity"
+        },
+        "air_temperature_data": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "air_temperature"
+            }
+          },
+          "description": "2m air temperature"
+        },
+        "specific_humidity_data": {
+          "type": "parameter",
+          "units": "kg/kg",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "specific_humidity"
+            }
+          },
+          "description": "2m specific humidity from dewpoint"
+        },
+        "wind_speed_data": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "wind_speed"
+            }
+          },
+          "description": "10m wind speed magnitude"
         }
       },
       "equations": [
@@ -234,19 +300,43 @@
           "type": "parameter",
           "units": "m^3/m^3",
           "default": 0.45,
-          "description": "Soil porosity"
+          "description": "Soil porosity",
+          "update": {
+            "kind": "data",
+            "source": "SoilProperties",
+            "from": {
+              "file_variable": "porosity"
+            }
+          },
+          "shape": []
         },
         "field_capacity": {
           "type": "parameter",
           "units": "m^3/m^3",
           "default": 0.35,
-          "description": "Field capacity"
+          "description": "Field capacity",
+          "update": {
+            "kind": "data",
+            "source": "SoilProperties",
+            "from": {
+              "file_variable": "field_capacity"
+            }
+          },
+          "shape": []
         },
         "wilting_point": {
           "type": "parameter",
           "units": "m^3/m^3",
           "default": 0.15,
-          "description": "Permanent wilting point"
+          "description": "Permanent wilting point",
+          "update": {
+            "kind": "data",
+            "source": "SoilProperties",
+            "from": {
+              "file_variable": "wilting_point"
+            }
+          },
+          "shape": []
         },
         "hydraulic_conductivity": {
           "type": "parameter",
@@ -1373,48 +1463,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteorologicalForcing": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/ERA5_Hourly/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "air_temperature": {
-          "file_variable": "air_temperature",
-          "units": "K",
-          "description": "2m air temperature"
-        },
-        "specific_humidity": {
-          "file_variable": "specific_humidity",
-          "units": "kg/kg",
-          "description": "2m specific humidity from dewpoint"
-        },
-        "pressure": {
-          "file_variable": "pressure",
-          "units": "Pa",
-          "description": "Surface pressure"
-        },
-        "wind_speed": {
-          "file_variable": "wind_speed",
-          "units": "m/s",
-          "description": "10m wind speed magnitude"
-        },
-        "precipitation": {
-          "file_variable": "precipitation",
-          "units": "kg/m^2/s",
-          "description": "Precipitation rate"
-        },
-        "incoming_radiation": {
-          "file_variable": "incoming_radiation",
-          "units": "W/m^2",
-          "description": "Surface solar radiation"
-        },
-        "longwave_radiation": {
-          "file_variable": "longwave_radiation",
-          "units": "W/m^2",
-          "description": "Surface thermal radiation"
-        }
       },
       "metadata": {
         "tags": [
@@ -1427,33 +1480,6 @@
       "kind": "static",
       "source": {
         "url_template": "file:///data/SoilGrids250.nc"
-      },
-      "variables": {
-        "porosity": {
-          "file_variable": "porosity",
-          "units": "m^3/m^3",
-          "description": "Soil porosity from bulk density"
-        },
-        "field_capacity": {
-          "file_variable": "field_capacity",
-          "units": "m^3/m^3",
-          "description": "Field capacity from soil texture"
-        },
-        "wilting_point": {
-          "file_variable": "wilting_point",
-          "units": "m^3/m^3",
-          "description": "Wilting point from soil texture"
-        },
-        "hydraulic_conductivity": {
-          "file_variable": "hydraulic_conductivity",
-          "units": "m/s",
-          "description": "Saturated hydraulic conductivity"
-        },
-        "thermal_conductivity": {
-          "file_variable": "thermal_conductivity",
-          "units": "W/m/K",
-          "description": "Soil thermal conductivity"
-        }
       },
       "metadata": {
         "tags": [
@@ -1582,69 +1608,6 @@
         ]
       },
       "description": "Plant root water uptake from soil"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.air_temperature",
-      "to": "AtmosphericBoundaryLayer.air_temperature",
-      "transform": "param_to_var",
-      "description": "Use ERA5 air temperature"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.specific_humidity",
-      "to": "AtmosphericBoundaryLayer.specific_humidity",
-      "transform": "param_to_var",
-      "description": "Use ERA5 humidity"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.wind_speed",
-      "to": "AtmosphericBoundaryLayer.wind_speed",
-      "transform": "param_to_var",
-      "description": "Use ERA5 wind speed"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.precipitation",
-      "to": "AtmosphericBoundaryLayer.precipitation",
-      "transform": "param_to_var",
-      "description": "Use ERA5 precipitation"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.incoming_radiation",
-      "to": "AtmosphericBoundaryLayer.incoming_radiation",
-      "transform": "param_to_var",
-      "description": "Use ERA5 solar radiation"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.longwave_radiation",
-      "to": "AtmosphericBoundaryLayer.longwave_radiation",
-      "transform": "param_to_var",
-      "description": "Use ERA5 longwave radiation"
-    },
-    {
-      "type": "variable_map",
-      "from": "SoilProperties.porosity",
-      "to": "SoilHydrologyThermal.porosity",
-      "transform": "param_to_var",
-      "description": "Use SoilGrids porosity"
-    },
-    {
-      "type": "variable_map",
-      "from": "SoilProperties.field_capacity",
-      "to": "SoilHydrologyThermal.field_capacity",
-      "transform": "param_to_var",
-      "description": "Use SoilGrids field capacity"
-    },
-    {
-      "type": "variable_map",
-      "from": "SoilProperties.wilting_point",
-      "to": "SoilHydrologyThermal.wilting_point",
-      "transform": "param_to_var",
-      "description": "Use SoilGrids wilting point"
     },
     {
       "type": "callback",

@@ -25,9 +25,9 @@
     { "id": "valid/units_dimensional_analysis",     "path": "valid/units_dimensional_analysis.esm",     "tags": ["units"] },
     { "id": "valid/units_propagation",              "path": "valid/units_propagation.esm",              "tags": ["units"] },
 
-    { "id": "valid/data_loaders_comprehensive",     "path": "valid/data_loaders_comprehensive.esm",     "tags": ["data_loaders"] },
-    { "id": "valid/data_loaders_earthscidata_jl",   "path": "valid/data_loaders_earthscidata_jl.esm",   "tags": ["data_loaders"] },
-    { "id": "valid/data_loaders_only",              "path": "valid/data_loaders_only.esm",              "tags": ["data_loaders", "loader-only", "ess-v9a.8"] },
+    { "id": "valid/data_sources_comprehensive",     "path": "valid/data_sources_comprehensive.esm",     "tags": ["data_sources"] },
+    { "id": "valid/data_sources_earthscidata_jl",   "path": "valid/data_sources_earthscidata_jl.esm",   "tags": ["data_sources"] },
+    { "id": "valid/data_sources_only",              "path": "valid/data_sources_only.esm",              "tags": ["data_sources", "source-catalog", "ess-v9a.8"] },
 
     { "id": "valid/scoped_refs_nested",             "path": "valid/scoped_refs_nested.esm",             "tags": ["scoping"] },
     { "id": "valid/scoped_refs_coupling",           "path": "valid/scoped_refs_coupling.esm",           "tags": ["scoping", "coupling", "esm-umm"] },

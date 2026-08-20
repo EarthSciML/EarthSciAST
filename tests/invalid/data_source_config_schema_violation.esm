@@ -1,0 +1,45 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceSourceSchemaViolation",
+    "description": "Test case: data source `source` field is a string instead of an object.",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "data_sources": {
+    "BadConfig": {
+      "kind": "grid",
+      "source": "this_should_be_an_object_not_string"
+    }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

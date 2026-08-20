@@ -54,12 +54,26 @@
         "T": {
           "units": "K",
           "default": 298.15,
-          "description": "Temperature"
+          "description": "Temperature",
+          "update": {
+            "kind": "data",
+            "source": "WeatherData",
+            "from": {
+              "file_variable": "T"
+            }
+          }
         },
         "P": {
           "units": "Pa",
           "default": 101325.0,
-          "description": "Pressure"
+          "description": "Pressure",
+          "update": {
+            "kind": "data",
+            "source": "WeatherData",
+            "from": {
+              "file_variable": "P"
+            }
+          }
         },
         "M": {
           "units": "molec/cm^3",
@@ -224,13 +238,29 @@
           "type": "parameter",
           "units": "m/s",
           "default": 5.0,
-          "description": "Zonal wind"
+          "description": "Zonal wind",
+          "update": {
+            "kind": "data",
+            "source": "WeatherData",
+            "from": {
+              "file_variable": "u"
+            }
+          },
+          "shape": []
         },
         "v_wind": {
           "type": "parameter",
           "units": "m/s",
           "default": 2.0,
-          "description": "Meridional wind"
+          "description": "Meridional wind",
+          "update": {
+            "kind": "data",
+            "source": "WeatherData",
+            "from": {
+              "file_variable": "v"
+            }
+          },
+          "shape": []
         },
         "w_wind": {
           "type": "parameter",
@@ -363,7 +393,16 @@
           "type": "parameter",
           "units": "molec/cm^3/s",
           "default": 1000000.0,
-          "description": "NO emission rate"
+          "description": "NO emission rate",
+          "update": {
+            "kind": "data",
+            "source": "EmissionInventory",
+            "from": {
+              "file_variable": "E_NO_total",
+              "unit_conversion": 2.14e+19
+            }
+          },
+          "shape": []
         },
         "E_CO": {
           "type": "parameter",
@@ -396,38 +435,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "WeatherData": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/ECMWF_ERA5/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "T": {
-          "file_variable": "T",
-          "units": "K",
-          "description": "2-meter temperature"
-        },
-        "P": {
-          "file_variable": "P",
-          "units": "Pa",
-          "description": "Surface pressure"
-        },
-        "u": {
-          "file_variable": "u",
-          "units": "m/s",
-          "description": "10-meter eastward wind"
-        },
-        "v": {
-          "file_variable": "v",
-          "units": "m/s",
-          "description": "10-meter northward wind"
-        },
-        "RH": {
-          "file_variable": "RH",
-          "units": "1",
-          "description": "Relative humidity"
-        }
       },
       "metadata": {
         "tags": [
@@ -440,18 +452,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/CEDS_v2021/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "E_NO_total": {
-          "file_variable": "E_NO_total",
-          "units": "kg/m^2/s",
-          "description": "Total NOx emissions"
-        },
-        "E_CO_total": {
-          "file_variable": "E_CO_total",
-          "units": "kg/m^2/s",
-          "description": "Total CO emissions"
-        }
       },
       "metadata": {
         "tags": [
@@ -477,42 +477,6 @@
         "Emissions"
       ],
       "description": "Couple chemistry with emissions"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherData.T",
-      "to": "AtmosphericChemistry.T",
-      "transform": "param_to_var",
-      "description": "Temperature from weather data"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherData.P",
-      "to": "AtmosphericChemistry.P",
-      "transform": "param_to_var",
-      "description": "Pressure from weather data"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherData.u",
-      "to": "Transport.u_wind",
-      "transform": "param_to_var",
-      "description": "Eastward wind component"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherData.v",
-      "to": "Transport.v_wind",
-      "transform": "param_to_var",
-      "description": "Northward wind component"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmissionInventory.E_NO_total",
-      "to": "Emissions.E_NO",
-      "transform": "conversion_factor",
-      "factor": 2.14e+19,
-      "description": "Convert kg/m^2/s to molec/cm^3/s for NO"
     }
   ],
   "domain": {

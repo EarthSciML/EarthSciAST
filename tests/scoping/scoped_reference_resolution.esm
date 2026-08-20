@@ -180,7 +180,15 @@
                       "type": "parameter",
                       "units": "cm^3/molec/s",
                       "default": 1.8e-12,
-                      "description": "Rate constant for NO + O3 reaction"
+                      "description": "Rate constant for NO + O3 reaction",
+                      "update": {
+                        "kind": "data",
+                        "source": "EmissionInventory",
+                        "from": {
+                          "file_variable": "temperature_profile"
+                        }
+                      },
+                      "shape": []
                     }
                   },
                   "equations": [
@@ -457,23 +465,11 @@
       }
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "EmissionInventory": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR_v6/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "NO_emissions": {
-          "file_variable": "NO_emissions",
-          "units": "kg/m^2/s",
-          "description": "Nitrogen oxide emissions, as NITROGEN mass flux (kilograms of N per square metre per second). The species is named here, not in the unit string (esm-spec §4.8.1)."
-        },
-        "temperature_profile": {
-          "file_variable": "temperature_profile",
-          "units": "K",
-          "description": "3D temperature field"
-        }
       },
       "metadata": {
         "tags": [
@@ -559,13 +555,6 @@
         }
       ],
       "description": "When tropospheric ozone drops, increase stratospheric production using nested scoped references"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmissionInventory.temperature_profile",
-      "to": "EarthSystem.Atmosphere.Chemistry.TroposphericChemistry.k_NO_O3",
-      "transform": "param_to_var",
-      "description": "Temperature profile affects reaction rate coefficient"
     },
     {
       "type": "couple",

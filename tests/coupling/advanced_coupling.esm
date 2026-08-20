@@ -30,7 +30,15 @@
           "type": "parameter",
           "units": "K",
           "default": 298.15,
-          "description": "Temperature"
+          "description": "Temperature",
+          "update": {
+            "kind": "data",
+            "source": "MeteoData",
+            "from": {
+              "file_variable": "temperature"
+            }
+          },
+          "shape": []
         },
         "deposition_flux": {
           "type": "unknown",
@@ -142,7 +150,16 @@
           "type": "parameter",
           "units": "m/s",
           "default": 5.0,
-          "description": "Wind speed"
+          "description": "Wind speed",
+          "update": {
+            "kind": "data",
+            "source": "MeteoData",
+            "from": {
+              "file_variable": "wind_u",
+              "unit_conversion": 1.0
+            }
+          },
+          "shape": []
         },
         "diffusivity": {
           "type": "parameter",
@@ -208,7 +225,7 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteoData": {
       "kind": "grid",
       "source": {
@@ -218,23 +235,6 @@
         "frequency": "PT1H",
         "file_period": "PT1H",
         "records_per_file": 1
-      },
-      "variables": {
-        "temperature": {
-          "file_variable": "temperature",
-          "units": "K",
-          "description": "Air temperature"
-        },
-        "wind_u": {
-          "file_variable": "wind_u",
-          "units": "m/s",
-          "description": "Eastward wind"
-        },
-        "wind_v": {
-          "file_variable": "wind_v",
-          "units": "m/s",
-          "description": "Northward wind"
-        }
       },
       "metadata": {
         "tags": [
@@ -303,21 +303,6 @@
         "Chemistry.NO": "Transport._var"
       },
       "description": "Add transport to chemistry species"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteoData.temperature",
-      "to": "Chemistry.temperature",
-      "transform": "param_to_var",
-      "description": "Use meteorological temperature"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteoData.wind_u",
-      "to": "Transport.wind_speed",
-      "transform": "conversion_factor",
-      "factor": 1.0,
-      "description": "Map wind speed (simplified)"
     },
     {
       "type": "callback",

@@ -37,7 +37,14 @@
         "T": {
           "units": "K",
           "default": 298.15,
-          "description": "Temperature"
+          "description": "Temperature",
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "T"
+            }
+          }
         },
         "M": {
           "units": "molec/cm^3",
@@ -123,12 +130,30 @@
         "u_wind": {
           "type": "parameter",
           "units": "m/s",
-          "default": 0.0
+          "default": 0.0,
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "u"
+            }
+          },
+          "description": "Eastward wind",
+          "shape": []
         },
         "v_wind": {
           "type": "parameter",
           "units": "m/s",
-          "default": 0.0
+          "default": 0.0,
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "v"
+            }
+          },
+          "description": "Northward wind",
+          "shape": []
         }
       },
       "equations": [
@@ -185,28 +210,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "GEOSFP": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/GEOSFP/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "u": {
-          "file_variable": "u",
-          "units": "m/s",
-          "description": "Eastward wind"
-        },
-        "v": {
-          "file_variable": "v",
-          "units": "m/s",
-          "description": "Northward wind"
-        },
-        "T": {
-          "file_variable": "T",
-          "units": "K",
-          "description": "Temperature"
-        }
       },
       "metadata": {
         "tags": [
@@ -223,24 +231,6 @@
         "SimpleOzone",
         "Advection"
       ]
-    },
-    {
-      "type": "variable_map",
-      "from": "GEOSFP.T",
-      "to": "SimpleOzone.T",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "GEOSFP.u",
-      "to": "Advection.u_wind",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "GEOSFP.v",
-      "to": "Advection.v_wind",
-      "transform": "param_to_var"
     }
   ],
   "domain": {

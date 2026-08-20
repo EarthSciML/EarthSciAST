@@ -225,17 +225,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "EmptyDataLoader": {
       "kind": "static",
       "source": {
         "url_template": "file:///data/empty_csv.nc"
-      },
-      "variables": {
-        "value": {
-          "file_variable": "value",
-          "units": "1"
-        }
       },
       "metadata": {
         "tags": [
@@ -320,13 +314,6 @@
         "SingleVariableSystem"
       ],
       "description": "EDGE CASE 8: System with variable literally named '_var' - disambiguation required"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmptyDataLoader.nonexistent_var",
-      "to": "SingleVariableSystem.x",
-      "transform": "param_to_var",
-      "description": "EDGE CASE 9: Map from non-existent data loader variable"
     },
     {
       "type": "variable_map",

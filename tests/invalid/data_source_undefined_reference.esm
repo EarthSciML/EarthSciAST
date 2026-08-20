@@ -1,0 +1,61 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceUndefinedReference",
+    "description": "Test case: a parameter's `update.source` names a data source the document does not declare. `update.source` MUST resolve to a `data_sources` key (esm-spec 8.5, diagnostic data_source_undefined). The file is schema-valid, so it reaches structural validation (CONFORMANCE_SPEC 7.1.2). This replaces the 0.x 'coupling references an undefined loader variable' negative: from 1.0.0 a data source is not a coupling endpoint, so the only way to name one wrongly is through an update.",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "data_sources": {
+    "WeatherData": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/weather/{date:%Y%m%d}.nc"
+      }
+    }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "external_temp": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "UndefinedSource",
+            "from": {
+              "file_variable": "T"
+            }
+          },
+          "description": "Names 'UndefinedSource', which no data_sources entry declares -- the defect."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

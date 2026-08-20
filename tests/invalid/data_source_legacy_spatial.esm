@@ -1,0 +1,51 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "LegacySpatialBlockRejected",
+    "description": "Test case: a data source still carrying the legacy 'spatial' block (the former DataLoaderSpatial). The native-grid description was removed in RFC pure-io-data-loaders 4.1; from 1.0.0 grid geometry a source reads arrives as ordinary parameters bound to its file variables (esm-spec 8.4). DataSource.additionalProperties:false rejects the stale 'spatial' block. Parallel negative to interpolation_method_invalid.esm (the 'regridding' rejection) and data_source_legacy_variables.esm (the 'variables' rejection).",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "data_sources": {
+    "BadSpatial": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.nc"
+      },
+      "spatial": {
+        "grid_mapping": "lambert_conformal",
+        "interpolation": "bilinear"
+      }
+    }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

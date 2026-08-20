@@ -1,0 +1,31 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourcesOnlyDocument",
+    "description": "Source-catalog ESM document (esm-spec §8, RFC unified-variable-model D2): a top-level data_sources block with no models or reaction_systems is a VALID document, satisfying the data_sources branch of the top-level anyOf. This is the cross-binding positive counterpart to tests/invalid/no_systems.esm (which carries none of the anyOf branches). One pure-I/O grid source: it locates, reads, decodes and slices bytes and nothing else — from 1.0.0 it exposes no variables and is not a component, so a catalog file like this one is NOT referenceable as a subsystem; a model consumes it by declaring a parameter whose `update` names it and binds one of its file variables (see tests/valid/data_sources_ingest_and_select.esm).",
+    "authors": [
+      "Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "data-sources",
+      "source-catalog",
+      "pure-io",
+      "conformance",
+      "ess-v9a.8"
+    ]
+  },
+  "data_sources": {
+    "weather": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/weather/{date:%Y%m%d_%H%M}.nc"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "PT1H",
+        "records_per_file": 1
+      }
+    }
+  }
+}

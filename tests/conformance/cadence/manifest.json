@@ -156,7 +156,7 @@
       "id": "loader_temporal_seed",
       "fixture": "tests/valid/cadence/loader_temporal_seed.esm",
       "model": "LoaderTemporalSeed",
-      "doc": "Loader-seeded DISCRETE (RFC pure-io-data-loaders §4.6, bead ess-v9a.5): the BC-relaxation RHS D(c[i])/dt = bc[i] - c[i], where `bc` is declared `discrete` with a `data_ingest` refresh naming the top-level loader `bc_loader`, and that loader HAS a `temporal` block. A loader with `temporal` is time-varying, so the partition seeds `bc` DISCRETE (refresh trigger = the loader's update times). The discrete bc[i] gather feeds the CONTINUOUS subtraction, materializing at the DISCRETE->CONTINUOUS threshold (bind provenance — recomputed by the per-event handler on each ingest, not folded at compile). The c-loads are CONTINUOUS (hot tree). Matched-pair sibling of loader_const_seed (identical but for the loader's `temporal`).",
+      "doc": "Source-seeded DISCRETE (bead ess-v9a.5): the BC-relaxation RHS D(c[i])/dt = bc[i] - c[i], where `bc` is a parameter carrying `update: {kind: data, source: bc_loader}` and that data source HAS a `temporal` block. A source with `temporal` is time-varying, so the partition seeds `bc` DISCRETE (refresh trigger = the source's update times). The discrete bc[i] gather feeds the CONTINUOUS subtraction, materializing at the DISCRETE->CONTINUOUS threshold (bind provenance — recomputed by the per-event handler on each ingest, not folded at compile). The c-loads are CONTINUOUS (hot tree). Matched-pair sibling of loader_const_seed (identical but for the source's `temporal`).",
       "class_summary": { "const": 0, "discrete": 1, "continuous": 3 },
       "hot_tree_empty": false,
       "event_handler_empty": false,
@@ -190,7 +190,7 @@
           "threshold": "const->continuous",
           "provenance": "bind",
           "array": "bc",
-          "doc": "The CONST loader-output gather index(bc,i) feeding the CONTINUOUS subtraction — folds at bind (the loader has no `temporal`, so the field is loaded once and never refreshed) into a buffer the hot path reads as a constant. Bind provenance distinguishes it from a compile-folded document literal; no compile-time golden bytes (the value comes from the external resource)."
+          "doc": "The CONST source-fed gather index(bc,i) feeding the CONTINUOUS subtraction — folds at bind (the source has no `temporal`, so the field is loaded once and never refreshed) into a buffer the hot path reads as a constant. Bind provenance distinguishes it from a compile-folded document literal; no compile-time golden bytes (the value comes from the external resource)."
         }
       ],
       "const_fold": {

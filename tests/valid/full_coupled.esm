@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "FullCoupledSystem",
-    "description": "Comprehensive ESM test exercising all sections: models, reaction_systems, data_loaders, operators, coupling (all 6 types), domain with spatial+temporal+ICs+BCs, and solver\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
+    "description": "Comprehensive ESM test exercising all sections: models, reaction_systems, data_sources, operators, coupling, domain with spatial+temporal+ICs+BCs, and solver. The meteorology and emission fields the loaders used to publish are now parameters of the consuming components, each carrying an `update` that names its data source (esm-spec 8.5).\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
     "authors": [
       "Claude Test Generator"
     ],
@@ -46,7 +46,14 @@
         "T": {
           "units": "K",
           "default": 298.15,
-          "description": "Temperature"
+          "description": "Temperature",
+          "update": {
+            "kind": "data",
+            "source": "MeteoData",
+            "from": {
+              "file_variable": "T"
+            }
+          }
         },
         "M": {
           "units": "molec/cm^3",
@@ -112,13 +119,29 @@
           "type": "parameter",
           "units": "m/s",
           "default": 0.0,
-          "description": "Eastward wind"
+          "description": "Eastward wind",
+          "update": {
+            "kind": "data",
+            "source": "MeteoData",
+            "from": {
+              "file_variable": "u"
+            }
+          },
+          "shape": []
         },
         "v": {
           "type": "parameter",
           "units": "m/s",
           "default": 0.0,
-          "description": "Northward wind"
+          "description": "Northward wind",
+          "update": {
+            "kind": "data",
+            "source": "MeteoData",
+            "from": {
+              "file_variable": "v"
+            }
+          },
+          "shape": []
         },
         "w": {
           "type": "parameter",
@@ -333,38 +356,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteoData": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/GEOSFP/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "u": {
-          "file_variable": "u",
-          "units": "m/s",
-          "description": "Eastward wind"
-        },
-        "v": {
-          "file_variable": "v",
-          "units": "m/s",
-          "description": "Northward wind"
-        },
-        "w": {
-          "file_variable": "w",
-          "units": "m/s",
-          "description": "Vertical wind"
-        },
-        "T": {
-          "file_variable": "T",
-          "units": "K",
-          "description": "Temperature"
-        },
-        "P": {
-          "file_variable": "P",
-          "units": "Pa",
-          "description": "Pressure"
-        }
       },
       "metadata": {
         "tags": [
@@ -377,13 +373,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR_v5/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "NOx_emissions": {
-          "file_variable": "NOx_emissions",
-          "units": "kg/m^2/s",
-          "description": "NOx emissions"
-        }
       },
       "metadata": {
         "tags": [
@@ -400,24 +389,6 @@
         "AtmosphericChemistry",
         "Transport"
       ]
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteoData.T",
-      "to": "AtmosphericChemistry.T",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteoData.u",
-      "to": "Transport.u",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteoData.v",
-      "to": "Transport.v",
-      "transform": "param_to_var"
     },
     {
       "type": "callback",

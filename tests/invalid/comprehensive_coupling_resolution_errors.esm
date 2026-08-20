@@ -114,7 +114,7 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "ValidDataLoader": {
       "description": "Valid data loader for testing error conditions",
       "data_source": {
@@ -144,7 +144,7 @@
       "description": "ERROR CASE 1: Invalid system reference in operator_compose",
       "_expected_error": {
         "code": "undefined_system",
-        "message": "System 'NonExistentSystem' not found in models, reaction_systems, data_loaders, or operators",
+        "message": "System 'NonExistentSystem' not found in models or reaction_systems",
         "algorithm_step": "System resolution"
       }
     },
@@ -258,7 +258,7 @@
       "description": "ERROR CASE 9: Invalid system reference in couple",
       "_expected_error": {
         "code": "undefined_system",
-        "message": "System 'NonExistentSystem' not found in models, reaction_systems, data_loaders, or operators",
+        "message": "System 'NonExistentSystem' not found in models or reaction_systems",
         "algorithm_step": "System resolution"
       }
     },

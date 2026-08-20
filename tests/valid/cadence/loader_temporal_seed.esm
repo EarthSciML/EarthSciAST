@@ -8,8 +8,8 @@
     ],
     "tags": [
       "cadence-partition",
-      "loader-seeded",
-      "data-loader",
+      "source-seeded",
+      "data-source",
       "temporal",
       "discrete-variable",
       "refresh-trigger",
@@ -26,7 +26,7 @@
       "size": 4
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "bc_loader": {
       "kind": "grid",
       "source": {
@@ -36,13 +36,6 @@
         "frequency": "PT6H",
         "file_period": "P1D",
         "records_per_file": 4
-      },
-      "variables": {
-        "bc": {
-          "file_variable": "boundary_o3",
-          "units": "mol/mol",
-          "description": "Time-varying boundary-condition field, refreshed every 6 h as the loader advances to the next record. Its `temporal` block makes the loader output DISCRETE (RFC pure-io-data-loaders §4.6)."
-        }
       }
     }
   },

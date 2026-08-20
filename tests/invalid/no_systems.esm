@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "InvalidNoSystems",
-    "description": "ESM document declaring no subsystem of any kind: neither models, reaction_systems, nor data_loaders (and not a grid_discretization_descriptor). It therefore fails the top-level anyOf. RFC pure-io-data-loaders 4.4 added the data_loaders-only branch, so a bare data_loaders block is now VALID; this negative deliberately carries none of the four branches.",
+    "description": "ESM document declaring no subsystem of any kind: neither models, reaction_systems, data_sources, expression_templates nor coupling_roles. It therefore fails the top-level anyOf. A bare data_sources block is VALID (a source-catalog file, tests/valid/data_sources_only.esm); this negative deliberately carries none of the branches.",
     "authors": [
       "Test Suite"
     ],

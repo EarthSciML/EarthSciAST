@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "import_bind_not_a_component",
-    "description": "INVALID import: 'Spread' is bound to 'DoesNotExist', which resolves to no top-level or nested models/reaction_systems/data_loaders component (esm-spec 10.10.1). Expected: coupling_import_bind_not_a_component."
+    "description": "INVALID import: 'Spread' is bound to 'DoesNotExist', which resolves to no top-level or nested models/reaction_systems component (esm-spec 10.10.1). Expected: coupling_import_bind_not_a_component."
   },
   "models": {
     "FuelModelLookup": {

@@ -1,0 +1,122 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ERA5_pressure_levels_example",
+    "description": "Covers EarthSciData.jl/src/era5.jl ERA5PressureLevelFileSet. Files come from CDS API or a local mirror (era5_pl_YYYY_MM.nc per month, 37 pressure levels 1000..1 hPa, hourly valid_time). Variables follow ERA5_VARIABLES mapping (full name -> short name used in the NetCDF). ERA5 pressure-level reanalysis, monthly files, hourly frequency, 37 pressure levels from CDS.",
+    "authors": [
+      "ESM fixture"
+    ],
+    "tags": [
+      "data-source",
+      "meteorology",
+      "reanalysis",
+      "era5"
+    ]
+  },
+  "models": {
+    "Stub": {
+      "variables": {
+        "temperature": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "ERA5_pl_monthly",
+            "from": {
+              "file_variable": "t"
+            }
+          },
+          "description": "Air temperature on pressure levels"
+        },
+        "u_component_of_wind": {
+          "type": "parameter",
+          "units": "m s^-1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "ERA5_pl_monthly",
+            "from": {
+              "file_variable": "u"
+            }
+          },
+          "description": "Eastward component of wind on pressure levels"
+        },
+        "v_component_of_wind": {
+          "type": "parameter",
+          "units": "m s^-1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "ERA5_pl_monthly",
+            "from": {
+              "file_variable": "v"
+            }
+          },
+          "description": "Northward component of wind on pressure levels"
+        },
+        "specific_humidity": {
+          "type": "parameter",
+          "units": "kg kg^-1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "ERA5_pl_monthly",
+            "from": {
+              "file_variable": "q"
+            }
+          },
+          "description": "Specific humidity on pressure levels"
+        },
+        "geopotential": {
+          "type": "parameter",
+          "units": "m^2 s^-2",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "ERA5_pl_monthly",
+            "from": {
+              "file_variable": "z"
+            }
+          },
+          "description": "Geopotential on pressure levels"
+        }
+      },
+      "equations": []
+    }
+  },
+  "data_sources": {
+    "ERA5_pl_monthly": {
+      "kind": "grid",
+      "source": {
+        "url_template": "cdsapi://reanalysis-era5-pressure-levels/era5_pl_{date:%Y}_{date:%m}.nc",
+        "mirrors": [
+          "file://${ERA5_LOCAL}/era5_pl_{date:%Y}_{date:%m}.nc"
+        ]
+      },
+      "temporal": {
+        "start": "1940-01-01T00:00:00Z",
+        "file_period": "P1M",
+        "frequency": "PT1H",
+        "time_variable": "valid_time"
+      },
+      "reference": {
+        "citation": "Hersbach, H. et al. (2020) The ERA5 global reanalysis. Q. J. R. Meteorol. Soc. 146: 1999-2049.",
+        "doi": "10.1002/qj.3803",
+        "url": "https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-pressure-levels"
+      },
+      "metadata": {
+        "tags": [
+          "reanalysis",
+          "pressure-levels"
+        ],
+        "dataset": "reanalysis-era5-pressure-levels"
+      }
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataUpdateMissingShape",
+    "description": "Test case: a parameter whose `update.kind` is \"data\" does not declare `shape`. A schedule / data / remesh parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so ModelVariable requires `shape` for it (esm-spec 5.4; an empty array is a valid scalar shape). This fixture replaces the 0.x 'loader variable missing units' negative: from 1.0.0 units are declared once, on the consuming parameter, and the binding carries none.",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "data_sources": {
+    "BadProvides": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.nc"
+      }
+    }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "update": {
+            "kind": "data",
+            "source": "BadProvides",
+            "from": {
+              "file_variable": "T"
+            }
+          },
+          "description": "Data-updated parameter with no `shape` -- the defect."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

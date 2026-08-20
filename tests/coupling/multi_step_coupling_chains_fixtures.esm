@@ -51,7 +51,29 @@
           "units": "K",
           "default": 298.15,
           "description": "Temperature",
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "air_temperature"
+            }
+          },
+          "shape": []
+        },
+        "NOx_emissions": {
+          "type": "parameter",
+          "units": "mol/m^2/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "EmissionInventory",
+            "from": {
+              "file_variable": "NOx_emissions"
+            }
+          },
+          "description": "NOx emission rate"
         }
       },
       "equations": [
@@ -157,13 +179,29 @@
           "type": "parameter",
           "units": "m/s",
           "default": 10.0,
-          "description": "Zonal wind"
+          "description": "Zonal wind",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "wind_u"
+            }
+          },
+          "shape": []
         },
         "v": {
           "type": "parameter",
           "units": "m/s",
           "default": 5.0,
-          "description": "Meridional wind"
+          "description": "Meridional wind",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalForcing",
+            "from": {
+              "file_variable": "wind_v"
+            }
+          },
+          "shape": []
         },
         "w": {
           "type": "parameter",
@@ -444,6 +482,20 @@
           "default": 1e-08,
           "description": "Soil decomposition",
           "type": "parameter"
+        },
+        "CO2_flux": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "EmissionInventory",
+            "from": {
+              "file_variable": "CO2_flux"
+            }
+          },
+          "description": "CO2 surface flux"
         }
       },
       "equations": [
@@ -507,33 +559,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteorologicalForcing": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/meteorological_netcdf/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "wind_u": {
-          "file_variable": "wind_u",
-          "units": "m/s",
-          "description": "Zonal wind velocity"
-        },
-        "wind_v": {
-          "file_variable": "wind_v",
-          "units": "m/s",
-          "description": "Meridional wind velocity"
-        },
-        "solar_flux": {
-          "file_variable": "solar_flux",
-          "units": "W/m^2",
-          "description": "Solar radiation flux"
-        },
-        "air_temperature": {
-          "file_variable": "air_temperature",
-          "units": "K",
-          "description": "Air temperature"
-        }
       },
       "metadata": {
         "tags": [
@@ -546,18 +576,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/emissions_csv/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "NOx_emissions": {
-          "file_variable": "NOx_emissions",
-          "units": "mol/m^2/s",
-          "description": "NOx emission rate"
-        },
-        "CO2_flux": {
-          "file_variable": "CO2_flux",
-          "units": "kg/m^2/s",
-          "description": "CO2 surface flux"
-        }
       },
       "metadata": {
         "tags": [
@@ -575,34 +593,6 @@
         "AtmosphereTransport"
       ],
       "description": "STEP 1: Couple chemistry with transport (placeholder expansion for all chemical species)"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.wind_u",
-      "to": "AtmosphereTransport.u",
-      "transform": "param_to_var",
-      "description": "STEP 2: Replace constant wind with time-varying meteorological data"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.wind_v",
-      "to": "AtmosphereTransport.v",
-      "transform": "param_to_var",
-      "description": "STEP 3: Replace meridional wind with data"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalForcing.air_temperature",
-      "to": "AtmosphereChemistry.temperature",
-      "transform": "param_to_var",
-      "description": "STEP 4: Replace constant temperature with meteorological forcing"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmissionInventory.NOx_emissions",
-      "to": "AtmosphereChemistry.NO",
-      "transform": "additive",
-      "description": "STEP 6: Add surface NOx emissions to NO equation"
     },
     {
       "type": "couple",
@@ -675,13 +665,6 @@
         ]
       },
       "description": "STEP 8: Couple atmosphere and land through deposition and ozone stress"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmissionInventory.CO2_flux",
-      "to": "LandVegetation.soil_carbon",
-      "transform": "additive",
-      "description": "STEP 9: Add anthropogenic CO2 flux to soil carbon budget"
     },
     {
       "type": "operator_compose",

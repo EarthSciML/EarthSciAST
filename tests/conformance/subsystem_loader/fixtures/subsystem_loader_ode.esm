@@ -2,12 +2,40 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "subsystem_loader_ode",
-    "description": "Cross-language conformance fixture for a pure-I/O data loader MOUNTED AS A MODEL SUBSYSTEM and consumed by the owning model's OWN equations (RFC pure-io-data-loaders §4.3; CONFORMANCE_SPEC §5.11). Model 'Box' mounts a static (CONST) DataLoader 'raw' exposing two variables: scalar 'k' and 3-element 'wind'. Box's single ODE consumes BOTH the bare-scalar loader field 'raw.k' (a bare dot-notation reference, lowered to the observed 'Box.raw.k') AND a gather 'index(raw.wind, 2)' (element 2 of 'Box.raw.wind'), integrating D(c) = (raw.k + wind[2]) - c with c(0)=0. Both variables flatten to const-array-backed observeds ('Box.raw.k', 'Box.raw.wind'); no defining equation (their values are pure-I/O external inputs injected at the RHS boundary by the provider seam). With a deterministic offline CONST provider (k=2, wind[2]=5) the forcing F = 2 + 5 = 7 is constant, so the trajectory c(t) = 7(1 - e^-t) is analytic and network-free. This is the ONLY loader fixture that exercises a SUBSYSTEM-mounted loader consumed directly by the owner (the top-level-loader fixtures cover variable_map + gather; this covers subsystem-mount + bare-scalar + gather)."
+    "description": "Cross-language conformance fixture for a pure-I/O data SOURCE consumed by the owning model's OWN equations (esm-spec §8.5; CONFORMANCE_SPEC §5.11). From 1.0.0 a data source is a document-scoped registry entry, NOT a component: it can no longer be mounted as a model subsystem, so the two former loader variables are declared as PARAMETERS of model 'Box', each with an `update` naming the source 'raw' and binding one of its file variables — scalar 'k' and 3-element 'wind'. Box's single ODE consumes BOTH the bare-scalar parameter 'k' AND a gather 'index(wind, 2)', integrating D(c) = (k + wind[2]) - c with c(0)=0. Neither parameter has a defining equation (their values are pure-I/O external inputs injected at the RHS boundary by the provider seam). With a deterministic offline CONST provider (k=2, wind[2]=5) the forcing F = 2 + 5 = 7 is constant, so the trajectory c(t) = 7(1 - e^-t) is analytic and network-free. This is the loader fixture that exercises BARE-SCALAR consumption of a source-backed parameter alongside a gather."
+  },
+  "index_sets": {
+    "wind_axis": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "data_sources": {
+    "raw": {
+      "kind": "static",
+      "source": {"url_template": "file:///data/terrain.nc"}
+    }
   },
   "models": {
     "Box": {
       "variables": {
-        "c": {"type": "unknown", "default": 0.0, "description": "tracer concentration"}
+        "c": {"type": "unknown", "default": 0.0, "description": "tracer concentration"},
+        "k": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "shape": [],
+          "update": {"kind": "data", "source": "raw", "from": {"file_variable": "K"}},
+          "description": "scalar forcing field (consumed as a bare scalar)"
+        },
+        "wind": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": ["wind_axis"],
+          "update": {"kind": "data", "source": "raw", "from": {"file_variable": "U"}},
+          "description": "3-element wind field (consumed via index gather)"
+        }
       },
       "equations": [
         {
@@ -18,25 +46,15 @@
               {
                 "op": "+",
                 "args": [
-                  "raw.k",
-                  {"op": "index", "args": ["raw.wind", 2]}
+                  "k",
+                  {"op": "index", "args": ["wind", 2]}
                 ]
               },
               "c"
             ]
           }
         }
-      ],
-      "subsystems": {
-        "raw": {
-          "kind": "static",
-          "source": {"url_template": "file:///data/terrain.nc"},
-          "variables": {
-            "k": {"file_variable": "K", "units": "1", "description": "scalar forcing field (consumed as a bare scalar)"},
-            "wind": {"file_variable": "U", "units": "m/s", "description": "3-element wind field (consumed via index gather)"}
-          }
-        }
-      }
+      ]
     }
   }
 }

@@ -27,13 +27,29 @@
           "units": "K",
           "default": 298.15,
           "description": "Air temperature",
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "WeatherStation",
+            "from": {
+              "file_variable": "air_temp"
+            }
+          },
+          "shape": []
         },
         "humidity": {
           "units": "%",
           "default": 60.0,
           "description": "Relative humidity",
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "WeatherStation",
+            "from": {
+              "file_variable": "rel_humidity"
+            }
+          },
+          "shape": []
         },
         "wind_speed": {
           "units": "m/s",
@@ -46,6 +62,34 @@
           "default": 800.0,
           "description": "Solar radiation",
           "type": "parameter"
+        },
+        "wind_velocity": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "WeatherStation",
+            "from": {
+              "file_variable": "wind_velocity"
+            }
+          },
+          "description": "Measured wind speed"
+        },
+        "incoming_radiation": {
+          "type": "parameter",
+          "units": "W/m^2",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "WeatherStation",
+            "from": {
+              "file_variable": "incoming_radiation"
+            }
+          },
+          "description": "Measured solar irradiance"
         }
       },
       "equations": [
@@ -129,6 +173,20 @@
           "default": 1e-08,
           "description": "Evaporation rate",
           "type": "parameter"
+        },
+        "sst_satellite": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "SatelliteData",
+            "from": {
+              "file_variable": "sst_satellite"
+            }
+          },
+          "description": "Satellite sea surface temperature"
         }
       },
       "equations": [
@@ -190,7 +248,16 @@
           "units": "dimensionless",
           "default": 0.2,
           "description": "Surface albedo",
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "WeatherStation",
+            "from": {
+              "file_variable": "incoming_radiation",
+              "unit_conversion": 0.0001
+            }
+          },
+          "shape": []
         },
         "stomatal_conductance": {
           "units": "m/s",
@@ -259,33 +326,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "WeatherStation": {
       "kind": "static",
       "source": {
         "url_template": "file:///data/weather_station_csv.nc"
-      },
-      "variables": {
-        "air_temp": {
-          "file_variable": "air_temp",
-          "units": "K",
-          "description": "Measured air temperature"
-        },
-        "rel_humidity": {
-          "file_variable": "rel_humidity",
-          "units": "%",
-          "description": "Measured relative humidity"
-        },
-        "wind_velocity": {
-          "file_variable": "wind_velocity",
-          "units": "m/s",
-          "description": "Measured wind speed"
-        },
-        "incoming_radiation": {
-          "file_variable": "incoming_radiation",
-          "units": "W/m^2",
-          "description": "Measured solar irradiance"
-        }
       },
       "metadata": {
         "tags": [
@@ -298,18 +343,6 @@
       "source": {
         "url_template": "file:///data/satellite_netcdf/{date:%Y%m%d_%H%M}.nc"
       },
-      "variables": {
-        "sst_satellite": {
-          "file_variable": "sst_satellite",
-          "units": "K",
-          "description": "Satellite sea surface temperature"
-        },
-        "ocean_color": {
-          "file_variable": "ocean_color",
-          "units": "mg/m^3",
-          "description": "Chlorophyll concentration"
-        }
-      },
       "metadata": {
         "tags": [
           "meteorology",
@@ -319,49 +352,6 @@
     }
   },
   "coupling": [
-    {
-      "type": "variable_map",
-      "from": "WeatherStation.air_temp",
-      "to": "AtmosphericModel.temperature",
-      "transform": "param_to_var",
-      "description": "TEST CASE 1: param_to_var transform - promotes constant parameter to time-varying variable"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherStation.rel_humidity",
-      "to": "AtmosphericModel.humidity",
-      "transform": "identity",
-      "description": "TEST CASE 2: identity transform - direct assignment without type change"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherStation.wind_velocity",
-      "to": "AtmosphericModel.wind_speed",
-      "transform": "additive",
-      "description": "TEST CASE 3: additive transform - adds source value to target equation RHS"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherStation.incoming_radiation",
-      "to": "AtmosphericModel.solar_radiation",
-      "transform": "multiplicative",
-      "description": "TEST CASE 4: multiplicative transform - multiplies target equation RHS by source value"
-    },
-    {
-      "type": "variable_map",
-      "from": "WeatherStation.incoming_radiation",
-      "to": "LandModel.albedo",
-      "transform": "conversion_factor",
-      "factor": 0.0001,
-      "description": "TEST CASE 5: conversion_factor transform - param_to_var with unit conversion"
-    },
-    {
-      "type": "variable_map",
-      "from": "SatelliteData.sst_satellite",
-      "to": "OceanModel.sea_surface_temperature",
-      "transform": "param_to_var",
-      "description": "TEST CASE 6: Cross-system param_to_var - satellite data drives ocean model"
-    },
     {
       "type": "variable_map",
       "from": "AtmosphericModel.temperature",

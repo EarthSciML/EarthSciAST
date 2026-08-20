@@ -283,7 +283,15 @@
           "type": "parameter",
           "units": "m/s",
           "default": 5.0,
-          "description": "Advection velocity"
+          "description": "Advection velocity",
+          "update": {
+            "kind": "data",
+            "source": "MeteoData",
+            "from": {
+              "file_variable": "wind_speed"
+            }
+          },
+          "shape": []
         }
       },
       "equations": [
@@ -333,23 +341,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteoData": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/WRF_output/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "wind_speed": {
-          "file_variable": "wind_speed",
-          "units": "m/s",
-          "description": "Wind speed field"
-        },
-        "boundary_layer_height": {
-          "file_variable": "boundary_layer_height",
-          "units": "m",
-          "description": "PBL height"
-        }
       },
       "metadata": {
         "tags": [
@@ -360,13 +356,6 @@
     }
   },
   "coupling": [
-    {
-      "type": "variable_map",
-      "from": "MeteoData.wind_speed",
-      "to": "Transport.velocity",
-      "transform": "identity",
-      "description": "Wind speed drives transport velocity"
-    },
     {
       "type": "operator_compose",
       "systems": [

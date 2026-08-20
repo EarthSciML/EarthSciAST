@@ -48,7 +48,7 @@
       "from": "NonExistentModel.valid_var",
       "to": "ValidModel.valid_var",
       "transform": "identity",
-      "description": "ERROR TEST 1: Invalid top-level system - 'NonExistentModel' not found in models/reaction_systems/data_loaders/operators",
+      "description": "ERROR TEST 1: Invalid top-level system - 'NonExistentModel' not found in models/reaction_systems/operators",
       "_expected_error": "undefined_system"
     },
     {

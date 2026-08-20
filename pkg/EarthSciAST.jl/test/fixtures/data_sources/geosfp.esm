@@ -1,0 +1,94 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "GEOSFP_A3dyn_example",
+    "description": "Covers EarthSciData.jl/src/geosfp.jl GEOSFPFileSet: mirror + domain + filetype + hourly/daily cadence (relpath yyyy/mm/yyyymmdd in GEOSFP.<date>.<filetype>.<domain>.nc). Default mirror: https://geos-chem.s3-us-west-2.amazonaws.com. Staggering from geosfp_staggering(); A3dyn is 3D dynamics on center/center/center. CRS is longitude/latitude WGS84. GEOS-FP A3dyn 3-hour average 3D dynamics for a 2x2.5 global domain.",
+    "authors": [
+      "ESM fixture"
+    ],
+    "tags": [
+      "data-source",
+      "meteorology",
+      "reanalysis",
+      "geosfp"
+    ]
+  },
+  "models": {
+    "Stub": {
+      "variables": {
+        "U": {
+          "type": "parameter",
+          "units": "m s^-1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_A3dyn_2x2_5",
+            "from": {
+              "file_variable": "U"
+            }
+          },
+          "description": "Eastward wind component"
+        },
+        "V": {
+          "type": "parameter",
+          "units": "m s^-1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_A3dyn_2x2_5",
+            "from": {
+              "file_variable": "V"
+            }
+          },
+          "description": "Northward wind component"
+        },
+        "OMEGA": {
+          "type": "parameter",
+          "units": "Pa s^-1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_A3dyn_2x2_5",
+            "from": {
+              "file_variable": "OMEGA"
+            }
+          },
+          "description": "Vertical pressure velocity"
+        }
+      },
+      "equations": []
+    }
+  },
+  "data_sources": {
+    "GEOSFP_A3dyn_2x2_5": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://geos-chem.s3-us-west-2.amazonaws.com/GEOS_2x2.5/GEOS_FP/{date:%Y}/{date:%m}/GEOSFP.{date:%Y%m%d}.A3dyn.2x2.5.nc",
+        "mirrors": [
+          "file:///data/GEOS_2x2.5/GEOS_FP/{date:%Y}/{date:%m}/GEOSFP.{date:%Y%m%d}.A3dyn.2x2.5.nc"
+        ]
+      },
+      "temporal": {
+        "file_period": "P1D",
+        "frequency": "PT3H",
+        "records_per_file": 8,
+        "time_variable": "time"
+      },
+      "reference": {
+        "citation": "Global Modeling and Assimilation Office (GMAO), NASA GSFC — GEOS-FP assimilation",
+        "url": "https://gmao.gsfc.nasa.gov/GEOS_systems/"
+      },
+      "metadata": {
+        "tags": [
+          "meteorology",
+          "reanalysis"
+        ],
+        "domain": "2x2.5",
+        "filetype": "A3dyn"
+      }
+    }
+  }
+}
