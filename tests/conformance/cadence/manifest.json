@@ -2,8 +2,16 @@
   "category": "cadence_partition_conformance",
   "version": "1.0",
   "description": "Static golden for the cross-binding dependency-partition (cadence) contract (CONFORMANCE_SPEC.md §5.7, RFC semiring-faq-unified-ir §6.1). Each fixture pins the golden the partition pass MUST reproduce in every binding: the cadence CLASS of every annotated node (const ⊏ discrete ⊏ continuous, class(node)=max over inputs, the gather rule classing index expressions independently of the array), the SET of materialization points (where the frontier cut fires — a lower-cadence sub-DAG feeding a higher-cadence parent), and the byte-identical CONST-folded buffers. The fixtures cover the §6.1 trio plus a discrete-remesh sibling and a loader-seeded matched pair: a mixed stencil (all three classes, both frontier thresholds, the gather split), a pure-topology rule (all CONST, empty hot tree — folds entirely into the artifact), a pure-pointwise rule (all CONTINUOUS, empty per-event handler, no materialization), a discrete-remesh stencil, and loader_temporal_seed / loader_const_seed — two models IDENTICAL except that one DataLoader declares a `temporal` block and the other does not, so the SAME `discrete`+`data_ingest` variable seeds DISCRETE (with-temporal) vs CONST (no-temporal), the loader-seeded-cadence contract of RFC pure-io-data-loaders §4.6 (bead ess-v9a.5). The per-binding partition-pass implementations have landed (ess-my4.3.7 Julia, ess-my4.3.8 Rust, ess-my4.3.9 Python): each binding registers a thin adapter and the runner asserts the SAME golden across Julia / Rust / Python. `bindings_required` lists all three, so a missing or mismatching producer fails the gate; the embedded REFERENCE classifier + folder remains the --self-test green check. See tests/conformance/cadence/README.md for the adapter contract.",
-  "class_order": ["const", "discrete", "continuous"],
-  "bindings_required": ["julia", "rust", "python"],
+  "class_order": [
+    "const",
+    "discrete",
+    "continuous"
+  ],
+  "bindings_required": [
+    "julia",
+    "rust",
+    "python"
+  ],
   "bindings_optional": [],
   "fixtures": [
     {
@@ -11,7 +19,11 @@
       "fixture": "tests/valid/cadence/mixed_stencil.esm",
       "model": "MixedStencilDiffusion",
       "doc": "The canonical three-cadence FVM stencil D(u[i])/dt = Σ_k Kdiff[i]·coeff[i,k]·(u[nbr[i,k]] − u[i]). CONST topology (nbr, coeff) folds into the artifact; the DISCRETE diffusivity Kdiff materializes into a per-event buffer; the CONTINUOUS state loads form the hot tree. The nested gather index(u, index(nbr,i,k)) splits: the inner topology selection is CONST while the outer value load is CONTINUOUS.",
-      "class_summary": { "const": 2, "discrete": 1, "continuous": 6 },
+      "class_summary": {
+        "const": 2,
+        "discrete": 1,
+        "continuous": 6
+      },
       "hot_tree_empty": false,
       "event_handler_empty": false,
       "materialization_points": [
@@ -42,21 +54,111 @@
       ],
       "const_fold": {
         "inputs": {
-          "nbr": [[2, 4, 1], [3, 1, 2], [4, 2, 3], [1, 3, 4]],
-          "coeff": [[1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0]]
+          "nbr": [
+            [
+              2,
+              4,
+              1
+            ],
+            [
+              3,
+              1,
+              2
+            ],
+            [
+              4,
+              2,
+              3
+            ],
+            [
+              1,
+              3,
+              4
+            ]
+          ],
+          "coeff": [
+            [
+              1,
+              1,
+              0
+            ],
+            [
+              1,
+              1,
+              0
+            ],
+            [
+              1,
+              1,
+              0
+            ],
+            [
+              1,
+              1,
+              0
+            ]
+          ]
         },
         "expected": {
           "nbr_idx": {
             "fold": "to_zero_based",
             "array": "nbr",
-            "shape": [4, 3],
-            "value": [[1, 3, 0], [2, 0, 1], [3, 1, 2], [0, 2, 3]],
+            "shape": [
+              4,
+              3
+            ],
+            "value": [
+              [
+                1,
+                3,
+                0
+              ],
+              [
+                2,
+                0,
+                1
+              ],
+              [
+                3,
+                1,
+                2
+              ],
+              [
+                0,
+                2,
+                3
+              ]
+            ],
             "serialized": "[[1,3,0],[2,0,1],[3,1,2],[0,2,3]]"
           },
           "coeff": {
             "fold": "identity",
-            "shape": [4, 3],
-            "value": [[1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0]],
+            "shape": [
+              4,
+              3
+            ],
+            "value": [
+              [
+                1,
+                1,
+                0
+              ],
+              [
+                1,
+                1,
+                0
+              ],
+              [
+                1,
+                1,
+                0
+              ],
+              [
+                1,
+                1,
+                0
+              ]
+            ],
             "serialized": "[[1,1,0],[1,1,0],[1,1,0],[1,1,0]]"
           }
         }
@@ -67,7 +169,11 @@
       "fixture": "tests/valid/cadence/pure_topology.esm",
       "model": "PureTopologyEdges",
       "doc": "The minimal 2-triangle mesh (faces sharing edge {2,3}). The unique undirected edges are enumerated from the CONST face→vertex connectivity and ranked to dense ids. Every node is CONST, so the entire partition folds into the artifact at compile time: the per-step CONTINUOUS tree is EMPTY and the per-event DISCRETE handler is EMPTY. Reuses the determinism edge_enumeration golden (tests/conformance/determinism/manifest.json) — the dedup order and numbering are fixed by the §5.5 determinism rules.",
-      "class_summary": { "const": 6, "discrete": 0, "continuous": 0 },
+      "class_summary": {
+        "const": 6,
+        "discrete": 0,
+        "continuous": 0
+      },
       "hot_tree_empty": true,
       "event_handler_empty": true,
       "materialization_points": [
@@ -89,19 +195,68 @@
       ],
       "const_fold": {
         "inputs": {
-          "face_lo": [[1, 2, 3], [3, 2, 4]],
-          "face_hi": [[2, 3, 1], [2, 4, 3]],
+          "face_lo": [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              3,
+              2,
+              4
+            ]
+          ],
+          "face_hi": [
+            [
+              2,
+              3,
+              1
+            ],
+            [
+              2,
+              4,
+              3
+            ]
+          ],
           "skolem": "undirected"
         },
         "expected": {
           "edges": {
             "fold": "edge_enumeration",
-            "value": [[1, 2], [1, 3], [2, 3], [2, 4], [3, 4]],
+            "value": [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                3
+              ],
+              [
+                2,
+                3
+              ],
+              [
+                2,
+                4
+              ],
+              [
+                3,
+                4
+              ]
+            ],
             "serialized": "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
           },
           "edge_dense_id": {
             "fold": "rank",
-            "value": [0, 1, 2, 3, 4],
+            "value": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ],
             "serialized": "[0,1,2,3,4]"
           }
         }
@@ -112,7 +267,11 @@
       "fixture": "tests/valid/cadence/pure_pointwise.esm",
       "model": "PurePointwiseForcing",
       "doc": "A pointwise relaxation-plus-forcing RHS D(u[i])/dt = −u[i] + A·sin(omega·t). Every node is CONTINUOUS — including the analytic continuous-t forcing sin(omega·t), which is NOT piecewise-constant between events and must recompute every step (classing it DISCRETE would let it go stale). The CONST scalars A, omega inline as literals (the pre-existing constant-fold); a bare scalar constant is not a buffer, so the materialization-point SET is empty, the per-event handler is empty, and the entire RHS is the hot tree.",
-      "class_summary": { "const": 0, "discrete": 0, "continuous": 6 },
+      "class_summary": {
+        "const": 0,
+        "discrete": 0,
+        "continuous": 6
+      },
       "hot_tree_empty": false,
       "event_handler_empty": true,
       "materialization_points": [],
@@ -126,7 +285,11 @@
       "fixture": "tests/valid/cadence/discrete_remesh_stencil.esm",
       "model": "DiscreteRemeshStencil",
       "doc": "The DISCRETE-remesh sibling of mixed_stencil (bead ess-my4.3.10): the SAME §6.1 FVM-diffusion stencil D(u[i])/dt = Σ_k coeff[i,k]·(u[nbr[i,k]] − u[i]), but the mesh TOPOLOGY (nbr, coeff) is declared `discrete` (an AMR remesh-reloadable mesh) instead of document-literal `parameter`s — only the leaf seed changes. This realizes the §6.1 worked-trace claim that mixed_stencil only half-shows: 'mesh primitives as document literals → topology folds at compile (CONST); if instead the mesh is reloaded/refined at discrete events, the SAME topology nodes are DISCRETE and move from the artifact into the per-event handler.' The gather split is identical to mixed_stencil — the inner topology selection index(nbr,i,k) is DISCRETE while the outer value-load index(u, .) stays CONTINUOUS — so the two topology gathers (nbr, coeff) materialize at the DISCRETE→CONTINUOUS threshold (bind provenance): recomputed by the per-event handler on each remesh event, NOT folded once at compile as in mixed_stencil. The hot per-step contraction over u is unchanged and stays CONTINUOUS; topology is never on the hot path, CONST or DISCRETE. Together with mixed_stencil (CONST topology) this is the §6.1 const-vs-discrete topology pair the bead requires. No const_fold block: a DISCRETE buffer has no compile-time golden bytes (the value comes from the runtime remesh source), asserted by the per-binding adapter at the remesh epoch — exactly as mixed_stencil's DISCRETE Kdiff point.",
-      "class_summary": { "const": 0, "discrete": 2, "continuous": 5 },
+      "class_summary": {
+        "const": 0,
+        "discrete": 2,
+        "continuous": 5
+      },
       "hot_tree_empty": false,
       "event_handler_empty": false,
       "materialization_points": [
@@ -157,7 +320,11 @@
       "fixture": "tests/valid/cadence/loader_temporal_seed.esm",
       "model": "LoaderTemporalSeed",
       "doc": "Source-seeded DISCRETE (bead ess-v9a.5): the BC-relaxation RHS D(c[i])/dt = bc[i] - c[i], where `bc` is a parameter carrying `update: {kind: data, source: bc_loader}` and that data source HAS a `temporal` block. A source with `temporal` is time-varying, so the partition seeds `bc` DISCRETE (refresh trigger = the source's update times). The discrete bc[i] gather feeds the CONTINUOUS subtraction, materializing at the DISCRETE->CONTINUOUS threshold (bind provenance — recomputed by the per-event handler on each ingest, not folded at compile). The c-loads are CONTINUOUS (hot tree). Matched-pair sibling of loader_const_seed (identical but for the source's `temporal`).",
-      "class_summary": { "const": 0, "discrete": 1, "continuous": 3 },
+      "class_summary": {
+        "const": 0,
+        "discrete": 1,
+        "continuous": 3
+      },
       "hot_tree_empty": false,
       "event_handler_empty": false,
       "materialization_points": [
@@ -180,7 +347,11 @@
       "fixture": "tests/valid/cadence/loader_const_seed.esm",
       "model": "LoaderConstSeed",
       "doc": "Loader-seeded CONST (RFC pure-io-data-loaders §4.6, bead ess-v9a.5): the matched-pair sibling of loader_temporal_seed — the SAME RHS D(c[i])/dt = bc[i] - c[i] and the SAME `discrete`+`data_ingest` declaration of `bc`, but the loader `bc_loader` declares NO `temporal` block. A loader without `temporal` is non-time-varying (§4.6: `temporal` optional, absence ⇒ non-time-varying), so the partition refines the declared DISCRETE seed down to CONST: `bc` folds at bind (external-resource provenance) and never refreshes. The const bc[i] gather feeds the CONTINUOUS subtraction at the CONST->CONTINUOUS threshold; because nothing is DISCRETE, the per-event handler is EMPTY (the only structural difference from the temporal sibling). Toggling the loader's `temporal` block — and nothing else — is what flips bc between the two cadences.",
-      "class_summary": { "const": 1, "discrete": 0, "continuous": 3 },
+      "class_summary": {
+        "const": 1,
+        "discrete": 0,
+        "continuous": 3
+      },
       "hot_tree_empty": false,
       "event_handler_empty": true,
       "materialization_points": [
@@ -193,6 +364,24 @@
           "doc": "The CONST source-fed gather index(bc,i) feeding the CONTINUOUS subtraction — folds at bind (the source has no `temporal`, so the field is loaded once and never refreshed) into a buffer the hot path reads as a constant. Bind provenance distinguishes it from a compile-folded document literal; no compile-time golden bytes (the value comes from the external resource)."
         }
       ],
+      "const_fold": {
+        "inputs": {},
+        "expected": {}
+      }
+    },
+    {
+      "id": "observed_leaf_seeds",
+      "fixture": "tests/valid/cadence/observed_leaf_seeds.esm",
+      "model": "ObservedLeafSeeds",
+      "doc": "CONFORMANCE_SPEC §5.7.2, the esm 1.0.0 leaf-seed rule for OBSERVED unknowns. With only two declared variable types, an observed's seed cannot be read off its type: it is the class of its DEFINING EQUATION's RHS. This fixture discriminates both wrong answers. `geom` reads only parameters and must seed CONST — a binding that seeds every unknown CONTINUOUS (sound, but coarse) stops it folding at bind, and const-folding state-free observeds is what the geometry and projection-pushdown paths rely on. `u_scaled` reads the state and must seed CONTINUOUS — a binding that seeds observeds CONST (the 0.x shortcut, which the code itself flagged as imprecise and unexercised) folds a value that changes every step. `k_scaled` reads a DISCRETE parameter and must seed DISCRETE, so the rule is not merely a CONST/CONTINUOUS binary. `geom_chain` reads another observed rather than a parameter, pinning that the resolution is TRANSITIVE: a binding that resolves one level and then falls back to a default misclassifies it.",
+      "class_summary": {
+        "const": 2,
+        "discrete": 1,
+        "continuous": 2
+      },
+      "hot_tree_empty": false,
+      "event_handler_empty": true,
+      "materialization_points": [],
       "const_fold": {
         "inputs": {},
         "expected": {}

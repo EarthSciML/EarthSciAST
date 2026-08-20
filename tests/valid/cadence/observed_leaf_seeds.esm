@@ -1,0 +1,205 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ObservedLeafSeeds",
+    "description": "CONFORMANCE_SPEC §5.7.2: an OBSERVED unknown's cadence seed is the class of its DEFINING EQUATION's RHS, not a fixed class for the whole `unknown` type. Both wrong answers are discriminated here. Seeding every unknown CONTINUOUS is sound but stops `geom` folding at bind, and const-folding state-free observeds is what the geometry and projection-pushdown paths rely on. Seeding an observed CONST — what the 0.x code did, admitting it was imprecise and unexercised — wrongly folds `u_scaled`, which reads the state `u` and is genuinely CONTINUOUS. Only resolving through the defining equation gets both right. `geom_chain` additionally pins that the resolution is TRANSITIVE: it reads another observed, not a parameter, so a binding that resolves one level deep and then gives up misclassifies it.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-08-19T00:00:00Z",
+    "tags": [
+      "cadence",
+      "observed",
+      "leaf-seed",
+      "esm-1.0.0"
+    ]
+  },
+  "index_sets": {
+    "cells": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "ObservedLeafSeeds": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "ODE state — CONTINUOUS."
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "m",
+          "default": 100.0,
+          "description": "Plain constant parameter — CONST."
+        },
+        "geom": {
+          "type": "unknown",
+          "units": "m^2",
+          "description": "STATE-FREE observed: its equation reads only parameters, so it must seed CONST and fold at bind. A binding that seeds every unknown CONTINUOUS gets this wrong."
+        },
+        "geom_chain": {
+          "type": "unknown",
+          "units": "m^4",
+          "description": "Observed reading ANOTHER observed. Still CONST, but only if the resolution is transitive."
+        },
+        "Kdiff": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "shape": [],
+          "default": 1.0,
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "handler": {
+              "handler_id": "met_diffusivity_reload"
+            }
+          },
+          "description": "Discrete-cadence parameter — DISCRETE."
+        },
+        "k_scaled": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "description": "Observed reading a DISCRETE parameter — seeds DISCRETE, not CONST and not CONTINUOUS."
+        },
+        "u_scaled": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "cells"
+          ],
+          "description": "Observed reading the state — CONTINUOUS. A binding that seeds observeds CONST (the 0.x shortcut) gets this wrong."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "geom",
+          "rhs": {
+            "op": "*",
+            "expect_cadence": "const",
+            "args": [
+              "dx",
+              "dx"
+            ]
+          }
+        },
+        {
+          "lhs": "geom_chain",
+          "rhs": {
+            "op": "*",
+            "expect_cadence": "const",
+            "args": [
+              "geom",
+              "geom"
+            ]
+          }
+        },
+        {
+          "lhs": "k_scaled",
+          "rhs": {
+            "op": "*",
+            "expect_cadence": "discrete",
+            "args": [
+              "Kdiff",
+              2.0
+            ]
+          }
+        },
+        {
+          "lhs": "u_scaled",
+          "rhs": {
+            "op": "*",
+            "expect_cadence": "continuous",
+            "args": [
+              "u",
+              "geom"
+            ]
+          }
+        },
+        {
+          "_comment": "D(u[i])/dt = k_scaled * (u_scaled[i] - u[i]) / geom_chain. Mixes all three classes so the materialization frontier is observable.",
+          "lhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [
+              "u"
+            ],
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "expect_cadence": "continuous",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "cells"
+              }
+            },
+            "args": [
+              "u",
+              "u_scaled",
+              "k_scaled",
+              "geom_chain"
+            ],
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "k_scaled",
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "u_scaled",
+                            "i"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "geom_chain"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

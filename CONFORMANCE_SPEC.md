@@ -1356,22 +1356,54 @@ Two points fix the semantics:
 
 #### 5.7.2 Seeding the leaves
 
-The `max`-propagation bottoms out at *declared* leaf cadences. Three roles seed
-the three classes:
+From esm 1.0.0 the `max`-propagation bottoms out at leaf cadences that are
+**derived, not declared**. There are only two declared types, so the seed comes
+from the classification of esm-spec §6.3.1 — and every binding MUST seed from
+those functions rather than re-deriving the categories locally, because five
+local derivations are five chances to disagree about which nodes fold.
 
-| Leaf | Seed | Source |
-|---|---|---|
-| `state` variable, the independent variable `t` | `CONTINUOUS` | existing ESM |
-| `parameter` variable, numeric literal, index-set name, bound index symbol | `CONST` | existing ESM |
-| `discrete` variable | `DISCRETE` | the **one new declaration** (`esm-schema.json`, `ModelVariable.type` enum) |
+| Leaf | Seed |
+|---|---|
+| the independent variable `t` | `CONTINUOUS` |
+| an unknown in `ode_states` | `CONTINUOUS` |
+| an unknown in `algebraic_unknowns` | `CONTINUOUS` |
+| an unknown in `observed_unknowns` | **the join of its defining equation's RHS** — see below |
+| a parameter in `brownian_parameters` | `CONTINUOUS` (resampled every step) |
+| a parameter in `discrete_parameters` | `DISCRETE`, subject to the source refinement below |
+| a parameter in `sampled_parameters` or `constant_parameters` | `CONST` |
+| numeric literal, index-set name, bound index symbol, relation tag | `CONST` |
 
-`DISCRETE` had no existing role to derive from — nothing in the pre-M3 schema
-expressed "shape fixed at setup, values refreshed at discrete events." The
-`discrete` variable kind (a third role beside `state` and `parameter`) is that
-seed: it declares its **fixed shape** and, optionally, a **`refresh` trigger**
-(`schedule` / `data_ingest` / `remesh`) that drives its per-event recompute.
-Loaded met/BC fields, scheduled emission inventories, and reloadable mesh
-topology are all declared `discrete`.
+**The observed leaf is the one that changed, and it must not be shortcut.**
+Before 1.0.0 an `observed` leaf seeded `CONST`, with the code admitting this was
+imprecise and unexercised ("none of the fixtures read an observed as a leaf").
+That shortcut is now both unavailable — observed and ODE-state are the same
+declared type — and unsound, since an observed defined from a state is
+`CONTINUOUS`. But seeding every unknown `CONTINUOUS` is equally wrong in the
+other direction: it would stop a **state-free** observed from folding, and
+const-folding exactly those is what the geometry and projection-pushdown paths
+rely on (esm-spec §6.6, "constant-backed" observeds).
+
+So an observed leaf resolves to the join of the leaves of **its defining
+equation's RHS**, computed by this same pass and memoised. This is the one place
+where the cadence pass must follow the 1.0.0 relocation: an observed's definition
+used to live in `variables[v].expression` and now lives in the model's
+`equations` array as the bare-variable-LHS equation whose LHS is that name. The
+observed sub-DAG is acyclic (§4.9.4 balance plus the DAE contract), so the
+recursion terminates; a cycle is a defect and MUST be reported rather than
+silently seeded.
+
+The consequence to test for is behavioural, not cosmetic: a state-free observed
+must still fold at bind, and an observed reading a state must be `CONTINUOUS`.
+`tests/conformance/cadence/` pins both.
+
+`DISCRETE` still has no role to derive from other than an explicit refresh
+cadence. A parameter carrying a `schedule`, `data`, or `remesh` update is that
+seed: it declares its **fixed shape** and the trigger that drives its per-event
+recompute. Loaded met/BC fields, scheduled emission inventories, and reloadable
+mesh topology are all such parameters. A parameter whose update is `condition` or
+`crossing` is likewise `DISCRETE` — it is piecewise-constant between firings —
+but carries no shape requirement, being an ordinary scalar that changes at
+events.
 
 The compile-fold-vs-bind-fold distinction is a **provenance sub-tag**, not a
 declared class: a `CONST`/`DISCRETE` leaf whose bytes are inline folds at
@@ -1392,8 +1424,8 @@ update):
   optional; absence ⇒ non-time-varying), so the same variable is refined down to
   `CONST` — loaded once, still folding at **bind**.
 
-Any other refresh trigger (`schedule` / `remesh`) or a `source` that resolves to
-no loader keeps the declared `DISCRETE` seed. This is the one context in which a
+Any other update kind (`schedule` / `remesh` / `condition` / `crossing`) or a
+`source` that resolves to no entry keeps the `DISCRETE` seed. This is the one context in which a
 leaf's seed reads a document field outside its own declaration; it is resolved at
 build time, before propagation, so the rest of the pass is unchanged. The
 worked-example pair `loader_temporal_seed` (→ `DISCRETE`) and `loader_const_seed`

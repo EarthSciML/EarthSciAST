@@ -124,7 +124,29 @@ def _source_without_temporal(var: dict, model: dict) -> bool:
     return isinstance(source, dict) and "temporal" not in source
 
 
-def seed_leaf(leaf: Any, model: dict) -> str:
+def _observed_definitions(model: dict) -> dict:
+    """Map each observed unknown to its defining equation RHS.
+
+    An observed unknown is one an equation defines with a BARE-VARIABLE LHS
+    (esm-spec §6.3.1). Before esm 1.0.0 this lived in `variables[v].expression`;
+    the cadence pass must now read it from the model's `equations`, which is the
+    one place the pass has to follow the format change.
+    """
+    cache = model.get("_observed_defs")
+    if cache is not None:
+        return cache
+    variables = model.get("variables", {}) or {}
+    unknowns = {n for n, v in variables.items() if v.get("type") == "unknown"}
+    defs = {}
+    for eq in model.get("equations", []) or []:
+        lhs = eq.get("lhs")
+        if isinstance(lhs, str) and lhs in unknowns and lhs not in defs:
+            defs[lhs] = eq.get("rhs")
+    model["_observed_defs"] = defs
+    return defs
+
+
+def seed_leaf(leaf: Any, model: dict, _resolving: tuple = ()) -> str:
     """Seed a leaf's cadence from its DERIVED role (§5.7 leaf-seed table).
 
     From esm 1.0.0 the seed cannot be read off a declared type, because there are
@@ -146,9 +168,22 @@ def seed_leaf(leaf: Any, model: dict) -> str:
         var = variables[leaf]
         kind = var.get("type")
         if kind == "unknown":
-            # An unknown is CONTINUOUS whether it is an ODE state or an observed
-            # one: an observed leaf resolves to its defining equation's class
-            # elsewhere, and CONTINUOUS is the sound seed here either way.
+            # An OBSERVED unknown resolves to the class of its defining
+            # equation's RHS (§5.7.2). Seeding every unknown CONTINUOUS would be
+            # sound but would stop a state-free observed folding at bind, and
+            # const-folding exactly those is what the geometry and
+            # projection-pushdown paths rely on. Seeding it CONST — what the 0.x
+            # code did for `observed` — is unsound the other way, since an
+            # observed reading a state is CONTINUOUS.
+            defs = _observed_definitions(model)
+            if leaf in defs:
+                if leaf in _resolving:
+                    raise CadenceError(
+                        f"observed definition cycle through {leaf!r}: "
+                        + " -> ".join(_resolving + (leaf,))
+                    )
+                return classify(defs[leaf], model, _resolving + (leaf,))
+            # An ODE state or an algebraic unknown: CONTINUOUS.
             return "continuous"
         if kind == "parameter":
             update = var.get("update")
@@ -184,14 +219,18 @@ def _child_exprs(node: dict):
             yield node[field]
 
 
-def classify(node: Any, model: dict) -> str:
+def classify(node: Any, model: dict, _resolving: tuple = ()) -> str:
     """Derive a node's cadence class. For a leaf, seed it. For an operator node,
     class = max over child classes — which, for a gather index(A, e…), is
     max(class(A), class(e…)): the index expressions are classed INDEPENDENTLY of
-    the array, so a stencil splits (§5.7 gather rule)."""
+    the array, so a stencil splits (§5.7 gather rule).
+
+    `_resolving` carries the chain of observed unknowns currently being resolved
+    through their defining equations, so a definition cycle is reported rather
+    than recursing forever."""
     if not isinstance(node, dict):
-        return seed_leaf(node, model)
-    child_classes = [classify(c, model) for c in _child_exprs(node)]
+        return seed_leaf(node, model, _resolving)
+    child_classes = [classify(c, model, _resolving) for c in _child_exprs(node)]
     return _join(*child_classes) if child_classes else "const"
 
 
