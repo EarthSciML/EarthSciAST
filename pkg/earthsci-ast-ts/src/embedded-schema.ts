@@ -1659,8 +1659,8 @@ export const schema: AnySchemaObject = {
           "description": "Name of the variable in the source file supplying this parameter's values."
         },
         "unit_conversion": {
-          "type": "number",
-          "description": "Multiplicative factor applied to the raw file values to reach the parameter's declared `units`. Scales a number that is already a number — contrast `codes`, which decodes a text label into one."
+          "$ref": "#/$defs/Expression",
+          "description": "Multiplicative factor applied to the raw file values to reach the parameter's declared `units` — a plain number or a full Expression AST (§4), as the 0.x loader-variable form allowed. `Expression` already admits the bare number, so this is a single `$ref`: spelling it `oneOf: [number, Expression]` (which is what 0.x did) is unsatisfiable for every plain factor, since a number matches BOTH branches. Scales a number that is already a number — contrast `codes`, which decodes a text label into one. As an Expression position it is subject to reference integrity (esm-spec §4.9.5): its free names must resolve."
         },
         "codes": {
           "$ref": "#/$defs/DataSourceCodes"
