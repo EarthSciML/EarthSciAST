@@ -85,7 +85,33 @@ def _param(shape):
 
 
 def _obs(shape, expression):
-    return {"type": "observed", "shape": list(shape), "expression": expression}
+    """An OBSERVED unknown, in the esm 1.0.0 spelling.
+
+    1.0.0 has no ``observed`` type and no ``expression`` field on a variable:
+    the variable is declared ``unknown`` and a bare-variable-LHS equation
+    defines it. This helper carries the body under the helper-only key
+    ``defined_by``, which :func:`_lift_observed` moves onto the model's
+    ``equations`` before the document is handed to ``prepare`` /
+    ``desugar_pushdown``.
+    """
+    return {"type": "unknown", "shape": list(shape), "defined_by": expression}
+
+
+def _lift_observed(doc):
+    """Move every ``defined_by`` body onto its model's ``equations``."""
+    for model in (doc.get("models") or {}).values():
+        equations = model.setdefault("equations", [])
+        for name, var in (model.get("variables") or {}).items():
+            body = var.pop("defined_by", None)
+            if body is not None:
+                equations.append({"lhs": name, "rhs": body})
+    return doc
+
+
+def _observed_body(model, name):
+    """The RHS of ``name``'s defining equation -- where an observed unknown's
+    expression lives now that the variable carries none."""
+    return next(eq["rhs"] for eq in model["equations"] if eq.get("lhs") == name)
 
 
 # --------------------------------------------------------------------------- #
@@ -100,7 +126,7 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
     NPTS·NCELLS full product — and the values equal the oracle EXACTLY (one
     surviving term per record either way)."""
     doc = {
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_mirror"},
         "index_sets": {
             "points": {"kind": "interval", "size": NPTS},
@@ -147,6 +173,7 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
             }
         },
     }
+    _lift_observed(doc)
     # Const arrays ride the FLATTENED spelling (`flatten` prefixes every
     # variable with its owning model); the gate's env factors keep the bare
     # authored names, which is the reconciliation `_scoped_array_name` performs.
@@ -198,7 +225,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
         "expr": _op("*", _ix("SR", "s", "rcv"), _ix("Emis", "s")),
     }
     doc = {
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_forward"},
         "index_sets": {
             "points": {"kind": "interval", "size": NPTS},
@@ -223,10 +250,11 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
             }
         },
     }
+    _lift_observed(doc)
 
     rw = desugar_pushdown(doc, "Fwd")
     assert rw is not doc
-    emis_expr = rw["models"]["Fwd"]["variables"]["Emis"]["expression"]
+    emis_expr = _observed_body(rw["models"]["Fwd"], "Emis")
     # The rewritten binning aggregate carries the DERIVED gate, over the
     # generated COMPACT-axis envelopes — not the full-grid rects.
     assert "join" in emis_expr
@@ -277,7 +305,7 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
     """A record outside the grid is never visited by the driver, and MUST come
     out as 0̄ — not a hole, not NaN, not a stale buffer value."""
     doc = {
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_identity_fill"},
         "index_sets": {
             "points": {"kind": "interval", "size": 3},
@@ -325,6 +353,7 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
             }
         },
     }
+    _lift_observed(doc)
     ca = {
         "Fill.X": np.array([0.5, 1.5, 99.0]),
         "Fill.Y": np.array([0.5, 0.5, 99.0]),
@@ -349,7 +378,7 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
     pins this as the ``pairs`` shape: bind both from the sorted candidate pairs,
     which is a MUST-drive shape even though the node is not a producer."""
     doc = {
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_pairs"},
         "index_sets": {
             "points": {"kind": "interval", "size": NPTS},
@@ -365,8 +394,8 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
                     "E": _param(["cells"]),
                     "N": _param(["cells"]),
                     "T": {
-                        "type": "observed",
-                        "expression": {
+                        "type": "unknown",
+                        "defined_by": {
                             "op": "aggregate",
                             "semiring": "sum_product",
                             "output_idx": [],
@@ -396,6 +425,7 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
             }
         },
     }
+    _lift_observed(doc)
     ca = {f"Pairs.{k}": geom[k] for k in ("X", "Y", "W", "S", "E", "N")}
 
     broad_phase.ENUM_VISITS[0] = 0
@@ -441,7 +471,7 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
     vals = np.sqrt(np.arange(1.0, npt + 1.0)) * np.pi
 
     doc = {
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_order"},
         "index_sets": {
             "points": {"kind": "interval", "size": npt},
@@ -489,6 +519,7 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
             }
         },
     }
+    _lift_observed(doc)
     ca = {
         "Ord.X": px, "Ord.Y": py, "Ord.V": vals,
         "Ord.W": w, "Ord.S": s, "Ord.E": e, "Ord.N": n,

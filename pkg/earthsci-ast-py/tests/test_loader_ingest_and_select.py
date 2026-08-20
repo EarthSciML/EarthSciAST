@@ -5,7 +5,7 @@ zip and a Zarr v2 store, both over the ``file`` transport — no network).
 
 The Python peer of ``pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs``:
 the document under test is the same committed fixture
-``tests/valid/data_loaders_ingest_and_select.esm``, with only its two
+``tests/valid/data_sources_ingest_and_select.esm``, with only its two
 ``url_template``s patched onto the temporary fixtures — so what the validation
 sweep checks and what this file runs are the same declaration, in both
 bindings.
@@ -41,7 +41,7 @@ pytest.importorskip("zarr")
 
 from conftest import VALID_DIR  # noqa: E402
 
-from earthsci_ast.data_loaders.esio_provider import (  # noqa: E402
+from earthsci_ast.data_sources.esio_provider import (  # noqa: E402
     providers_from_document,
 )
 from earthsci_ast.prepare import prepare  # noqa: E402
@@ -145,9 +145,9 @@ def _write_grid_store(dirpath, n: int) -> str:
 @pytest.fixture()
 def document(tmp_path):
     """The committed fixture with its two placeholder URLs pointed at ``tmp_path``."""
-    doc = json.loads((VALID_DIR / "data_loaders_ingest_and_select.esm").read_text())
-    doc["data_loaders"]["EGU_Emis"]["source"]["url_template"] = _write_ff10_zip(tmp_path)
-    doc["data_loaders"]["Grid"]["source"]["url_template"] = _write_grid_store(tmp_path, 10)
+    doc = json.loads((VALID_DIR / "data_sources_ingest_and_select.esm").read_text())
+    doc["data_sources"]["EGU_Emis"]["source"]["url_template"] = _write_ff10_zip(tmp_path)
+    doc["data_sources"]["Grid"]["source"]["url_template"] = _write_grid_store(tmp_path, 10)
     return doc
 
 
@@ -182,7 +182,7 @@ def test_the_document_alone_decodes_maps_and_filters_the_ff10_table(doc_and_tmp)
 def test_an_unrecognised_reader_option_is_refused_at_construction(doc_and_tmp):
     """FORMAT-08-A-006: a mis-typed decode option cannot quietly select nothing."""
     doc, tmp_path = doc_and_tmp
-    doc["data_loaders"]["EGU_Emis"]["reader_options"]["member_filter"] = "*egu*"
+    doc["data_sources"]["EGU_Emis"]["reader_options"]["member_filter"] = "*egu*"
     with pytest.raises(esio.errors.UnknownReaderOption) as e:
         _providers(doc, tmp_path)
     assert "member_filter" in str(e.value)
@@ -193,7 +193,7 @@ def test_reader_options_are_load_bearing_not_decorative(doc_and_tmp):
     """Without the declared glob the loader reads the WRONG members — which is
     why an ignored option is a defect rather than a nicety."""
     doc, tmp_path = doc_and_tmp
-    doc["data_loaders"]["EGU_Emis"]["reader_options"] = {}
+    doc["data_sources"]["EGU_Emis"]["reader_options"] = {}
     with pytest.raises(Exception):  # noqa: B017 - a whole-zip read cannot decode
         _sample(doc, tmp_path, "EGU_Emis.annual")
 
@@ -257,7 +257,7 @@ def test_a_text_column_with_no_codes_map_is_a_boundary_error(doc_and_tmp):
     """FORMAT-08-A-007: a model forcing must be numeric, so a text column with
     no ``codes`` map fails at the loader boundary, not as an absent forcing."""
     doc, tmp_path = doc_and_tmp
-    del doc["data_loaders"]["EGU_Emis"]["variables"]["pollutant"]["codes"]
+    del doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"]["codes"]
     with pytest.raises(ValueError) as e:
         _sample(doc, tmp_path, "EGU_Emis.pollutant")
     assert "decoded as strings" in str(e.value)
@@ -267,7 +267,7 @@ def test_a_text_column_with_no_codes_map_is_a_boundary_error(doc_and_tmp):
 def test_an_unmapped_code_can_error_or_substitute_instead_of_dropping(doc_and_tmp):
     """``unmapped`` is a three-way policy, and ``error`` is the default."""
     doc, tmp_path = doc_and_tmp
-    codes = doc["data_loaders"]["EGU_Emis"]["variables"]["pollutant"]["codes"]
+    codes = doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"]["codes"]
 
     codes["unmapped"] = "error"
     with pytest.raises(ValueError) as e:
@@ -298,7 +298,7 @@ def test_the_record_filter_drops_the_record_from_every_variable(doc_and_tmp):
     # record — to EVERY variable at once, NaN longitude and all. The columns
     # move together or they do not move; that is the whole point of the mask
     # being the loader's.
-    doc["data_loaders"]["EGU_Emis"]["record_filter"]["require_finite"] = ["annual"]
+    doc["data_sources"]["EGU_Emis"]["record_filter"]["require_finite"] = ["annual"]
     lon = _sample(doc, tmp_path, "EGU_Emis.lon")
     assert lon[0] == -90.0 and np.isnan(lon[1]) and lon[2:] == [-92.0, -93.0]
     assert _sample(doc, tmp_path, "EGU_Emis.pollutant") == [36.0, 41.0, 36.0, 1.0]
@@ -340,7 +340,7 @@ def test_a_range_select_over_a_filtered_table_counts_surviving_records(doc_and_t
     doc, tmp_path = doc_and_tmp
     # A loader-level select is the default for every variable of the loader —
     # which is what keeps a truncated table aligned.
-    doc["data_loaders"]["EGU_Emis"]["select"] = {"axes": [{"range": {"start": 0, "stop": 2}}]}
+    doc["data_sources"]["EGU_Emis"]["select"] = {"axes": [{"range": {"start": 0, "stop": 2}}]}
     assert _sample(doc, tmp_path, "EGU_Emis.annual") == [100.0, 7.0], (
         "[0:2] is the first two SURVIVING records (100, 7) — never the first two "
         "raw rows (100, 50) of which one is dropped"
@@ -351,7 +351,7 @@ def test_a_range_select_over_a_filtered_table_counts_surviving_records(doc_and_t
 
 def test_a_truncated_table_re_discovers_its_own_smaller_extent(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
-    doc["data_loaders"]["EGU_Emis"]["select"] = {"axes": [{"range": {"start": 0, "stop": 2}}]}
+    doc["data_sources"]["EGU_Emis"]["select"] = {"axes": [{"range": {"start": 0, "stop": 2}}]}
     prep = prepare(doc, providers=_providers(doc, tmp_path), pushdown_rewrite=True)
     assert float(_field(prep, "E_NOx")) == 107.0
     assert len(_field(prep, "is_NOx")) == 2, (
@@ -371,7 +371,7 @@ def test_the_selected_prefix_reaches_the_model_as_its_own_axis(doc_and_tmp):
 
 def test_an_unrecognised_axis_selector_is_refused_at_construction(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
-    doc["data_loaders"]["Grid"]["variables"]["src_W"]["select"] = {"axes": [{"prefix": 4}]}
+    doc["data_sources"]["Grid"]["variables"]["src_W"]["select"] = {"axes": [{"prefix": 4}]}
     with pytest.raises(Exception) as e:
         _providers(doc, tmp_path)
     assert "unrecognised axis selector keys" in str(e.value)
@@ -379,7 +379,7 @@ def test_an_unrecognised_axis_selector_is_refused_at_construction(doc_and_tmp):
 
 def test_a_range_bound_naming_an_unknown_metaparameter_is_refused(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
-    doc["data_loaders"]["Grid"]["variables"]["src_W"]["select"]["axes"][0]["range"]["stop"] = (
+    doc["data_sources"]["Grid"]["variables"]["src_W"]["select"]["axes"][0]["range"]["stop"] = (
         "N_NOPE"
     )
     with pytest.raises(ValueError) as e:

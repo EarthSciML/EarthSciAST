@@ -44,7 +44,7 @@
       "variables": {
         "annual": {
           "type": "parameter",
-          "units": "ton/yr",
+          "units": "kg/yr",
           "default": 0.0,
           "shape": [
             "stacks"
@@ -56,7 +56,7 @@
               "file_variable": "ANN_VALUE"
             }
           },
-          "description": "THE CONTROL: units match the raw column and no conversion is declared, so the delivered array must be the raw column, bit for bit."
+          "description": "THE CONTROL: units match the raw column and no conversion is declared, so the delivered array must be the raw column, bit for bit. Declared kg/yr, not the ton/yr an FF10 ANN_VALUE column carries in the field: `ton` is not in the esm-spec 4.8.1 closed unit registry (which has g, mg, ug, kg and no mass-ton entry at all), so the 0.x spelling did not resolve. It went unnoticed because units used to sit on the LOADER VARIABLE, which the unit checker never walked; from 1.0.0 they sit on the consuming parameter, which is an ordinary model variable and IS walked. The values here are synthetic and the property under test is bit-identity, so the label is incidental -- but a real emissions document cannot express tons/year today."
         },
         "stkhgt": {
           "type": "parameter",

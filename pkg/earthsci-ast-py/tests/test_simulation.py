@@ -9,6 +9,13 @@ This module tests the core simulation functionality including:
 - Event handling capabilities
 """
 
+# PRE-EXISTING, not part of the 1.0.0 port: this module annotates a default
+# argument `list[Parameter] | None`, which Python evaluates at def time. That is
+# a SyntaxError-free but runtime-fatal construct before 3.10, and pyproject
+# declares `requires-python = ">=3.9"`, so the module failed to import under the
+# floor it claims to support -- taking the whole suite's collection down with it.
+from __future__ import annotations
+
 import pytest
 import numpy as np
 from earthsci_ast.simulation import simulate, SimulationResult

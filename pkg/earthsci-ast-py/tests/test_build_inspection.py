@@ -114,7 +114,7 @@ def test_ragged_offsets_resolve_through_factor_scope() -> None:
 # Cell valences [2, 3] over 5 edges; edge weights w = [10, 20, 30, 40, 50].
 # gathered[i] = sum_{k<=nedges[i]} w[edges[i,k]] -> [10+20, 30+40+50] = [30, 120].
 _RAGGED_DOC = {
-    "esm": "0.8.0",
+    "esm": "1.0.0",
     "metadata": {
         "name": "ragged_csr_miniature",
         "description": "2-cell ragged CSR keyed-factor miniature.",
@@ -133,26 +133,30 @@ _RAGGED_DOC = {
     "models": {
         "Rag": {
             "variables": {
-                "u": {"type": "state", "units": "1", "shape": ["cells"], "default": 0.0},
-                "nedges": {
-                    "type": "observed",
-                    "shape": ["cells"],
-                    "expression": {"op": "const", "args": [], "value": [2, 3]},
+                "u": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 0.0},
+                # Observed unknowns: 1.0.0 declares them `unknown` and their
+                # bare-variable equations below are what make them observed.
+                "nedges": {"type": "unknown", "shape": ["cells"]},
+                "edges_on_cell": {"type": "unknown", "shape": ["cells", "maxe"]},
+                "w": {"type": "unknown", "shape": ["edges"]},
+                "gathered": {"type": "unknown", "shape": ["cells"]},
+            },
+            "equations": [
+                {
+                    "lhs": "nedges",
+                    "rhs": {"op": "const", "args": [], "value": [2, 3]},
                 },
-                "edges_on_cell": {
-                    "type": "observed",
-                    "shape": ["cells", "maxe"],
-                    "expression": {"op": "const", "args": [], "value": [[1, 2, 0], [3, 4, 5]]},
+                {
+                    "lhs": "edges_on_cell",
+                    "rhs": {"op": "const", "args": [], "value": [[1, 2, 0], [3, 4, 5]]},
                 },
-                "w": {
-                    "type": "observed",
-                    "shape": ["edges"],
-                    "expression": {"op": "const", "args": [], "value": [10, 20, 30, 40, 50]},
+                {
+                    "lhs": "w",
+                    "rhs": {"op": "const", "args": [], "value": [10, 20, 30, 40, 50]},
                 },
-                "gathered": {
-                    "type": "observed",
-                    "shape": ["cells"],
-                    "expression": {
+                {
+                    "lhs": "gathered",
+                    "rhs": {
                         "op": "aggregate",
                         "args": ["w", "edges_on_cell"],
                         "output_idx": ["i"],
@@ -166,8 +170,6 @@ _RAGGED_DOC = {
                         },
                     },
                 },
-            },
-            "equations": [
                 {
                     "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                     "rhs": {

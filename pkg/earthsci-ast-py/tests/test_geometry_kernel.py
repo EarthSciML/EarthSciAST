@@ -218,12 +218,17 @@ def test_planar_fixture_clip_and_area_evaluate() -> None:
     doc = load(str(fixture))
     model = doc.models["PolygonClipAreaPlanar"]
     ctx = _ctx_with_polys()
-    # index_sets is document-scoped (v0.8.0): read it from the top-level file.
+    # index_sets is document-scoped: read it from the top-level file.
     ctx.index_sets = doc.index_sets
 
-    closed = eval_expr(model.variables["clip"].expression, ctx)
+    # esm 1.0.0: an observed unknown's body is its DEFINING EQUATION's RHS, not
+    # a `variables[...].expression` field.
+    def body(name: str):
+        return next(eq.rhs for eq in model.equations if eq.lhs == name)
+
+    closed = eval_expr(body("clip"), ctx)
     ctx.derived_rings["clip"] = closed  # bind the observed `clip` to its ring
-    area = float(eval_expr(model.variables["area"].expression, ctx))
+    area = float(eval_expr(body("area"), ctx))
     assert math.isclose(area, 1.0, abs_tol=1e-12)
 
 
@@ -502,7 +507,8 @@ def test_tolerance_relative_band_scales_with_reference() -> None:
 def test_manifold_and_id_survive_typed_round_trip() -> None:
     fixture = _VALID_GEOM / "intersect_polygon_clip_area.esm"
     dumped = json.loads(save(load(str(fixture))))
-    clip = dumped["models"]["PolygonClipArea"]["variables"]["clip"]["expression"]
+    model = dumped["models"]["PolygonClipArea"]
+    clip = next(eq["rhs"] for eq in model["equations"] if eq.get("lhs") == "clip")
     assert clip["manifold"] == "spherical"
     assert clip["id"] == "overlap_clip"
     # idempotent: a second round-trip is byte-identical

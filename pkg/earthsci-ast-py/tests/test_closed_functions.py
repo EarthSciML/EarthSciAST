@@ -133,9 +133,10 @@ def test_closed_function_fixture(fixture_dir: Path):
     canonical = fixture_dir / "canonical.esm"
     expected = fixture_dir / "expected.json"
 
-    # Parser must accept the fixture (validates `fn`-op AST under v0.3.0 schema).
+    # Parser must accept the fixture (validates the `fn`-op AST under the
+    # current schema).
     file = load(canonical)
-    assert file.version == "0.3.0", f"expected v0.3.0 fixture, got {file.version}"
+    assert file.version == "1.0.0", f"expected a 1.0.0 fixture, got {file.version}"
 
     spec = json.loads(expected.read_text())
     fn_name = spec["function"]
@@ -226,7 +227,12 @@ def test_enums_lowered_to_const():
     assert file.enums["season"]["summer"] == 3
     assert file.enums["land_use_class"]["deciduous_forest"] == 3
 
-    expr = file.models["DryDep"].variables["r_c"].expression
+    # `r_c` is an OBSERVED unknown: 1.0.0 has no variable `expression` field, so
+    # its definition is the bare-variable-LHS equation naming it.
+    model = file.models["DryDep"]
+    defining = [eq for eq in model.equations if eq.lhs == "r_c"]
+    assert len(defining) == 1
+    expr = defining[0].rhs
     # `index` op with two enum-resolved arguments — both should now be `const` ints.
     assert expr.op == "index"
     assert expr.args[1].op == "const"

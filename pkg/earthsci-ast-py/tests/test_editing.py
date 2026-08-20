@@ -16,7 +16,7 @@ def _make_model() -> Model:
     return Model(
         name="m",
         variables={
-            "x": ModelVariable(type="state", units="m", default=1.0),
+            "x": ModelVariable(type="unknown", units="m", default=1.0),
             "k": ModelVariable(type="parameter", units="1/s", default=0.1),
         },
         equations=[Equation(lhs="x", rhs=ExprNode(op="*", args=["k", "x"]))],
@@ -41,7 +41,7 @@ def test_add_variable_duplicate_fails():
     model = _make_model()
     editor = ESMEditor(validate_after_edit=False)
 
-    result = editor.add_variable(model, "x", ModelVariable(type="state", units="m", default=0.0))
+    result = editor.add_variable(model, "x", ModelVariable(type="unknown", units="m", default=0.0))
 
     assert not result.success
     assert any("already exists" in e for e in result.errors)

@@ -6,7 +6,7 @@ import tempfile
 
 import pytest
 
-from earthsci_ast import DataLoader, load
+from earthsci_ast import DataSource, load
 from earthsci_ast.parse import (
     CircularReferenceError,
     SubsystemRefError,
@@ -19,11 +19,12 @@ def _write(path: str, payload: dict) -> None:
         json.dump(payload, f)
 
 
-# A minimal schema-valid pure-I/O data loader (RFC pure-io-data-loaders).
-_LOADER = {
+# A minimal schema-valid pure-I/O data source (RFC pure-io-data-loaders). In
+# esm 1.0.0 a source declares NO `variables` map: it is a pure IO declaration,
+# and the CONSUMING PARAMETER carries the file-variable binding and the units.
+_SOURCE = {
     "kind": "grid",
     "source": {"url_template": "file:///data/{date:%Y%m%d}.nc"},
-    "variables": {"emis": {"file_variable": "EMIS", "units": "kg/m^2/s"}},
 }
 
 
@@ -33,12 +34,12 @@ def test_load_resolves_local_subsystem_ref():
         _write(
             sub_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "inner"},
                 "models": {
                     "Inner": {
                         "variables": {
-                            "x": {"type": "state", "default": 1.0},
+                            "x": {"type": "unknown", "default": 1.0},
                         },
                         "equations": [],
                     },
@@ -50,7 +51,7 @@ def test_load_resolves_local_subsystem_ref():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Outer": {
@@ -68,7 +69,7 @@ def test_load_resolves_local_subsystem_ref():
         outer = loaded.models["Outer"]
         assert "Inner" in outer.subsystems
         inner = outer.subsystems["Inner"]
-        # After resolution we should have the typed model with x as a state var
+        # After resolution we should have the typed model with x as an unknown
         assert hasattr(inner, "variables")
         assert "x" in inner.variables
 
@@ -79,7 +80,7 @@ def test_load_raises_for_missing_local_ref():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Outer": {
@@ -104,7 +105,7 @@ def test_circular_reference_detection():
         _write(
             a_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "a"},
                 "models": {
                     "A": {
@@ -118,7 +119,7 @@ def test_circular_reference_detection():
         _write(
             b_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "b"},
                 "models": {
                     "B": {
@@ -134,7 +135,7 @@ def test_circular_reference_detection():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Root": {
@@ -151,40 +152,42 @@ def test_circular_reference_detection():
 
 
 def test_loader_only_file_loads_and_validates():
-    """A document whose sole top-level component is data_loaders is valid
+    """A document whose sole top-level component is data_sources is valid
     (RFC pure-io-data-loaders §4.4 / esm-spec §4.7)."""
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "loader_only.esm.json")
         _write(
             path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "loader_only"},
-                "data_loaders": {"Met": _LOADER},
+                "data_sources": {"Met": _SOURCE},
             },
         )
 
         loaded = load(path)
         assert loaded.models == {} or not loaded.models
-        assert "Met" in loaded.data_loaders
-        assert isinstance(loaded.data_loaders["Met"], DataLoader)
+        assert "Met" in loaded.data_sources
+        assert isinstance(loaded.data_sources["Met"], DataSource)
 
         # The structural validator must also accept a loader-only file.
         result = validate(loaded)
         assert result.is_valid, result.structural_errors
 
 
-def test_load_resolves_local_loader_ref():
-    """A subsystem ref to a single-loader file resolves to that loader,
-    named by the parent's subsystem key (RFC pure-io-data-loaders §4.4)."""
+def test_subsystem_ref_to_source_only_file_raises():
+    """esm 1.0.0 removed the loader subsystem mount: a data source is NOT a
+    component, so a subsystem ref must resolve to a MODEL. A source-only file
+    is no longer a valid subsystem target — a model reaches external data
+    through a parameter whose ``update`` names the source instead."""
     with tempfile.TemporaryDirectory() as tmp:
         sub_path = os.path.join(tmp, "loader.esm.json")
         _write(
             sub_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "loader"},
-                "data_loaders": {"GEOSFP": _LOADER},
+                "data_sources": {"GEOSFP": _SOURCE},
             },
         )
 
@@ -192,7 +195,7 @@ def test_load_resolves_local_loader_ref():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Regridder": {
@@ -204,51 +207,45 @@ def test_load_resolves_local_loader_ref():
             },
         )
 
-        loaded = load(main_path)
-        met = loaded.models["Regridder"].subsystems["Met"]
-        assert isinstance(met, DataLoader)
-        # Named by the parent subsystem key, not the referenced file's key.
-        assert met.name == "Met"
-        assert "emis" in met.variables
+        with pytest.raises(SubsystemRefError, match="does not contain a model"):
+            load(main_path)
 
 
-def test_load_inline_loader_subsystem():
-    """A data loader declared inline in a model's subsystems map parses as a
-    DataLoader (schema oneOf [Model, DataLoader, SubsystemRef])."""
+def test_inline_source_is_not_a_valid_subsystem():
+    """A data source declared inline in a model's subsystems map is rejected."""
+    from earthsci_ast.parse import SchemaValidationError
+
     with tempfile.TemporaryDirectory() as tmp:
         main_path = os.path.join(tmp, "main.esm.json")
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Regridder": {
                         "variables": {},
                         "equations": [],
-                        "subsystems": {"Met": _LOADER},
+                        "subsystems": {"Met": _SOURCE},
                     },
                 },
             },
         )
 
-        loaded = load(main_path)
-        met = loaded.models["Regridder"].subsystems["Met"]
-        assert isinstance(met, DataLoader)
-        assert met.name == "Met"
-        assert met.kind.value == "grid"
+        with pytest.raises(SchemaValidationError):
+            load(main_path)
 
 
 def test_load_raises_for_ref_without_model_or_loader():
-    """A referenced file with neither a model nor a data loader is an error."""
+    """A referenced file with no model is an error."""
     with tempfile.TemporaryDirectory() as tmp:
         sub_path = os.path.join(tmp, "empty.esm.json")
         # reaction_systems-only file: valid document, but not a valid Model
-        # subsystem target (the schema only admits Model/DataLoader/ref there).
+        # subsystem target (the schema only admits Model/DataSource/ref there).
         _write(
             sub_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "rs_only"},
                 "reaction_systems": {"Chem": {"species": {}, "reactions": []}},
             },
@@ -258,7 +255,7 @@ def test_load_raises_for_ref_without_model_or_loader():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Outer": {

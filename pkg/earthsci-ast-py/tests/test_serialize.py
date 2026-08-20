@@ -61,23 +61,23 @@ def test_serialize_expression_with_metadata():
 def test_save_minimal_esm():
     """Test saving a minimal ESM file."""
     metadata = Metadata(title="Test Model")
-    variable = ModelVariable(type="state", units="kg")
+    variable = ModelVariable(type="unknown", units="kg")
     equation = Equation(lhs="x", rhs=1)
     model = Model(name="test_model", variables={"x": variable}, equations=[equation])
 
-    esm_file = EsmFile(version="0.1.0", metadata=metadata, models={"test_model": model})
+    esm_file = EsmFile(version="1.0.0", metadata=metadata, models={"test_model": model})
 
     json_str = save(esm_file)
 
     # Parse back to verify
     data = json.loads(json_str)
-    assert data["esm"] == "0.1.0"
+    assert data["esm"] == "1.0.0"
     assert data["metadata"]["name"] == "Test Model"
     assert "test_model" in data["models"]
 
     model_data = data["models"]["test_model"]
     assert "x" in model_data["variables"]
-    assert model_data["variables"]["x"]["type"] == "state"
+    assert model_data["variables"]["x"]["type"] == "unknown"
     assert model_data["variables"]["x"]["units"] == "kg"
 
 
@@ -106,7 +106,7 @@ def test_save_reaction_system():
         reactions=[reaction],
     )
 
-    esm_file = EsmFile(version="0.1.0", metadata=metadata, reaction_systems={"test_reactions": rs})
+    esm_file = EsmFile(version="1.0.0", metadata=metadata, reaction_systems={"test_reactions": rs})
 
     json_str = save(esm_file)
 
@@ -138,7 +138,7 @@ def test_save_reaction_system():
 def test_save_to_file():
     """Test saving ESM file to disk."""
     metadata = Metadata(title="File Test")
-    esm_file = EsmFile(version="0.1.0", metadata=metadata)
+    esm_file = EsmFile(version="1.0.0", metadata=metadata)
 
     # Use temporary file
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as tmp_file:
@@ -158,7 +158,7 @@ def test_save_to_file():
 
         # Parse back from file to verify
         data = json.loads(file_content)
-        assert data["esm"] == "0.1.0"
+        assert data["esm"] == "1.0.0"
         assert data["metadata"]["name"] == "File Test"
 
     finally:

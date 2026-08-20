@@ -19,6 +19,7 @@ from earthsci_ast.expression import (
     symbolic_jacobian,
     SimulationError,
 )
+from earthsci_ast.classification import ode_states, observed_unknowns
 from earthsci_ast.numpy_interpreter import fold_constant_expr
 from earthsci_ast.esm_types import ExprNode, Model, ModelVariable, Equation
 
@@ -55,17 +56,21 @@ class TestBasicExpressionFunctions:
 
     def test_free_parameters(self):
         """Test free_parameters extracts only parameter variables."""
-        # Create a model with different variable types
+        # Both of the declared 1.0.0 variable types. `z` is an OBSERVED unknown
+        # — a property of the equation defining it (esm-spec §6.3.1), not of a
+        # declared type — and, like every unknown, is not a free parameter.
         model = Model(
             name="test_model",
             variables={
-                "x": ModelVariable(type="state"),
-                "y": ModelVariable(type="state"),
+                "x": ModelVariable(type="unknown"),
+                "y": ModelVariable(type="unknown"),
                 "k": ModelVariable(type="parameter"),
                 "alpha": ModelVariable(type="parameter"),
-                "z": ModelVariable(type="observed"),
+                "z": ModelVariable(type="unknown"),
             },
+            equations=[Equation(lhs="z", rhs=ExprNode(op="*", args=["alpha", "y"]))],
         )
+        assert observed_unknowns(model) == ["z"]
 
         # Test expression: k * x + alpha * y + z
         expr = ExprNode(
@@ -83,7 +88,7 @@ class TestBasicExpressionFunctions:
         """Test free_parameters with no parameters in expression."""
         model = Model(
             name="test_model",
-            variables={"x": ModelVariable(type="state"), "y": ModelVariable(type="observed")},
+            variables={"x": ModelVariable(type="unknown"), "y": ModelVariable(type="unknown")},
         )
 
         expr = ExprNode(op="+", args=["x", "y"])
@@ -279,8 +284,8 @@ class TestSymbolicJacobian:
         model = Model(
             name="linear_system",
             variables={
-                "x": ModelVariable(type="state"),
-                "y": ModelVariable(type="state"),
+                "x": ModelVariable(type="unknown"),
+                "y": ModelVariable(type="unknown"),
                 "a": ModelVariable(type="parameter"),
                 "b": ModelVariable(type="parameter"),
                 "c": ModelVariable(type="parameter"),
@@ -332,11 +337,18 @@ class TestSymbolicJacobian:
             symbolic_jacobian(model)
 
     def test_no_equations_error(self):
-        """Test error when model has no equations."""
+        """A model with unknowns but no equations has no ODE states.
+
+        From 1.0.0 ODE-state-ness is DERIVED from the equations (esm-spec
+        §6.3.1), so "states but no equations" is unreachable: no equations means
+        no `D(., t)` LHS means no states, and the no-states guard is the one that
+        fires. The declared `state` type this test used to lean on is gone.
+        """
         model = Model(
-            name="no_equations", variables={"x": ModelVariable(type="state")}, equations=[]
+            name="no_equations", variables={"x": ModelVariable(type="unknown")}, equations=[]
         )
-        with pytest.raises(ValueError, match="Model has no equations"):
+        assert ode_states(model) == []
+        with pytest.raises(ValueError, match="Model has no state variables"):
             symbolic_jacobian(model)
 
     def test_single_state_variable(self):
@@ -344,7 +356,7 @@ class TestSymbolicJacobian:
         # dx/dt = -kx
         model = Model(
             name="single_state",
-            variables={"x": ModelVariable(type="state"), "k": ModelVariable(type="parameter")},
+            variables={"x": ModelVariable(type="unknown"), "k": ModelVariable(type="parameter")},
             equations=[
                 Equation(
                     lhs=ExprNode(op="D", args=["x"], wrt="t"),
@@ -358,14 +370,20 @@ class TestSymbolicJacobian:
         assert "k" in str(jacobian[0, 0])
 
     def test_algebraic_equations(self):
-        """Test Jacobian with algebraic equations (non-differential)."""
-        # x = 2y (algebraic)
+        """Jacobian for a model mixing a non-differential equation with an ODE.
+
+        `x ~ 2y` gives `x` a bare-variable LHS, which in 1.0.0 makes it an
+        OBSERVED unknown rather than a state (esm-spec §6.3.1) — only `y` carries
+        a `D(., t)`. The Jacobian is over the ODE states, so it is 1x1 here; both
+        variables were declared `state` before 1.0.0, which is what made it 2x2.
+        """
+        # x = 2y (observed)
         # dy/dt = -ky (differential)
         model = Model(
             name="mixed_system",
             variables={
-                "x": ModelVariable(type="state"),
-                "y": ModelVariable(type="state"),
+                "x": ModelVariable(type="unknown"),
+                "y": ModelVariable(type="unknown"),
                 "k": ModelVariable(type="parameter"),
             },
             equations=[
@@ -377,8 +395,12 @@ class TestSymbolicJacobian:
             ],
         )
 
+        assert ode_states(model) == ["y"]
+        assert observed_unknowns(model) == ["x"]
+
         jacobian = symbolic_jacobian(model)
-        assert jacobian.shape == (2, 2)
+        assert jacobian.shape == (1, 1)
+        assert "k" in str(jacobian[0, 0])
 
 
 class TestErrorHandling:

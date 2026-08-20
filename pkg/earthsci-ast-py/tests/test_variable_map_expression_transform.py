@@ -41,23 +41,25 @@ TRANSFORM_AST = {
 
 def _doc() -> dict:
     """A minimal schema-valid two-model document coupled by an expression
-    ``variable_map``: Src.F (observed, const 4.0) feeds Sink.F_in through
-    ``2 * Src.F + Sink.offset``; Sink integrates d(u)/dt = F_in."""
+    ``variable_map``: Src.F (an observed unknown, const 4.0) feeds Sink.F_in
+    through ``2 * Src.F + Sink.offset``; Sink integrates d(u)/dt = F_in."""
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "vm_expression_transform"},
         "models": {
             "Src": {
                 "variables": {
-                    "F": {"type": "observed", "units": "1", "expression": 4.0},
+                    "F": {"type": "unknown", "units": "1"},
                 },
-                "equations": [],
+                # `F` is OBSERVED because this bare-variable-LHS equation defines
+                # it — 1.0.0 has no `observed` type and no variable `expression`.
+                "equations": [{"lhs": "F", "rhs": 4.0}],
             },
             "Sink": {
                 "variables": {
                     "offset": {"type": "parameter", "default": 1.5},
                     "F_in": {"type": "parameter", "units": "1"},
-                    "u": {"type": "state", "default": 0.0},
+                    "u": {"type": "unknown", "default": 0.0},
                 },
                 "equations": [
                     {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "F_in"},
@@ -85,14 +87,15 @@ def _transform_expr() -> ExprNode:
 def _esm_file(transform) -> EsmFile:
     src = Model(
         name="Src",
-        variables={"F": ModelVariable(type="observed", units="1", expression=4.0)},
+        variables={"F": ModelVariable(type="unknown", units="1")},
+        equations=[Equation(lhs="F", rhs=4.0)],
     )
     sink = Model(
         name="Sink",
         variables={
             "offset": ModelVariable(type="parameter", default=1.5),
             "F_in": ModelVariable(type="parameter", units="1"),
-            "u": ModelVariable(type="state", default=0.0),
+            "u": ModelVariable(type="unknown", default=0.0),
         },
         equations=[
             Equation(lhs=ExprNode(op="D", args=["u"], wrt="t"), rhs="F_in"),
@@ -104,7 +107,7 @@ def _esm_file(transform) -> EsmFile:
         transform=transform,
     )
     return EsmFile(
-        version="0.8.0",
+        version="1.0.0",
         metadata=Metadata(title="vm expression transform"),
         models={"Src": src, "Sink": sink},
         coupling=[vm],

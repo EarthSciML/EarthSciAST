@@ -8,6 +8,7 @@ per_instantiation_validation, flatten_registry_merge}.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 
@@ -50,6 +51,18 @@ def _isapply(x) -> bool:
     return isinstance(x, dict) and x.get("op") == "apply_expression_template"
 
 
+def _defining(doc: dict, model: str, var: str):
+    """The RHS of the bare-variable-LHS equation defining ``var``.
+
+    esm 1.0.0 removed the variable ``expression`` field: an observed unknown is
+    defined by an equation, so a template call site that used to sit on
+    ``variables[v]["expression"]`` now sits on that equation's ``rhs``.
+    """
+    eqs = [e for e in doc["models"][model]["equations"] if e.get("lhs") == var]
+    assert len(eqs) == 1, f"expected exactly one defining equation for {var!r}"
+    return eqs[0]["rhs"]
+
+
 # ---------------------------------------------------------------------------
 # BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): expand_document(load(fixture))
 # is structurally equal to the existing expanded*.esm oracle. The 17 raw-pipeline
@@ -78,11 +91,22 @@ _BRIDGE_CASES = [
 
 
 def _core(d: dict) -> dict:
-    return {
-        k: d[k]
+    core = {
+        k: copy.deepcopy(d[k])
         for k in ("models", "reaction_systems", "coupling", "index_sets")
         if k in d
     }
+    # An observed unknown's defining expression lives on an EQUATION from esm
+    # 1.0.0, and which equation defines what is a property of the equation SET,
+    # not of traversal order — the expansion appends its lowered definitions in
+    # its own order, the golden lists them in the author's. Canonicalize the
+    # order so the comparison stays a structural one.
+    for section in ("models", "reaction_systems"):
+        for comp in (core.get(section) or {}).values():
+            eqs = comp.get("equations")
+            if isinstance(eqs, list):
+                comp["equations"] = sorted(eqs, key=lambda e: json.dumps(e, sort_keys=True))
+    return core
 
 
 @pytest.mark.parametrize("dir_,fix,gold", _BRIDGE_CASES)
@@ -112,7 +136,7 @@ def test_emit_materialized_registry():
     assert s == open(_conf("emit_materialized_registry", "emitted.esm"), encoding="utf-8").read()
     doc = json.loads(s)
     adv = doc["models"]["Advection"]
-    assert doc["esm"] == "0.9.0"  # rule 8 version stamp
+    assert doc["esm"] == "1.0.0"  # rule 8 version stamp
     assert "expression_template_imports" not in adv  # imports consumed
     reg = adv["expression_templates"]
     assert set(reg.keys()) == {"central_D_lon_interior", "dlon_deg"}  # match-less only
@@ -142,14 +166,13 @@ def test_emit_rename_dotted_keys():
 # ---------------------------------------------------------------------------
 def test_eager_target_bearing():
     loaded = _load("eager_target_bearing")
-    vars_ = loaded["models"]["m"]["variables"]
     # POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
     # lowered by the `central` rule → an aggregate. No surviving ref.
-    deager = vars_["d_eager"]["expression"]
+    deager = _defining(loaded, "m", "d_eager")
     assert deager["op"] == "index"
     assert deager["args"][0]["op"] == "aggregate"
     # NEGATIVE: scale_c (target-free) reference SURVIVES.
-    dsurv = vars_["d_survive"]["expression"]
+    dsurv = _defining(loaded, "m", "d_survive")
     assert _isapply(dsurv["args"][0]) and dsurv["args"][0]["name"] == "scale_c"
     # Emit golden.
     assert _emit("eager_target_bearing") == open(
@@ -163,7 +186,7 @@ def test_eager_target_bearing():
 # ---------------------------------------------------------------------------
 def test_opacity_negative():
     loaded = _load("opacity_negative")
-    flux = loaded["models"]["m"]["variables"]["flux"]["expression"]
+    flux = _defining(loaded, "m", "flux")
     assert flux["op"] == "D"  # compound did NOT fire (no marker 999)
     assert _isapply(flux["args"][0])  # its arg is the surviving reference
     assert flux["args"][0]["name"] == "flux_prod"
@@ -179,7 +202,7 @@ def test_opacity_negative():
 # ---------------------------------------------------------------------------
 def test_opacity_priority_shadowing():
     loaded = _load("opacity_priority_shadowing")
-    flux = loaded["models"]["m"]["variables"]["flux"]["expression"]
+    flux = _defining(loaded, "m", "flux")
     assert flux["op"] == "*"
     assert flux["args"][0] == 1  # generic marker (NOT compound 999)
     assert _isapply(flux["args"][1])  # reference bound WHOLE by metavariable f
@@ -197,8 +220,15 @@ def test_per_instantiation_validation():
     with pytest.raises(ExpressionTemplateError) as ei:
         _load("per_instantiation_validation")
     assert ei.value.code == "geometry_manifold_invalid"
-    assert "area_bad" in str(ei.value)  # offending call site named
-    assert "overlap" in str(ei.value)  # template name named
+    msg = str(ei.value)
+    # The offending call site is identified by its PATH. esm 1.0.0 moved an
+    # observed unknown's defining expression onto an equation, so the bad site
+    # is the SECOND equation's rhs (the one defining `area_bad`) rather than a
+    # `variables.area_bad.expression` path — and the admissible sibling
+    # (`area_ok`, equation 0) is NOT the one reported.
+    assert "models.m.equations/1/rhs" in msg
+    assert "equations/0" not in msg
+    assert "overlap" in msg  # template name named
 
 
 # ---------------------------------------------------------------------------
@@ -210,10 +240,10 @@ def test_flatten_registry_merge():
     assert set(merged.keys()) == {"sten", "A.s", "B.s"}  # dedup + rename
     assert merged["sten"]["body"] == {"op": "*", "args": [2, "f"]}
     # references rewritten in lockstep
-    assert root["models"]["A"]["variables"]["za"]["expression"]["name"] == "A.s"
-    assert root["models"]["B"]["variables"]["zb"]["expression"]["name"] == "B.s"
-    assert root["models"]["A"]["variables"]["ya"]["expression"]["name"] == "sten"
-    assert root["models"]["B"]["variables"]["yb"]["expression"]["name"] == "sten"
+    assert _defining(root, "A", "za")["name"] == "A.s"
+    assert _defining(root, "B", "zb")["name"] == "B.s"
+    assert _defining(root, "A", "ya")["name"] == "sten"
+    assert _defining(root, "B", "yb")["name"] == "sten"
     # per-component blocks surrendered to the merged registry
     assert "expression_templates" not in root["models"]["A"]
     assert "expression_templates" not in root["models"]["B"]

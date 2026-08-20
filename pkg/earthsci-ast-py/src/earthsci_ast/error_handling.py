@@ -91,6 +91,10 @@ class ErrorCode(Enum):
     # esm 1.0.0. A data source is not a component, so `update.source` is the only
     # way a document can name one -- and it MUST resolve.
     DATA_SOURCE_UNDEFINED = "data_source_undefined"
+    # A declared `system_kind` that contradicts the §6.3.1 derivation. The field
+    # is optional and the derivation authoritative, so disagreement is always an
+    # author error, never an override.
+    SYSTEM_KIND_MISMATCH = "system_kind_mismatch"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string

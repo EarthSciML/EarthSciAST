@@ -89,7 +89,10 @@ def flattened_model(doc: dict, flat) -> dict:
     variables = {}
     for table in (flat.state_variables, flat.parameters, flat.observed_variables):
         for name, var in table.items():
-            entry: dict = {"type": "parameter" if var.type == "parameter" else "state"}
+            # esm 1.0.0 declares exactly two types. `FlattenedVariable.type`
+            # is the DERIVED role ("state" / "observed" / "parameter"), so
+            # everything that is not a parameter rebuilds as an `unknown`.
+            entry: dict = {"type": "parameter" if var.type == "parameter" else "unknown"}
             if var.shape:
                 entry["shape"] = list(var.shape)
             variables[name] = entry

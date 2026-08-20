@@ -74,9 +74,24 @@ def _makearray(regions, value) -> dict:
 
 
 def _doc(variables: dict, equations: list, index_sets: dict | None = None) -> str:
+    """Build a one-model document.
+
+    A variable entry may carry the helper-only key ``defined_by``. esm 1.0.0
+    declares only ``unknown`` and ``parameter``: an *observed* unknown is one
+    whose defining equation has a bare-variable LHS, so ``_doc`` lifts
+    ``defined_by`` off the variable and appends ``{"lhs": name, "rhs": expr}``
+    to the model's ``equations``. Nothing about the variable DECLARATION says
+    "observed" any more — the equation set does.
+    """
+    variables = {k: dict(v) for k, v in variables.items()}
+    equations = list(equations)
+    for name, var in variables.items():
+        expr = var.pop("defined_by", None)
+        if expr is not None:
+            equations.append({"lhs": name, "rhs": expr})
     return json.dumps(
         {
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "AlignmentFixture"},
             "index_sets": dict(index_sets or GRID),
             "models": {"M": {"variables": variables, "equations": equations}},
@@ -166,12 +181,12 @@ def test_broadcast_end_to_end_matches_the_bare_operator() -> None:
     ``broadcast(fn="-")`` it returned ``exp(-0.3) = 0.741`` — the sign dropped.
     """
     variables = {
-        "dp": {"type": "state", "shape": ["lon", "lat", "lev"], "default": 1.0},
+        "dp": {"type": "unknown", "shape": ["lon", "lat", "lev"], "default": 1.0},
         "a": {"type": "parameter", "default": -0.3},
         "div_h": {
-            "type": "observed",
+            "type": "unknown",
             "shape": ["lon", "lat", "lev"],
-            "expression": {"op": "*", "args": ["a", "dp"]},
+            "defined_by": {"op": "*", "args": ["a", "dp"]},
         },
     }
 
@@ -195,11 +210,11 @@ def test_broadcast_end_to_end_matches_the_bare_operator() -> None:
 def _broadcast_doc(node: dict) -> str:
     return _doc(
         {
-            "dp": {"type": "state", "shape": ["lon", "lat", "lev"], "default": 1.0},
+            "dp": {"type": "unknown", "shape": ["lon", "lat", "lev"], "default": 1.0},
             "q": {
-                "type": "observed",
+                "type": "unknown",
                 "shape": ["lon", "lat", "lev"],
-                "expression": {"op": "*", "args": [2.0, "dp"]},
+                "defined_by": {"op": "*", "args": [2.0, "dp"]},
             },
         },
         [{"lhs": {"op": "D", "args": ["dp"], "wrt": "t"}, "rhs": node}],
@@ -365,22 +380,22 @@ def test_neg_renders_exactly_like_unary_minus() -> None:
 # ===========================================================================
 
 _ONES3 = {
-    "type": "observed",
+    "type": "unknown",
     "shape": ["lon", "lat", "lev"],
-    "expression": _makearray([[1, 3], [1, 2], [1, 2]], 1.0),
+    "defined_by": _makearray([[1, 3], [1, 2], [1, 2]], 1.0),
 }
 #: w1 over `lat` only: [10, 20].
-_W1 = {"type": "observed", "shape": ["lat"], "expression": _makearray([[1, 2]], [10.0, 20.0])}
+_W1 = {"type": "unknown", "shape": ["lat"], "defined_by": _makearray([[1, 2]], [10.0, 20.0])}
 #: w2 over `[lon, lat]`.
 _W2 = {
-    "type": "observed",
+    "type": "unknown",
     "shape": ["lon", "lat"],
-    "expression": _makearray([[1, 3], [1, 2]], [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
+    "defined_by": _makearray([[1, 3], [1, 2]], [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
 }
 #: z1 over `lev` only.
-_Z1 = {"type": "observed", "shape": ["lev"], "expression": _makearray([[1, 2]], [100.0, 200.0])}
+_Z1 = {"type": "unknown", "shape": ["lev"], "defined_by": _makearray([[1, 2]], [100.0, 200.0])}
 
-_STATE3 = {"type": "state", "shape": ["lon", "lat", "lev"], "default": 0.0}
+_STATE3 = {"type": "unknown", "shape": ["lon", "lat", "lev"], "default": 0.0}
 
 
 def _bare_eq(rhs):
@@ -495,11 +510,11 @@ def test_equal_rank_name_permuted_operand_transposes_not_reinterprets() -> None:
     # wt[lat][lon] = 10*lat + lon, so wt is asymmetric and a transpose shows up.
     wt_values = [[10 * a + b for b in (1, 2, 3)] for a in (1, 2, 3)]
     variables = {
-        "dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0},
+        "dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0},
         "wt": {
-            "type": "observed",
+            "type": "unknown",
             "shape": ["lat", "lon"],
-            "expression": _makearray([[1, 3], [1, 3]], wt_values),
+            "defined_by": _makearray([[1, 3], [1, 3]], wt_values),
         },
     }
     bare = _run(_doc(variables, _bare_eq("wt"), square), (3, 3))
@@ -543,9 +558,9 @@ def test_observed_expression_is_aligned_too() -> None:
         "w1": _W1,
         "ones3": _ONES3,
         "q": {
-            "type": "observed",
+            "type": "unknown",
             "shape": ["lon", "lat", "lev"],
-            "expression": {"op": "*", "args": ["w1", "ones3"]},
+            "defined_by": {"op": "*", "args": ["w1", "ones3"]},
         },
     }
     bare = _run(_doc(variables, _bare_eq("q")), (3, 2, 2))
@@ -562,7 +577,7 @@ def test_operand_with_an_index_set_absent_from_the_result_is_rejected() -> None:
     size error it used to be (and not a warning).
     """
     doc = _doc(
-        {"dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
+        {"dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
         _bare_eq("z1"),
     )
     report = validate(doc)
@@ -582,7 +597,7 @@ def test_the_emitted_record_matches_the_shared_fixture_contract() -> None:
     surfacing as a cross-language diff.
     """
     doc = _doc(
-        {"dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
+        {"dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
         _bare_eq({"op": "*", "args": ["dp", "z1"]}),
     )
     records = [e for e in validate(doc).structural_errors if e.code == "array_shape_mismatch"]
@@ -617,7 +632,7 @@ def test_the_broadcast_spelling_is_governed_by_the_same_rule() -> None:
     sentence has to change with it.
     """
     variables = {
-        "dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0},
+        "dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0},
         "z1": _Z1,
         "w2": _W2,
     }
@@ -649,7 +664,7 @@ def test_power_aliases_are_all_elementwise(op: str) -> None:
     of the same scope question as ``broadcast`` above.
     """
     doc = _doc(
-        {"dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
+        {"dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
         _bare_eq({"op": op, "args": ["z1", 2.0]}),
     )
     assert "array_shape_mismatch" in _codes(doc)
@@ -659,7 +674,7 @@ def test_unalignable_operand_is_rejected_inside_a_compound_expression() -> None:
     """The check follows the element-wise layer, not just the root."""
     doc = _doc(
         {
-            "dp": {"type": "state", "shape": ["lon", "lat"], "default": 0.0},
+            "dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0},
             "z1": _Z1,
             "w2": _W2,
         },

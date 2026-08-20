@@ -79,7 +79,7 @@ def test_roundtrip_preserves_distinct_and_key():
 
 def test_roundtrip_preserves_constraint_equations():
     doc = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "constraint_equations round-trip"},
         "reaction_systems": {
             "rs": {

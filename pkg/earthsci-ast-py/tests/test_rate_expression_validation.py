@@ -40,7 +40,7 @@ class TestRateExpressionValidation:
         )
 
         return EsmFile(
-            version="1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test", description="Rate expression validation test"),
             models={},
             reaction_systems={"test_system": rs},
@@ -194,7 +194,7 @@ class TestRateExpressionValidation:
         )
 
         esm_file = EsmFile(
-            version="1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test", description="Multiple reactions test"),
             models={},
             reaction_systems={"test_system": rs},

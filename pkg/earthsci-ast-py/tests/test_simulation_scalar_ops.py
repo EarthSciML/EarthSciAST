@@ -226,7 +226,7 @@ class TestEndToEndSimulation:
             name="ClampDecay",
             variables={
                 "x": ModelVariable(
-                    type="state",
+                    type="unknown",
                     default=2.0,
                 ),
             },
@@ -237,7 +237,7 @@ class TestEndToEndSimulation:
                 ),
             ],
         )
-        esm = EsmFile(version="0.4.0", metadata=Metadata(title="t"), models={"ClampDecay": model})
+        esm = EsmFile(version="1.0.0", metadata=Metadata(title="t"), models={"ClampDecay": model})
 
         result = simulate(esm, tspan=(0.0, 1.0))
         # Final value: x(1) = 2 * e^{-1} ≈ 0.7357...
@@ -260,13 +260,13 @@ class TestEndToEndSimulation:
         model = Model(
             name="MinClamp",
             variables={
-                "x": ModelVariable(type="state", default=2.0),
+                "x": ModelVariable(type="unknown", default=2.0),
             },
             equations=[
                 Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs=rhs),
             ],
         )
-        esm = EsmFile(version="0.4.0", metadata=Metadata(title="t"), models={"MinClamp": model})
+        esm = EsmFile(version="1.0.0", metadata=Metadata(title="t"), models={"MinClamp": model})
 
         result = simulate(esm, tspan=(0.0, 1.0))
         x_idx = next(i for i, v in enumerate(result.vars) if v.endswith(".x"))
@@ -291,13 +291,13 @@ class TestEndToEndSimulation:
         model = Model(
             name="PowDecay",
             variables={
-                "x": ModelVariable(type="state", default=1.0),
+                "x": ModelVariable(type="unknown", default=1.0),
             },
             equations=[
                 Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs=rhs),
             ],
         )
-        esm = EsmFile(version="0.4.0", metadata=Metadata(title="t"), models={"PowDecay": model})
+        esm = EsmFile(version="1.0.0", metadata=Metadata(title="t"), models={"PowDecay": model})
 
         result = simulate(esm, tspan=(0.0, 1.0))
         x_idx = next(i for i, v in enumerate(result.vars) if v.endswith(".x"))

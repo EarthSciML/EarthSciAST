@@ -145,7 +145,7 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
 
     This function implements comprehensive validation including:
     1. Equation-unknown balance
-    2. Reference integrity (variable refs, scoped refs, discrete_parameters, coupling refs, operator refs)
+    2. Reference integrity (variable refs, scoped refs, event affects, coupling refs, operator refs)
     3. Reaction consistency (species declared, positive stoichiometries, no null-null, rate refs)
     4. Event consistency (condition types, affect vars, functional affect refs)
 
@@ -438,10 +438,15 @@ def _validate_equation_balance_enhanced(
         if is_coupled or _is_operator_style(model):
             continue
 
-        # DECLARATION order, not sorted: the cross-binding contract in
-        # tests/invalid/expected_errors.json pins `unknowns` as the order the
-        # document declares them in, which Python's dict preserves for free.
-        unknown_names = [name for name, var in model.variables.items() if var.type == "unknown"]
+        # SORTED, not declaration order (CONFORMANCE_SPEC §7.1.0). Python's dict
+        # preserves the author's order for free, which made declaration order the
+        # tempting default -- but Go decodes `variables` into a map and Rust into
+        # a HashMap, so two of the five bindings cannot produce it at all. The
+        # diagnostic's job is to NAME the offending unknowns, not to reproduce
+        # the order they were written in.
+        unknown_names = sorted(
+            name for name, var in model.variables.items() if var.type == "unknown"
+        )
         num_unknowns = len(unknown_names)
 
         # Count governing equations only — `ic` equations pin initial conditions,
@@ -458,6 +463,7 @@ def _validate_equation_balance_enhanced(
         # its own to point at, so it is reported alongside the genuinely
         # undefined ones only when the counts already disagree.
         defined = set(ode_states(model)) | set(observed_unknowns(model))
+        # `unknown_names` is already sorted, so this inherits the §7.1.0 order.
         missing = [name for name in unknown_names if name not in defined]
 
         details: dict[str, Any] = {
@@ -519,7 +525,7 @@ def _validate_stoich(
                         "species": species_name,
                         "reaction_id": reaction_id,
                         "reaction_system": rs_name,
-                        "available_species": list(species_names),
+                        "available_species": sorted(species_names),  # §7.1.0
                     },
                 )
             )
@@ -712,7 +718,7 @@ def _validate_rate_expression(
                     details={
                         "parameter": rate_expr,
                         "reaction_system": reaction_system_name,
-                        "available_parameters": list(param_names),
+                        "available_parameters": sorted(param_names),  # §7.1.0
                     },
                 )
             )
@@ -747,8 +753,8 @@ def _validate_rate_expression(
                             details={
                                 "variable": var,
                                 "reaction_system": reaction_system_name,
-                                "available_parameters": list(param_names),
-                                "available_species": list(species_names),
+                                "available_parameters": sorted(param_names),  # §7.1.0
+                                "available_species": sorted(species_names),  # §7.1.0
                                 "rate_expression": str(rate_expr),
                             },
                         )

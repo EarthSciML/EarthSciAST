@@ -102,7 +102,14 @@ __all__ = [
 #: a non-``t`` ``wrt`` is the other spelling; both are recognized because neither
 #: is canonical — the sugar ops are open-tier rewrite targets that lower to ``D``
 #: only once a discretization rule fires.
-SPATIAL_DERIVATIVE_OPS = frozenset({"grad", "div", "laplacian", "curl"})
+#:
+#: esm-spec §6.3.1 names EXACTLY these three. ``curl`` is spatial sugar too by
+#: §4.2, but §6.3.1 omits it, and this set is a cross-binding contract: adding a
+#: fourth op here would classify a curl-only model ``pde`` where every other
+#: binding says otherwise. Matching the spec exactly is what keeps the five
+#: bindings' answers identical; the omission is a question for the spec, not
+#: something to paper over locally.
+SPATIAL_DERIVATIVE_OPS = frozenset({"grad", "div", "laplacian"})
 
 #: The closed set of derived system kinds (esm-spec §6.3).
 SYSTEM_KINDS = ("ode", "nonlinear", "sde", "pde")

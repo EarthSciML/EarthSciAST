@@ -36,6 +36,48 @@ INVALID_DIR = str(conftest.INVALID_DIR / "template_imports")
 VALID_DIR = str(conftest.VALID_DIR)
 
 
+def _defining(doc: dict, model: str, var: str):
+    """The RHS of the bare-variable-LHS equation defining ``var``, raw-dict form.
+
+    esm 1.0.0 removed the variable ``expression`` field: an observed unknown is
+    defined by an EQUATION, so a template call site that used to sit on
+    ``variables[v]["expression"]`` now sits on that equation's ``rhs``.
+    """
+    eqs = [e for e in doc["models"][model]["equations"] if e.get("lhs") == var]
+    assert len(eqs) == 1, f"expected exactly one defining equation for {var!r}"
+    return eqs[0]["rhs"]
+
+
+def _defining_typed(model, var: str):
+    """The RHS of the equation defining ``var`` on a parsed ``Model``."""
+    eqs = [e for e in model.equations if e.lhs == var]
+    assert len(eqs) == 1, f"expected exactly one defining equation for {var!r}"
+    return eqs[0].rhs
+
+
+def _canonical_equation_order(node):
+    """Sort every ``equations`` list in a document, recursively.
+
+    From esm 1.0.0 an observed unknown's defining expression is an EQUATION, so
+    a document's equation list gained one entry per observed variable — and
+    which equation defines what is a property of the equation SET, not of
+    traversal order. The resolver appends its folded definitions in its own
+    order while the Julia-generated golden lists them in the author's, so the
+    comparison is canonicalized here rather than pinned to one traversal.
+    """
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            v = _canonical_equation_order(v)
+            if k == "equations" and isinstance(v, list):
+                v = sorted(v, key=lambda e: json.dumps(e, sort_keys=True))
+            out[k] = v
+        return out
+    if isinstance(node, list):
+        return [_canonical_equation_order(v) for v in node]
+    return node
+
+
 def _read_json(path: str) -> dict:
     with open(path) as fh:
         return json.load(fh)
@@ -89,8 +131,8 @@ def _err_code(fn) -> str | None:
 def test_import_conformance_matches_golden(group, fixture, golden):
     """The raw pipeline (resolve → lower) must match the Julia-generated
     golden structurally, for the whole document."""
-    got = _expand_raw(os.path.join(CONF, group, fixture))
-    want = _read_json(os.path.join(CONF, group, golden))
+    got = _canonical_equation_order(_expand_raw(os.path.join(CONF, group, fixture)))
+    want = _canonical_equation_order(_read_json(os.path.join(CONF, group, golden)))
     assert got == want
 
 
@@ -114,11 +156,11 @@ def test_effective_order_pins_tie_break_and_priority_flips_it():
     """Winner sanity, independent of the goldens: earlier import wins the
     equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x)."""
     d1 = _expand_raw(os.path.join(CONF, "import_order_determinism", "fixture_import_order.esm"))
-    assert d1["models"]["M"]["variables"]["y"]["expression"]["args"][0] == 2
+    assert _defining(d1, "M", "y")["args"][0] == 2
     d2 = _expand_raw(
         os.path.join(CONF, "import_order_determinism", "fixture_priority_override.esm")
     )
-    assert d2["models"]["M"]["variables"]["y"]["expression"]["args"][0] == 5
+    assert _defining(d2, "M", "y")["args"][0] == 5
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +199,7 @@ def test_valid_suite_library_file_loads_clean():
 def test_valid_suite_minimal_consumer():
     m = load(os.path.join(VALID_DIR, "template_import_minimal.esm"))
     assert m.index_sets["cells"]["size"] == 8  # §9.7.5 merge into consumer
-    y = m.models["M"].variables["y"].expression
+    y = _defining_typed(m.models["M"], "y")
     assert y.op == "*"
     assert y.args == ["x", 8]
 
@@ -175,18 +217,20 @@ def test_metaparameter_resolutions_subsystem_bindings(wrapper, golden, n):
     f = load(os.path.join(CONF, "metaparameter_resolutions", wrapper))
     sub = f.models["Sweep"].subsystems["Problem"]
     # Expression position: bare "N" substituted as an integer literal.
-    assert sub.variables["npts"].expression == n
+    assert _defining_typed(sub, "npts") == n
     # Expression-position division stays an AST division (no folding).
-    half = sub.variables["half"].expression
+    half = _defining_typed(sub, "half")
     assert half.op == "/"
     assert half.args == [n, 2]
     # Structural site: the aggregate dense range folded exactly.
-    ramp = sub.variables["ramp"].expression
+    ramp = _defining_typed(sub, "ramp")
     assert ramp.op == "aggregate"
     assert ramp.ranges == {"i": [1, n // 2]}
     # Typed round-trip matches the golden, fully structurally.
-    got = _serialize_esm_file(f)
-    want = _read_json(os.path.join(CONF, "metaparameter_resolutions", golden))
+    got = _canonical_equation_order(_serialize_esm_file(f))
+    want = _canonical_equation_order(
+        _read_json(os.path.join(CONF, "metaparameter_resolutions", golden))
+    )
     assert got == want
 
 
@@ -194,10 +238,10 @@ def test_loader_api_bindings_and_defaults():
     """§9.7.6 binding sites 4 (loader API) and 5 (defaults, last)."""
     problem = os.path.join(CONF, "metaparameter_resolutions", "problem.esm")
     fdef = load(problem)
-    assert fdef.models["Problem"].variables["npts"].expression == 2  # default
+    assert _defining_typed(fdef.models["Problem"], "npts") == 2  # default
     fapi = load(problem, metaparameters={"N": 6})
-    assert fapi.models["Problem"].variables["npts"].expression == 6  # API > default
-    assert fapi.models["Problem"].variables["ramp"].expression.ranges == {"i": [1, 3]}
+    assert _defining_typed(fapi.models["Problem"], "npts") == 6  # API > default
+    assert _defining_typed(fapi.models["Problem"], "ramp").ranges == {"i": [1, 3]}
     # Binding a name the document does not declare is an error.
     assert (
         _err_code(lambda: load(problem, metaparameters={"Q": 1})) == "template_import_unknown_name"
@@ -223,8 +267,8 @@ def test_import_where_rename_carries_where_shape():
     with the index set, so each rule registers and fires ONLY on its own field.
     Without the rewrite this raised template_constraint_unknown_index_set."""
     d = _expand_raw(os.path.join(CONF, "import_where_rename_two_instances", "fixture.esm"))
-    va = d["models"]["TwoGrids"]["variables"]["div_A"]["expression"]
-    vb = d["models"]["TwoGrids"]["variables"]["div_B"]["expression"]
+    va = _defining(d, "TwoGrids", "div_A")
+    vb = _defining(d, "TwoGrids", "div_B")
     assert va["op"] == "*" and vb["op"] == "*"  # both div nodes lowered
     assert va["args"][0]["op"] == "/" and va["args"][0]["args"][1] == 16
     assert vb["args"][0]["op"] == "/" and vb["args"][0]["args"][1] == 8
@@ -254,8 +298,24 @@ def _invalid_fixture_names():
     return sorted(f for f in os.listdir(INVALID_DIR) if f.endswith(".esm"))
 
 
+# ---------------------------------------------------------------------------
+# Invalid fixtures in the SHARED corpus whose declared defect the esm 1.0.0
+# conversion erased. The corpus is owned by a different work-stream, so this
+# package cannot repair them; each is NAMED (never glob-matched) and carries the
+# exact defect and its repair, so the list cannot silently absorb an unrelated
+# regression. Delete an entry the moment its fixture is repaired upstream.
+#
+# Currently empty: `import_version_too_old.esm` was the sole entry, and it has
+# been resolved upstream by RETIRING the diagnostic rather than restoring the
+# fixture -- see `test_invalid_fixture_set_covers_the_reachable_code_table`.
+# ---------------------------------------------------------------------------
+_CORPUS_DEFECTS: dict[str, str] = {}
+
+
 @pytest.mark.parametrize("fname", _invalid_fixture_names())
 def test_invalid_template_import_fixture(fname):
+    if fname in _CORPUS_DEFECTS:
+        pytest.xfail(f"{fname}: {_CORPUS_DEFECTS[fname]}")
     expected = _read_json(str(conftest.INVALID_DIR / "expected_errors.json"))
     entry = expected[fname]
     assert entry["resolver_only"] is True
@@ -265,14 +325,21 @@ def test_invalid_template_import_fixture(fname):
     assert excinfo.value.code == want
 
 
-def test_invalid_fixture_set_covers_all_12_codes():
-    """The fixture set exercises the full §9.6.6 §9.7 code table (the 12th,
-    template_import_unresolved, is exercised by the unit tests below — a
-    missing file is not representable as a fixture)."""
+def test_invalid_fixture_set_covers_the_reachable_code_table():
+    """The fixture set exercises every REACHABLE §9.6.6 / §9.7 code.
+
+    Two codes are deliberately absent. `template_import_unresolved` is exercised
+    by the unit tests below — a missing file is not representable as a fixture.
+    `template_import_version_too_old` is RETIRED as unreachable: it gated files
+    declaring an esm version older than `expression_template_imports`, and from
+    1.0.0 such a file is rejected by the major-version gate in `load` long before
+    the template resolver sees it, so no document can reach the code. Its fixture
+    was deleted upstream. The gate FUNCTION is still covered directly, below, as
+    defence in depth.
+    """
     expected = _read_json(str(conftest.INVALID_DIR / "expected_errors.json"))
     seen = {expected[f]["resolver_error_code"] for f in _invalid_fixture_names()}
     for code in [
-        "template_import_version_too_old",
         "template_import_not_library",
         "subsystem_ref_is_template_library",
         "template_import_cycle",
@@ -301,11 +368,11 @@ def test_invalid_fixture_set_covers_all_12_codes():
 def _model_json(extra_model_fields: str = "", top_fields: str = "") -> str:
     return f"""
     {{
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": {{"name": "t"}},{top_fields}
       "models": {{
         "M": {{{extra_model_fields}
-          "variables": {{"x": {{"type": "state", "units": "1", "default": 0.5}}}},
+          "variables": {{"x": {{"type": "unknown", "units": "1", "default": 0.5}}}},
           "equations": [{{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}},
                          "rhs": {{"op": "-", "args": ["x"]}}}}]
         }}
@@ -327,7 +394,7 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
     (tmp_path / "lib.esm").write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "lib"},
                 "expression_templates": {
                     "t_inner": {"params": [], "body": 7},
@@ -395,7 +462,7 @@ def test_diamond_with_conflicting_edge_bindings_rejected(tmp_path):
     (tmp_path / "grid.esm").write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "grid"},
                 "metaparameters": {"NC": {"type": "integer"}},
                 "index_sets": {"cells": {"kind": "interval", "size": "NC"}},
@@ -431,7 +498,7 @@ def test_edge_bindings_unknown_names_and_non_integers(tmp_path):
     (tmp_path / "lib.esm").write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "lib"},
                 "metaparameters": {"N": {"type": "integer", "default": 8}},
                 "expression_templates": {"n": {"params": [], "body": "N"}},
@@ -467,7 +534,7 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
     p.write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "fold"},
                 "metaparameters": {"N": {"type": "integer", "default": 6}},
                 "index_sets": {
@@ -476,11 +543,20 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
                 "models": {
                     "M": {
                         "variables": {
-                            "x": {"type": "state", "units": "1", "default": 0.5},
-                            "agg": {
-                                "type": "observed",
-                                "units": "1",
-                                "expression": {
+                            "x": {"type": "unknown", "units": "1", "default": 0.5},
+                            "agg": {"type": "unknown", "units": "1"},
+                            "ma": {"type": "unknown", "units": "1"},
+                        },
+                        # `agg` / `ma` are OBSERVED unknowns: their structural
+                        # metaparameter sites live on their defining EQUATIONS.
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["x"]},
+                            },
+                            {
+                                "lhs": "agg",
+                                "rhs": {
                                     "op": "aggregate",
                                     "output_idx": ["i"],
                                     "args": ["x"],
@@ -488,22 +564,15 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
                                     "expr": {"op": "*", "args": ["x", "i"]},
                                 },
                             },
-                            "ma": {
-                                "type": "observed",
-                                "units": "1",
-                                "expression": {
+                            {
+                                "lhs": "ma",
+                                "rhs": {
                                     "op": "makearray",
                                     "args": [],
                                     "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
                                     "values": [1.5],
                                 },
                             },
-                        },
-                        "equations": [
-                            {
-                                "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                                "rhs": {"op": "-", "args": ["x"]},
-                            }
                         ],
                     }
                 },
@@ -513,8 +582,8 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
     f = load(str(p))
     assert f.index_sets["cells"]["size"] == 12
     m = f.models["M"]
-    assert m.variables["agg"].expression.ranges == {"i": [1, 5]}
-    assert m.variables["ma"].expression.regions == [[[3, 6]]]
+    assert _defining_typed(m, "agg").ranges == {"i": [1, 5]}
+    assert _defining_typed(m, "ma").regions == [[[3, 6]]]
 
 
 def test_expression_position_substitution_never_folds(tmp_path):
@@ -522,24 +591,21 @@ def test_expression_position_substitution_never_folds(tmp_path):
     p.write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "subst"},
                 "metaparameters": {"N": {"type": "integer", "default": 144}},
                 "models": {
                     "M": {
                         "variables": {
-                            "x": {"type": "state", "units": "1", "default": 0.5},
-                            "dlon": {
-                                "type": "observed",
-                                "units": "1",
-                                "expression": {"op": "/", "args": [360, "N"]},
-                            },
+                            "x": {"type": "unknown", "units": "1", "default": 0.5},
+                            "dlon": {"type": "unknown", "units": "1"},
                         },
                         "equations": [
                             {
                                 "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                                 "rhs": {"op": "-", "args": ["x"]},
-                            }
+                            },
+                            {"lhs": "dlon", "rhs": {"op": "/", "args": [360, "N"]}},
                         ],
                     }
                 },
@@ -547,7 +613,7 @@ def test_expression_position_substitution_never_folds(tmp_path):
         )
     )
     f = load(str(p))
-    dlon = f.models["M"].variables["dlon"].expression
+    dlon = _defining_typed(f.models["M"], "dlon")
     assert dlon.op == "/"
     assert dlon.args == [360, 144]
 
@@ -570,12 +636,12 @@ def _chain_doc(n: int) -> dict:
                 },
             }
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "chain"},
         "models": {
             "M": {
                 "expression_templates": tpl,
-                "variables": {"x": {"type": "state", "default": 0.5}},
+                "variables": {"x": {"type": "unknown", "default": 0.5}},
                 "equations": [
                     {
                         "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
@@ -590,7 +656,7 @@ def _chain_doc(n: int) -> dict:
 def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
     # A 3-deep local chain inlines through the §9.6.3 fixpoint untouched.
     doc = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "chain3"},
         "models": {
             "M": {
@@ -628,23 +694,23 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
                     "c3": {"params": [], "body": 3},
                 },
                 "variables": {
-                    "x": {"type": "state", "units": "1", "default": 0.5},
-                    "y": {
-                        "type": "observed",
-                        "units": "1",
-                        "expression": {
+                    "x": {"type": "unknown", "units": "1", "default": 0.5},
+                    "y": {"type": "unknown", "units": "1"},
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["x"]},
+                    },
+                    {
+                        "lhs": "y",
+                        "rhs": {
                             "op": "apply_expression_template",
                             "args": [],
                             "name": "c1",
                             "bindings": {},
                         },
                     },
-                },
-                "equations": [
-                    {
-                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                        "rhs": {"op": "-", "args": ["x"]},
-                    }
                 ],
             }
         },
@@ -653,10 +719,7 @@ def test_body_composition_inlines_acyclic_dag_and_depth_bound_is_exact():
     # depth-bounded) but NOT inlined; the references survive lower and Expand
     # denotes the fully-inlined value (§9.6.4 rule 2).
     out = expand_document(lower_expression_templates(copy.deepcopy(doc)))
-    assert out["models"]["M"]["variables"]["y"]["expression"] == {
-        "op": "+",
-        "args": [1, {"op": "+", "args": [2, 3]}],
-    }
+    assert _defining(out, "M", "y") == {"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]}
 
     # Exactly MAX_TEMPLATE_EXPANSION_DEPTH templates chain: accepted; one
     # more: template_body_expansion_too_deep. The depth counts TEMPLATES on
@@ -675,7 +738,7 @@ def _chainlib_consumer(tmp_path, chain_len):
     tmp_path.mkdir(parents=True, exist_ok=True)
     lib = _chain_doc(chain_len)
     lib_doc = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "chainlib"},
         "expression_templates": lib["models"]["M"]["expression_templates"],
     }
@@ -720,7 +783,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
     (tmp_path / "lib_first.esm").write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "lib_first"},
                 "expression_templates": {
                     "z_rule": {
@@ -735,7 +798,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
     (tmp_path / "lib_second.esm").write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "lib_second"},
                 "expression_templates": {
                     "a_rule": {
@@ -751,7 +814,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
     p.write_text(
         json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "order"},
                 "models": {
                     "M": {
@@ -760,18 +823,15 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
                             {"ref": "./lib_second.esm"},
                         ],
                         "variables": {
-                            "x": {"type": "state", "units": "1", "default": 1.5},
-                            "y": {
-                                "type": "observed",
-                                "units": "1",
-                                "expression": {"op": "lowerme", "args": ["x"]},
-                            },
+                            "x": {"type": "unknown", "units": "1", "default": 1.5},
+                            "y": {"type": "unknown", "units": "1"},
                         },
                         "equations": [
                             {
                                 "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                                 "rhs": {"op": "-", "args": ["x"]},
-                            }
+                            },
+                            {"lhs": "y", "rhs": {"op": "lowerme", "args": ["x"]}},
                         ],
                     }
                 },
@@ -779,7 +839,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
         )
     )
     f = load(str(p))
-    y = f.models["M"].variables["y"].expression
+    y = _defining_typed(f.models["M"], "y")
     assert y.op == "*"
     assert y.args == [2, "x"]  # the FIRST import's rule wins the tie
 
@@ -820,6 +880,13 @@ def test_match_pattern_may_not_contain_apply_node():
 
 
 def test_version_gate_flags_every_v097_construct():
+    """The pre-0.8.0 gate, exercised DIRECTLY.
+
+    From 1.0.0 ``load()`` rejects every major-version-0 document outright, so
+    this gate is only reached by calling it — the 0.7.0 documents below are
+    deliberately spelled in the LEGACY format (``"type": "state"``) they would
+    have carried, because that is the only kind of file the gate ever sees.
+    """
     for snippet in [
         '"metaparameters": {"N": {"type": "integer"}},',
         '"expression_templates": {"t": {"params": [], "body": 1}},',
@@ -832,9 +899,9 @@ def test_version_gate_flags_every_v097_construct():
             _err_code(lambda: reject_template_imports_pre_v08(doc))
             == "template_import_version_too_old"
         )
-    # 0.8.0 files pass the gate.
+    # 0.8.0-and-later files pass the gate; 1.0.0 is what a real file declares.
     ok = json.loads("""
-    {"esm": "0.8.0", "metadata": {"name": "new"},
+    {"esm": "1.0.0", "metadata": {"name": "new"},
      "metaparameters": {"N": {"type": "integer", "default": 1}},
      "expression_templates": {"t": {"params": [], "body": 1}}}""")
     assert reject_template_imports_pre_v08(ok) is None
@@ -849,20 +916,22 @@ def test_zero_parameter_templates_are_legal():
             '"initialization_equations": [],'
         )
     )
-    doc["models"]["M"]["variables"]["y"] = {
-        "type": "observed",
-        "units": "1",
-        "expression": {
-            "op": "apply_expression_template",
-            "args": [],
-            "name": "two",
-            "bindings": {},
-        },
-    }
+    doc["models"]["M"]["variables"]["y"] = {"type": "unknown", "units": "1"}
+    doc["models"]["M"]["equations"].append(
+        {
+            "lhs": "y",
+            "rhs": {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": "two",
+                "bindings": {},
+            },
+        }
+    )
     # Option B: `two` is target-free → the reference survives lower; Expand
     # yields the Option-A constant image.
     out = expand_document(lower_expression_templates(doc))
-    assert out["models"]["M"]["variables"]["y"]["expression"] == 2
+    assert _defining(out, "M", "y") == 2
 
 
 # ---------------------------------------------------------------------------

@@ -257,6 +257,13 @@ def prepare(
         else:
             merged[k] = np.asarray(_provider_sample_field(prov, t0), dtype=float)
 
+    # A provider is keyed "<Source>.<parameter>"; the equations name the
+    # parameter under its own component prefix. Alias one onto the other through
+    # the loader fields, which carry both (esm-spec §8.5).
+    from .simulation_loaders import bind_provider_arrays
+
+    bind_provider_arrays(flat, merged)
+
     # ---- pushdown-path name aliasing (same objects, no copies) ----
     if pushdown_rewrite:
         all_var_names = (

@@ -180,7 +180,7 @@ class TestModelSubstitution:
     def test_substitute_in_simple_model(self):
         """Test substitution in a simple model."""
         model_data = {
-            "variables": {"x": {"type": "state"}, "y": {"type": "state"}},
+            "variables": {"x": {"type": "unknown"}, "y": {"type": "unknown"}},
             "equations": [
                 {"lhs": "x", "rhs": "a"},
                 {"lhs": "y", "rhs": {"op": "+", "args": ["x", "b"]}},
@@ -200,7 +200,7 @@ class TestModelSubstitution:
     def test_substitute_in_model_with_metadata(self):
         """Test substitution preserves model structure."""
         model_data = {
-            "variables": {"x": {"type": "state", "units": "kg"}},
+            "variables": {"x": {"type": "unknown", "units": "kg"}},
             "equations": [{"lhs": "x", "rhs": "param"}],
             "description": "Test model",
         }
@@ -215,7 +215,7 @@ class TestModelSubstitution:
 
     def test_substitute_in_model_no_equations(self):
         """Test substitution in model with no equations."""
-        model_data = {"variables": {"x": {"type": "state"}}, "equations": []}
+        model_data = {"variables": {"x": {"type": "unknown"}}, "equations": []}
 
         result = substitute_in_model(model_data, {"a": "b"})
         assert result == model_data

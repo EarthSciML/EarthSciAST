@@ -73,6 +73,7 @@ from .json_walk import (  # noqa: F401 — re-exported for the historical import
     _rewrite_json,
     _walk_json,
 )
+
 # ``emit_esm_string`` (the canonical Option-B byte writer) now lives next to
 # ``serialize.save`` — the two JSON writers are co-located there. It is
 # re-exported here so ``lower_expression_templates.emit_esm_string`` (used by the
@@ -1563,7 +1564,14 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
 
     root.pop("expression_template_imports", None)
     if bump:
-        root["esm"] = "0.9.0"
+        # The §9.6.4 rule-8 emit stamp. It has to track the format version the
+        # emitter WRITES, so it is read from the parser's supported version
+        # rather than hard-coded: with major 0 rejected outright from 1.0.0, an
+        # older stamp makes every bumped document unloadable by its own loader.
+        # Imported lazily -- `parse` imports this module at load.
+        from .parse import _CURRENT_VERSION
+
+        root["esm"] = ".".join(str(v) for v in _CURRENT_VERSION)
     return root
 
 

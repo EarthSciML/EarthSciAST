@@ -45,7 +45,12 @@ import re
 from typing import Any
 
 from . import index_alignment, op_registry
-from .classification import algebraic_unknowns, observed_definitions, ode_states
+from .classification import (
+    algebraic_unknowns,
+    observed_definitions,
+    ode_states,
+    system_kind,
+)
 from .json_walk import iter_child_values
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -1307,6 +1312,33 @@ def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> No
                 )
 
 
+def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:
+    """``system_kind_mismatch``: a model whose declared ``system_kind`` FIELD
+    contradicts the derivation (esm-spec §6.3.1).
+
+    The field is optional and the derivation is authoritative -- a binding uses
+    it whenever the field is absent -- so a present field that disagrees is
+    always an author error, never a legitimate override.
+    """
+    for mname, m in (data.get("models") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        declared = m.get("system_kind")
+        if not isinstance(declared, str):
+            continue
+        derived = system_kind(m)
+        if declared == derived:
+            continue
+        errors.append(
+            (
+                f"/models/{mname}/system_kind",
+                f"Model '{mname}' declares system_kind '{declared}' but its "
+                f"equations and parameters derive '{derived}'",
+                {"declared": declared, "derived": derived, "model": mname},
+            )
+        )
+
+
 def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> None:
     """``event_affects_parameter``: an event ``affects`` LHS naming a PARAMETER.
 
@@ -1341,10 +1373,14 @@ def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> N
                             "event_name": event.get("name", ""),
                             "event_type": event_kind,
                         }
+                        # `trigger_type` is reported only when it DECIDES the
+                        # remedy: a fixed-interval rewrite of a parameter has an
+                        # exact 1.0.0 replacement (`update: {kind: "schedule",
+                        # interval}`), so the trigger is worth naming. Every
+                        # other trigger gets the general remedy and no tag.
                         trigger_type = trigger.get("type")
-                        if trigger_type:
-                            details["trigger_type"] = trigger_type
                         if trigger_type == "periodic" and trigger.get("interval") is not None:
+                            details["trigger_type"] = trigger_type
                             details["remedy"] = (
                                 f"declare the change as update: {{kind: \"schedule\", "
                                 f"interval: {trigger['interval']}}} on '{lhs}' (esm-spec 5.4)"
@@ -2405,6 +2441,7 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
+    collect("system_kind_mismatch", lambda sub: _check_system_kind(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
     # Subsystem ref existence/parse is checked by resolve_subsystem_refs after

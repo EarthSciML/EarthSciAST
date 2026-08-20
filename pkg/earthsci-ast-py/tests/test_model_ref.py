@@ -28,31 +28,34 @@ def _write(path: str, payload: dict) -> None:
         json.dump(payload, f)
 
 
-# A minimal schema-valid pure-I/O data loader (RFC pure-io-data-loaders).
+# A minimal schema-valid pure-I/O data source (RFC pure-io-data-loaders). In
+# esm 1.0.0 a source declares NO `variables` map — the consuming parameter
+# carries the binding and owns the units.
 _LOADER = {
     "kind": "grid",
     "source": {"url_template": "file:///data/{date:%Y%m%d}.nc"},
-    "variables": {"emis": {"file_variable": "EMIS", "units": "kg/m^2/s"}},
 }
 
 
 def _producer(name: str = "producer") -> dict:
-    """A component file exposing `Producer.out = Producer.y + 1` (observed)."""
+    """A component file exposing `Producer.out = Producer.y + 1`.
+
+    `out` is an OBSERVED unknown: 1.0.0 declares it `unknown` like any other,
+    and it is the bare-variable-LHS equation below — not a declared type — that
+    makes it observed.
+    """
     return {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": name},
         "models": {
             "Producer": {
                 "variables": {
-                    "y": {"type": "state", "default": 0.0},
-                    "out": {
-                        "type": "observed",
-                        "units": "1",
-                        "expression": {"op": "+", "args": ["y", 1.0]},
-                    },
+                    "y": {"type": "unknown", "default": 0.0},
+                    "out": {"type": "unknown", "units": "1"},
                 },
                 "equations": [
                     {"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": 1.0},
+                    {"lhs": "out", "rhs": {"op": "+", "args": ["y", 1.0]}},
                 ],
             },
         },
@@ -62,12 +65,12 @@ def _producer(name: str = "producer") -> dict:
 def _consumer(name: str = "consumer") -> dict:
     """A component file with a free parameter `Consumer.p` driving `Consumer.z`."""
     return {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": name},
         "models": {
             "Consumer": {
                 "variables": {
-                    "z": {"type": "state", "default": 0.0},
+                    "z": {"type": "unknown", "default": 0.0},
                     "p": {"type": "parameter", "default": 0.0, "units": "1"},
                 },
                 "equations": [
@@ -87,7 +90,7 @@ def test_load_resolves_top_level_model_ref():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Producer": {"ref": "./producer.esm.json"},
@@ -117,7 +120,7 @@ def test_coupled_model_refs_resolve_zero_rewrite():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "coupled"},
                 "models": {
                     "Producer": {"ref": "./producer.esm.json"},
@@ -161,12 +164,12 @@ def test_model_ref_mixes_with_inline_model():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "mixed"},
                 "models": {
                     "Producer": {"ref": "./producer.esm.json"},
                     "Inline": {
-                        "variables": {"w": {"type": "state", "default": 2.0}},
+                        "variables": {"w": {"type": "unknown", "default": 2.0}},
                         "equations": [
                             {"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0},
                         ],
@@ -187,7 +190,7 @@ def test_model_ref_missing_file_raises():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Missing": {"ref": "./does-not-exist.esm.json"},
@@ -206,9 +209,9 @@ def test_model_ref_to_loader_only_file_raises():
         _write(
             os.path.join(tmp, "loader_only.esm.json"),
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "loader_only"},
-                "data_loaders": {"Met": _LOADER},
+                "data_sources": {"Met": _LOADER},
             },
         )
 
@@ -216,7 +219,7 @@ def test_model_ref_to_loader_only_file_raises():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Met": {"ref": "./loader_only.esm.json"},
@@ -236,7 +239,7 @@ def test_circular_model_ref_detection():
         _write(
             os.path.join(tmp, "self_ref.esm.json"),
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "self_ref"},
                 "models": {
                     "SelfRef": {
@@ -252,7 +255,7 @@ def test_circular_model_ref_detection():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "SelfRef": {"ref": "./self_ref.esm.json"},
@@ -271,11 +274,11 @@ def test_resolve_model_refs_is_idempotent_on_inline_models():
         _write(
             main_path,
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "main"},
                 "models": {
                     "Inline": {
-                        "variables": {"w": {"type": "state", "default": 2.0}},
+                        "variables": {"w": {"type": "unknown", "default": 2.0}},
                         "equations": [
                             {"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": 0.0},
                         ],

@@ -200,9 +200,9 @@ class TestUnitValidationErrors:
         """Test validation when assigning units to model variables."""
         # Valid unit assignments
         valid_vars = [
-            ModelVariable(type="state", units="kg/m**3"),
+            ModelVariable(type="unknown", units="kg/m**3"),
             ModelVariable(type="parameter", units="1/second"),
-            ModelVariable(type="observed", units="kelvin"),
+            ModelVariable(type="unknown", units="kelvin"),
         ]
 
         for var in valid_vars:
@@ -301,10 +301,10 @@ class TestModelVariableUnitValidation:
     def test_valid_atmospheric_variables(self):
         """Test valid atmospheric model variables with units."""
         variables = [
-            ModelVariable(type="state", units="pascal", description="Pressure"),
-            ModelVariable(type="state", units="kelvin", description="Temperature"),
-            ModelVariable(type="state", units="kg/kg", description="Specific humidity"),
-            ModelVariable(type="state", units="meter/second", description="Wind velocity"),
+            ModelVariable(type="unknown", units="pascal", description="Pressure"),
+            ModelVariable(type="unknown", units="kelvin", description="Temperature"),
+            ModelVariable(type="unknown", units="kg/kg", description="Specific humidity"),
+            ModelVariable(type="unknown", units="meter/second", description="Wind velocity"),
             ModelVariable(
                 type="parameter", units="joule/(kilogram*kelvin)", description="Specific heat"
             ),
@@ -319,10 +319,10 @@ class TestModelVariableUnitValidation:
     def test_valid_oceanic_variables(self):
         """Test valid oceanic model variables with units."""
         variables = [
-            ModelVariable(type="state", units="kg/meter**3", description="Density"),
-            ModelVariable(type="state", units="meter/second", description="Current velocity"),
-            ModelVariable(type="state", units="celsius", description="Temperature"),
-            ModelVariable(type="state", units="gram/kilogram", description="Salinity"),
+            ModelVariable(type="unknown", units="kg/meter**3", description="Density"),
+            ModelVariable(type="unknown", units="meter/second", description="Current velocity"),
+            ModelVariable(type="unknown", units="celsius", description="Temperature"),
+            ModelVariable(type="unknown", units="gram/kilogram", description="Salinity"),
             ModelVariable(type="parameter", units="meter**2/second", description="Diffusivity"),
         ]
 
@@ -462,13 +462,13 @@ class TestIntegratedUnitValidation:
 
         # Add variables with units
         model.variables["temperature"] = ModelVariable(
-            type="state", units="kelvin", description="Air temperature"
+            type="unknown", units="kelvin", description="Air temperature"
         )
         model.variables["pressure"] = ModelVariable(
-            type="state", units="pascal", description="Air pressure"
+            type="unknown", units="pascal", description="Air pressure"
         )
         model.variables["ozone"] = ModelVariable(
-            type="state", units="mol/meter**3", description="Ozone concentration"
+            type="unknown", units="mol/meter**3", description="Ozone concentration"
         )
 
         # Validate all units can be parsed
@@ -848,8 +848,8 @@ class TestUnparseableUnitIsAnError:
     def test_variable_unparseable_unit_is_an_error(self):
         model = Model(name="BadUnits")
         # A syntactically valid identifier that is not a unit.
-        model.variables["bad"] = ModelVariable(type="state", units="not_a_real_unit_zzz")
-        model.variables["good"] = ModelVariable(type="state", units="K")
+        model.variables["bad"] = ModelVariable(type="unknown", units="not_a_real_unit_zzz")
+        model.variables["good"] = ModelVariable(type="unknown", units="K")
 
         validator = UnitValidator()
         result = validator.validate_model(model)
@@ -865,8 +865,8 @@ class TestUnparseableUnitIsAnError:
 
     def test_unparseable_unit_does_not_also_manufacture_a_mismatch(self):
         model = Model(name="BadUnitsEq")
-        model.variables["bad"] = ModelVariable(type="state", units="not_a_real_unit_zzz")
-        model.variables["good"] = ModelVariable(type="observed", units="K")
+        model.variables["bad"] = ModelVariable(type="unknown", units="not_a_real_unit_zzz")
+        model.variables["good"] = ModelVariable(type="unknown", units="K")
         # good = bad : `bad` resolves to an unknown dimension (omitted from
         # known_units), so the ONLY finding must be the unparseable unit itself.
         model.equations.append(Equation(lhs="good", rhs="bad"))
@@ -882,12 +882,12 @@ class TestUnparseableUnitIsAnError:
     def test_unparseable_unit_fails_structural_validation(self):
         """The hard error reaches `load()` / `validate()`, at a JSON-Pointer path."""
         doc = {
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "BadUnits"},
             "models": {
                 "M": {
                     "variables": {
-                        "c": {"type": "state", "units": "not_a_unit", "default": 1.0},
+                        "c": {"type": "unknown", "units": "not_a_unit", "default": 1.0},
                         "k": {"type": "parameter", "units": "1/s", "default": 0.5},
                     },
                     "equations": [
@@ -925,7 +925,7 @@ class TestUnparseableUnitIsAnError:
             "cm^3/molec/s",
         ):
             model = Model(name="Ok")
-            model.variables["v"] = ModelVariable(type="state", units=unit)
+            model.variables["v"] = ModelVariable(type="unknown", units=unit)
             result = UnitValidator().validate_model(model)
             assert result.is_valid is True, f"{unit!r} must parse: {result.errors}"
             assert "v" in result.unit_registry
@@ -980,19 +980,20 @@ class TestTranscendentalArgumentMustBeDimensionless:
     )
     def test_dimensional_argument_is_a_hard_error(self, op):
         doc = {
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "T"},
             "models": {
                 "M": {
                     "variables": {
-                        "L": {"type": "state", "units": "m", "default": 1.0},
-                        "bad": {
-                            "type": "observed",
-                            "units": "1",
-                            "expression": {"op": op, "args": ["L"]},
-                        },
+                        "L": {"type": "unknown", "units": "m", "default": 1.0},
+                        # Observed by its DEFINING EQUATION below, not by a
+                        # declared type (esm-spec §6.3.1).
+                        "bad": {"type": "unknown", "units": "1"},
                     },
-                    "equations": [{"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}],
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0},
+                        {"lhs": "bad", "rhs": {"op": op, "args": ["L"]}},
+                    ],
                 }
             },
         }
@@ -1008,21 +1009,23 @@ class TestTranscendentalArgumentMustBeDimensionless:
 
     def test_dimensionless_argument_is_accepted(self):
         doc = {
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "T"},
             "models": {
                 "M": {
                     "variables": {
-                        "L": {"type": "state", "units": "m", "default": 1.0},
+                        "L": {"type": "unknown", "units": "m", "default": 1.0},
                         "L0": {"type": "parameter", "units": "m", "default": 1.0},
-                        # log of a RATIO — the physically meaningful form.
-                        "ok": {
-                            "type": "observed",
-                            "units": "1",
-                            "expression": {"op": "log", "args": [{"op": "/", "args": ["L", "L0"]}]},
-                        },
+                        "ok": {"type": "unknown", "units": "1"},
                     },
-                    "equations": [{"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0}],
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["L"], "wrt": "t"}, "rhs": 0.0},
+                        # log of a RATIO — the physically meaningful form.
+                        {
+                            "lhs": "ok",
+                            "rhs": {"op": "log", "args": [{"op": "/", "args": ["L", "L0"]}]},
+                        },
+                    ],
                 }
             },
         }
@@ -1032,19 +1035,18 @@ class TestTranscendentalArgumentMustBeDimensionless:
     def test_sqrt_is_not_in_the_rule(self):
         """`sqrt` halves a dimension; it does not require a dimensionless argument."""
         doc = {
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "T"},
             "models": {
                 "M": {
                     "variables": {
-                        "A": {"type": "state", "units": "m^2", "default": 1.0},
-                        "side": {
-                            "type": "observed",
-                            "units": "m",
-                            "expression": {"op": "sqrt", "args": ["A"]},
-                        },
+                        "A": {"type": "unknown", "units": "m^2", "default": 1.0},
+                        "side": {"type": "unknown", "units": "m"},
                     },
-                    "equations": [{"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": 0.0}],
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["A"], "wrt": "t"}, "rhs": 0.0},
+                        {"lhs": "side", "rhs": {"op": "sqrt", "args": ["A"]}},
+                    ],
                 }
             },
         }
@@ -1099,7 +1101,7 @@ class TestDimensionalMismatchIsDetected:
         provable dimensional contradiction reported as a clean bill of health.
         """
         model = Model(name="BadAddition")
-        model.variables["x"] = ModelVariable(type="state", units="m")
+        model.variables["x"] = ModelVariable(type="unknown", units="m")
         model.variables["tt"] = ModelVariable(type="parameter", units="s")
         model.equations.append(Equation(lhs="x", rhs=ExprNode(op="+", args=["x", "tt"])))
 
@@ -1114,13 +1116,19 @@ class TestDimensionalMismatchIsDetected:
         warning — that downgrade is what made a detected mismatch unable to
         fail validation."""
         model = Model(name="ErrorNotWarning")
-        model.variables["L"] = ModelVariable(type="state", units="m")
+        model.variables["L"] = ModelVariable(type="unknown", units="m")
         model.variables["tt"] = ModelVariable(type="parameter", units="s")
         model.equations.append(Equation(lhs="L", rhs=ExprNode(op="-", args=["L", "tt"])))
 
         result = UnitValidator().validate_model(model)
 
-        assert len(result.errors) == 1
+        # Every finding must be THE mismatch, and none of them a warning. (The
+        # count is not pinned: since 1.0.0 the defining equation `L ~ L - tt` is
+        # both an equation and `L`'s observed definition, and `validate_model`
+        # types it on both passes — so one defect yields two identically-worded
+        # errors.)
+        assert result.errors
+        assert all("Incompatible dimensions in -: [length] vs [time]" in e for e in result.errors)
         assert result.warnings == []
 
     def test_transcendental_argument_must_be_dimensionless(self):

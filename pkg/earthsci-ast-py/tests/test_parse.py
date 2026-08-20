@@ -57,11 +57,11 @@ def test_parse_nested_expression():
 def test_load_minimal_valid_esm():
     """Test loading a minimal valid ESM file."""
     minimal_esm = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "Test Model"},
         "models": {
             "test_model": {
-                "variables": {"x": {"type": "state"}},
+                "variables": {"x": {"type": "unknown"}},
                 "equations": [{"lhs": "x", "rhs": 1}],
             }
         },
@@ -71,7 +71,7 @@ def test_load_minimal_valid_esm():
     esm_file = load(json_str)
 
     assert isinstance(esm_file, EsmFile)
-    assert esm_file.version == "0.1.0"
+    assert esm_file.version == "1.0.0"
     assert esm_file.metadata.title == "Test Model"
     assert len(esm_file.models) == 1
 
@@ -79,14 +79,14 @@ def test_load_minimal_valid_esm():
     assert model.name == "test_model"
     assert len(model.variables) == 1
     assert "x" in model.variables
-    assert model.variables["x"].type == "state"
+    assert model.variables["x"].type == "unknown"
     assert len(model.equations) == 1
 
 
 def test_load_reaction_system():
     """Test loading an ESM file with reaction system."""
     rs_esm = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "Reaction Test"},
         "reaction_systems": {
             "test_reactions": {
@@ -182,13 +182,42 @@ def test_operator_field_requirements():
 
 
 def test_load_comprehensive_fields():
-    """Test loading ESM file with events, data_loaders, and coupling."""
+    """Test loading ESM file with events, data_sources, and coupling."""
     comprehensive_esm = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "Comprehensive Test"},
         "models": {
             "test_model": {
-                "variables": {"x": {"type": "state"}},
+                "variables": {
+                    "x": {"type": "unknown"},
+                    # The data source is consumed by PARAMETERS: each carries
+                    # its own units and the `from` binding naming a file
+                    # variable of the source (esm-spec §8.5).
+                    "temperature": {
+                        "type": "parameter",
+                        "units": "K",
+                        "default": 0.0,
+                        "shape": [],
+                        "description": "Air temperature",
+                        "update": {
+                            "kind": "data",
+                            "source": "weather",
+                            "from": {"file_variable": "t"},
+                        },
+                    },
+                    "pressure": {
+                        "type": "parameter",
+                        "units": "Pa",
+                        "default": 0.0,
+                        "shape": [],
+                        "description": "Air pressure",
+                        "update": {
+                            "kind": "data",
+                            "source": "weather",
+                            "from": {"file_variable": "p"},
+                        },
+                    },
+                },
                 "equations": [{"lhs": "x", "rhs": 1}],
                 "discrete_events": [
                     {
@@ -204,43 +233,37 @@ def test_load_comprehensive_fields():
                         "affects": [{"lhs": "x", "rhs": 5}],
                     }
                 ],
-            }
+            },
+            "other_model": {
+                "variables": {
+                    "y": {"type": "unknown"},
+                    "x_in": {"type": "parameter", "default": 0.0},
+                },
+                "equations": [{"lhs": "y", "rhs": "x_in"}],
+            },
         },
-        "data_loaders": {
+        "data_sources": {
+            # A source declares no `variables` map: it is pure I/O, not a
+            # component, so it is also not a coupling endpoint below.
             "weather": {
                 "kind": "grid",
                 "source": {"url_template": "file:///data/era5_{date:%Y%m}.nc"},
-                "variables": {
-                    "temperature": {
-                        "file_variable": "t",
-                        "units": "K",
-                        "description": "Air temperature",
-                    },
-                    "pressure": {
-                        "file_variable": "p",
-                        "units": "Pa",
-                        "description": "Air pressure",
-                    },
-                },
             }
         },
         "coupling": [
             {
                 "type": "operator_compose",
-                # `model1`/`model2` were declared NOWHERE in this document — the
-                # only systems it defines are `test_model` and the `weather`
-                # loader. A coupling entry naming a nonexistent system is now
-                # caught (`undefined_system`, tests/invalid/undefined_system.esm);
-                # this fixture exercises FIELD PARSING, so point it at real ones.
-                "systems": ["test_model", "weather"],
+                # Every named system must be declared. A data source is NOT a
+                # system, so only real models may appear here.
+                "systems": ["test_model", "other_model"],
                 "description": "Compose two models",
             },
             {
                 "type": "variable_map",
-                "from": "weather.temperature",
-                "to": "test_model.T",
+                "from": "test_model.x",
+                "to": "other_model.x_in",
                 "transform": "param_to_var",
-                "description": "Map temperature",
+                "description": "Map x onto the receiving parameter",
             },
         ],
     }
@@ -250,7 +273,7 @@ def test_load_comprehensive_fields():
 
     # Verify all fields are parsed correctly
     assert len(esm_file.events) == 2
-    assert len(esm_file.data_loaders) == 1
+    assert len(esm_file.data_sources) == 1
     assert len(esm_file.coupling) == 2
 
     # Check events
@@ -258,15 +281,20 @@ def test_load_comprehensive_fields():
     assert "reset_event" in event_names
     assert "threshold_event" in event_names
 
-    # Check data loader
-    assert "weather" in esm_file.data_loaders
-    data_loader = esm_file.data_loaders["weather"]
-    assert data_loader.name == "weather"
-    assert len(data_loader.variables) == 2
-    assert "temperature" in data_loader.variables
-    assert "pressure" in data_loader.variables
-    assert data_loader.variables["temperature"].file_variable == "t"
-    assert data_loader.variables["temperature"].units == "K"
+    # Check the data source: located and decoded, with no variables of its own.
+    assert "weather" in esm_file.data_sources
+    data_source = esm_file.data_sources["weather"]
+    assert data_source.name == "weather"
+    assert data_source.kind.value == "grid"
+    assert not hasattr(data_source, "variables")
+
+    # Its bindings live on the consuming parameters, which own the units.
+    variables = esm_file.models["test_model"].variables
+    assert variables["temperature"].units == "K"
+    assert variables["temperature"].update.kind == "data"
+    assert variables["temperature"].update.source == "weather"
+    assert variables["temperature"].update.from_source.file_variable == "t"
+    assert variables["pressure"].update.from_source.file_variable == "p"
 
     # Check coupling
     assert len(esm_file.coupling) == 2

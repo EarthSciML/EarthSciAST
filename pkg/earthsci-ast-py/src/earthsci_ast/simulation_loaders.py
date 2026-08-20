@@ -56,7 +56,7 @@ def _provider_sample_field(provider: Any, t: float) -> np.ndarray:
     The EarthSciIO branch is duck-typed on the ``materialize`` + ``refresh_times``
     contract so ESS keeps NO hard ``earthsciio`` import — the Python analog of the
     Julia weakdep extension (``EarthSciASTEarthSciIOExt``), keeping the
-    two rigs decoupled (see ``data_loaders/esio_provider.py``). The ``providers=``
+    two rigs decoupled (see ``data_sources/esio_provider.py``). The ``providers=``
     seam samples ONCE at build time, so ``materialize()`` is the right entry
     (CONST reads the single file; DISCRETE primes at the window start), and the
     provider's native array is returned UNREORDERED — ESS is agnostic to
@@ -144,6 +144,31 @@ def _coerce_field_values(obj: Any) -> np.ndarray:
     if hasattr(obj, "data") and hasattr(obj, "dims"):
         return np.asarray(obj.data, dtype=float)
     return np.asarray(obj, dtype=float)
+
+
+def bind_provider_arrays(flat: FlattenedSystem, arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Surface each ``providers=`` array under the FLATTENED name its consumer
+    reads, in place.
+
+    A provider is keyed ``"<Source>.<parameter>"`` -- the key
+    ``providers_from_document`` mints and the conformance manifests carry. The
+    equations name the parameter under its own component prefix
+    (``"ChemistryICs.O3_init"``), because from esm 1.0.0 the parameter IS the
+    loaded field: there is no loader component to qualify it with and no
+    coupling edge to route it through. The two names are the same parameter, and
+    ``flat.loader_fields`` is what says so -- each field carries both the
+    flattened name and the source key -- so the alias is DERIVED from the
+    document rather than guessed from a matching suffix.
+
+    Existing keys are never overwritten, so a caller that already keys by the
+    flattened name is unaffected.
+    """
+    for field in flat.loader_fields:
+        local = field.name.rsplit(".", 1)[-1]
+        provider_key = f"{field.subkey}.{local}"
+        if provider_key in arrays and field.name not in arrays:
+            arrays[field.name] = arrays[provider_key]
+    return arrays
 
 
 def _extract_loader_var(native: Any, var: str) -> np.ndarray:
@@ -708,6 +733,7 @@ def _simulate_with_discrete_providers(
         loader_arrays: dict[str, np.ndarray] = {}
         for n in const_names:
             loader_arrays[n] = np.asarray(_provider_sample_field(providers[n], t0), dtype=float)
+        bind_provider_arrays(flat, loader_arrays)
 
         def _refresh_discrete(when_seconds: float) -> None:
             for n in discrete_names:

@@ -99,9 +99,12 @@ def test_form_b_diagnostics():
         _err_code(lambda: load(_conf("inject_coupling_entry", "neg_target_unknown.esm")))
         == "template_inject_target_unknown"
     )
+    # From 1.0.0 a data source is not a component, so a key naming a
+    # `data_sources` entry is reported by the general not-a-component code —
+    # the separate `template_inject_target_is_loader` diagnostic is retired.
     assert (
         _err_code(lambda: load(_conf("inject_coupling_entry", "neg_target_is_loader.esm")))
-        == "template_inject_target_is_loader"
+        == "template_inject_target_not_component"
     )
 
 

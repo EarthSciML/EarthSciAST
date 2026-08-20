@@ -237,11 +237,11 @@ def _generate_coupling_comment(coupling: dict[str, Any]) -> list[str]:
 
 def _generate_data_source_comment(name: str, data_source: dict[str, Any]) -> list[str]:
     lines = []
-    lines.append(f"# Data loader: {name}")
-    source = data_loader.get("source")
+    lines.append(f"# Data source: {name}")
+    source = data_source.get("source")
     if isinstance(source, dict) and "url_template" in source:
         lines.append(f"#   Source: {source['url_template']}")
-    kind = data_loader.get("kind")
+    kind = data_source.get("kind")
     if kind:
         lines.append(f"#   Kind: {kind}")
     return lines

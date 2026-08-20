@@ -51,7 +51,7 @@ def _decay_file() -> EsmFile:
         parameters=[k],
         reactions=[reaction],
     )
-    return EsmFile(version="0.1.0", metadata=_metadata(), reaction_systems={"Decay": rs})
+    return EsmFile(version="1.0.0", metadata=_metadata(), reaction_systems={"Decay": rs})
 
 
 # ----------------------------------------------------------------------------
@@ -112,13 +112,13 @@ def test_simulate_rejects_pde_systems():
     """A model with an unlowered spatial operator should raise
     UnsupportedDimensionalityError carrying the uniform `unlowered_operator`
     code (esm-spec §4.2 / §9.6.8), superseding the old per-binding code."""
-    var_u = ModelVariable(type="state", default=0.0)
+    var_u = ModelVariable(type="unknown", default=0.0)
     eq = Equation(
         lhs=ExprNode(op="D", args=["u"], wrt="t"),
         rhs=ExprNode(op="grad", args=["u"], dim="x"),
     )
     model = Model(name="Adv", variables={"u": var_u}, equations=[eq])
-    file = EsmFile(version="0.1.0", metadata=_metadata(), models={"Adv": model})
+    file = EsmFile(version="1.0.0", metadata=_metadata(), models={"Adv": model})
 
     with pytest.raises(UnsupportedDimensionalityError) as excinfo:
         simulate(file, tspan=(0.0, 1.0))
@@ -136,14 +136,14 @@ def test_simulate_rejects_pde_systems():
 
 def test_simulate_works_for_pure_ode_model():
     """A Model with explicit equations (no reactions) should run end-to-end."""
-    var_x = ModelVariable(type="state", default=2.0)
+    var_x = ModelVariable(type="unknown", default=2.0)
     var_k = ModelVariable(type="parameter", default=0.3)
     eq = Equation(
         lhs=ExprNode(op="D", args=["x"], wrt="t"),
         rhs=ExprNode(op="*", args=[ExprNode(op="-", args=["k"]), "x"]),
     )
     model = Model(name="Decay", variables={"x": var_x, "k": var_k}, equations=[eq])
-    file = EsmFile(version="0.1.0", metadata=_metadata(), models={"Decay": model})
+    file = EsmFile(version="1.0.0", metadata=_metadata(), models={"Decay": model})
 
     result = simulate(
         file,
@@ -184,14 +184,14 @@ def test_simulate_caches_compiled_rhs_across_calls():
 def test_simulate_cache_survives_parameter_overrides():
     # Pure-ODE model where k is referenced symbolically in the equation,
     # so a parameter override observably changes the trajectory.
-    var_x = ModelVariable(type="state", default=1.0)
+    var_x = ModelVariable(type="unknown", default=1.0)
     var_k = ModelVariable(type="parameter", default=0.3)
     eq = Equation(
         lhs=ExprNode(op="D", args=["x"], wrt="t"),
         rhs=ExprNode(op="*", args=[ExprNode(op="-", args=["k"]), "x"]),
     )
     model = Model(name="Decay", variables={"x": var_x, "k": var_k}, equations=[eq])
-    file = EsmFile(version="0.1.0", metadata=_metadata(), models={"Decay": model})
+    file = EsmFile(version="1.0.0", metadata=_metadata(), models={"Decay": model})
     flat = flatten(file)
 
     # Prime the cache with one set of parameters.

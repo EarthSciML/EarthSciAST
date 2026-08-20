@@ -1,14 +1,18 @@
-"""Test for round-trip preservation of previously missing fields: events, data_loaders, operators, couplings, solvers."""
+"""Test for round-trip preservation of previously missing fields: events, data_sources, operators, couplings, solvers."""
 
 import json
 
 from earthsci_ast.esm_types import (
     EsmFile,
     Metadata,
-    DataLoader,
-    DataLoaderKind,
-    DataLoaderSource,
-    DataLoaderVariable,
+    Model,
+    ModelVariable,
+    Equation,
+    DataSource,
+    DataSourceKind,
+    DataSourceLocation,
+    DataSourceBinding,
+    ParameterUpdate,
     Operator,
     VariableMapCoupling,
     ContinuousEvent,
@@ -17,12 +21,19 @@ from earthsci_ast.esm_types import (
 from earthsci_ast.serialize import save
 
 
-def test_roundtrip_preserves_data_loaders():
-    """Test that data loaders are preserved through serialization."""
+def test_roundtrip_preserves_data_sources():
+    """Test that data sources — and the parameter bindings that consume them —
+    are preserved through serialization.
+
+    A source is pure I/O from 1.0.0: it declares NO `variables` map. Each
+    per-variable binding lives on the CONSUMING PARAMETER's `update.from`, and
+    the parameter owns the units (esm-spec §8.5), so both halves have to survive
+    for the document to still name what it reads.
+    """
     # Create minimal metadata
     metadata = Metadata(
-        title="Data Loader Test",
-        description="Test data loader preservation",
+        title="Data Source Test",
+        description="Test data source preservation",
         authors=[],
         created=None,
         modified=None,
@@ -31,29 +42,55 @@ def test_roundtrip_preserves_data_loaders():
         keywords=[],
     )
 
-    # Create data loader
-    data_loader = DataLoader(
+    # Create data source
+    data_source = DataSource(
         name="test_loader",
-        kind=DataLoaderKind.GRID,
-        source=DataLoaderSource(url_template="file:///data/test_{date:%Y%m%d}.nc"),
+        kind=DataSourceKind.GRID,
+        source=DataSourceLocation(url_template="file:///data/test_{date:%Y%m%d}.nc"),
+    )
+
+    # The consumers: one parameter per file variable, each carrying its own
+    # units and the `from` binding naming the source's file variable.
+    consumer = Model(
+        name="consumer",
         variables={
-            "temperature": DataLoaderVariable(
-                file_variable="T", units="K", description="Air temperature"
+            "temperature": ModelVariable(
+                type="parameter",
+                units="K",
+                default=0.0,
+                shape=[],
+                description="Air temperature",
+                update=ParameterUpdate(
+                    kind="data",
+                    source="test_loader",
+                    from_source=DataSourceBinding(file_variable="T"),
+                ),
             ),
-            "pressure": DataLoaderVariable(
-                file_variable="P", units="Pa", description="Air pressure"
+            "pressure": ModelVariable(
+                type="parameter",
+                units="Pa",
+                default=0.0,
+                shape=[],
+                description="Air pressure",
+                update=ParameterUpdate(
+                    kind="data",
+                    source="test_loader",
+                    from_source=DataSourceBinding(file_variable="P"),
+                ),
             ),
+            "x": ModelVariable(type="unknown", units="1"),
         },
+        equations=[Equation(lhs="x", rhs="temperature")],
     )
 
     # Create ESM file
     esm_file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=metadata,
-        models={},
+        models={"consumer": consumer},
         reaction_systems={},
         events=[],
-        data_loaders={"test_loader": data_loader},
+        data_sources={"test_loader": data_source},
         operators=[],
         coupling=[],
     )
@@ -62,16 +99,26 @@ def test_roundtrip_preserves_data_loaders():
     json_str = save(esm_file)
     data = json.loads(json_str)
 
-    # Verify data_loaders field is present
-    assert "data_loaders" in data
-    assert "test_loader" in data["data_loaders"]
+    # Verify data_sources field is present
+    assert "data_sources" in data
+    assert "test_loader" in data["data_sources"]
 
-    loader_data = data["data_loaders"]["test_loader"]
+    loader_data = data["data_sources"]["test_loader"]
     assert loader_data["kind"] == "grid"
     assert loader_data["source"]["url_template"] == "file:///data/test_{date:%Y%m%d}.nc"
-    assert "variables" in loader_data
-    assert loader_data["variables"]["temperature"]["file_variable"] == "T"
-    assert loader_data["variables"]["temperature"]["units"] == "K"
+    # A source is not a component: it exposes no variables map at all.
+    assert "variables" not in loader_data
+
+    # The binding and the units live on the consuming parameter instead.
+    variables = data["models"]["consumer"]["variables"]
+    assert variables["temperature"]["units"] == "K"
+    assert variables["temperature"]["update"] == {
+        "kind": "data",
+        "source": "test_loader",
+        "from": {"file_variable": "T"},
+    }
+    assert variables["pressure"]["units"] == "Pa"
+    assert variables["pressure"]["update"]["from"]["file_variable"] == "P"
 
 
 def test_roundtrip_preserves_operators():
@@ -97,12 +144,12 @@ def test_roundtrip_preserves_operators():
 
     # Create ESM file
     esm_file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=metadata,
         models={},
         reaction_systems={},
         events=[],
-        data_loaders={},
+        data_sources={},
         operators=[operator],
         coupling=[],
     )
@@ -144,12 +191,12 @@ def test_roundtrip_preserves_couplings():
 
     # Create ESM file
     esm_file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=metadata,
         models={},
         reaction_systems={},
         events=[],
-        data_loaders={},
+        data_sources={},
         operators=[],
         coupling=[coupling],
     )
@@ -191,12 +238,12 @@ def test_roundtrip_preserves_events():
 
     # Create ESM file
     esm_file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=metadata,
         models={},
         reaction_systems={},
         events=[event],
-        data_loaders={},
+        data_sources={},
         operators=[],
         coupling=[],
     )
@@ -230,13 +277,30 @@ def test_roundtrip_preserves_all_missing_fields():
     )
 
     # Create all components
-    data_loader = DataLoader(
+    data_source = DataSource(
         name="loader",
-        kind=DataLoaderKind.GRID,
-        source=DataLoaderSource(url_template="file:///data/emissions_{date:%Y%m}.nc"),
+        kind=DataSourceKind.GRID,
+        source=DataSourceLocation(url_template="file:///data/emissions_{date:%Y%m}.nc"),
+    )
+
+    # The parameter that consumes it: it owns the units and the `from` binding.
+    consumer = Model(
+        name="consumer",
         variables={
-            "temp": DataLoaderVariable(file_variable="T", units="K"),
+            "temp": ModelVariable(
+                type="parameter",
+                units="K",
+                default=0.0,
+                shape=[],
+                update=ParameterUpdate(
+                    kind="data",
+                    source="loader",
+                    from_source=DataSourceBinding(file_variable="T"),
+                ),
+            ),
+            "x": ModelVariable(type="unknown", units="1"),
         },
+        equations=[Equation(lhs="x", rhs="temp")],
     )
 
     operator = Operator(
@@ -257,12 +321,12 @@ def test_roundtrip_preserves_all_missing_fields():
 
     # Create ESM file with all components
     esm_file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=metadata,
-        models={},
+        models={"consumer": consumer},
         reaction_systems={},
         events=[event],
-        data_loaders={"loader": data_loader},
+        data_sources={"loader": data_source},
         operators=[operator],
         coupling=[coupling],
     )
@@ -272,16 +336,18 @@ def test_roundtrip_preserves_all_missing_fields():
     data = json.loads(json_str)
 
     # Verify all fields are present
-    assert "data_loaders" in data
+    assert "data_sources" in data
     assert "operators" in data
     assert "coupling" in data
     assert "continuous_events" in data
 
     # Verify they have the expected content
-    assert "loader" in data["data_loaders"]
+    assert "loader" in data["data_sources"]
     assert "operator" in data["operators"]
     assert len(data["coupling"]) == 1
     assert len(data["continuous_events"]) == 1
+    # The source's consumer survives with its binding intact.
+    assert data["models"]["consumer"]["variables"]["temp"]["update"]["source"] == "loader"
 
 
 def test_parse_domain_with_empty_temporal_block():
@@ -326,11 +392,11 @@ def test_roundtrip_preserves_analysis_expression_template_imports():
     imports = [{"ref": "./upwind1.esm", "bindings": {"N": 100}}]
     decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": {"op": "*", "args": [-1, "u"]}}
     doc = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "analysis_import_roundtrip"},
         "models": {
             "M": {
-                "variables": {"u": {"type": "state", "units": "1"}},
+                "variables": {"u": {"type": "unknown", "units": "1"}},
                 "equations": [decay],
                 "analyses": [
                     {
@@ -362,11 +428,11 @@ def test_analysis_without_imports_omits_key():
 
     decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": {"op": "*", "args": [-1, "u"]}}
     doc = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "analysis_no_import"},
         "models": {
             "M": {
-                "variables": {"u": {"type": "state", "units": "1"}},
+                "variables": {"u": {"type": "unknown", "units": "1"}},
                 "equations": [decay],
                 "analyses": [
                     {

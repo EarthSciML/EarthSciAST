@@ -19,12 +19,14 @@ small valid scalar ODE models and assert:
      ``simulate(flatten(m))`` agree within solver tolerance. This confirms the
      two entry points into the simulation pipeline remain interchangeable.
 
-Scope (matches the gt-3aql brief): scalar-only models, 1-3 state variables,
-0-2 parameters, no domains, no couplings, no spatial operators. The RHS
-generator is a deliberately restricted subset of the full expression strategy
-used in phase 1 — we need expressions that (a) reference only declared
-variables so the model passes structural validation on round-trip and
-(b) remain numerically tame enough to simulate.
+Scope (matches the gt-3aql brief): scalar-only models, 1-3 ODE-state unknowns,
+0-2 parameters, no domains, no couplings, no spatial operators. Every variable
+is declared with one of the two esm 1.0.0 types (``unknown`` / ``parameter``);
+being an ODE state is DERIVED from carrying a ``D(·, t)`` equation, never
+declared (esm-spec §6.3.1). The RHS generator is a deliberately restricted
+subset of the full expression strategy used in phase 1 — we need expressions
+that (a) reference only declared variables so the model passes structural
+validation on round-trip and (b) remain numerically tame enough to simulate.
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ from earthsci_ast.esm_types import (
     Model,
     ModelVariable,
 )
+from earthsci_ast.classification import ode_states
 from earthsci_ast.flatten import FlattenedSystem, flatten
 from earthsci_ast.parse import load
 from earthsci_ast.serialize import _serialize_expression, save
@@ -135,11 +138,13 @@ def _safe_rhs_strategy(names: List[str]) -> st.SearchStrategy:
 
 @st.composite
 def _scalar_model_file(draw) -> EsmFile:
-    """Generate a single-model EsmFile with 1-3 state vars and 0-2 params.
+    """Generate a single-model EsmFile with 1-3 ODE states and 0-2 params.
 
-    Each state variable gets exactly one ``D(state, t) = rhs`` equation where
-    ``rhs`` is drawn from :func:`_safe_rhs_strategy` over the union of declared
-    state + parameter names.
+    Every variable is declared ``unknown`` or ``parameter`` — the only two types
+    esm 1.0.0 has. Each prospective state gets exactly one ``D(state, t) = rhs``
+    equation where ``rhs`` is drawn from :func:`_safe_rhs_strategy` over the
+    union of declared unknown + parameter names, and it is THAT equation, not
+    the declaration, that makes it an ODE state (esm-spec §6.3.1).
     """
     n_states = draw(st.integers(min_value=1, max_value=3))
     n_params = draw(st.integers(min_value=0, max_value=2))
@@ -155,7 +160,7 @@ def _scalar_model_file(draw) -> EsmFile:
     variables: "OrderedDict[str, ModelVariable]" = OrderedDict()
     for name in state_names:
         variables[name] = ModelVariable(
-            type="state",
+            type="unknown",
             default=draw(
                 st.floats(
                     min_value=0.1,
@@ -194,7 +199,7 @@ def _scalar_model_file(draw) -> EsmFile:
     model_name = draw(_model_name)
     model = Model(name=model_name, variables=dict(variables), equations=equations)
     return EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="property-test"),
         models={model_name: model},
     )
@@ -288,8 +293,16 @@ def _flat_to_esm(flat: FlattenedSystem) -> EsmFile:
     the system name. Equations are similarly de-namespaced so that the next
     :func:`flatten` pass re-applies the exact same prefix.
 
+    Every reconstructed variable is declared with one of the two esm 1.0.0
+    types. ``FlattenedVariable.type`` carries the DERIVED role ("state" /
+    "observed" / "parameter", esm-spec §6.3.1), which is not a declarable type:
+    both unknown roles are declared ``unknown`` here and re-derived on the next
+    pass from the equations, which travel back verbatim — an observed unknown's
+    defining ``y ~ f(…)`` is an ordinary equation in ``flat.equations``, so
+    re-flattening recovers the same role without it being restated anywhere.
+
     Limitations (acceptable for the phase-3 scope):
-      - Only state and parameter variables are reconstructed. Flattened
+      - Only unknown and parameter variables are reconstructed. Flattened
         "species" from reaction systems are left out; the strategy in this
         module never produces them.
       - Couplings are not preserved. The scalar-only generator in this file
@@ -309,12 +322,14 @@ def _flat_to_esm(flat: FlattenedSystem) -> EsmFile:
         )
         systems_eqs.setdefault(sys, [])
 
+    # Both unknown ROLES collapse onto the one declarable type; the role comes
+    # back out of the equations on the next flatten pass.
     for name, fv in flat.state_variables.items():
-        _collect(name, fv, "state")
+        _collect(name, fv, "unknown")
     for name, fv in flat.parameters.items():
         _collect(name, fv, "parameter")
     for name, fv in flat.observed_variables.items():
-        _collect(name, fv, "observed")
+        _collect(name, fv, "unknown")
 
     for feq in flat.equations:
         systems_eqs.setdefault(feq.source_system, []).append(feq)
@@ -336,7 +351,7 @@ def _flat_to_esm(flat: FlattenedSystem) -> EsmFile:
         )
 
     return EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="reconstructed"),
         models=dict(models),
     )
@@ -419,11 +434,11 @@ def test_simulate_matches_simulate_via_flatten(esm_file: EsmFile) -> None:
     simulable.
     """
     tspan = (0.0, 0.5)
+    # Which unknowns need an initial condition is a DERIVED question — the ODE
+    # states, i.e. those under a `D(·, t)` on some equation LHS. Asking the
+    # declaration is exactly what esm 1.0.0 removes (esm-spec §6.3.1).
     initial = {
-        f"{m.name}.{vname}": 1.0
-        for m in esm_file.models.values()
-        for vname, v in m.variables.items()
-        if v.type == "state"
+        f"{m.name}.{vname}": 1.0 for m in esm_file.models.values() for vname in ode_states(m)
     }
 
     via_file = simulate(esm_file, tspan=tspan, initial_conditions=initial, method="RK45")
@@ -452,12 +467,16 @@ def test_simulate_matches_simulate_via_flatten(esm_file: EsmFile) -> None:
 
 
 def test_flatten_idempotent_multi_state_decay() -> None:
-    """A two-state coupled decay round-trips through reconstruction."""
+    """A two-state coupled decay round-trips through reconstruction.
+
+    ``A`` and ``B`` are declared plain ``unknown``\\ s; their ``D(·, t)``
+    equations are what make them ODE states.
+    """
     model = Model(
         name="Chem",
         variables={
-            "A": ModelVariable(type="state", default=1.0),
-            "B": ModelVariable(type="state", default=0.5),
+            "A": ModelVariable(type="unknown", default=1.0),
+            "B": ModelVariable(type="unknown", default=0.5),
             "k": ModelVariable(type="parameter", default=0.3),
         },
         equations=[
@@ -472,7 +491,7 @@ def test_flatten_idempotent_multi_state_decay() -> None:
         ],
     )
     esm_file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="regression"),
         models={"Chem": model},
     )
@@ -490,7 +509,7 @@ def test_simulate_matches_simulate_via_flatten_linear_decay() -> None:
     model = Model(
         name="Decay",
         variables={
-            "x": ModelVariable(type="state", default=1.0),
+            "x": ModelVariable(type="unknown", default=1.0),
             "k": ModelVariable(type="parameter", default=0.5),
         },
         equations=[
@@ -501,7 +520,7 @@ def test_simulate_matches_simulate_via_flatten_linear_decay() -> None:
         ],
     )
     esm_file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="regression"),
         models={"Decay": model},
     )

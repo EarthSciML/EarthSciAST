@@ -24,22 +24,27 @@ from earthsci_ast.flatten import DomainUnitMismatchError, flatten
 def _esm_file(src_units, dst_units) -> EsmFile:
     """Two models coupled by an ``identity`` variable_map from ``Src.T`` onto
     the consumer parameter ``Dst.T_ext`` (which drives ``d(u)/dt = T_ext``).
-    ``src_units``/``dst_units`` set the two declared unit strings under test."""
+    ``src_units``/``dst_units`` set the two declared unit strings under test.
+
+    ``Src.T`` is an OBSERVED unknown: 1.0.0 declares it ``unknown`` and the
+    bare-variable-LHS equation ``T = 300`` — not a declared type or an
+    ``expression`` field — is what makes it observed."""
     src = Model(
         name="Src",
-        variables={"T": ModelVariable(type="observed", units=src_units, expression=300.0)},
+        variables={"T": ModelVariable(type="unknown", units=src_units)},
+        equations=[Equation(lhs="T", rhs=300.0)],
     )
     dst = Model(
         name="Dst",
         variables={
             "T_ext": ModelVariable(type="parameter", units=dst_units),
-            "u": ModelVariable(type="state", default=0.0),
+            "u": ModelVariable(type="unknown", default=0.0),
         },
         equations=[Equation(lhs=ExprNode(op="D", args=["u"], wrt="t"), rhs="T_ext")],
     )
     vm = VariableMapCoupling(from_var="Src.T", to_var="Dst.T_ext", transform="identity")
     return EsmFile(
-        version="0.8.0",
+        version="1.0.0",
         metadata=Metadata(title="vm identity unit check"),
         models={"Src": src, "Dst": dst},
         coupling=[vm],

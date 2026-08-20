@@ -49,13 +49,13 @@ def _decay_doc() -> dict:
     expression ic(u) = cos(pi x_i); exact solution e^{-t} cos(pi x_i)."""
     idx = {"op": "index", "args": ["u", "i"]}
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "pde_inline_decay"},
         "index_sets": {"x": {"kind": "interval", "size": N}},
         "models": {
             "M": {
                 "variables": {
-                    "u": {"type": "state", "units": "1", "shape": ["x"]},
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"]},
                 },
                 "equations": [
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": _cos_pi_x()},
@@ -339,11 +339,11 @@ def test_run_pde_tests_coords_validation_rejections():
 def test_run_pde_tests_coords_on_scalar_variable_rejected():
     """coords on a scalar (0-D) variable is ill-formed per §6.6.5."""
     doc = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "scalar_coords"},
         "models": {
             "M": {
-                "variables": {"z": {"type": "state", "units": "1", "default": 1.0}},
+                "variables": {"z": {"type": "unknown", "units": "1", "default": 1.0}},
                 "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": 0.0}],
                 "tests": [
                     {
@@ -378,12 +378,12 @@ def _doc_2d(ny):
     idx = {"op": "index", "args": ["u", "i", "j"]}
     ranges = {"i": [1, 4], "j": [1, ny]}
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "pde_inline_2d"},
         "index_sets": {"x": {"kind": "interval", "size": 4}, "y": {"kind": "interval", "size": ny}},
         "models": {
             "M": {
-                "variables": {"u": {"type": "state", "units": "1", "shape": ["x", "y"]}},
+                "variables": {"u": {"type": "unknown", "units": "1", "shape": ["x", "y"]}},
                 "equations": [
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
                     {
@@ -556,21 +556,21 @@ def _scalar_observed_doc() -> dict:
             "variables": {
                 "T": {"type": "parameter", "units": "K", "default": 10.0},
                 "a": {"type": "parameter", "units": "1", "default": a},
-                "x": {"type": "state", "units": "1", "default": 1.0},
-                "k": {
-                    "type": "observed",
-                    "units": "1",
-                    "expression": {"op": "*", "args": ["a", "T"]},
-                },
+                "x": {"type": "unknown", "units": "1", "default": 1.0},
+                # `k` is an OBSERVED unknown -- what makes it one is the
+                # bare-variable-LHS equation below, not a declared type
+                # (esm-spec §6.3.1).
+                "k": {"type": "unknown", "units": "1"},
             },
             "equations": [
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 0.0},
+                {"lhs": "k", "rhs": {"op": "*", "args": ["a", "T"]}},
             ],
             "tests": tests,
         }
 
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "scalar_observed_param_override"},
         "models": {
             # M1 (a=2) is laid out first, so its `k` shadows M2's under a

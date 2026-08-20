@@ -27,6 +27,8 @@ from typing import Any, Dict, Mapping, Tuple
 import pytest
 from conftest import VALID_DIR
 
+from earthsci_ast.classification import observed_definitions
+
 
 FIXTURES_DIR = VALID_DIR
 FIXTURES = [
@@ -106,16 +108,19 @@ def _resolve_tol(model_tol: Any, test_tol: Any, assertion_tol: Any) -> Tuple[flo
 
 
 def _resolve_observed(model: Dict[str, Any], bindings: Dict[str, float]) -> None:
-    variables = model.get("variables", {})
-    for _ in range(len(variables) + 1):
+    """Evaluate each observed unknown from its DEFINING EQUATION's RHS.
+
+    An observed unknown carries no `expression` from esm 1.0.0 -- it is the
+    unknown a bare-variable-LHS equation defines (esm-spec §6.3.1) -- so the
+    definitions come from `observed_definitions`, the binding's own §6.3.1
+    derivation, rather than from a field on the variable. The fixed-point loop
+    is unchanged: it resolves in dependency order without needing one.
+    """
+    definitions = observed_definitions(model)
+    for _ in range(len(definitions) + 1):
         progress = False
-        for vname, var in variables.items():
-            if var.get("type") != "observed":
-                continue
-            if vname in bindings:
-                continue
-            expr = var.get("expression")
-            if expr is None:
+        for vname, expr in definitions.items():
+            if vname in bindings or expr is None:
                 continue
             try:
                 bindings[vname] = _evaluate(expr, bindings)
@@ -149,7 +154,10 @@ def _collect_tests():
 def test_units_fixture_inline_assertion(fname, mname, model, test):
     bindings: Dict[str, float] = {}
     for vname, var in (model.get("variables") or {}).items():
-        if var.get("type") in ("parameter", "state") and var.get("default") is not None:
+        # A declared default seeds the binding whichever of the two types the
+        # variable is: for a parameter it is the value, for an unknown the
+        # initial condition.
+        if var.get("default") is not None:
             bindings[vname] = float(var["default"])
     for name, val in (test.get("initial_conditions") or {}).items():
         bindings[name] = float(val)

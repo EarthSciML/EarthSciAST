@@ -19,8 +19,8 @@ binding". That claim is FALSE: esm-spec §9.7.6 says a metaparameter in an
 ordinary *expression position* "is substituted as an integer literal at load"
 (``{"op":"/","args":[360,"NLON"]}`` becomes ``{"op":"/","args":[360,144]}``), an
 unbound one is ``metaparameter_unbound``, and "validators run on the folded,
-expanded form". A bare ``NY`` in an observed expression is therefore simply an
-undefined variable, and §4.9.5 reference integrity now correctly REJECTS it at
+expanded form". A bare ``NY`` on the RHS of an observed unknown's
+defining equation is therefore simply an undefined variable, and §4.9.5 reference integrity now correctly REJECTS it at
 load (pinned by ``tests/invalid/undefined_variable_in_observed_expression.esm``).
 
 The runtime tolerance is still worth pinning — ``simulate()`` also runs on
@@ -45,7 +45,7 @@ def _load_unvalidated(doc_json: str):
     """``load()`` with the §4.9.5 structural gate bypassed.
 
     The fixtures below are intentionally invalid documents (an undefined ``NY``
-    in an observed expression). Only the RUNTIME behaviour of the array
+    on an observed unknown's defining RHS). Only the RUNTIME behaviour of the array
     evaluator is under test here, so the load-time reference-integrity check —
     which correctly rejects them — is suppressed for the build.
     """
@@ -58,23 +58,28 @@ def _load_unvalidated(doc_json: str):
 
 
 def _doc(dead_body):
-    """A 3-cell array model ``D(u[i]) = live`` with ``live = k`` (=3) driving the
-    state, plus a second observed ``dead`` whose body is ``dead_body``. The
+    """A 3-cell array model ``D(u[i]) ~ live`` with ``live ~ k`` (=3) driving
+    the state, plus a second observed ``dead`` whose body is ``dead_body``. The
     aggregate/index ops route the run through the NumPy array path (the one the
-    passive-axis 2-D cases exercise). ``dead`` is referenced by nothing."""
+    passive-axis 2-D cases exercise). ``dead`` is referenced by nothing.
+
+    Under esm 1.0.0 ``live`` and ``dead`` are declared ``unknown``; it is the
+    bare-variable equations below that make them observed (§6.3.1)."""
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "DeadObservedFixture"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
         "models": {
             "M": {
                 "variables": {
-                    "u": {"type": "state", "shape": ["cells"], "default": 0.0},
+                    "u": {"type": "unknown", "shape": ["cells"], "default": 0.0},
                     "k": {"type": "parameter", "default": 3.0},
-                    "live": {"type": "observed", "expression": "k"},
-                    "dead": {"type": "observed", "expression": dead_body},
+                    "live": {"type": "unknown"},
+                    "dead": {"type": "unknown"},
                 },
                 "equations": [
+                    {"lhs": "live", "rhs": "k"},
+                    {"lhs": "dead", "rhs": dead_body},
                     {
                         "lhs": {
                             "op": "aggregate",
@@ -167,8 +172,10 @@ def test_needed_broken_observed_still_errors() -> None:
     consumes it still fails with a clear unresolved-symbol error rather than
     silently producing a wrong trajectory."""
     doc = _doc(_DEAD_BODY)
-    # Break the LIVE observed the ODE actually reads.
-    doc["models"]["M"]["variables"]["live"]["expression"] = {"op": "/", "args": [1.0, "Z"]}
+    # Break the LIVE observed the ODE actually reads, i.e. its DEFINING
+    # equation, which is where an observed's body lives in 1.0.0.
+    live_eq = next(e for e in doc["models"]["M"]["equations"] if e["lhs"] == "live")
+    live_eq["rhs"] = {"op": "/", "args": [1.0, "Z"]}
     result = simulate(
         _load_unvalidated(json.dumps(doc)), (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12
     )
@@ -179,9 +186,9 @@ def test_needed_broken_observed_still_errors() -> None:
 
 def test_dead_observed_doc_is_rejected_by_load() -> None:
     """The counterpart of the runtime skip: the document above is INVALID, and
-    plain ``load()`` must say so. `NY` is an undefined name in an observed
-    expression — esm-spec §4.9.5 reference integrity applies to every
-    expression-bearing field, not just `equations`."""
+    plain ``load()`` must say so. `NY` is an undefined name on the RHS of the
+    equation that DEFINES the observed `dead` — esm-spec §4.9.5 reference
+    integrity applies to it exactly as to any other equation."""
     from earthsci_ast.parse import SchemaValidationError
 
     with pytest.raises(SchemaValidationError) as exc:

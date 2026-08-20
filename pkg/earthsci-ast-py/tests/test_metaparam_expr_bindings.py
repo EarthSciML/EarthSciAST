@@ -98,7 +98,7 @@ def test_helper_diagnostics(expr, env, code):
 
 def _lib_grid():
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "lib_grid"},
         "metaparameters": {"GX": {"type": "integer", "default": 2}},
         "index_sets": {"cells": {"kind": "interval", "size": "GX"}},
@@ -110,7 +110,7 @@ def _lib_grid():
 
 def _model_importing(binding):
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "model_import"},
         "metaparameters": {
             "NX": {"type": "integer", "default": 3},
@@ -147,7 +147,7 @@ def test_import_edge_product_binding_folds_at_close(tmp_path):
 
 def _child_regrid():
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "child_regrid"},
         "metaparameters": {
             "NX": {"type": "integer", "default": 2},
@@ -173,7 +173,7 @@ def _child_regrid():
 
 def _parent_mount(bindings):
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "parent_mount"},
         "metaparameters": {
             "NX": {"type": "integer", "default": 18},

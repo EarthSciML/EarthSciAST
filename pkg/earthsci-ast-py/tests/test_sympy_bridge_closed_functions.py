@@ -57,11 +57,11 @@ def test_interp_linear_in_ode_rhs_runs_via_sympy_bridge():
     rhs = ExprNode(op="*", args=[-0.5, fn_node])
     model = Model(
         name="M",
-        variables={"x": ModelVariable(type="state", default=2.0)},
+        variables={"x": ModelVariable(type="unknown", default=2.0)},
         equations=[Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs=rhs)],
     )
     esm = EsmFile(
-        version="0.4.0",
+        version="1.0.0",
         metadata=Metadata(title="t"),
         models={"M": model},
     )
@@ -103,14 +103,14 @@ def test_interp_bilinear_in_ode_rhs_runs_via_sympy_bridge():
     model = Model(
         name="M",
         variables={
-            "x": ModelVariable(type="state", default=10.0),
+            "x": ModelVariable(type="unknown", default=10.0),
             "p_x": ModelVariable(type="parameter", default=1.0),
             "p_y": ModelVariable(type="parameter", default=0.5),
         },
         equations=[Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs=rhs)],
     )
     esm = EsmFile(
-        version="0.4.0",
+        version="1.0.0",
         metadata=Metadata(title="t"),
         models={"M": model},
     )
@@ -128,7 +128,7 @@ def test_interp_bilinear_via_observed_variable_substitution():
     """The fn-call placeholder survives observed→differential substitution.
 
     Mirrors the fastjx.esm pattern where ``j_<species> = interp.bilinear(...)``
-    is an observed variable and ``D(species)/dt = -j_<species> * species``
+    is an observed unknown and ``D(species)/dt = -j_<species> * species``
     references it by name. The SymPy bridge's observed-substitution pass
     folds the lookup body into the differential RHS, and the synthetic
     ``_ess_fn_<idx>`` placeholder must still resolve against the merged
@@ -145,7 +145,9 @@ def test_interp_bilinear_via_observed_variable_substitution():
             "p_y",
         ],
     )
-    # D(c)/dt = -j_c * c, with j_c = interp.bilinear(...) observed.
+    # D(c)/dt = -j_c * c, with j_c an OBSERVED unknown defined by the
+    # bare-variable-LHS equation `j_c = interp.bilinear(...)` (1.0.0 has no
+    # `observed` type and no variable `expression` field).
     rhs = ExprNode(
         op="-",
         args=[ExprNode(op="*", args=["j_c", "c"])],
@@ -153,15 +155,18 @@ def test_interp_bilinear_via_observed_variable_substitution():
     model = Model(
         name="M",
         variables={
-            "c": ModelVariable(type="state", default=1.0),
-            "j_c": ModelVariable(type="observed", expression=j_lookup),
+            "c": ModelVariable(type="unknown", default=1.0),
+            "j_c": ModelVariable(type="unknown"),
             "p_x": ModelVariable(type="parameter", default=0.5),
             "p_y": ModelVariable(type="parameter", default=0.5),
         },
-        equations=[Equation(lhs=ExprNode(op="D", args=["c"], wrt="t"), rhs=rhs)],
+        equations=[
+            Equation(lhs=ExprNode(op="D", args=["c"], wrt="t"), rhs=rhs),
+            Equation(lhs="j_c", rhs=j_lookup),
+        ],
     )
     esm = EsmFile(
-        version="0.4.0",
+        version="1.0.0",
         metadata=Metadata(title="t"),
         models={"M": model},
     )

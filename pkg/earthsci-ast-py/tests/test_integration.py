@@ -9,7 +9,15 @@ import pytest
 import json
 from conftest import FIXTURES_ROOT
 
-from earthsci_ast import load, save, validate, substitute
+from earthsci_ast import (
+    load,
+    ode_states,
+    observed_definitions,
+    observed_unknowns,
+    save,
+    substitute,
+    validate,
+)
 from earthsci_ast.display import to_unicode, to_latex
 from earthsci_ast.parse import SchemaValidationError
 
@@ -26,24 +34,30 @@ class TestFullWorkflowIntegration:
         """Test full workflow with a simple model."""
         # 1. Create a simple ESM model
         esm_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Integration Test Model"},
             "models": {
                 "simple": {
                     "variables": {
-                        "x": {"type": "state", "units": "kg"},
+                        "x": {"type": "unknown", "units": "kg"},
                         # `param1`/`param2` were USED but never DECLARED. Reference
-                        # integrity now covers an observed variable's `expression`
-                        # (esm-spec §4.9.5), which surfaced `param2` as a genuine
-                        # undefined reference in this fixture.
+                        # integrity covers every equation RHS (esm-spec §4.9.5),
+                        # which surfaced `param2` as a genuine undefined reference
+                        # in this fixture.
                         "param1": {"type": "parameter", "units": "kg/s", "default": 1.0},
                         "param2": {"type": "parameter", "units": "kg", "default": 0.0},
-                        "y": {
-                            "type": "observed",
-                            "expression": {"op": "+", "args": ["x", "param2"]},
-                        },
+                        # `y` is OBSERVED, and from 1.0.0 that is a property of the
+                        # EQUATION SET, not a declared type: an `unknown` whose
+                        # defining equation has a bare-variable LHS.
+                        "y": {"type": "unknown"},
                     },
-                    "equations": [{"lhs": "x", "rhs": "param1"}],
+                    "equations": [
+                        # `x` is an ODE STATE: 1.0.0 has no `state` type to
+                        # declare, so the D(.,t) LHS is what makes it one — and
+                        # it is also what makes the units balance (kg/s = kg/s).
+                        {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "param1"},
+                        {"lhs": "y", "rhs": {"op": "+", "args": ["x", "param2"]}},
+                    ],
                 }
             },
         }
@@ -56,9 +70,13 @@ class TestFullWorkflowIntegration:
         validation_result = validate(loaded_model)
         assert validation_result.is_valid
 
-        # 3. Pretty-print expressions
+        # 3. Pretty-print expressions. An observed unknown's defining expression
+        # lives in the model's `equations`, and `observed_definitions` is the
+        # sanctioned way to recover it (esm-spec §6.3.1).
         simple_model = loaded_model.models["simple"]
-        y_variable = simple_model.variables["y"].expression
+        assert ode_states(simple_model) == ["x"]
+        assert observed_unknowns(simple_model) == ["y"]
+        y_variable = observed_definitions(simple_model)["y"]
         unicode_display = to_unicode(y_variable)
         latex_display = to_latex(y_variable)
 
@@ -88,7 +106,7 @@ class TestFullWorkflowIntegration:
         """Test full workflow with a reaction system."""
         # 1. Create reaction system
         esm_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Reaction Integration Test"},
             "reaction_systems": {
                 "simple_chemistry": {
@@ -141,15 +159,25 @@ class TestFullWorkflowIntegration:
     def test_coupled_system_full_workflow(self):
         """Test full workflow with coupled models."""
         esm_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Coupled System Test"},
             "models": {
                 "physics": {
-                    "variables": {"T": {"type": "state", "units": "K"}},
+                    "variables": {
+                        "T": {"type": "unknown", "units": "K"},
+                        "heat_param": {"type": "parameter", "units": "K", "default": 300.0},
+                    },
                     "equations": [{"lhs": "T", "rhs": "heat_param"}],
                 },
                 "chemistry": {
-                    "variables": {"conc": {"type": "state", "units": "mol/L"}},
+                    "variables": {
+                        "conc": {"type": "unknown", "units": "mol/L"},
+                        "rate_const": {
+                            "type": "parameter",
+                            "units": "mol/L/K",
+                            "default": 1.0,
+                        },
+                    },
                     "equations": [{"lhs": "conc", "rhs": {"op": "*", "args": ["rate_const", "T"]}}],
                 },
             },
@@ -213,11 +241,11 @@ class TestFullWorkflowIntegration:
         """Test workflow with error recovery."""
         # Start with invalid model
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Error Recovery Test"},
             "models": {
                 "broken": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": "x", "rhs": "undefined_var"}],
                 }
             },
@@ -238,7 +266,7 @@ class TestWorkflowRobustness:
 
     def test_empty_model_workflow(self):
         """Test workflow with minimal/empty model."""
-        minimal_esm = {"esm": "0.1.0", "metadata": {"name": "Minimal Test"}, "models": {}}
+        minimal_esm = {"esm": "1.0.0", "metadata": {"name": "Minimal Test"}, "models": {}}
 
         esm_json = json.dumps(minimal_esm)
         loaded_model = load(esm_json)
@@ -255,11 +283,19 @@ class TestWorkflowRobustness:
         """Test workflow performance with larger models."""
         # Create a model with many variables and equations
         large_model = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Performance Test"},
             "models": {
                 "large_system": {
-                    "variables": {f"x{i}": {"type": "state"} for i in range(20)},
+                    "variables": {
+                        **{f"x{i}": {"type": "unknown"} for i in range(20)},
+                        # The `param{i}` were USED but never DECLARED; reference
+                        # integrity covers every equation RHS (esm-spec §4.9.5).
+                        **{
+                            f"param{i}": {"type": "parameter", "default": 1.0}
+                            for i in range(20)
+                        },
+                    },
                     "equations": [
                         {
                             "lhs": f"x{i}",
@@ -291,11 +327,16 @@ class TestWorkflowRobustness:
             nested_expr = {"op": "+", "args": [nested_expr, f"y{i}"]}
 
         nested_model = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Nested Expression Test"},
             "models": {
                 "nested": {
-                    "variables": {"result": {"type": "state"}},
+                    "variables": {
+                        "result": {"type": "unknown"},
+                        "x": {"type": "parameter", "default": 0.0},
+                        # The `y{i}` leaves were USED but never DECLARED.
+                        **{f"y{i}": {"type": "parameter", "default": 0.0} for i in range(5)},
+                    },
                     "equations": [{"lhs": "result", "rhs": nested_expr}],
                 }
             },
@@ -318,12 +359,12 @@ class TestWorkflowRobustness:
     def test_workflow_with_unicode_content(self):
         """Test workflow with Unicode characters in content."""
         unicode_model = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Unicode Test", "authors": ["François Müller"]},
             "models": {
                 "chemistry": {
                     "variables": {
-                        "CO₂": {"type": "state", "description": "Carbon dioxide concentration"}
+                        "CO₂": {"type": "unknown", "description": "Carbon dioxide concentration"}
                     },
                     "equations": [{"lhs": "CO₂", "rhs": 0.0}],
                 }
@@ -346,7 +387,7 @@ class TestWorkflowErrorHandling:
 
     def test_invalid_json_handling(self):
         """Test handling of invalid JSON."""
-        invalid_json = '{"esm": "0.1.0", "metadata": {"name": "Test"'  # Missing closing braces
+        invalid_json = '{"esm": "1.0.0", "metadata": {"name": "Test"'  # Missing closing braces
 
         with pytest.raises((json.JSONDecodeError, ValueError)):
             load(invalid_json)
@@ -365,11 +406,11 @@ class TestWorkflowErrorHandling:
     def test_substitution_error_handling(self):
         """Test error handling in substitution phase."""
         esm_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Substitution Error Test"},
             "models": {
                 "test": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": "x", "rhs": "param"}],
                 }
             },
@@ -414,11 +455,11 @@ class TestWorkflowErrorHandling:
     def test_roundtrip_consistency(self):
         """Test that load(save(load(content))) gives consistent results."""
         original_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Roundtrip Test"},
             "models": {
                 "test": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": "x", "rhs": {"op": "+", "args": [1, 2]}}],
                 }
             },

@@ -61,8 +61,8 @@ from .esm_types import (
     DataSourceLocation,
     DataSourceTemporal,
     DiscreteEvent,
-    Distribution,
     DiscreteEventTrigger,
+    Distribution,
     Domain,
     Equation,
     EsmFile,
@@ -79,8 +79,8 @@ from .esm_types import (
     OperatorApplyCoupling,
     OperatorComposeCoupling,
     Parameter,
-    ParameterUpdate,
     ParameterSweep,
+    ParameterUpdate,
     Plot,
     PlotAxis,
     PlotSeries,
@@ -153,15 +153,23 @@ def _count_top_level_systems(parsed) -> int:
     )
 
 
-# Current library version for compatibility checking. Kept in lockstep with the
-# package version (pyproject `version`) and the schema banner. Bumped to 0.9.0
-# with the reference-preserving (Option B) template round-trip: template
-# references survive load and parse->emit (esm-spec §9.6.4). 0.8.0 was the clean
-# break that removed the bespoke spatial-grid / discretization / regrid machinery
-# in favour of `aggregate` Functional Aggregate Query nodes; legacy loader files
-# are rejected by the schema's `additionalProperties: false`. Prior steps: 0.4.0
-# added the sampled-function-tables block + `table_lookup`; 0.5.0 widened
-# `plots.y`; 0.6.0 added the `integral` AST op.
+# The FORMAT version this binding reads and writes -- the `esm` banner and the
+# bundled schema's `$id`, NOT the distribution version in pyproject (the two
+# tracked together while the format was pre-1.0 and no longer do).
+#
+# 1.0.0 is a clean break with NO deprecation path, so a major-0 document is
+# REJECTED rather than warned about: the unified variable model collapses the
+# five declared types to `unknown` / `parameter`, removes the variable
+# `expression` field, moves parameter mutation off events and onto the parameter
+# as an `update`, and turns `data_loaders` into the document-scoped
+# `data_sources` ingest registry, which is not a component. None of that is
+# expressible in a 0.x reader, and none of the 0.x spellings survive.
+#
+# Prior steps, for the record: 0.9.0 made template references survive
+# parse->emit (§9.6.4); 0.8.0 replaced the bespoke spatial-grid / discretization
+# / regrid machinery with `aggregate` FAQ nodes; 0.4.0 added the
+# sampled-function-tables block + `table_lookup`; 0.5.0 widened `plots.y`; 0.6.0
+# added the `integral` AST op.
 _CURRENT_VERSION = (1, 0, 0)
 
 

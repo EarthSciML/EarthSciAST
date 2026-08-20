@@ -27,18 +27,28 @@ CUBE_ROOT = 0.333333333
 
 
 def _doc(expression, shape=None, extra_vars=None):
+    """One model whose observed unknown ``y`` is defined by ``expression``.
+
+    esm 1.0.0 declares ``y`` as ``unknown`` and puts its body in a
+    bare-variable-LHS equation; that equation is what makes it observed
+    (esm-spec §6.3.1).
+    """
     variables = {"x": {"type": "parameter", "default": -2.5}}
     variables.update(extra_vars or {})
     variables["y"] = {
-        "type": "observed",
-        "expression": expression,
+        "type": "unknown",
         **({"shape": list(shape)} if shape else {}),
     }
     return {
-        "esm": "0.9.0",
+        "esm": "1.0.0",
         "metadata": {"name": "complex_guard"},
         "index_sets": {"n": {"kind": "interval", "size": 3}},
-        "models": {"M": {"variables": variables, "equations": []}},
+        "models": {
+            "M": {
+                "variables": variables,
+                "equations": [{"lhs": "y", "rhs": expression}],
+            }
+        },
     }
 
 

@@ -1,15 +1,17 @@
 """Tests for scalar algebraic-equation elimination in simulate() (esm-y3n).
 
-A model may declare a state variable whose value is determined by an
-algebraic equation ``v = body`` rather than by an ODE ``D(v, t) = …``. The
-canonical Python simulation runner must:
+esm 1.0.0 declares only ``unknown`` and ``parameter``; whether an unknown is
+an ODE state, an observed quantity or an algebraic one is DERIVED from the
+model's equations (§6.3.1). So an unknown whose value is determined by
+``v ~ body`` rather than by ``D(v, t) ~ …`` is exactly what this file
+exercises. The canonical Python simulation runner must:
 
-* Substitute the algebraic body into every other equation that references
-  the variable, so the integrator's RHS depends only on the differential
-  states (the equivalent of MTK's structural_simplify scalar pass).
-* Reconstruct the algebraic value at every output time so the
-  SimulationResult exposes correct trajectories for both differential and
-  algebraic state variables.
+* Substitute the defining body into every other equation that references
+  the variable, so the integrator's RHS depends only on the ODE states
+  (the equivalent of MTK's structural_simplify scalar pass).
+* Reconstruct the derived value at every output time so the
+  SimulationResult exposes correct trajectories for both ODE-state and
+  non-differential unknowns.
 * Reject cyclic algebraic systems with a clear error message.
 * Leave pure-ODE models numerically identical to the previous behaviour.
 """
@@ -38,9 +40,10 @@ from earthsci_ast.simulation import simulate
 def _diameter_growth_model() -> EsmFile:
     """Build the Seinfeld & Pandis Fig. 13.2 / Eq. 13.11–13.13 model directly.
 
-    The model has three state variables — ``D_p`` (ODE), ``A`` (algebraic),
-    ``I_D`` (algebraic that references ``A`` and ``D_p``) — and exercises
-    every part of the elimination pipeline.
+    The model has three unknowns — ``D_p`` (an ODE state), ``A`` (defined by
+    ``A ~ …``), ``I_D`` (defined by ``I_D ~ A / D_p``) — and exercises every
+    part of the elimination pipeline. None of that is declared: all three are
+    ``type: "unknown"`` and the equations say which is which.
     """
     variables = {
         "R_gas": ModelVariable(type="parameter", default=8.314),
@@ -49,9 +52,9 @@ def _diameter_growth_model() -> EsmFile:
         "M_i": ModelVariable(type="parameter", default=0.1),
         "ρ_p": ModelVariable(type="parameter", default=1000.0),
         "Δp": ModelVariable(type="parameter", default=1.0e-4),
-        "D_p": ModelVariable(type="state", default=2.0e-7),
-        "I_D": ModelVariable(type="state"),
-        "A": ModelVariable(type="state"),
+        "D_p": ModelVariable(type="unknown", default=2.0e-7),
+        "I_D": ModelVariable(type="unknown"),
+        "A": ModelVariable(type="unknown"),
     }
 
     eq_dDp = Equation(
@@ -79,7 +82,7 @@ def _diameter_growth_model() -> EsmFile:
         equations=[eq_dDp, eq_A, eq_ID],
     )
     return EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="DiameterGrowthRate"),
         models={"DiameterGrowthRate": model},
     )
@@ -133,11 +136,17 @@ def test_simulate_recovers_algebraic_values_at_output():
 
 
 def test_simulate_rejects_cyclic_algebraic_equations():
-    """A self-referential / mutually-cyclic algebraic system must error out."""
+    """A self-referential / mutually-cyclic system of definitions must error out.
+
+    ``X ~ Y + 1`` / ``Y ~ X + 1`` are bare-variable LHSs, so under esm 1.0.0
+    §6.3.1 both X and Y are OBSERVED unknowns — which is what the diagnostic
+    names. (Under 0.x they were declared ``state`` and the same cycle was
+    reported against the "algebraic" equation class.)
+    """
     variables = {
-        "X": ModelVariable(type="state", default=0.0),
-        "Y": ModelVariable(type="state", default=0.0),
-        "Z": ModelVariable(type="state", default=0.0),
+        "X": ModelVariable(type="unknown", default=0.0),
+        "Y": ModelVariable(type="unknown", default=0.0),
+        "Z": ModelVariable(type="unknown", default=0.0),
     }
     eq_dz = Equation(
         lhs=ExprNode(op="D", args=["Z"], wrt="t"),
@@ -152,7 +161,7 @@ def test_simulate_rejects_cyclic_algebraic_equations():
         equations=[eq_dz, eq_x, eq_y],
     )
     file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="Cyclic"),
         models={"Cyclic": model},
     )
@@ -165,7 +174,8 @@ def test_simulate_rejects_cyclic_algebraic_equations():
         method="LSODA",
     )
     assert not result.success
-    assert "Cyclic algebraic equations detected" in result.message
+    assert "Cyclic observed equations detected" in result.message
+    assert "Cyclic.X" in result.message and "Cyclic.Y" in result.message
 
 
 def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
@@ -178,8 +188,8 @@ def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
         "T": ModelVariable(type="parameter", default=298.0),
         "H_plus": ModelVariable(type="parameter", default=1.0e-4),
         "K_w_298": ModelVariable(type="parameter", default=1.0e-8),
-        "K_w": ModelVariable(type="state"),
-        "OH_minus": ModelVariable(type="state"),
+        "K_w": ModelVariable(type="unknown"),
+        "OH_minus": ModelVariable(type="unknown"),
     }
     eq_K_temp = Equation(lhs="K_w", rhs="K_w_298")
     eq_K_product = Equation(
@@ -192,7 +202,7 @@ def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
         equations=[eq_K_temp, eq_K_product],
     )
     file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="EquilibriumDAE"),
         models={"Eq": model},
     )
@@ -230,7 +240,7 @@ def test_simulate_pure_ode_model_unaffected_by_algebraic_pass():
         reactions=[reaction],
     )
     file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="decay"),
         reaction_systems={"Decay": rs},
     )
@@ -260,9 +270,13 @@ def test_simulate_observed_only_model_emits_observed_trajectories():
     variables = {
         "tau_c": ModelVariable(type="parameter", default=10.0),
         "g": ModelVariable(type="parameter", default=0.85),
-        "gamma": ModelVariable(
-            type="observed",
-            expression=ExprNode(
+        "gamma": ModelVariable(type="unknown"),
+        "R_c": ModelVariable(type="unknown"),
+    }
+    equations = [
+        Equation(
+            lhs="gamma",
+            rhs=ExprNode(
                 op="/",
                 args=[
                     2,
@@ -282,9 +296,9 @@ def test_simulate_observed_only_model_emits_observed_trajectories():
                 ],
             ),
         ),
-        "R_c": ModelVariable(
-            type="observed",
-            expression=ExprNode(
+        Equation(
+            lhs="R_c",
+            rhs=ExprNode(
                 op="/",
                 args=[
                     "tau_c",
@@ -292,10 +306,10 @@ def test_simulate_observed_only_model_emits_observed_trajectories():
                 ],
             ),
         ),
-    }
-    model = Model(name="CloudAlbedo", variables=variables, equations=[])
+    ]
+    model = Model(name="CloudAlbedo", variables=variables, equations=equations)
     file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="cloud_albedo"),
         models={"CloudAlbedo": model},
     )
@@ -328,22 +342,23 @@ def test_simulate_state_plus_observed_emits_observed_alongside_states():
     reference the independent variable ``t``."""
     variables = {
         "k": ModelVariable(type="parameter", default=0.5),
-        "C": ModelVariable(type="state", default=1.0),
-        "C_analytical": ModelVariable(
-            type="observed",
-            expression=ExprNode(
-                op="exp",
-                args=[ExprNode(op="*", args=[-1, "k", "t"])],
-            ),
-        ),
+        "C": ModelVariable(type="unknown", default=1.0),
+        "C_analytical": ModelVariable(type="unknown"),
     }
     eq_dC = Equation(
         lhs=ExprNode(op="D", args=["C"], wrt="t"),
         rhs=ExprNode(op="*", args=[-1, "k", "C"]),
     )
-    model = Model(name="Decay", variables=variables, equations=[eq_dC])
+    eq_analytical = Equation(
+        lhs="C_analytical",
+        rhs=ExprNode(
+            op="exp",
+            args=[ExprNode(op="*", args=[-1, "k", "t"])],
+        ),
+    )
+    model = Model(name="Decay", variables=variables, equations=[eq_dC, eq_analytical])
     file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="decay"),
         models={"Decay": model},
     )
@@ -378,20 +393,19 @@ def test_simulate_observed_referenced_in_diff_rhs_no_namespace_leak():
     variables = {
         "k0": ModelVariable(type="parameter", default=2.0),
         "T": ModelVariable(type="parameter", default=300.0),
-        "NO2": ModelVariable(type="state", default=1.0),
-        # Observed photolysis rate j_NO2 = k0 / T (depends only on parameters).
-        "j_NO2": ModelVariable(
-            type="observed",
-            expression=ExprNode(op="/", args=["k0", "T"]),
-        ),
+        "NO2": ModelVariable(type="unknown", default=1.0),
+        # Photolysis rate j_NO2 = k0 / T (depends only on parameters); its
+        # bare-variable equation below is what makes it an OBSERVED unknown.
+        "j_NO2": ModelVariable(type="unknown"),
     }
     eq_dNO2 = Equation(
         lhs=ExprNode(op="D", args=["NO2"], wrt="t"),
         rhs=ExprNode(op="*", args=[-1, "j_NO2", "NO2"]),
     )
-    model = Model(name="Decay", variables=variables, equations=[eq_dNO2])
+    eq_j = Equation(lhs="j_NO2", rhs=ExprNode(op="/", args=["k0", "T"]))
+    model = Model(name="Decay", variables=variables, equations=[eq_dNO2, eq_j])
     file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="namespaced-observed-in-diff-rhs"),
         models={"Decay": model},
     )
@@ -433,10 +447,10 @@ def test_simulate_deep_algebraic_chain_sequential_evaluation():
     variables = {
         "a": ModelVariable(type="parameter", default=2.0),
         "b": ModelVariable(type="parameter", default=3.0),
-        "x": ModelVariable(type="state", default=1.0),
-        "C": ModelVariable(type="state"),
-        "D": ModelVariable(type="state"),
-        "E": ModelVariable(type="state"),
+        "x": ModelVariable(type="unknown", default=1.0),
+        "C": ModelVariable(type="unknown"),
+        "D": ModelVariable(type="unknown"),
+        "E": ModelVariable(type="unknown"),
     }
     eq_C = Equation(lhs="C", rhs=ExprNode(op="*", args=["a", "b"]))
     eq_D = Equation(lhs="D", rhs=ExprNode(op="*", args=["C", "x"]))
@@ -447,7 +461,7 @@ def test_simulate_deep_algebraic_chain_sequential_evaluation():
     )
     model = Model(name="Chain", variables=variables, equations=[eq_C, eq_D, eq_E, eq_dx])
     file = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="deep_alg_chain"),
         models={"Chain": model},
     )

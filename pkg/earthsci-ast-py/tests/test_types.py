@@ -10,10 +10,12 @@ from earthsci_ast.esm_types import (
     Parameter,
     Reaction,
     ReactionSystem,
-    DataLoader,
-    DataLoaderKind,
-    DataLoaderSource,
-    DataLoaderVariable,
+    DataSource,
+    DataSourceKind,
+    DataSourceLocation,
+    DataSourceBinding,
+    Distribution,
+    ParameterUpdate,
     Operator,
     CouplingType,
     VariableMapCoupling,
@@ -49,12 +51,55 @@ def test_affect_equation():
 
 
 def test_model_variable():
-    """Test ModelVariable creation."""
-    var = ModelVariable(type="state", units="kg/m^3", default=0.0, description="Concentration")
-    assert var.type == "state"
+    """Test ModelVariable creation.
+
+    There are exactly two declared types, `unknown` and `parameter`; an
+    unknown's behaviour is stated by the model's equations, so it carries no
+    `expression` of its own.
+    """
+    var = ModelVariable(type="unknown", units="kg/m^3", default=0.0, description="Concentration")
+    assert var.type == "unknown"
     assert var.units == "kg/m^3"
     assert var.default == 0.0
     assert var.description == "Concentration"
+    assert var.distribution is None
+    assert var.update is None
+
+
+def test_model_variable_parameter_distribution_and_update():
+    """A parameter may carry a `distribution` (what it is drawn from) and an
+    `update` (when it is refreshed) — the two fields that subsume the retired
+    `brownian` and `discrete` variable types."""
+    var = ModelVariable(
+        type="parameter",
+        units="m/s",
+        distribution=Distribution(kind="normal", mean=0.0, std=1.0),
+        update=ParameterUpdate(kind="wiener"),
+    )
+    assert var.type == "parameter"
+    assert var.distribution.kind == "normal"
+    assert var.distribution.mean == 0.0
+    assert var.distribution.std == 1.0
+    assert var.update.kind == "wiener"
+    # `wiener` takes no value form at all — it resamples the distribution.
+    assert var.update.expression is None
+    assert var.update.from_source is None
+    assert var.update.handler is None
+
+
+def test_parameter_update_rule_list():
+    """A parameter's `update` is EITHER one rule or an ordered list of >= 2,
+    applied in declaration order."""
+    rules = [
+        ParameterUpdate(kind="schedule", interval=3600.0, expression=1.0),
+        ParameterUpdate(
+            kind="condition", when=ExprNode(op=">", args=["x", 5.0]), expression=0.0
+        ),
+    ]
+    var = ModelVariable(type="parameter", units="1", shape=[], update=rules)
+    assert [rule.kind for rule in var.update] == ["schedule", "condition"]
+    assert var.update[0].interval == 3600.0
+    assert var.update[1].when.op == ">"
 
 
 def test_model():
@@ -99,21 +144,41 @@ def test_reaction_system():
     assert len(system.reactions) == 0
 
 
-def test_data_loader():
-    """Test DataLoader creation."""
-    loader = DataLoader(
+def test_data_source():
+    """Test DataSource creation.
+
+    A source is pure I/O: it locates and decodes bytes and exposes NO variables
+    map. The per-variable binding is a `DataSourceBinding` on the CONSUMING
+    parameter's `update`, and the parameter — not the source — owns the units.
+    """
+    source = DataSource(
         name="test",
-        kind=DataLoaderKind.GRID,
-        source=DataLoaderSource(url_template="file:///data/test_{date:%Y%m%d}.nc"),
-        variables={
-            "T": DataLoaderVariable(file_variable="T", units="K", description="temperature"),
-        },
+        kind=DataSourceKind.GRID,
+        source=DataSourceLocation(url_template="file:///data/test_{date:%Y%m%d}.nc"),
     )
-    assert loader.name == "test"
-    assert loader.kind == DataLoaderKind.GRID
-    assert loader.source.url_template == "file:///data/test_{date:%Y%m%d}.nc"
-    assert "T" in loader.variables
-    assert loader.variables["T"].file_variable == "T"
+    assert source.name == "test"
+    assert source.kind == DataSourceKind.GRID
+    assert source.source.url_template == "file:///data/test_{date:%Y%m%d}.nc"
+    assert not hasattr(source, "variables")
+
+    consumer = ModelVariable(
+        type="parameter",
+        units="K",
+        shape=[],
+        description="temperature",
+        update=ParameterUpdate(
+            kind="data",
+            source="test",
+            from_source=DataSourceBinding(file_variable="T", unit_conversion=1.0),
+        ),
+    )
+    assert consumer.update.kind == "data"
+    assert consumer.update.source == "test"
+    assert consumer.update.from_source.file_variable == "T"
+    assert consumer.update.from_source.unit_conversion == 1.0
+    # The units are declared once, on the parameter.
+    assert consumer.units == "K"
+    assert not hasattr(consumer.update.from_source, "units")
 
 
 def test_operator():

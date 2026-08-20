@@ -217,15 +217,10 @@ def _rewrite_entry_in_place(entry: dict[str, Any], struct_fn: RefFn, expr_fn: Re
             and trigger.get("expression") is not None
         ):
             trigger["expression"] = _rewrite_expr(trigger["expression"], expr_fn)
-        fa = entry.get("functional_affect")
-        if _is_object(fa):
-            for key in ("read_vars", "read_params", "modified_params"):
-                if isinstance(fa.get(key), list):
-                    fa[key] = [struct_fn(s) if isinstance(s, str) else s for s in fa[key]]
-        if isinstance(entry.get("discrete_parameters"), list):
-            entry["discrete_parameters"] = [
-                struct_fn(s) if isinstance(s, str) else s for s in entry["discrete_parameters"]
-            ]
+        # An event carries no `functional_affect` and no `discrete_parameters`
+        # from esm 1.0.0: it affects UNKNOWNS only, and a handler or a scheduled
+        # rewrite lives on the PARAMETER it writes, as that parameter's own
+        # `update`. There is nothing left here to rewrite.
 
 
 def _collect_role_segments(edge: Any) -> set[str]:

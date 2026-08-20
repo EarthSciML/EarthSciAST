@@ -11,6 +11,7 @@ from earthsci_ast import (
     Species,
     Parameter,
     derive_odes,
+    ode_states,
     stoichiometric_matrix,
     substrate_matrix,
     product_matrix,
@@ -167,10 +168,13 @@ class TestDeriveODEs:
         assert len(model.variables) == 3  # A, B, k1
         assert len(model.equations) == 2  # d[A]/dt, d[B]/dt
 
-        # Check variable types
-        assert model.variables["A"].type == "state"
-        assert model.variables["B"].type == "state"
+        # Check variable types. 1.0.0 declares only `unknown` / `parameter`;
+        # that A and B are ODE STATES is DERIVED from the `D(., t)` equations
+        # `derive_odes` emits, never declared (esm-spec §6.3.1).
+        assert model.variables["A"].type == "unknown"
+        assert model.variables["B"].type == "unknown"
         assert model.variables["k1"].type == "parameter"
+        assert ode_states(model) == ["A", "B"]
 
         # Check equations structure (they should be differential equations)
         for eq in model.equations:

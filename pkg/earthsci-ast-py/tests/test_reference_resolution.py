@@ -239,7 +239,7 @@ def test_reference_cycle_is_detected():
 
 def test_no_references_empty_graph():
     model = {
-        "variables": {"u": {"type": "state"}},
+        "variables": {"u": {"type": "unknown"}},
         "equations": [_eqn({"op": "D", "args": ["u"], "wrt": "t"}, -1)],
     }
     g = build_reference_graph(model, "M")

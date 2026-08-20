@@ -20,7 +20,7 @@ import pytest
 
 esio = pytest.importorskip("earthsciio", reason="EarthSciIO not installed")
 
-from earthsci_ast.data_loaders.esio_provider import (  # noqa: E402
+from earthsci_ast.data_sources.esio_provider import (  # noqa: E402
     providers_from_document,
 )
 

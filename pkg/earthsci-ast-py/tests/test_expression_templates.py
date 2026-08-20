@@ -24,7 +24,7 @@ from earthsci_ast.template_imports import resolve_template_machinery
 
 
 ARRHENIUS_FIXTURE: dict = {
-    "esm": "0.4.0",
+    "esm": "1.0.0",
     "metadata": {"name": "expr_template_smoke", "authors": ["esm-giy"]},
     "reaction_systems": {
         "chem": {
@@ -122,7 +122,7 @@ def test_lower_expression_templates_is_deterministic():
 
 def test_files_without_templates_pass_through_unchanged():
     fixture = {
-        "esm": "0.4.0",
+        "esm": "1.0.0",
         "metadata": {"name": "no_templates", "authors": ["t"]},
         "reaction_systems": {
             "chem": {
@@ -146,6 +146,12 @@ def test_files_without_templates_pass_through_unchanged():
 
 
 def test_rejects_apply_expression_template_pre_v04():
+    """The pre-0.4.0 gate, exercised DIRECTLY.
+
+    From 1.0.0 ``load()`` rejects every major-version-0 document outright, so
+    this gate is only ever reached by calling it — it stays as the pinned
+    cross-binding diagnostic for a legacy file handed to the checker.
+    """
     fixture = copy.deepcopy(ARRHENIUS_FIXTURE)
     fixture["esm"] = "0.3.5"
     with pytest.raises(ExpressionTemplateError) as excinfo:
@@ -273,6 +279,18 @@ def test_load_end_to_end_produces_inline_rate_in_typed_object():
 # ===========================================================================
 
 
+def _defining(doc: dict, model: str, var: str, section: str = "models"):
+    """The RHS of the bare-variable-LHS equation defining ``var``.
+
+    esm 1.0.0 removed the variable ``expression`` field: an observed unknown is
+    defined by an equation, so a template call site that used to sit on
+    ``variables[v]["expression"]`` now sits on that equation's ``rhs``.
+    """
+    eqs = [e for e in doc[section][model]["equations"] if e.get("lhs") == var]
+    assert len(eqs) == 1, f"expected exactly one defining equation for {var!r}"
+    return eqs[0]["rhs"]
+
+
 def _conf_dir(fix: str) -> str:
     return str(CONFORMANCE_DIR / "expression_templates" / fix)
 
@@ -289,11 +307,12 @@ def test_godunov_compound_rule_beats_inner_derivative():
     expanded form is ``godunov_coef * u`` — crucially with NO ``inv_dx`` (which
     only the per-derivative rule emits)."""
     out = lower_expression_templates(_conf_fixture("godunov_beats_inner_deriv"))
-    got = out["models"]["m"]["variables"]
-    exp = _conf_fixture("godunov_beats_inner_deriv", "expanded.esm")["models"]["m"]["variables"]
-    assert got == exp
-    assert got["grad_mag"]["expression"] == {"op": "*", "args": ["godunov_coef", "u"]}
-    expr_json = json.dumps(got["grad_mag"]["expression"])
+    exp = _conf_fixture("godunov_beats_inner_deriv", "expanded.esm")
+    assert out["models"]["m"]["variables"] == exp["models"]["m"]["variables"]
+    assert out["models"]["m"]["equations"] == exp["models"]["m"]["equations"]
+    grad_mag = _defining(out, "m", "grad_mag")
+    assert grad_mag == {"op": "*", "args": ["godunov_coef", "u"]}
+    expr_json = json.dumps(grad_mag)
     assert "inv_dx" not in expr_json
     assert "godunov_coef" in expr_json
 
@@ -303,17 +322,18 @@ def test_nested_derivative_fixpoint_converges_across_passes():
     (pass 2). Exercises the bounded fixpoint: a produced body is re-scanned only in
     a SUBSEQUENT pass."""
     out = lower_expression_templates(_conf_fixture("fixpoint_nested_deriv"))
-    got = out["models"]["m"]["variables"]
-    exp = _conf_fixture("fixpoint_nested_deriv", "expanded.esm")["models"]["m"]["variables"]
-    assert got == exp
-    assert got["lap"]["expression"] == {
+    exp = _conf_fixture("fixpoint_nested_deriv", "expanded.esm")
+    assert out["models"]["m"]["variables"] == exp["models"]["m"]["variables"]
+    assert out["models"]["m"]["equations"] == exp["models"]["m"]["equations"]
+    lap = _defining(out, "m", "lap")
+    assert lap == {
         "op": "+",
         "args": [
             {"op": "*", "args": ["inv_dx2", "u"]},
             {"op": "*", "args": ["inv_dy2", "u"]},
         ],
     }
-    expr_json = json.dumps(got["lap"]["expression"])
+    expr_json = json.dumps(lap)
     assert "laplacian" not in expr_json
     assert '"D"' not in expr_json
 
@@ -394,23 +414,26 @@ def test_attrs_match_binds_scalar_metavariable():
     the matched literal. This falls out of generic structural matching — no
     special-casing in the engine. Mirrors the Julia attrs testset."""
     src = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "attrs_match", "authors": ["t"]},
         "models": {
             "m": {
                 "variables": {
-                    "u": {"type": "state", "units": "1", "default": 0.0},
-                    "y": {
-                        "type": "observed",
-                        "units": "1",
-                        "expression": {
+                    "u": {"type": "unknown", "units": "1", "default": 0.0},
+                    "y": {"type": "unknown", "units": "1"},
+                },
+                # `y` is an OBSERVED unknown: its definition is this equation,
+                # not a declared type plus an `expression` field.
+                "equations": [
+                    {
+                        "lhs": "y",
+                        "rhs": {
                             "op": "custom_scheme",
                             "args": ["u"],
                             "attrs": {"gamma": 1.4},
                         },
-                    },
-                },
-                "equations": [],
+                    }
+                ],
                 "expression_templates": {
                     "lower_custom": {
                         "params": ["f", "g"],
@@ -422,10 +445,7 @@ def test_attrs_match_binds_scalar_metavariable():
         },
     }
     out = lower_expression_templates(src)
-    assert out["models"]["m"]["variables"]["y"]["expression"] == {
-        "op": "*",
-        "args": [1.4, "u"],
-    }
+    assert _defining(out, "m", "y") == {"op": "*", "args": [1.4, "u"]}
 
 
 # ---------------------------------------------------------------------------
@@ -436,24 +456,28 @@ def test_attrs_match_binds_scalar_metavariable():
 
 def _scalar_field_doc(templates: dict, bindings: dict, name: str = "overlap_area") -> dict:
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "scalar_field_param_unit", "authors": ["t"]},
         "models": {
             "M": {
                 "variables": {
                     "pa": {"type": "parameter"},
                     "pb": {"type": "parameter"},
-                    "area": {
-                        "type": "observed",
-                        "expression": {
+                    "area": {"type": "unknown"},
+                },
+                # `area` is an OBSERVED unknown — the template call site is on
+                # its defining EQUATION (1.0.0 has no variable `expression`).
+                "equations": [
+                    {
+                        "lhs": "area",
+                        "rhs": {
                             "op": "apply_expression_template",
                             "args": [],
                             "name": name,
                             "bindings": bindings,
                         },
-                    },
-                },
-                "equations": [],
+                    }
+                ],
                 "expression_templates": templates,
             }
         },
@@ -480,7 +504,7 @@ def test_scalar_field_substitution_happy_path():
     # Option B: polygon_intersection_area is target-free → the reference
     # survives lower; expand_document yields the substituted Option-A image.
     out = expand_document(lower_expression_templates(src))
-    assert out["models"]["M"]["variables"]["area"]["expression"] == {
+    assert _defining(out, "M", "area") == {
         "op": "polygon_intersection_area",
         "manifold": "planar",
         "args": ["pa", "pb"],
@@ -517,7 +541,7 @@ def test_scalar_field_param_threads_through_body_composition():
         name="outer",
     )
     out = expand_document(lower_expression_templates(src))
-    assert out["models"]["M"]["variables"]["area"]["expression"] == {
+    assert _defining(out, "M", "area") == {
         "op": "*",
         "args": [
             {"op": "polygon_intersection_area", "manifold": "spherical", "args": ["pa", "pb"]},
@@ -567,8 +591,7 @@ def test_params_shadow_literals_in_scalar_fields():
         name="shadowed",
     )
     out = expand_document(lower_expression_templates(src))
-    expr = out["models"]["M"]["variables"]["area"]["expression"]
-    assert expr["manifold"] == "spherical"
+    assert _defining(out, "M", "area")["manifold"] == "spherical"
 
 
 def test_scalar_field_param_conformance_fixture_matches_expanded():
@@ -579,9 +602,8 @@ def test_scalar_field_param_conformance_fixture_matches_expanded():
     expanded = _conf_fixture("scalar_field_param", "expanded.esm")
     out = expand_document(lower_expression_templates(fixture))
     assert out["models"] == expanded["models"]
-    variables = out["models"]["Overlap"]["variables"]
-    assert variables["area_planar"]["expression"]["manifold"] == "planar"
-    assert variables["area_spherical"]["expression"]["manifold"] == "spherical"
+    assert _defining(out, "Overlap", "area_planar")["manifold"] == "planar"
+    assert _defining(out, "Overlap", "area_spherical")["manifold"] == "spherical"
 
 
 # ---------------------------------------------------------------------------
@@ -618,11 +640,10 @@ def test_where_constraint_scopes_positive_and_negative_case():
     variables. div(F_edge) (shape [edges]) is rewritten; div(F_cell) (shape
     [cells]) is constraint-excluded and survives lowering intact."""
     out = _expand_conf("constrained_match_scope")
-    vars_ = out["models"]["m"]["variables"]
     # F_edge matched the shape [edges] constraint → rewritten to inv_area * F.
-    assert vars_["div_edge"]["expression"]["op"] == "*"
+    assert _defining(out, "m", "div_edge")["op"] == "*"
     # F_cell failed the constraint → the div node stays un-lowered.
-    assert vars_["div_cell"]["expression"]["op"] == "div"
+    assert _defining(out, "m", "div_cell")["op"] == "div"
 
 
 def test_where_unknown_index_set_rejected_at_registration():
@@ -639,22 +660,18 @@ def test_where_unknown_index_set_rejected_at_registration():
 
 def _where_pin_doc(templates: dict) -> dict:
     return {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "where_pin"},
         "index_sets": {"edges": {"kind": "interval", "size": 4}},
         "models": {
             "m": {
                 "variables": {
-                    "Fe": {"type": "state", "units": "1", "default": 1.0, "shape": ["edges"]},
+                    "Fe": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["edges"]},
                     "k": {"type": "parameter", "units": "1", "default": 2.0},
-                    "d": {
-                        "type": "observed",
-                        "units": "1",
-                        "shape": ["edges"],
-                        "expression": {"op": "div", "args": ["Fe"]},
-                    },
+                    "d": {"type": "unknown", "units": "1", "shape": ["edges"]},
                 },
-                "equations": [],
+                # `d` is an OBSERVED unknown defined by this equation.
+                "equations": [{"lhs": "d", "rhs": {"op": "div", "args": ["Fe"]}}],
                 "expression_templates": templates,
             }
         },
@@ -691,7 +708,7 @@ def test_where_constraint_filters_before_priority():
     # it simply never matches a variable's declared shape.
     doc["index_sets"]["cells_nope_unused"] = {"kind": "interval", "size": 1}
     out = lower_expression_templates(doc)
-    expr = out["models"]["m"]["variables"]["d"]["expression"]
+    expr = _defining(out, "m", "d")
     assert expr["op"] == "*"
     assert expr["args"][0] == "k"  # the low-priority (satisfied) rule fired
 
@@ -711,12 +728,12 @@ def test_where_constraint_compound_argument_fails_conservatively():
         }
     )
     # div of a compound (Fe + Fe), not a bare variable reference.
-    doc["models"]["m"]["variables"]["d"]["expression"] = {
+    doc["models"]["m"]["equations"][0]["rhs"] = {
         "op": "div",
         "args": [{"op": "+", "args": ["Fe", "Fe"]}],
     }
     out = lower_expression_templates(doc)
-    expr = out["models"]["m"]["variables"]["d"]["expression"]
+    expr = _defining(out, "m", "d")
     assert expr["op"] == "div"  # unchanged: constraint not satisfied
 
 

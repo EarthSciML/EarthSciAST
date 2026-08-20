@@ -145,13 +145,13 @@ def test_b_numerical_domain_agnostic_negative_state():
     rhs = _node("-", _node("abs", "v"))
     model = Model(
         name="NegState",
-        variables={"v": ModelVariable(type="state", default=-1.0)},
+        variables={"v": ModelVariable(type="unknown", default=-1.0)},
         equations=[
             Equation(lhs=ExprNode(op="D", args=["v"], wrt="t"), rhs=rhs),
         ],
     )
     esm = EsmFile(
-        version="0.4.0",
+        version="1.0.0",
         metadata=Metadata(title="t"),
         models={"NegState": model},
     )

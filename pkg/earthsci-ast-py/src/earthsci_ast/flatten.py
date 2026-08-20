@@ -14,6 +14,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .classification import inlined_unknowns
 from .errors import EarthSciAstError
 from .esm_types import (
     ARRAY_OPS,
@@ -34,7 +35,6 @@ from .esm_types import (
     ReactionSystem,
     VariableMapCoupling,
 )
-from .classification import inlined_unknowns
 from .expr_walk import any_child, iter_children, map_children, walk
 
 # ``_expand_range`` moved to the dependency-free leaf :mod:`.index_ranges` (so

@@ -44,9 +44,9 @@ def _load_manifest() -> dict:
 
 
 def _load_model(fixture: dict) -> dict:
-    # model_from_doc attaches the document's top-level `data_loaders` so the
-    # loader-seeded cadence refinement (§5.7.2) resolves a discrete variable's
-    # data_ingest source loader.
+    # model_from_doc attaches the document's top-level `data_sources` so the
+    # source-seeded cadence refinement (§5.7.2) resolves the source named by a
+    # parameter's `data` update.
     doc = json.loads((REPO_ROOT / fixture["fixture"]).read_text())
     return model_from_doc(doc, fixture["model"])
 
@@ -107,33 +107,40 @@ def test_expect_cadence_annotations_agree(fixture):
     partition(_load_model(fixture))
 
 
-# ── loader-seeded cadence: a DataLoader's `temporal` block drives the seed ───
+# ── loader-seeded cadence: a DataSource's `temporal` block drives the seed ───
 
 
 def test_loader_temporal_seeds_discrete_no_temporal_seeds_const():
-    """§5.7.2 / RFC pure-io-data-loaders §4.6: a discrete variable fed by a
-    ``data_ingest`` refresh resolves through its source loader's ``temporal``
-    block — DISCRETE when the loader is time-varying, CONST (folds at bind) when
-    it is not. The SAME variable declaration; only the loader differs."""
+    """§5.7.2 / RFC pure-io-data-loaders §4.6: a parameter fed by a ``data``
+    update resolves through its source's ``temporal`` block — DISCRETE when the
+    source is time-varying, CONST (folds at bind) when it is not. The SAME
+    variable declaration; only the source differs.
+
+    In 1.0.0 there is no ``discrete`` variable type: the parameter carries the
+    ``update`` and its DISCRETE cadence is derived from it."""
     variables = {
-        "c": {"type": "state", "shape": ["cells"]},
+        "c": {"type": "unknown", "shape": ["cells"]},
         "bc": {
-            "type": "discrete",
+            "type": "parameter",
             "shape": ["cells"],
-            "refresh": {"kind": "data_ingest", "source": "bc_loader"},
+            "update": {
+                "kind": "data",
+                "source": "bc_loader",
+                "from": {"file_variable": "BC"},
+            },
         },
     }
     bc = {"op": "index", "args": ["bc", "i"]}
 
     with_temporal = {
         "variables": variables,
-        "data_loaders": {"bc_loader": {"kind": "grid", "temporal": {"frequency": "PT6H"}}},
+        "data_sources": {"bc_loader": {"kind": "grid", "temporal": {"frequency": "PT6H"}}},
     }
     assert classify(bc, with_temporal) == "discrete"
 
     no_temporal = {
         "variables": variables,
-        "data_loaders": {"bc_loader": {"kind": "static"}},
+        "data_sources": {"bc_loader": {"kind": "static"}},
     }
     assert classify(bc, no_temporal) == "const"
 
@@ -142,16 +149,16 @@ def test_loader_temporal_seeds_discrete_no_temporal_seeds_const():
 
 
 def test_model_from_doc_attaches_loaders():
-    """model_from_doc lifts the document's top-level ``data_loaders`` onto the
+    """model_from_doc lifts the document's top-level ``data_sources`` onto the
     model so the refinement resolves the source loader — without mutating the
     parsed document."""
     doc = {
         "models": {"M": {"variables": {}, "equations": []}},
-        "data_loaders": {"bc_loader": {"kind": "static"}},
+        "data_sources": {"bc_loader": {"kind": "static"}},
     }
     model = model_from_doc(doc, "M")
-    assert "bc_loader" in model["data_loaders"]
-    assert "data_loaders" not in doc["models"]["M"]  # original document untouched
+    assert "bc_loader" in model["data_sources"]
+    assert "data_sources" not in doc["models"]["M"]  # original document untouched
 
 
 # ── the adapter: byte-identical to the golden ───────────────────────────────
@@ -207,10 +214,10 @@ def test_guard_expect_cadence_mismatch_rejected():
 
 
 def test_guard_continuous_relational_rejected():
-    """A state-dependent ``distinct`` that classifies CONTINUOUS is rejected —
-    the relational engine may not run on the hot path (guard 2)."""
+    """An unknown-dependent ``distinct`` that classifies CONTINUOUS is rejected
+    — the relational engine may not run on the hot path (guard 2)."""
     bad_model = {
-        "variables": {"u": {"type": "state"}, "lo": {"type": "parameter"}},
+        "variables": {"u": {"type": "unknown"}, "lo": {"type": "parameter"}},
         "index_sets": {"faces": {"kind": "interval", "size": 4}},
         "equations": [
             {
@@ -234,7 +241,7 @@ def test_guard_continuous_relational_rejected():
 
 def test_continuous_relational_fixture_rejected():
     """The shared invalid fixture tests/invalid/aggregate/continuous_relational_node.esm
-    — a relational/value-invention node whose Skolem key reads a `state` var — is
+    — a relational/value-invention node whose Skolem key reads an `unknown` var — is
     SCHEMA-VALID (Go / TS accept it, marked resolver_only) but the partition pass
     rejects it (guard 2). The same fixture is rejected by the Julia and Rust
     siblings, so all three evaluators agree (bead ess-my4.3.11)."""

@@ -13,7 +13,7 @@ Sections covered:
 5. Events - continuous/discrete/cross-system with Pre operator
 6. Models - ODE systems with variables/equations/events
 7. Reaction systems - species/parameters/reactions with mass action
-8. Data loaders - by reference with provides validation
+8. Data sources - pure I/O by reference; consuming parameters carry the bindings
 9. Operators - runtime-specific with needed_vars
 10. Coupling - all 6 types including couple/operator_apply/callback/event
 11. Domain - spatial/temporal with BCs/ICs
@@ -22,10 +22,23 @@ Sections covered:
 14. Future considerations compatibility
 """
 
-import pytest
+from __future__ import annotations
+
 import jsonschema
+import pytest
 from jsonschema import ValidationError
 
+from earthsci_ast import (
+    algebraic_unknowns,
+    assert_partitions,
+    brownian_parameters,
+    constant_parameters,
+    discrete_parameters,
+    observed_unknowns,
+    ode_states,
+    sampled_parameters,
+    system_kind,
+)
 from earthsci_ast.parse import _get_schema
 
 
@@ -36,9 +49,9 @@ class TestSection01Overview:
         """Test valid format version strings."""
         schema = _get_schema()
 
-        # Valid version 0.1.0
+        # Valid version 1.0.0
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -67,10 +80,12 @@ class TestSection01Overview:
             with pytest.raises(ValidationError):
                 jsonschema.validate(invalid_data, schema)
 
-        # Incompatible major versions should fail at library level
+        # Incompatible major versions should fail at library level. 1.0.0 is a
+        # CLEAN BREAK with no deprecation path, so major version 0 is rejected
+        # exactly as an unreleased future major is.
         from earthsci_ast.parse import UnsupportedVersionError, load
 
-        for version in ["1.0.0", "2.0.0"]:
+        for version in ["0.1.0", "0.9.0", "2.0.0"]:
             invalid_data = {
                 "esm": version,
                 "metadata": {"name": "Test"},
@@ -104,9 +119,29 @@ class TestSection02TopLevelStructure:
         schema = _get_schema()
 
         complete_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Complete Test"},
-            "models": {"test_model": {"variables": {"x": {"type": "state"}}, "equations": []}},
+            "models": {
+                "test_model": {
+                    "variables": {
+                        "x": {"type": "unknown"},
+                        # A source is not a component: the CONSUMING PARAMETER
+                        # carries the binding and owns the units (§8.5).
+                        "var1": {
+                            "type": "parameter",
+                            "units": "1",
+                            "default": 0.0,
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "test_source",
+                                "from": {"file_variable": "v1"},
+                            },
+                        },
+                    },
+                    "equations": [],
+                }
+            },
             "reaction_systems": {
                 "test_rs": {
                     "species": {"A": {}},
@@ -121,11 +156,10 @@ class TestSection02TopLevelStructure:
                     ],
                 }
             },
-            "data_loaders": {
-                "test_loader": {
+            "data_sources": {
+                "test_source": {
                     "kind": "grid",
                     "source": {"url_template": "file:///data/test_{date:%Y%m%d}.nc"},
-                    "variables": {"var1": {"file_variable": "v1", "units": "1"}},
                 }
             },
             "coupling": [],
@@ -152,7 +186,7 @@ class TestSection02TopLevelStructure:
         # Missing metadata field
         with pytest.raises(ValidationError, match="'metadata' is a required property"):
             jsonschema.validate(
-                {"esm": "0.1.0", "models": {"test": {"variables": {}, "equations": []}}}, schema
+                {"esm": "1.0.0", "models": {"test": {"variables": {}, "equations": []}}}, schema
             )
 
     def test_at_least_one_model_or_reaction_system_required(self):
@@ -161,7 +195,7 @@ class TestSection02TopLevelStructure:
 
         # Neither models nor reaction_systems present
         with pytest.raises(ValidationError):
-            jsonschema.validate({"esm": "0.1.0", "metadata": {"name": "Test"}}, schema)
+            jsonschema.validate({"esm": "1.0.0", "metadata": {"name": "Test"}}, schema)
 
     def test_optional_fields_can_be_omitted(self):
         """Test that optional fields can be safely omitted."""
@@ -170,12 +204,12 @@ class TestSection02TopLevelStructure:
         # Minimal valid structure with only required fields
         minimal_valid_cases = [
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {"test": {"variables": {}, "equations": []}},
             },
             {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "reaction_systems": {
                     "test": {
@@ -202,7 +236,7 @@ class TestSection02TopLevelStructure:
         schema = _get_schema()
 
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "unknown_field": "should not be allowed",
@@ -220,7 +254,7 @@ class TestSection03Metadata:
         schema = _get_schema()
 
         minimal_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Minimal Test"},
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -231,7 +265,7 @@ class TestSection03Metadata:
         schema = _get_schema()
 
         complete_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "FullChemistry_NorthAmerica",
                 "description": "Coupled gas-phase chemistry with advection and meteorology over North America",
@@ -259,7 +293,7 @@ class TestSection03Metadata:
         with pytest.raises(ValidationError, match="'name' is a required property"):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"description": "Missing name"},
                     "models": {"test": {"variables": {}, "equations": []}},
                 },
@@ -280,7 +314,7 @@ class TestSection03Metadata:
 
         for violation in type_violations:
             invalid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": violation,
                 "models": {"test": {"variables": {}, "equations": []}},
             }
@@ -297,11 +331,11 @@ class TestSection04ExpressionAST:
 
         # Number expression
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": "x", "rhs": 3.14}],
                 }
             },
@@ -327,11 +361,11 @@ class TestSection04ExpressionAST:
 
         for op_case in arithmetic_cases:
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [{"lhs": "x", "rhs": op_case}],
                     }
                 },
@@ -351,11 +385,11 @@ class TestSection04ExpressionAST:
 
         for op_case in calculus_cases:
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [{"lhs": "x", "rhs": op_case}],
                     }
                 },
@@ -400,11 +434,11 @@ class TestSection04ExpressionAST:
                 op_case["args"] = ["a", "b"]  # min/max need at least two arguments
 
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [{"lhs": "x", "rhs": op_case}],
                     }
                 },
@@ -430,11 +464,11 @@ class TestSection04ExpressionAST:
 
         for op_case in conditional_cases:
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [{"lhs": "x", "rhs": op_case}],
                     }
                 },
@@ -446,11 +480,11 @@ class TestSection04ExpressionAST:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [],
                     "continuous_events": [
                         {
@@ -476,11 +510,11 @@ class TestSection04ExpressionAST:
 
         def _doc(op):
             return {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [{"lhs": "x", "rhs": {"op": op, "args": ["x"]}}],
                     }
                 },
@@ -504,11 +538,11 @@ class TestSection05Events:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}, "v": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}, "v": {"type": "unknown"}},
                     "equations": [],
                     "continuous_events": [
                         {
@@ -536,11 +570,11 @@ class TestSection05Events:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"T": {"type": "state"}, "heater_on": {"type": "state"}},
+                    "variables": {"T": {"type": "unknown"}, "heater_on": {"type": "unknown"}},
                     "equations": [],
                     "continuous_events": [
                         {
@@ -598,11 +632,11 @@ class TestSection05Events:
 
         for trigger_case in trigger_cases:
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [],
                         "discrete_events": [trigger_case],
                     }
@@ -610,17 +644,59 @@ class TestSection05Events:
             }
             jsonschema.validate(valid_data, schema)
 
-    def test_discrete_parameters_in_events(self):
-        """Test discrete parameters modification in events."""
+    def test_parameter_change_is_the_parameters_own_update(self):
+        """A parameter that changes during a run declares its own `update`.
+
+        Events affect UNKNOWNS ONLY from 1.0.0 (§5.5): the ``discrete_parameters``
+        list is gone, and the trigger that used to sit on the event now sits on
+        the parameter as ``update: {kind: "condition", ...}``. An event whose
+        ``affects`` LHS names a parameter is the ``event_affects_parameter``
+        diagnostic.
+        """
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
                     "variables": {
-                        "x": {"type": "state"},
+                        "x": {"type": "unknown"},
+                        "alpha": {
+                            "type": "parameter",
+                            "default": 1.0,
+                            "update": {
+                                "kind": "condition",
+                                "when": {"op": "==", "args": ["t", 10]},
+                                "expression": 0.5,
+                            },
+                        },
+                    },
+                    "equations": [],
+                    "discrete_events": [
+                        {
+                            "name": "state_reset",
+                            "trigger": {
+                                "type": "condition",
+                                "expression": {"op": "==", "args": ["t", 10]},
+                            },
+                            "affects": [{"lhs": "x", "rhs": 0.0}],
+                            "description": "Reset the unknown at t=10",
+                        }
+                    ],
+                }
+            },
+        }
+        jsonschema.validate(valid_data, schema)
+
+        # `discrete_parameters` on an event is retired and now rejected outright.
+        retired = {
+            "esm": "1.0.0",
+            "metadata": {"name": "Test"},
+            "models": {
+                "test_model": {
+                    "variables": {
+                        "x": {"type": "unknown"},
                         "alpha": {"type": "parameter", "default": 1.0},
                     },
                     "equations": [],
@@ -631,52 +707,88 @@ class TestSection05Events:
                                 "type": "condition",
                                 "expression": {"op": "==", "args": ["t", 10]},
                             },
-                            "affects": [{"lhs": "alpha", "rhs": 0.5}],
+                            "affects": [{"lhs": "x", "rhs": 0.0}],
                             "discrete_parameters": ["alpha"],
-                            "description": "Change parameter at t=10",
                         }
                     ],
                 }
             },
         }
-        jsonschema.validate(valid_data, schema)
+        with pytest.raises(ValidationError, match="Additional properties are not allowed"):
+            jsonschema.validate(retired, schema)
 
-    def test_functional_affects_registered(self):
-        """Test functional affects with registered handlers."""
+    def test_registered_handler_is_a_parameter_update(self):
+        """A registered handler computes a PARAMETER's new value.
+
+        The 0.x event ``functional_affect`` relocated onto the parameter it
+        writes: its only write channel was ``modified_params``, so it now lives
+        on that parameter as ``update.handler`` and needs no write list at all.
+        The periodic cadence the event carried becomes ``kind: "schedule"``,
+        which requires a ``shape`` on the buffer it refills.
+        """
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"T": {"type": "state"}},
+                    "variables": {
+                        "T": {"type": "unknown"},
+                        "heater_power": {
+                            "type": "parameter",
+                            "default": 0.0,
+                            "shape": [],
+                            "update": {
+                                "kind": "schedule",
+                                "interval": 60.0,
+                                "handler": {
+                                    "handler_id": "PIDController",
+                                    "read_vars": ["T", "T_setpoint"],
+                                    "read_params": ["Kp", "Ki", "Kd"],
+                                    "config": {"anti_windup": True},
+                                },
+                            },
+                        },
+                    },
+                    "equations": [],
+                }
+            },
+        }
+        jsonschema.validate(valid_data, schema)
+
+        # `functional_affect` on an event is retired and now rejected outright.
+        retired = {
+            "esm": "1.0.0",
+            "metadata": {"name": "Test"},
+            "models": {
+                "test_model": {
+                    "variables": {"T": {"type": "unknown"}},
                     "equations": [],
                     "discrete_events": [
                         {
                             "name": "controller",
                             "trigger": {"type": "periodic", "interval": 60.0},
+                            "affects": [{"lhs": "T", "rhs": 0.0}],
                             "functional_affect": {
                                 "handler_id": "PIDController",
-                                "read_vars": ["T", "T_setpoint"],
-                                "read_params": ["Kp", "Ki", "Kd"],
+                                "read_vars": ["T"],
                                 "modified_params": ["heater_power"],
-                                "config": {"anti_windup": True},
                             },
-                            "description": "PID controller",
                         }
                     ],
                 }
             },
         }
-        jsonschema.validate(valid_data, schema)
+        with pytest.raises(ValidationError, match="Additional properties are not allowed"):
+            jsonschema.validate(retired, schema)
 
     def test_cross_system_events_in_coupling(self):
         """Test cross-system events defined in coupling section."""
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -700,23 +812,33 @@ class TestSection06Models:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "MinimalModel": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 1.0}],
                 }
             },
         }
         jsonschema.validate(valid_data, schema)
 
-    def test_complete_model_with_all_variable_types(self):
-        """Test model with all variable types."""
+    def test_complete_model_with_both_declared_variable_types(self):
+        """Test a model exercising both declared types and every DERIVED role.
+
+        1.0.0 declares exactly two types, ``unknown`` and ``parameter``. The
+        finer roles a solver needs are derived (§6.3.1): an ODE state is an
+        unknown under ``D(·, t)`` on an equation LHS, an observed unknown has a
+        bare-variable LHS (there is no ``expression`` field on a variable any
+        more), and an algebraic unknown is constrained only implicitly. On the
+        parameter side the role follows from ``distribution`` / ``update``:
+        Brownian (``wiener``), discrete (any other update), sampled (a
+        distribution and no update), constant (neither).
+        """
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "CompleteModel": {
@@ -727,46 +849,94 @@ class TestSection06Models:
                         "notes": "Test model for validation",
                     },
                     "variables": {
+                        # derived: ODE state
                         "x": {
-                            "type": "state",
+                            "type": "unknown",
                             "units": "mol/mol",
                             "default": 1.0e-8,
-                            "description": "State variable",
+                            "description": "Unknown integrated in time",
                         },
+                        # derived: observed unknown (defined by a bare LHS below)
+                        "total": {
+                            "type": "unknown",
+                            "units": "mol/mol",
+                            "description": "Unknown defined by an equation",
+                        },
+                        # derived: algebraic unknown (implicit constraint below)
+                        "y": {
+                            "type": "unknown",
+                            "units": "mol/mol",
+                            "description": "Unknown constrained only implicitly",
+                        },
+                        # derived: constant parameter
                         "k": {
                             "type": "parameter",
                             "units": "1/s",
                             "default": 0.1,
                             "description": "Rate parameter",
                         },
-                        "total": {
-                            "type": "observed",
-                            "units": "mol/mol",
-                            "expression": {"op": "*", "args": ["x", "k"]},
-                            "description": "Observed quantity",
+                        # derived: sampled parameter (distribution, no update)
+                        "k_uncertain": {
+                            "type": "parameter",
+                            "units": "1/s",
+                            "distribution": {"kind": "lognormal", "mu": 0.0, "sigma": 0.2},
+                            "description": "Rate parameter drawn once at setup",
+                        },
+                        # derived: Brownian parameter (wiener update + distribution)
+                        "noise": {
+                            "type": "parameter",
+                            "units": "1/s^0.5",
+                            "distribution": {"kind": "normal", "mean": 0.0, "std": 1.0},
+                            "update": {"kind": "wiener"},
+                            "description": "Driving Wiener process",
+                        },
+                        # derived: discrete parameter (a non-wiener update)
+                        "forcing": {
+                            "type": "parameter",
+                            "units": "mol/mol/s",
+                            "default": 0.0,
+                            "shape": [],
+                            "update": {"kind": "schedule", "interval": 3600.0, "expression": 1.0},
+                            "description": "Buffer refilled on a discrete cadence",
                         },
                     },
                     "equations": [
                         {
                             "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": ["-k", "x"]},
-                        }
+                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "x"]},
+                        },
+                        {"lhs": "total", "rhs": {"op": "*", "args": ["x", "k"]}},
+                        {"lhs": {"op": "*", "args": ["y", "y"]}, "rhs": "x"},
                     ],
                 }
             },
         }
         jsonschema.validate(valid_data, schema)
 
+        # Every finer role is DERIVED, and this is the only sanctioned way to
+        # ask for it (§6.3.1).
+        model = valid_data["models"]["CompleteModel"]
+        assert ode_states(model) == ["x"]
+        assert observed_unknowns(model) == ["total"]
+        assert algebraic_unknowns(model) == ["y"]
+        assert brownian_parameters(model) == ["noise"]
+        assert discrete_parameters(model) == ["forcing"]
+        assert sampled_parameters(model) == ["k_uncertain"]
+        assert constant_parameters(model) == ["k"]
+        # A Brownian parameter makes the enclosing model an SDE system.
+        assert system_kind(model) == "sde"
+        assert_partitions(model)
+
     def test_model_with_events(self):
         """Test model including both continuous and discrete events."""
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "EventModel": {
-                    "variables": {"x": {"type": "state"}, "y": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}, "y": {"type": "unknown"}},
                     "equations": [],
                     "continuous_events": [
                         {
@@ -793,29 +963,39 @@ class TestSection06Models:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "MainSystem": {
-                    "variables": {"top_var": {"type": "state"}},
+                    "variables": {"top_var": {"type": "unknown"}},
                     "equations": [],
                     "subsystems": {
-                        "SubSystem": {"variables": {"sub_var": {"type": "state"}}, "equations": []}
+                        "SubSystem": {
+                            "variables": {"sub_var": {"type": "unknown"}},
+                            "equations": [],
+                        }
                     },
                 }
             },
         }
         jsonschema.validate(valid_data, schema)
 
-    def test_observed_variables_require_expression(self):
-        """Test that observed variables must have expression field."""
+    def test_observed_unknowns_are_defined_by_an_equation(self):
+        """An observed quantity is defined by an EQUATION, never by a field.
+
+        0.x declared ``{"type": "observed", "expression": E}`` and the schema
+        made ``expression`` required. 1.0.0 removes both the ``observed`` type
+        and the ``expression`` field: the quantity is an ``unknown`` and its
+        defining ``E`` moves into the model's ``equations`` as ``y ~ E``. An
+        unknown's behaviour is stated by the equations and NOWHERE else.
+        """
         schema = _get_schema()
 
-        # Observed variable without expression should fail
-        with pytest.raises(ValidationError, match="'expression' is a required property"):
+        # The retired declared type is no longer in the `type` enum.
+        with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {
                         "test_model": {"variables": {"y": {"type": "observed"}}, "equations": []}
@@ -823,6 +1003,45 @@ class TestSection06Models:
                 },
                 schema,
             )
+
+        # Nor may a variable carry an `expression` field.
+        with pytest.raises(ValidationError, match="Additional properties are not allowed"):
+            jsonschema.validate(
+                {
+                    "esm": "1.0.0",
+                    "metadata": {"name": "Test"},
+                    "models": {
+                        "test_model": {
+                            "variables": {
+                                "x": {"type": "unknown"},
+                                "y": {
+                                    "type": "unknown",
+                                    "expression": {"op": "*", "args": ["x", 2]},
+                                },
+                            },
+                            "equations": [],
+                        }
+                    },
+                },
+                schema,
+            )
+
+        # The 1.0.0 spelling: an unknown, plus the equation that defines it.
+        defined_by_equation = {
+            "esm": "1.0.0",
+            "metadata": {"name": "Test"},
+            "models": {
+                "test_model": {
+                    "variables": {"x": {"type": "unknown"}, "y": {"type": "unknown"}},
+                    "equations": [
+                        {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": 1.0},
+                        {"lhs": "y", "rhs": {"op": "*", "args": ["x", 2]}},
+                    ],
+                }
+            },
+        }
+        jsonschema.validate(defined_by_equation, schema)
+        assert observed_unknowns(defined_by_equation["models"]["test_model"]) == ["y"]
 
 
 class TestSection07ReactionSystems:
@@ -833,7 +1052,7 @@ class TestSection07ReactionSystems:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "MinimalReactions": {
@@ -857,7 +1076,7 @@ class TestSection07ReactionSystems:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "SuperFastReactions": {
@@ -941,7 +1160,7 @@ class TestSection07ReactionSystems:
 
         for i, rate in enumerate(rate_cases):
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "reaction_systems": {
                     "test_rs": {
@@ -969,7 +1188,7 @@ class TestSection07ReactionSystems:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -999,7 +1218,7 @@ class TestSection07ReactionSystems:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -1029,7 +1248,7 @@ class TestSection07ReactionSystems:
         with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "reaction_systems": {
                         "test_rs": {
@@ -1050,65 +1269,118 @@ class TestSection07ReactionSystems:
             )
 
 
-class TestSection08DataLoaders:
-    """Section 8: Data loaders - generic STAC-like description (kind/source/variables)"""
+class TestSection08DataSources:
+    """Section 8: Data sources — pure I/O, by reference (kind/source/temporal).
 
-    def test_all_data_loader_kinds(self):
-        """Test all supported data loader kinds."""
+    From 1.0.0 the top-level key is ``data_sources`` and a source declares NO
+    ``variables`` map: it is not a component, not a coupling endpoint, not a
+    subsystem and not a scoped-name path root. The CONSUMING PARAMETER carries
+    the binding (``update: {kind: "data", source: ..., from: {...}}``) and owns
+    the units, which are therefore declared once instead of twice.
+    """
+
+    def test_all_data_source_kinds(self):
+        """Test all supported data source kinds."""
         schema = _get_schema()
 
         kinds = ["grid", "points", "static"]
 
         for kind in kinds:
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
-                "models": {"test": {"variables": {}, "equations": []}},
-                "data_loaders": {
+                "models": {
+                    "test": {
+                        "variables": {
+                            "test_var": {
+                                "type": "parameter",
+                                "units": "m/s",
+                                "default": 0.0,
+                                "shape": [],
+                                "description": "Test variable",
+                                "update": {
+                                    "kind": "data",
+                                    "source": f"test_{kind}",
+                                    "from": {"file_variable": "test_var"},
+                                },
+                            }
+                        },
+                        "equations": [],
+                    }
+                },
+                "data_sources": {
                     f"test_{kind}": {
                         "kind": kind,
                         "source": {"url_template": f"file:///data/{kind}_{{date:%Y%m%d}}.nc"},
-                        "variables": {
-                            "test_var": {
-                                "file_variable": "test_var",
-                                "units": "m/s",
-                                "description": "Test variable",
-                            }
-                        },
                     }
                 },
             }
             jsonschema.validate(valid_data, schema)
 
-    def test_complete_geosfp_example(self):
-        """Test complete GEOS-FP data loader example from spec."""
+    def test_data_source_declares_no_variables_map(self):
+        """A source is pure I/O: the 0.x ``variables`` map is gone from it."""
         schema = _get_schema()
 
+        with pytest.raises(ValidationError, match="Additional properties are not allowed"):
+            jsonschema.validate(
+                {
+                    "esm": "1.0.0",
+                    "metadata": {"name": "Test"},
+                    "models": {"test": {"variables": {}, "equations": []}},
+                    "data_sources": {
+                        "legacy": {
+                            "kind": "grid",
+                            "source": {"url_template": "file:///data/test.nc"},
+                            "variables": {"x": {"file_variable": "x", "units": "1"}},
+                        }
+                    },
+                },
+                schema,
+            )
+
+    def test_complete_geosfp_example(self):
+        """Test complete GEOS-FP data source example from spec.
+
+        Each field the model reads is a PARAMETER bound to one
+        ``file_variable``; the parameter declares the units, the source does not.
+        """
+        schema = _get_schema()
+
+        def _bound(units, file_variable, description):
+            return {
+                "type": "parameter",
+                "units": units,
+                "default": 0.0,
+                "shape": [],
+                "description": description,
+                "update": {
+                    "kind": "data",
+                    "source": "GEOSFP",
+                    "from": {"file_variable": file_variable},
+                },
+            }
+
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}},
-            "data_loaders": {
+            "models": {
+                "test": {
+                    "variables": {
+                        "u": _bound("m/s", "U", "Eastward wind"),
+                        "v": _bound("m/s", "V", "Northward wind"),
+                        "T": _bound("K", "T", "Air temperature"),
+                        "PBLH": _bound("m", "PBLH", "PBL height"),
+                    },
+                    "equations": [],
+                }
+            },
+            "data_sources": {
                 "GEOSFP": {
                     "kind": "grid",
                     "source": {
                         "url_template": "https://geos-chem.s3.amazonaws.com/GEOS_0.25x0.3125_NA/GEOS_FP/{date:%Y}/{date:%m}/GEOSFP.{date:%Y%m%d}.A3dyn.025x03125.NA.nc"
                     },
                     "temporal": {"file_period": "P1D", "frequency": "PT3H", "records_per_file": 8},
-                    "variables": {
-                        "u": {"file_variable": "U", "units": "m/s", "description": "Eastward wind"},
-                        "v": {
-                            "file_variable": "V",
-                            "units": "m/s",
-                            "description": "Northward wind",
-                        },
-                        "T": {"file_variable": "T", "units": "K", "description": "Air temperature"},
-                        "PBLH": {
-                            "file_variable": "PBLH",
-                            "units": "m",
-                            "description": "PBL height",
-                        },
-                    },
                     "reference": {
                         "citation": "Global Modeling and Assimilation Office (GMAO), NASA GSFC",
                         "url": "https://gmao.gsfc.nasa.gov/GEOS_systems/",
@@ -1119,33 +1391,58 @@ class TestSection08DataLoaders:
         }
         jsonschema.validate(valid_data, schema)
 
-    def test_emissions_data_loader(self):
-        """Test emissions-style data loader using new schema."""
+    def test_emissions_data_source(self):
+        """Test emissions-style data source, including a unit conversion.
+
+        ``unit_conversion`` is ONE Expression — a plain number here — carried on
+        the parameter's binding, reaching the parameter's declared units.
+        """
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}},
-            "data_loaders": {
+            "models": {
+                "test": {
+                    "variables": {
+                        "emission_rate_NO": {
+                            "type": "parameter",
+                            "units": "mol/mol/s",
+                            "default": 0.0,
+                            "shape": [],
+                            "description": "NO emission rate",
+                            "update": {
+                                "kind": "data",
+                                "source": "NEI_Emissions",
+                                "from": {
+                                    "file_variable": "NO",
+                                    "unit_conversion": 1e-6,
+                                },
+                            },
+                        },
+                        "emission_rate_CO": {
+                            "type": "parameter",
+                            "units": "mol/mol/s",
+                            "default": 0.0,
+                            "shape": [],
+                            "description": "CO emission rate",
+                            "update": {
+                                "kind": "data",
+                                "source": "NEI_Emissions",
+                                "from": {"file_variable": "CO"},
+                            },
+                        },
+                    },
+                    "equations": [],
+                }
+            },
+            "data_sources": {
                 "NEI_Emissions": {
                     "kind": "grid",
                     "source": {
                         "url_template": "https://gaftp.epa.gov/Air/emismod/2016/v1/gridded/monthly_netCDF/2016fh_16j_all_12US1_month_{date:%m}.ncf"
                     },
                     "temporal": {"file_period": "P1M", "frequency": "P1M", "records_per_file": 1},
-                    "variables": {
-                        "emission_rate_NO": {
-                            "file_variable": "NO",
-                            "units": "mol/mol/s",
-                            "description": "NO emission rate",
-                        },
-                        "emission_rate_CO": {
-                            "file_variable": "CO",
-                            "units": "mol/mol/s",
-                            "description": "CO emission rate",
-                        },
-                    },
                     "reference": {
                         "citation": "US EPA, 2016 National Emissions Inventory",
                         "url": "https://www.epa.gov/air-emissions-inventories",
@@ -1157,42 +1454,52 @@ class TestSection08DataLoaders:
         jsonschema.validate(valid_data, schema)
 
     def test_required_fields_validation(self):
-        """Test that required fields are enforced for data loaders."""
+        """Test that required fields are enforced for data sources.
+
+        ``kind`` and ``source`` are the whole requirement — a source that names
+        no variables is complete, because the variables live on the consuming
+        parameters.
+        """
         schema = _get_schema()
 
         # Missing kind
         with pytest.raises(ValidationError, match="'kind' is a required property"):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {"test": {"variables": {}, "equations": []}},
-                    "data_loaders": {
-                        "bad_loader": {
-                            "source": {"url_template": "file:///data/test.nc"},
-                            "variables": {"x": {"file_variable": "x", "units": "1"}},
-                        }
+                    "data_sources": {
+                        "bad_source": {"source": {"url_template": "file:///data/test.nc"}}
                     },
                 },
                 schema,
             )
 
-        # Missing variables
-        with pytest.raises(ValidationError, match="'variables' is a required property"):
+        # Missing source
+        with pytest.raises(ValidationError, match="'source' is a required property"):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {"test": {"variables": {}, "equations": []}},
-                    "data_loaders": {
-                        "bad_loader": {
-                            "kind": "grid",
-                            "source": {"url_template": "file:///data/test.nc"},
-                        }
-                    },
+                    "data_sources": {"bad_source": {"kind": "grid"}},
                 },
                 schema,
             )
+
+        # kind + source alone is a COMPLETE source.
+        jsonschema.validate(
+            {
+                "esm": "1.0.0",
+                "metadata": {"name": "Test"},
+                "models": {"test": {"variables": {}, "equations": []}},
+                "data_sources": {
+                    "ok": {"kind": "grid", "source": {"url_template": "file:///data/test.nc"}}
+                },
+            },
+            schema,
+        )
 
 
 class TestSection09Operators:
@@ -1207,7 +1514,7 @@ class TestSection09Operators:
         with pytest.raises(ValidationError, match="Additional properties are not allowed"):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {"test": {"variables": {}, "equations": []}},
                     "operators": {
@@ -1228,7 +1535,7 @@ class TestSection09Operators:
         with pytest.raises(ValidationError, match="Additional properties are not allowed"):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {"test": {"variables": {}, "equations": []}},
                     "operators": {"bad_op": {"needed_vars": ["x"]}},
@@ -1244,7 +1551,7 @@ class TestSection09Operators:
         with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {"test": {"variables": {}, "equations": []}},
                     "operators": {
@@ -1266,7 +1573,7 @@ class TestSection10Coupling:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -1284,7 +1591,7 @@ class TestSection10Coupling:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -1319,7 +1626,7 @@ class TestSection10Coupling:
 
         transform_cases = [
             {"from": "GEOSFP.T", "to": "Chemistry.T", "transform": "param_to_var"},
-            {"from": "DataSource.wind", "to": "Advection.wind", "transform": "identity"},
+            {"from": "MetModel.wind", "to": "Advection.wind", "transform": "identity"},
             {"from": "Emissions.CO", "to": "Chemistry.CO_source", "transform": "additive"},
             {"from": "Scaler.factor", "to": "Chemistry.rate", "transform": "multiplicative"},
             {
@@ -1333,7 +1640,7 @@ class TestSection10Coupling:
         for i, transform_case in enumerate(transform_cases):
             coupling_entry = {"type": "variable_map", **transform_case}
             valid_data = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {"test": {"variables": {}, "equations": []}},
                 "coupling": [coupling_entry],
@@ -1349,7 +1656,7 @@ class TestSection10Coupling:
         with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {"test": {"variables": {}, "equations": []}},
                     "coupling": [{"type": "operator_apply", "operator": "DryDepGrid"}],
@@ -1362,7 +1669,7 @@ class TestSection10Coupling:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -1381,7 +1688,7 @@ class TestSection10Coupling:
 
         # Continuous cross-system event
         continuous_event = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -1398,7 +1705,7 @@ class TestSection10Coupling:
 
         # Discrete cross-system event
         discrete_event = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -1422,7 +1729,7 @@ class TestSection10Coupling:
 
         # Simple variable translation
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -1457,7 +1764,7 @@ class TestSection11Domain:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "domain": {
@@ -1475,7 +1782,7 @@ class TestSection13CompleteExamples:
         schema = _get_schema()
 
         minimal_complete = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "MinimalChemAdvection",
                 "description": "O3-NO-NO2 chemistry with advection and external meteorology",
@@ -1546,8 +1853,31 @@ class TestSection13CompleteExamples:
                 "Advection": {
                     "reference": {"notes": "First-order advection"},
                     "variables": {
-                        "u_wind": {"type": "parameter", "units": "m/s", "default": 0.0},
-                        "v_wind": {"type": "parameter", "units": "m/s", "default": 0.0},
+                        # The wind fields ARE the loaded parameters: each names
+                        # the source and the `file_variable` it binds, and owns
+                        # its units. No coupling edge is involved.
+                        "u_wind": {
+                            "type": "parameter",
+                            "units": "m/s",
+                            "default": 0.0,
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "GEOSFP",
+                                "from": {"file_variable": "U"},
+                            },
+                        },
+                        "v_wind": {
+                            "type": "parameter",
+                            "units": "m/s",
+                            "default": 0.0,
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "GEOSFP",
+                                "from": {"file_variable": "V"},
+                            },
+                        },
                     },
                     "equations": [
                         {
@@ -1575,42 +1905,16 @@ class TestSection13CompleteExamples:
                     ],
                 }
             },
-            "data_loaders": {
+            "data_sources": {
                 "GEOSFP": {
                     "kind": "grid",
                     "source": {"url_template": "file:///data/geosfp_{date:%Y%m%d}.nc"},
-                    "variables": {
-                        "u": {"file_variable": "U", "units": "m/s", "description": "Eastward wind"},
-                        "v": {
-                            "file_variable": "V",
-                            "units": "m/s",
-                            "description": "Northward wind",
-                        },
-                        "T": {"file_variable": "T", "units": "K", "description": "Temperature"},
-                    },
                 }
             },
-            "coupling": [
-                {"type": "operator_compose", "systems": ["SimpleOzone", "Advection"]},
-                {
-                    "type": "variable_map",
-                    "from": "GEOSFP.T",
-                    "to": "SimpleOzone.T",
-                    "transform": "param_to_var",
-                },
-                {
-                    "type": "variable_map",
-                    "from": "GEOSFP.u",
-                    "to": "Advection.u_wind",
-                    "transform": "param_to_var",
-                },
-                {
-                    "type": "variable_map",
-                    "from": "GEOSFP.v",
-                    "to": "Advection.v_wind",
-                    "transform": "param_to_var",
-                },
-            ],
+            # A data source is NOT a coupling endpoint, so the three
+            # `variable_map` edges out of GEOSFP are gone; only the
+            # system-to-system composition remains.
+            "coupling": [{"type": "operator_compose", "systems": ["SimpleOzone", "Advection"]}],
             "domain": {
                 "temporal": {"start": "2024-05-01T00:00:00Z", "end": "2024-05-03T00:00:00Z"}
             },
@@ -1623,7 +1927,7 @@ class TestSection13CompleteExamples:
         schema = _get_schema()
 
         complex_example = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "AtmosphericChemistryFull",
                 "description": "Full atmospheric chemistry simulation with multiple processes",
@@ -1659,7 +1963,31 @@ class TestSection13CompleteExamples:
             },
             "models": {
                 "VerticalMixing": {
-                    "variables": {"Kz": {"type": "parameter", "units": "m^2/s", "default": 10.0}},
+                    "variables": {
+                        "Kz": {"type": "parameter", "units": "m^2/s", "default": 10.0},
+                        "T": {
+                            "type": "parameter",
+                            "units": "K",
+                            "default": 298.15,
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "Meteorology",
+                                "from": {"file_variable": "T"},
+                            },
+                        },
+                        "wind": {
+                            "type": "parameter",
+                            "units": "m/s",
+                            "default": 0.0,
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "Meteorology",
+                                "from": {"file_variable": "U"},
+                            },
+                        },
+                    },
                     "equations": [
                         {
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
@@ -1671,14 +1999,10 @@ class TestSection13CompleteExamples:
                     ],
                 }
             },
-            "data_loaders": {
+            "data_sources": {
                 "Meteorology": {
                     "kind": "grid",
                     "source": {"url_template": "file:///data/wrf_{date:%Y%m%d_%H}.nc"},
-                    "variables": {
-                        "T": {"file_variable": "T", "units": "K"},
-                        "wind": {"file_variable": "U", "units": "m/s"},
-                    },
                 }
             },
             "coupling": [
@@ -1701,13 +2025,13 @@ class TestSection14DesignPrinciples:
 
         # Valid: fully specified model
         fully_specified = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "FullySpecified": {
                     "variables": {
                         "x": {
-                            "type": "state",
+                            "type": "unknown",
                             "units": "mol/mol",
                             "default": 1e-9,
                             "description": "Test species",
@@ -1724,20 +2048,36 @@ class TestSection14DesignPrinciples:
         }
         jsonschema.validate(fully_specified, schema)
 
-    def test_data_loaders_by_reference_principle(self):
-        """Test that data loaders are by reference, not fully specified."""
+    def test_data_sources_by_reference_principle(self):
+        """Test that data sources are by reference, not fully specified."""
         schema = _get_schema()
 
-        # Valid: data loader by reference
+        # Valid: data source by reference; the consuming parameter binds it.
         by_reference = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}},
-            "data_loaders": {
+            "models": {
+                "test": {
+                    "variables": {
+                        "T": {
+                            "type": "parameter",
+                            "units": "K",
+                            "default": 298.15,
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "MetData",
+                                "from": {"file_variable": "T"},
+                            },
+                        }
+                    },
+                    "equations": [],
+                }
+            },
+            "data_sources": {
                 "MetData": {
                     "kind": "grid",
                     "source": {"url_template": "file:///data/met_{date:%Y%m%d}.nc"},
-                    "variables": {"T": {"file_variable": "T", "units": "K"}},
                 }
             },
         }
@@ -1749,11 +2089,11 @@ class TestSection14DesignPrinciples:
 
         # Valid: JSON AST expression
         ast_expression = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [
                         {
                             "lhs": "x",
@@ -1777,7 +2117,7 @@ class TestSection14DesignPrinciples:
 
         # Valid: reaction system with stoichiometry
         reaction_system = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "ChemicalNetwork": {
@@ -1805,7 +2145,7 @@ class TestSection14DesignPrinciples:
 
         # Valid: explicit coupling specification
         explicit_coupling = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -1816,7 +2156,7 @@ class TestSection14DesignPrinciples:
                 },
                 {
                     "type": "variable_map",
-                    "from": "MetData.temperature",
+                    "from": "MetModel.temperature",
                     "to": "Chemistry.T",
                     "transform": "param_to_var",
                     "description": "Use meteorological temperature in chemistry",
@@ -1835,14 +2175,13 @@ class TestSection15FutureConsiderations:
 
         # Valid: config fields are open for extensions
         extensible_config = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "data_loaders": {
-                "future_loader": {
+            "data_sources": {
+                "future_source": {
                     "kind": "grid",
                     "source": {"url_template": "file:///data/future_{date:%Y%m%d}.nc"},
-                    "variables": {"x": {"file_variable": "x", "units": "m"}},
                     "metadata": {
                         "future_option": True,
                         "experimental_feature": {"nested": "value"},
@@ -1859,7 +2198,7 @@ class TestSection15FutureConsiderations:
 
         # Current version should work
         current_version = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -1882,7 +2221,7 @@ class TestSection15FutureConsiderations:
 
         # Valid: rich reference information for future tools
         rich_references = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "Test",
                 "references": [
@@ -1917,10 +2256,10 @@ class TestCrossSectionValidation:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
-                "ModelSystem": {"variables": {"model_var": {"type": "state"}}, "equations": []}
+                "ModelSystem": {"variables": {"model_var": {"type": "unknown"}}, "equations": []}
             },
             "reaction_systems": {
                 "ReactionSystem": {
@@ -1952,11 +2291,30 @@ class TestCrossSectionValidation:
         schema = _get_schema()
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "ControlModel": {
-                    "variables": {"controller": {"type": "state"}},
+                    "variables": {
+                        "controller": {"type": "unknown"},
+                        # The registered handler now lives on the parameter it
+                        # writes, triggered by that parameter's own `condition`
+                        # update — the event no longer carries it.
+                        "setpoint": {
+                            "type": "parameter",
+                            "default": 0.0,
+                            "update": {
+                                "kind": "condition",
+                                "when": {"op": ">", "args": ["controller", 1]},
+                                "handler": {
+                                    "handler_id": "SystemController",
+                                    "read_vars": ["controller"],
+                                    "read_params": [],
+                                    "config": {"action": "reset"},
+                                },
+                            },
+                        },
+                    },
                     "equations": [],
                     "discrete_events": [
                         {
@@ -1964,12 +2322,7 @@ class TestCrossSectionValidation:
                                 "type": "condition",
                                 "expression": {"op": ">", "args": ["controller", 1]},
                             },
-                            "functional_affect": {
-                                "handler_id": "SystemController",
-                                "read_vars": ["controller"],
-                                "read_params": [],
-                                "config": {"action": "reset"},
-                            },
+                            "affects": [{"lhs": "controller", "rhs": 0.0}],
                         }
                     ],
                 }
@@ -1982,7 +2335,7 @@ class TestCrossSectionValidation:
         schema = _get_schema()
 
         comprehensive = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "ComprehensiveIntegrationTest",
                 "description": "Tests integration of all ESM format sections",
@@ -2016,7 +2369,19 @@ class TestCrossSectionValidation:
             },
             "models": {
                 "Transport": {
-                    "variables": {"wind": {"type": "parameter", "units": "m/s", "default": 5}},
+                    "variables": {
+                        "wind": {
+                            "type": "parameter",
+                            "units": "m/s",
+                            "default": 5,
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "MetData",
+                                "from": {"file_variable": "wind"},
+                            },
+                        }
+                    },
                     "equations": [
                         {
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
@@ -2028,22 +2393,15 @@ class TestCrossSectionValidation:
                     ],
                 }
             },
-            "data_loaders": {
+            "data_sources": {
                 "MetData": {
                     "kind": "grid",
                     "source": {"url_template": "file:///data/met_{date:%Y%m%d}.nc"},
-                    "variables": {"wind_field": {"file_variable": "wind", "units": "m/s"}},
                 }
             },
-            "coupling": [
-                {"type": "operator_compose", "systems": ["Chemistry", "Transport"]},
-                {
-                    "type": "variable_map",
-                    "from": "MetData.wind_field",
-                    "to": "Transport.wind",
-                    "transform": "param_to_var",
-                },
-            ],
+            # No `variable_map` edge out of MetData: a source is not a coupling
+            # endpoint, and Transport.wind binds it directly.
+            "coupling": [{"type": "operator_compose", "systems": ["Chemistry", "Transport"]}],
             "domain": {
                 "temporal": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z"}
             },
@@ -2075,11 +2433,11 @@ class TestNegativeValidationCases:
         with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {
                         "test": {
-                            "variables": {"x": {"type": "state"}},
+                            "variables": {"x": {"type": "unknown"}},
                             "equations": [{"lhs": "x", "rhs": {"op": "invalid op", "args": ["x"]}}],
                         }
                     },
@@ -2091,7 +2449,7 @@ class TestNegativeValidationCases:
         with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "reaction_systems": {
                         "test": {
@@ -2121,7 +2479,7 @@ class TestNegativeValidationCases:
         with pytest.raises(ValidationError):
             jsonschema.validate(
                 {
-                    "esm": "0.1.0",
+                    "esm": "1.0.0",
                     "metadata": {"name": "Test"},
                     "models": {"existing_model": {"variables": {}, "equations": []}},
                     "coupling": [
@@ -2147,7 +2505,7 @@ def test_complete_specification_coverage():
         "TestSection05Events",
         "TestSection06Models",
         "TestSection07ReactionSystems",
-        "TestSection08DataLoaders",  # class name unchanged but tests renamed to test_all_data_loader_kinds
+        "TestSection08DataSources",
         "TestSection09Operators",
         "TestSection10Coupling",
         "TestSection11Domain",

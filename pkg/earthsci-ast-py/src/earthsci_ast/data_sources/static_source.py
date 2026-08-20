@@ -7,8 +7,8 @@ configured opener. Variable remapping and unit conversion still apply.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from ..esm_types import DataSource, DataSourceKind

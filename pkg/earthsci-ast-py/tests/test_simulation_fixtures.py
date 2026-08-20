@@ -1,9 +1,12 @@
 """Simulation-oriented ESM integration tests.
 
-Verifies that models and reaction systems shaped for simulation (state
-variables, parameters, rate constants, ODE right-hand sides) survive the
-earthsci_ast save/load round trip with their simulation-relevant
-structure intact.
+Verifies that models and reaction systems shaped for simulation (unknowns,
+parameters, rate constants, ODE right-hand sides) survive the earthsci_ast
+save/load round trip with their simulation-relevant structure intact. Under
+esm 1.0.0 a variable declares only ``unknown`` or ``parameter``; that ``x``
+is an ODE state is DERIVED from its ``D(x, t)`` equation, so the round trip
+is checked against :func:`earthsci_ast.is_ode_state` as well as against the
+declared type.
 
 Historical note: this module once carried a large suite of numpy / scipy /
 sympy / matplotlib self-tests (broadcasting, solve_ivp accuracy, optimizer
@@ -24,6 +27,7 @@ from earthsci_ast.esm_types import (
     Parameter,
     Reaction,
 )
+from earthsci_ast.classification import is_ode_state
 from earthsci_ast.parse import load
 from earthsci_ast.serialize import save
 
@@ -41,7 +45,7 @@ class TestEarthSciASTIntegration:
         model = Model(
             name="exponential_decay",
             variables={
-                "x": ModelVariable(type="state", units="mol/L", default=1.0),
+                "x": ModelVariable(type="unknown", units="mol/L", default=1.0),
                 "k": ModelVariable(type="parameter", units="1/s", default=0.1),
                 "t": ModelVariable(type="parameter", units="s", default=0.0),
             },
@@ -55,7 +59,7 @@ class TestEarthSciASTIntegration:
 
         # Create ESM file
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Exponential Decay Simulation"),
             models={"exponential_decay": model},
         )
@@ -70,8 +74,11 @@ class TestEarthSciASTIntegration:
         assert recon_model.name == "exponential_decay"
         assert "x" in recon_model.variables
         assert "k" in recon_model.variables
-        assert recon_model.variables["x"].type == "state"
+        assert recon_model.variables["x"].type == "unknown"
         assert recon_model.variables["k"].type == "parameter"
+        # ...and the ODE-state role survives the round trip too, derived from
+        # the D(x, t) equation rather than read off the declaration.
+        assert is_ode_state(recon_model, "x")
 
     def test_reaction_system_simulation_setup(self):
         """Test setting up reaction systems for simulation."""
@@ -89,7 +96,7 @@ class TestEarthSciASTIntegration:
 
         # Create ESM file with reaction system
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Reaction System Simulation"),
             reaction_systems={"simple_decay": reaction_system},
         )

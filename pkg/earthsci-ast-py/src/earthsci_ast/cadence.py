@@ -95,9 +95,9 @@ from typing import Any
 
 from .classification import (
     brownian_parameters,
-    inlined_unknowns,
     constant_parameters,
     discrete_parameters,
+    inlined_unknowns,
     observed_definitions,
     sampled_parameters,
 )

@@ -47,7 +47,7 @@ class TestStoichiometryIntegerValidation:
         )
 
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test Integer Stoichiometry"),
             reaction_systems={"test_rs": reaction_system},
         )
@@ -78,7 +78,7 @@ class TestStoichiometryIntegerValidation:
         )
 
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test Float Integer Stoichiometry"),
             reaction_systems={"test_rs": reaction_system},
         )
@@ -110,7 +110,7 @@ class TestStoichiometryIntegerValidation:
         )
 
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test Fractional Stoichiometry"),
             reaction_systems={"test_rs": reaction_system},
         )
@@ -154,7 +154,7 @@ class TestStoichiometryIntegerValidation:
         )
 
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test Mixed Stoichiometry"),
             reaction_systems={"test_rs": reaction_system},
         )
@@ -196,7 +196,7 @@ class TestStoichiometryIntegerValidation:
         )
 
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test Negative Stoichiometry"),
             reaction_systems={"test_rs": reaction_system},
         )
@@ -235,7 +235,7 @@ class TestStoichiometryIntegerValidation:
         )
 
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test Zero Stoichiometry"),
             reaction_systems={"test_rs": reaction_system},
         )
@@ -283,7 +283,7 @@ class TestStoichiometryIntegerValidation:
         )
 
         esm_file = EsmFile(
-            version="0.1.0",
+            version="1.0.0",
             metadata=Metadata(title="Test Multiple Reactions"),
             reaction_systems={"test_rs": reaction_system},
         )

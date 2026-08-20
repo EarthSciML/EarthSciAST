@@ -72,6 +72,7 @@ from .simulation_loaders import (  # noqa: F401
     _provider_sample_field,
     _simulate_with_discrete_providers,
     _simulate_with_loaders,
+    bind_provider_arrays,
 )
 from .simulation_scalar import (  # noqa: F401
     _simulate_scalar,
@@ -250,6 +251,10 @@ def simulate(
             name: np.asarray(_provider_sample_field(prov, t0), dtype=float)
             for name, prov in providers.items()
         }
+        # A provider is keyed "<Source>.<parameter>"; the equations name the
+        # parameter under its own component prefix. Alias one onto the other
+        # through the loader fields, which carry both.
+        bind_provider_arrays(flat, loaded_arrays)
         return _simulate_with_numpy(
             flat,
             tspan,

@@ -65,12 +65,12 @@ class TestRequiredFieldValidation:
             jsonschema.validate(invalid_data, schema)
 
         # Missing metadata field
-        invalid_data = {"esm": "0.1.0"}
+        invalid_data = {"esm": "1.0.0"}
         with pytest.raises(ValidationError, match="'metadata' is a required property"):
             jsonschema.validate(invalid_data, schema)
 
         # Missing both models and reaction_systems (violates anyOf)
-        invalid_data = {"esm": "0.1.0", "metadata": {"name": "Test"}}
+        invalid_data = {"esm": "1.0.0", "metadata": {"name": "Test"}}
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
 
@@ -80,7 +80,7 @@ class TestRequiredFieldValidation:
 
         # Missing name field in metadata
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {},
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -95,7 +95,7 @@ class TestRequiredFieldValidation:
         # oneOf[Model, SubsystemRef]; the concrete cause is nested under the
         # oneOf umbrella error, so assert on the whole error tree.
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test_model": {"equations": []}},
         }
@@ -103,7 +103,7 @@ class TestRequiredFieldValidation:
 
         # Missing equations in model
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test_model": {"variables": {}}},
         }
@@ -134,7 +134,7 @@ class TestRequiredFieldValidation:
         # Missing species (reactions is non-empty, so minItems is satisfied and
         # the ONLY violation is the missing 'species' property).
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {"test_rs": {"parameters": {}, "reactions": one_reaction}},
         }
@@ -142,7 +142,7 @@ class TestRequiredFieldValidation:
 
         # Missing parameters
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {"test_rs": {"species": {}, "reactions": one_reaction}},
         }
@@ -150,7 +150,7 @@ class TestRequiredFieldValidation:
 
         # Missing reactions
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {"test_rs": {"species": {}, "parameters": {}}},
         }
@@ -162,10 +162,10 @@ class TestRequiredFieldValidation:
 
         # Missing lhs
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
-                "test_model": {"variables": {"x": {"type": "state"}}, "equations": [{"rhs": 1}]}
+                "test_model": {"variables": {"x": {"type": "unknown"}}, "equations": [{"rhs": 1}]}
             },
         }
         with pytest.raises(ValidationError, match="'lhs' is a required property"):
@@ -173,10 +173,10 @@ class TestRequiredFieldValidation:
 
         # Missing rhs
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
-                "test_model": {"variables": {"x": {"type": "state"}}, "equations": [{"lhs": "x"}]}
+                "test_model": {"variables": {"x": {"type": "unknown"}}, "equations": [{"lhs": "x"}]}
             },
         }
         with pytest.raises(ValidationError, match="'rhs' is a required property"):
@@ -201,7 +201,7 @@ class TestTypeValidation:
 
         # metadata should be object, not string
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": "not an object",
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -209,7 +209,7 @@ class TestTypeValidation:
             jsonschema.validate(invalid_data, schema)
 
         # models should be object, not array
-        invalid_data = {"esm": "0.1.0", "metadata": {"name": "Test"}, "models": []}
+        invalid_data = {"esm": "1.0.0", "metadata": {"name": "Test"}, "models": []}
         with pytest.raises(ValidationError, match="\\[\\] is not of type 'object'"):
             jsonschema.validate(invalid_data, schema)
 
@@ -219,11 +219,11 @@ class TestTypeValidation:
 
         # Expression can be number, string, or object - test invalid array
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": "x", "rhs": []}],  # Array is invalid
                 }
             },
@@ -239,7 +239,7 @@ class TestTypeValidation:
         # oneOf[Model, SubsystemRef]; the concrete type error is nested under
         # the oneOf umbrella.)
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test_model": {"variables": {"x": {"type": 123}}, "equations": []}},
         }
@@ -247,11 +247,11 @@ class TestTypeValidation:
 
         # units should be string, not boolean
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state", "units": True}},
+                    "variables": {"x": {"type": "unknown", "units": True}},
                     "equations": [],
                 }
             },
@@ -260,11 +260,11 @@ class TestTypeValidation:
 
         # default should be number, not string (when present)
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state", "default": "not a number"}},
+                    "variables": {"x": {"type": "unknown", "default": "not a number"}},
                     "equations": [],
                 }
             },
@@ -277,7 +277,7 @@ class TestTypeValidation:
 
         # substrates should be array or null, not string
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -301,7 +301,7 @@ class TestEnumValidation:
         schema = _get_schema()
 
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {"variables": {"x": {"type": "invalid_type"}}, "equations": []}
@@ -323,11 +323,11 @@ class TestEnumValidation:
 
         def _doc(op):
             return {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [{"lhs": "x", "rhs": {"op": op, "args": [1, 2]}}],
                     }
                 },
@@ -345,7 +345,7 @@ class TestEnumValidation:
         schema = _get_schema()
 
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [{"type": "invalid_coupling_type", "systems": ["sys1", "sys2"]}],
@@ -353,24 +353,48 @@ class TestEnumValidation:
         with pytest.raises(ValidationError):
             jsonschema.validate(invalid_data, schema)
 
-    def test_invalid_data_loader_kind_enum(self):
-        """Test validation of invalid data loader kind values."""
+    def test_invalid_data_source_kind_enum(self):
+        """Test validation of invalid data source kind values."""
         schema = _get_schema()
 
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
-            "data_loaders": {
-                "test_loader": {
+            "data_sources": {
+                "test_source": {
                     "kind": "invalid_kind",
                     "source": {"url_template": "file:///data/test.nc"},
-                    "variables": {"x": {"file_variable": "x", "units": "1"}},
                 }
             },
         }
         with pytest.raises(ValidationError, match="'invalid_kind' is not one of"):
             jsonschema.validate(invalid_data, schema)
+
+    def test_data_source_declares_no_variables(self):
+        """A source is pure I/O: it exposes NO variables (esm-spec §8).
+
+        The consuming PARAMETER carries the binding — `update.from` — and owns
+        the units, so a `variables` map on the source is now a schema violation
+        rather than the place a loaded field was declared.
+        """
+        schema = _get_schema()
+
+        invalid_data = {
+            "esm": "1.0.0",
+            "metadata": {"name": "Test"},
+            "models": {"test": {"variables": {}, "equations": []}},
+            "data_sources": {
+                "test_source": {
+                    "kind": "grid",
+                    "source": {"url_template": "file:///data/test.nc"},
+                    "variables": {"x": {"file_variable": "x", "units": "1"}},
+                }
+            },
+        }
+        _assert_rejected_with(
+            schema, invalid_data, "Additional properties are not allowed ('variables'"
+        )
 
 
 class TestPatternValidation:
@@ -424,7 +448,7 @@ class TestFormatValidation:
         schema = _get_schema()
         # Deliberately NO format_checker: the pattern alone must reject this.
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test", "created": "invalid-datetime"},
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -442,7 +466,7 @@ class TestFormatValidation:
             )
 
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test", "modified": "2023-13-01T25:00:00Z"},
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -455,7 +479,7 @@ class TestFormatValidation:
         schema = _get_schema()
         # Deliberately NO format_checker: the pattern alone must reject this.
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test", "references": [{"url": "not-a-valid-uri"}]},
             "models": {"test": {"variables": {}, "equations": []}},
         }
@@ -471,11 +495,11 @@ class TestConstraintValidation:
 
         # ContinuousEvent.conditions array must have minItems: 1
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [],
                     "continuous_events": [
                         {
@@ -495,7 +519,7 @@ class TestConstraintValidation:
 
         # Stoichiometry must be minimum 1
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -525,11 +549,11 @@ class TestConstraintValidation:
 
         # Test exclusiveMinimum for interval in periodic trigger
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [],
                     "discrete_events": [
                         {
@@ -552,45 +576,145 @@ class TestConstraintValidation:
 class TestConditionalValidation:
     """Test validation of conditional schema rules (if/then/else)."""
 
-    def test_observed_variable_requires_expression(self):
-        """Test that observed variables must have expression field."""
-        schema = _get_schema()
-
-        # Observed variable without expression should fail
-        invalid_data = {
-            "esm": "0.1.0",
+    @staticmethod
+    def _doc(variables):
+        return {
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
-            "models": {
-                "test_model": {
-                    "variables": {
-                        "y": {
-                            "type": "observed"
-                            # Missing required "expression" field for observed type
-                        }
-                    },
-                    "equations": [],
-                }
-            },
+            "models": {"test_model": {"variables": variables, "equations": []}},
         }
-        with pytest.raises(ValidationError, match="'expression' is a required property"):
-            jsonschema.validate(invalid_data, schema)
 
-    def test_discrete_event_requires_affects_or_functional_affect(self):
-        """Test that discrete events must have either affects or functional_affect."""
+    def test_unknown_carries_no_expression(self):
+        """An unknown's behaviour is stated by the model's `equations` and
+        NOWHERE else.
+
+        Before 1.0.0 a derived quantity was declared `type: "observed"` with an
+        `expression` field, and the schema's if/then made that field required.
+        Both are gone: `observed` is not a declared type, and `expression` is
+        not a variable field — so the old shape now fails on the type enum and
+        on `additionalProperties`, and the definition it carried belongs in an
+        equation `{"lhs": "y", "rhs": E}`.
+        """
         schema = _get_schema()
 
-        # Discrete event without affects or functional_affect should fail
+        _assert_rejected_with(
+            schema,
+            self._doc({"y": {"type": "observed"}}),
+            "'observed' is not one of ['unknown', 'parameter']",
+        )
+        _assert_rejected_with(
+            schema,
+            self._doc({"y": {"type": "unknown", "expression": {"op": "+", "args": ["x", 1]}}}),
+            "Additional properties are not allowed ('expression'",
+        )
+
+    def test_only_a_parameter_may_carry_distribution_or_update(self):
+        """`distribution` / `update` are parameter-only (schema `if/else`)."""
+        schema = _get_schema()
+
+        _assert_rejected_with(
+            schema,
+            self._doc(
+                {
+                    "x": {
+                        "type": "unknown",
+                        "distribution": {"kind": "normal", "mean": 0.0, "std": 1.0},
+                    }
+                }
+            ),
+            "should not be valid under {'anyOf': [{'required': ['distribution']}",
+        )
+        _assert_rejected_with(
+            schema,
+            self._doc({"x": {"type": "unknown", "update": {"kind": "wiener"}}}),
+            "should not be valid under {'anyOf': [{'required': ['distribution']}",
+        )
+
+    def test_wiener_update_requires_a_distribution(self):
+        """`wiener` takes no value form — it resamples the parameter's own
+        `distribution`, so it REQUIRES one (schema `if/then`)."""
+        schema = _get_schema()
+
+        _assert_rejected_with(
+            schema,
+            self._doc({"w": {"type": "parameter", "update": {"kind": "wiener"}}}),
+            "'distribution' is a required property",
+        )
+
+        # With the distribution supplied, the same variable validates.
+        jsonschema.validate(
+            self._doc(
+                {
+                    "w": {
+                        "type": "parameter",
+                        "distribution": {"kind": "normal", "mean": 0.0, "std": 1.0},
+                        "update": {"kind": "wiener"},
+                    }
+                }
+            ),
+            schema,
+        )
+
+    def test_buffer_updates_require_a_shape(self):
+        """`schedule` / `data` / `remesh` refill a buffer whose extent is fixed
+        at setup, so each REQUIRES `shape` (schema `if/then`). An empty array is
+        a valid scalar shape."""
+        schema = _get_schema()
+
+        for update in (
+            {"kind": "schedule", "interval": 3600.0, "expression": 1.0},
+            {"kind": "data", "source": "src", "from": {"file_variable": "U"}},
+            {"kind": "remesh", "expression": 1.0},
+        ):
+            _assert_rejected_with(
+                schema,
+                self._doc({"p": {"type": "parameter", "update": update}}),
+                "'shape' is a required property",
+            )
+            jsonschema.validate(
+                self._doc({"p": {"type": "parameter", "shape": [], "update": update}}), schema
+            )
+
+    def test_default_and_distribution_are_mutually_exclusive(self):
+        """A parameter's value comes from ONE of `default` or `distribution`."""
+        schema = _get_schema()
+
+        _assert_rejected_with(
+            schema,
+            self._doc(
+                {
+                    "p": {
+                        "type": "parameter",
+                        "default": 1.0,
+                        "distribution": {"kind": "uniform", "low": 0.0, "high": 2.0},
+                    }
+                }
+            ),
+            "should not be valid under {'required': ['default', 'distribution']}",
+        )
+
+    def test_discrete_event_requires_affects(self):
+        """A discrete event must state what it affects.
+
+        `affects` is now the ONLY write channel: events affect UNKNOWNS only, so
+        the 0.x alternative of a bare `functional_affect` (or a
+        `discrete_parameters` list) is not a way to satisfy this requirement —
+        a parameter that changes during a run declares its own `update`.
+        """
+        schema = _get_schema()
+
+        # Discrete event without affects should fail
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [],
                     "discrete_events": [
                         {
                             "trigger": {"type": "condition", "expression": "x > 1"}
-                            # Missing both "affects" and "functional_affect"
+                            # Missing "affects"
                         }
                     ],
                 }
@@ -605,7 +729,7 @@ class TestConditionalValidation:
 
         # Continuous coupling event without conditions should fail
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -625,7 +749,7 @@ class TestConditionalValidation:
 
         # Discrete coupling event without trigger should fail
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -652,7 +776,7 @@ class TestAdditionalPropertiesValidation:
         schema = _get_schema()
 
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "unexpected_field": "should not be allowed",
@@ -666,11 +790,11 @@ class TestAdditionalPropertiesValidation:
 
         # Additional property in ModelVariable
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state", "unexpected_field": "not allowed"}},
+                    "variables": {"x": {"type": "unknown", "unexpected_field": "not allowed"}},
                     "equations": [],
                 }
             },
@@ -680,11 +804,11 @@ class TestAdditionalPropertiesValidation:
 
         # Additional property in Equation
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": "x", "rhs": 1, "unexpected_field": "not allowed"}],
                 }
             },
@@ -702,11 +826,11 @@ class TestComplexValidationScenarios:
 
         # Nested expression with invalid operator
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}, "y": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}, "y": {"type": "unknown"}},
                     "equations": [
                         {
                             "lhs": "x",
@@ -734,7 +858,7 @@ class TestComplexValidationScenarios:
 
         # operator_compose with wrong number of systems
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -752,7 +876,7 @@ class TestComplexValidationScenarios:
 
         # couple missing required connector
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "coupling": [
@@ -775,7 +899,7 @@ class TestComplexValidationScenarios:
 
         # Reaction with empty reactions array (violates minItems: 1)
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -805,16 +929,19 @@ class TestVersionConstraintValidation:
         with pytest.raises(ValidationError, match="pattern"):
             jsonschema.validate(invalid_data, schema)
 
-        # Incompatible major version - rejected by library
+        # Incompatible major version - rejected by library. The current major is
+        # 1, and the 1.0.0 break has NO deprecation path: a 0.x document is
+        # rejected exactly as a 2.x one is.
         from earthsci_ast.parse import UnsupportedVersionError, load
 
-        invalid_data = {
-            "esm": "1.0.0",
-            "metadata": {"name": "Test"},
-            "models": {"test": {"variables": {}, "equations": []}},
-        }
-        with pytest.raises(UnsupportedVersionError):
-            load(invalid_data)
+        for version in ("0.9.0", "2.0.0"):
+            invalid_data = {
+                "esm": version,
+                "metadata": {"name": "Test"},
+                "models": {"test": {"variables": {}, "equations": []}},
+            }
+            with pytest.raises(UnsupportedVersionError):
+                load(invalid_data)
 
 
 class TestEdgeCaseValidation:
@@ -826,11 +953,11 @@ class TestEdgeCaseValidation:
 
         # Empty times array in preset_times trigger
         invalid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [],
                     "discrete_events": [
                         {
@@ -860,33 +987,81 @@ class TestEdgeCaseValidation:
         with pytest.raises(ValidationError, match="None is not of type 'string'"):
             jsonschema.validate(invalid_data, schema)
 
-    def test_functional_affect_validation_errors(self):
-        """Test functional affect specific validation errors."""
+    def test_handler_update_validation_errors(self):
+        """The 0.x event `functional_affect` relocated onto the parameter.
+
+        A handler's only write channel was `modified_params`, so from 1.0.0 it
+        lives on the parameter it writes, as one `update` rule's `handler` value
+        form. An event may no longer carry it at all, and `handler_id` is the
+        one required field (`read_vars` / `read_params` are optional — absent
+        means none).
+        """
         schema = _get_schema()
 
-        # Missing required fields in functional_affect
-        invalid_data = {
-            "esm": "0.1.0",
-            "metadata": {"name": "Test"},
-            "models": {
-                "test_model": {
-                    "variables": {"x": {"type": "state"}},
+        def _model(model):
+            return {"esm": "1.0.0", "metadata": {"name": "Test"}, "models": {"test_model": model}}
+
+        # An event carrying a functional_affect is now a schema violation.
+        _assert_rejected_with(
+            schema,
+            _model(
+                {
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [],
                     "discrete_events": [
                         {
                             "trigger": {"type": "condition", "expression": "x > 1"},
-                            "functional_affect": {
-                                "handler_id": "test_handler"
-                                # Missing required "read_vars" and "read_params"
-                            },
+                            "functional_affect": {"handler_id": "test_handler"},
                         }
                     ],
                 }
-            },
-        }
-        # The concrete cause is nested under the top-level `models`
-        # oneOf[Model, SubsystemRef] umbrella error.
-        _assert_rejected_with(schema, invalid_data, "'read_vars' is a required property")
+            ),
+            "Additional properties are not allowed ('functional_affect' was unexpected)",
+        )
+
+        # On the parameter, a handler without its `handler_id` is rejected.
+        _assert_rejected_with(
+            schema,
+            _model(
+                {
+                    "variables": {
+                        "x": {"type": "unknown"},
+                        "p": {
+                            "type": "parameter",
+                            "update": {
+                                "kind": "condition",
+                                "when": {"op": ">", "args": ["x", 1]},
+                                "handler": {"read_vars": ["x"]},
+                            },
+                        },
+                    },
+                    "equations": [],
+                }
+            ),
+            "'handler_id' is a required property",
+        )
+
+        # ... and a handler naming only its id validates: the read lists are
+        # optional, and the write list is gone with the parameter owning it.
+        jsonschema.validate(
+            _model(
+                {
+                    "variables": {
+                        "x": {"type": "unknown"},
+                        "p": {
+                            "type": "parameter",
+                            "update": {
+                                "kind": "condition",
+                                "when": {"op": ">", "args": ["x", 1]},
+                                "handler": {"handler_id": "test_handler"},
+                            },
+                        },
+                    },
+                    "equations": [],
+                }
+            ),
+            schema,
+        )
 
 
 class TestIntegrationValidationScenarios:
@@ -942,11 +1117,11 @@ class TestIntegrationValidationScenarios:
 
         # Minimal valid model
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [{"lhs": "x", "rhs": 1}],
                 }
             },
@@ -955,7 +1130,7 @@ class TestIntegrationValidationScenarios:
 
         # Minimal valid reaction system
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -990,11 +1165,11 @@ class TestValidationPerformance:
             return {"op": "+", "args": [create_nested_expr(depth - 1), 1]}
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [
                         {
                             "lhs": "x",
@@ -1027,7 +1202,7 @@ class TestValidationPerformance:
             )
 
         valid_data = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Large System Test"},
             "reaction_systems": {
                 "large_system": {

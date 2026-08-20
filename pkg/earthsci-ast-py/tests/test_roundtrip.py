@@ -11,10 +11,10 @@ from earthsci_ast.esm_types import EsmFile, Metadata, Model, ModelVariable, Equa
 def test_roundtrip_minimal():
     """Test round-trip with minimal ESM file."""
     original_json = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "Minimal Test"},
         "models": {
-            "simple": {"variables": {"x": {"type": "state"}}, "equations": [{"lhs": "x", "rhs": 1}]}
+            "simple": {"variables": {"x": {"type": "unknown"}}, "equations": [{"lhs": "x", "rhs": 1}]}
         },
     }
 
@@ -43,7 +43,7 @@ def test_roundtrip_minimal():
 def test_roundtrip_reaction_system():
     """Test round-trip with reaction system."""
     original_json = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {
             "name": "Reaction Round-trip Test",
             "description": "Test reaction system round-trip",
@@ -100,7 +100,7 @@ def test_roundtrip_reaction_system():
     assert data2 == data3
 
     # Verify specific components are preserved
-    assert data2["esm"] == "0.1.0"
+    assert data2["esm"] == "1.0.0"
     assert data2["metadata"]["name"] == "Reaction Round-trip Test"
     assert "simple_reaction" in data2["reaction_systems"]
 
@@ -113,17 +113,16 @@ def test_roundtrip_reaction_system():
 def test_roundtrip_complex_expression():
     """Test round-trip with complex nested expressions."""
     original_json = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "Expression Test"},
         "models": {
             "complex_model": {
                 "variables": {
-                    "x": {"type": "state"},
-                    "y": {"type": "state"},
-                    "z": {
-                        "type": "observed",
-                        "expression": {"op": "*", "args": [{"op": "+", "args": ["x", "y"]}, 2.5]},
-                    },
+                    "x": {"type": "unknown"},
+                    "y": {"type": "unknown"},
+                    # `z` is observed because an equation DEFINES it with a bare
+                    # LHS — there is no `expression` field on a variable in 1.0.0.
+                    "z": {"type": "unknown"},
                 },
                 "equations": [
                     {
@@ -133,6 +132,10 @@ def test_roundtrip_complex_expression():
                     {
                         "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
                         "rhs": {"op": "-", "args": ["x", {"op": "^", "args": ["y", 2]}]},
+                    },
+                    {
+                        "lhs": "z",
+                        "rhs": {"op": "*", "args": [{"op": "+", "args": ["x", "y"]}, 2.5]},
                     },
                 ],
             }
@@ -156,8 +159,9 @@ def test_roundtrip_complex_expression():
     # Check complex expressions are preserved
     model_data = data2["models"]["complex_model"]
 
-    # Check observed variable expression
-    z_expr = model_data["variables"]["z"]["expression"]
+    # Check the observed unknown's DEFINING EQUATION (its behaviour lives in
+    # `equations` and nowhere else).
+    z_expr = next(eq for eq in model_data["equations"] if eq["lhs"] == "z")["rhs"]
     assert z_expr["op"] == "*"
     assert z_expr["args"][1] == 2.5
     assert z_expr["args"][0]["op"] == "+"
@@ -175,7 +179,7 @@ def test_roundtrip_complex_expression():
 def test_roundtrip_preserves_metadata():
     """Test that all metadata fields are preserved through round-trip."""
     original_json = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {
             "name": "Full Metadata Test",
             "description": "A test with all metadata fields",
@@ -193,7 +197,7 @@ def test_roundtrip_preserves_metadata():
         },
         "models": {
             "meta_model": {
-                "variables": {"x": {"type": "state"}},
+                "variables": {"x": {"type": "unknown"}},
                 "equations": [{"lhs": "x", "rhs": 0}],
             }
         },
@@ -266,13 +270,13 @@ def test_roundtrip_normalizes_integral_floats_keeps_fractional():
     ``1.0`` spelling through serialization was the divergence the F-5 gate caught.
     """
     original_json = {
-        "esm": "0.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "int-float-distinction"},
         "models": {
             "m": {
                 "variables": {
-                    "x": {"type": "state"},
-                    "y": {"type": "state"},
+                    "x": {"type": "unknown"},
+                    "y": {"type": "unknown"},
                 },
                 "equations": [
                     {"lhs": "x", "rhs": 1},  # integer literal
@@ -412,12 +416,12 @@ def test_roundtrip_typed_test_assertion():
     )
 
     esm = EsmFile(
-        version="0.1.0",
+        version="1.0.0",
         metadata=Metadata(title="T"),
         models={
             "M": Model(
                 name="M",
-                variables={"x": ModelVariable(type="state", default=0.0)},
+                variables={"x": ModelVariable(type="unknown", default=0.0)},
                 equations=[Equation(lhs="x", rhs=1)],
                 tolerance=Tolerance(rel=1e-6),
                 tests=[

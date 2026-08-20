@@ -20,9 +20,9 @@ from earthsci_ast.esm_types import CouplingImport, VariableMapCoupling
 from earthsci_ast.lower_expression_templates import ExpressionTemplateError
 
 
-# A coupling-library file: roles + role-scoped edges, no models/loaders.
+# A coupling-library file: roles + role-scoped edges, no models/data sources.
 LIB = {
-    "esm": "0.8.0",
+    "esm": "1.0.0",
     "metadata": {"name": "RothermelFuelCoupling"},
     "coupling_roles": {
         "Fuel": {"description": "fuel-property source"},
@@ -39,7 +39,7 @@ def _assembly(coupling):
     """An assembly mounting the two components the library wires."""
     return load(
         {
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {"name": "wildfire"},
             "models": {
                 "FuelModelLookup": {
@@ -87,7 +87,7 @@ def _import_entry(bind, ref="lib.esm"):
 
 def test_is_coupling_library_doc_identifies_by_coupling_roles():
     assert is_coupling_library_doc(LIB) is True
-    assert is_coupling_library_doc({"esm": "0.8.0", "models": {}}) is False
+    assert is_coupling_library_doc({"esm": "1.0.0", "models": {}}) is False
     assert is_coupling_library_doc(None) is False
 
 
@@ -151,33 +151,33 @@ def test_rewrite_surface_operator_compose():
 
 
 def test_rewrite_surface_event_full():
+    """The whole §4.2 event surface, in its esm 1.0.0 shape.
+
+    An event affects UNKNOWNS only: the ``discrete_parameters`` list and the
+    ``functional_affect`` block are gone, and a parameter that changes during a
+    run declares its own ``update`` instead. So ``affects`` / ``affect_neg`` /
+    ``conditions`` / ``trigger`` are the entire rewrite surface.
+    """
     edge = {
         "type": "event",
         "conditions": [{"op": ">", "args": ["Sensor.temp", 500]}],
-        "affects": [{"lhs": "Fire.state", "rhs": {"op": "+", "args": ["Fire.state", 1]}}],
-        "affect_neg": [{"lhs": "Fire.state", "rhs": "Sensor.temp"}],
+        "affects": [{"lhs": "Fire.burned", "rhs": {"op": "+", "args": ["Fire.burned", 1]}}],
+        "affect_neg": [{"lhs": "Fire.burned", "rhs": "Sensor.temp"}],
         "trigger": {"type": "condition", "expression": {"op": "<", "args": ["Sensor.temp", "t"]}},
-        "functional_affect": {
-            "read_vars": ["Sensor.temp"],
-            "read_params": ["Fire.rate"],
-            "modified_params": ["Fire.rate"],
-        },
-        "discrete_parameters": ["Fire.rate"],
     }
     bind = {"Sensor": "TempProbe", "Fire": "Burn"}
     rw = lambda r: _rewrite_scoped_ref(r, bind)
     _rewrite_entry_in_place(edge, rw, rw)
     assert edge["conditions"][0]["args"][0] == "TempProbe.temp"
-    assert edge["affects"][0]["lhs"] == "Burn.state"
-    assert edge["affects"][0]["rhs"]["args"][0] == "Burn.state"
-    assert edge["affect_neg"][0]["lhs"] == "Burn.state"
+    assert edge["affects"][0]["lhs"] == "Burn.burned"
+    assert edge["affects"][0]["rhs"]["args"][0] == "Burn.burned"
+    assert edge["affect_neg"][0]["lhs"] == "Burn.burned"
     assert edge["affect_neg"][0]["rhs"] == "TempProbe.temp"
     # bare "t" (no dot) is not a role and is left untouched
     assert edge["trigger"]["expression"]["args"] == ["TempProbe.temp", "t"]
-    assert edge["functional_affect"]["read_vars"] == ["TempProbe.temp"]
-    assert edge["functional_affect"]["read_params"] == ["Burn.rate"]
-    assert edge["functional_affect"]["modified_params"] == ["Burn.rate"]
-    assert edge["discrete_parameters"] == ["Burn.rate"]
+    # The retired keys are not re-introduced by the rewrite.
+    assert "functional_affect" not in edge
+    assert "discrete_parameters" not in edge
 
 
 def test_rewrite_surface_apply_expression_template_binding_values():
@@ -271,7 +271,7 @@ def test_diag_not_library():
         _err_code(
             lambda: expand_coupling_imports(
                 _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})),
-                load_ref=lambda r, b: {"esm": "0.8.0", "metadata": {"name": "x"}, "models": {}},
+                load_ref=lambda r, b: {"esm": "1.0.0", "metadata": {"name": "x"}, "models": {}},
             )
         )
         == "coupling_import_not_library"
@@ -374,7 +374,7 @@ def _param_model(**extra):
 def test_subsystem_ref_to_coupling_library_is_rejected(tmp_path):
     _write(str(tmp_path), "couplib.esm", LIB)
     assembly = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "a"},
         "models": {"M": _param_model(subsystems={"Sub": {"ref": "couplib.esm"}})},
     }
@@ -387,7 +387,7 @@ def test_template_import_of_coupling_library_is_rejected(tmp_path):
     # A component-level expression_template_imports edge is resolved at load; the
     # gate fires when its target turns out to be a coupling-library file.
     assembly = {
-        "esm": "0.8.0",
+        "esm": "1.0.0",
         "metadata": {"name": "a"},
         "models": {"M": _param_model(expression_template_imports=[{"ref": "couplib.esm"}])},
     }

@@ -206,17 +206,19 @@ def test_resolver_still_raises_without_materialization() -> None:
 
 
 def test_continuous_relational_node_is_rejected() -> None:
-    """§5.7 guard 2: a distinct producer whose key reads a genuine state variable
+    """§5.7 guard 2: a distinct producer whose key reads a hot-path unknown
     classifies CONTINUOUS and must be refused — the relational engine may not run
-    per step."""
+    per step. ``u`` is an unknown that no bare-variable equation defines, so
+    §6.3.1 leaves it a SOLVED-FOR quantity and the cadence pass seeds it
+    continuous."""
     model = {
         "index_sets": {
             "items": {"kind": "interval", "size": 2},
             "tags": {"kind": "derived", "from_faq": "tag_set"},
         },
         "variables": {
-            "u": {"type": "state", "shape": ["items"]},
-            "tag": {"type": "state", "shape": ["tags"]},
+            "u": {"type": "unknown", "shape": ["items"]},
+            "tag": {"type": "unknown", "shape": ["tags"]},
         },
         "equations": [
             {
@@ -243,7 +245,7 @@ def test_no_op_for_plain_model() -> None:
     """A model with no value-invention node returns empty results, so a plain
     model flows through the evaluator byte-identically."""
     plain = {
-        "variables": {"x": {"type": "state", "shape": []}},
+        "variables": {"x": {"type": "unknown", "shape": []}},
         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": -1.0}],
     }
     vi = materialize_value_invention(plain, {}, {})
@@ -307,7 +309,7 @@ def test_argmax_farthest_generator_smallest_id_tiebreak() -> None:
         "variables": {
             "gx": {"type": "parameter", "shape": ["generators"]},
             "px": {"type": "parameter", "shape": ["points"]},
-            "far": {"type": "state", "shape": ["points"]},
+            "far": {"type": "unknown", "shape": ["points"]},
         },
         "equations": [
             {
@@ -359,7 +361,7 @@ def test_argmin_empty_candidate_set_is_error() -> None:
         "variables": {
             "gx": {"type": "parameter", "shape": ["generators"]},
             "px": {"type": "parameter", "shape": ["points"]},
-            "assign": {"type": "state", "shape": ["points"]},
+            "assign": {"type": "unknown", "shape": ["points"]},
         },
         "equations": [
             {
@@ -390,17 +392,19 @@ def test_argmin_empty_candidate_set_is_error() -> None:
 
 
 def test_argmin_continuous_assignment_is_rejected() -> None:
-    """§5.7 guard 2: an argmin whose distance reads a genuine `state` coordinate
-    classifies CONTINUOUS — a per-step assignment is out of scope for v1."""
+    """§5.7 guard 2: an argmin whose distance reads a solved-for UNKNOWN
+    coordinate classifies CONTINUOUS — a per-step assignment is out of scope
+    for v1. (``gx`` is declared ``unknown`` with no defining equation, which is
+    what makes it hot-path rather than a build-time parameter.)"""
     model = {
         "index_sets": {
             "points": {"kind": "interval", "size": 1},
             "generators": {"kind": "interval", "size": 2},
         },
         "variables": {
-            "gx": {"type": "state", "shape": ["generators"]},
+            "gx": {"type": "unknown", "shape": ["generators"]},
             "px": {"type": "parameter", "shape": ["points"]},
-            "assign": {"type": "state", "shape": ["points"]},
+            "assign": {"type": "unknown", "shape": ["points"]},
         },
         "equations": [
             {
@@ -504,8 +508,9 @@ def test_regridder_aggregates_are_not_grouped_value_invention() -> None:
 
 
 def test_centroid_grouped_reduction_reading_state_is_rejected() -> None:
-    """§5.7 guard 2: `rho` retyped to `state` ⇒ the grouped numerator reads a
-    hot-path quantity; a build-time reduction's inputs must be CONST/DISCRETE."""
+    """§5.7 guard 2: `rho` retyped from `parameter` to a solved-for `unknown`
+    ⇒ the grouped numerator reads a hot-path quantity; a build-time reduction's
+    inputs must be CONST/DISCRETE."""
     model = {
         "index_sets": {
             "points": {"kind": "interval", "size": 2},
@@ -514,9 +519,9 @@ def test_centroid_grouped_reduction_reading_state_is_rejected() -> None:
         "variables": {
             "gx": {"type": "parameter", "shape": ["generators"]},
             "px": {"type": "parameter", "shape": ["points"]},
-            "rho": {"type": "state", "shape": ["points"]},
-            "assign": {"type": "state", "shape": ["points"]},
-            "num": {"type": "state", "shape": ["generators"]},
+            "rho": {"type": "unknown", "shape": ["points"]},
+            "assign": {"type": "unknown", "shape": ["points"]},
+            "num": {"type": "unknown", "shape": ["generators"]},
         },
         "equations": [
             {
@@ -621,7 +626,7 @@ def test_join_key_prepass_skips_reductions_over_join_carrying_observeds() -> Non
     # numeric interpreter's own skolem code (the retired mirror's output), plus
     # its 1-D declared-shape index set.
     skolem_bin = {
-        "variables": {"src_bin": {"type": "state", "shape": ["cells"]}},
+        "variables": {"src_bin": {"type": "unknown", "shape": ["cells"]}},
         "equations": [
             {
                 "lhs": {"op": "index", "args": ["src_bin", "i"]},

@@ -28,7 +28,7 @@ def _make_metadata() -> Metadata:
 
 
 def _empty_file(**kwargs) -> EsmFile:
-    base = dict(version="0.1.0", metadata=_make_metadata())
+    base = dict(version="1.0.0", metadata=_make_metadata())
     base.update(kwargs)
     return EsmFile(**base)
 
@@ -40,7 +40,7 @@ def test_flatten_empty_raises():
 
 
 def test_flatten_single_model_namespaces_variables():
-    var_T = ModelVariable(type="state", units="K", default=300.0, description="Temperature")
+    var_T = ModelVariable(type="unknown", units="K", default=300.0, description="Temperature")
     var_k = ModelVariable(type="parameter", default=0.1)
     eq = Equation(
         lhs=ExprNode(op="D", args=["T"], wrt="t"),
@@ -80,7 +80,7 @@ def test_flatten_reaction_system_namespaces_species_and_params():
 
 
 def test_flatten_records_coupling_rules():
-    var_x = ModelVariable(type="state")
+    var_x = ModelVariable(type="unknown")
     var_y = ModelVariable(type="parameter")
     model_a = Model(name="A", variables={"x": var_x})
     model_b = Model(name="B", variables={"y": var_y})
@@ -98,9 +98,9 @@ def test_flatten_records_coupling_rules():
 
 
 def test_flatten_recurses_into_subsystems():
-    inner_var = ModelVariable(type="state")
+    inner_var = ModelVariable(type="unknown")
     inner = Model(name="Inner", variables={"x": inner_var})
-    outer_var = ModelVariable(type="state")
+    outer_var = ModelVariable(type="unknown")
     outer = Model(name="Outer", variables={"y": outer_var}, subsystems={"Inner": inner})
 
     file = _empty_file(models={"Outer": outer})
@@ -128,14 +128,19 @@ def test_namespace_expr_qualifies_subsystem_local_refs():
 
 
 def test_flatten_qualifies_subsystem_local_expression_refs():
-    """An observed variable whose expression references a subsystem variable
-    (`sub.v`) is qualified to `Outer.sub.v`, matching the lowered subsystem var —
-    the pattern by which a model re-exposes a mounted data loader (LANDFIRE's
-    `fuel_model = raw.fuel_model`)."""
-    inner = Model(name="Inner", variables={"v": ModelVariable(type="state")})
+    """An observed unknown whose DEFINING EQUATION references a subsystem
+    variable (`sub.v`) is qualified to `Outer.sub.v`, matching the lowered
+    subsystem var — the pattern by which a model re-exposes a mounted data
+    source (LANDFIRE's `fuel_model ~ raw.fuel_model`).
+
+    Under esm 1.0.0 the definition is an ordinary equation with a bare-variable
+    LHS, not a ``variables[out].expression`` field, so it is the equation the
+    namespacing pass has to qualify."""
+    inner = Model(name="Inner", variables={"v": ModelVariable(type="unknown")})
     outer = Model(
         name="Outer",
-        variables={"out": ModelVariable(type="observed", expression="sub.v")},
+        variables={"out": ModelVariable(type="unknown")},
+        equations=[Equation(lhs="out", rhs="sub.v")],
         subsystems={"sub": inner},
     )
     flat = flatten(_empty_file(models={"Outer": outer}))
@@ -186,7 +191,7 @@ def test_flatten_lowers_reaction_system_to_odes():
 
 
 def test_flatten_independent_variables_default_to_t_only():
-    var_x = ModelVariable(type="state")
+    var_x = ModelVariable(type="unknown")
     eq = Equation(
         lhs=ExprNode(op="D", args=["x"], wrt="t"),
         rhs="x",
@@ -198,7 +203,7 @@ def test_flatten_independent_variables_default_to_t_only():
 
 
 def test_flatten_independent_variables_pick_up_grad():
-    var_u = ModelVariable(type="state")
+    var_u = ModelVariable(type="unknown")
     eq = Equation(
         lhs=ExprNode(op="D", args=["u"], wrt="t"),
         rhs=ExprNode(op="grad", args=["u"], dim="x"),
@@ -217,14 +222,14 @@ def test_flatten_independent_variables_pick_up_grad():
 
 def test_flatten_operator_compose_lhs_match_and_sum():
     """Two systems with D(O3, t) on LHS should merge into one summed equation."""
-    chem_o3 = ModelVariable(type="state")
+    chem_o3 = ModelVariable(type="unknown")
     chem_eq = Equation(
         lhs=ExprNode(op="D", args=["O3"], wrt="t"),
         rhs=ExprNode(op="*", args=[-1, "O3"]),
     )
     chem = Model(name="Chem", variables={"O3": chem_o3}, equations=[chem_eq])
 
-    adv_o3 = ModelVariable(type="state")
+    adv_o3 = ModelVariable(type="unknown")
     adv_eq = Equation(
         lhs=ExprNode(op="D", args=["O3"], wrt="t"),
         rhs=ExprNode(op="grad", args=["O3"], dim="x"),
@@ -248,8 +253,8 @@ def test_flatten_operator_compose_lhs_match_and_sum():
 
 def test_flatten_operator_compose_var_placeholder_expansion():
     """An advection system using _var should clone its equation per state var."""
-    chem_a = ModelVariable(type="state")
-    chem_b = ModelVariable(type="state")
+    chem_a = ModelVariable(type="unknown")
+    chem_b = ModelVariable(type="unknown")
     chem_eq_a = Equation(lhs=ExprNode(op="D", args=["A"], wrt="t"), rhs=0)
     chem_eq_b = Equation(lhs=ExprNode(op="D", args=["B"], wrt="t"), rhs=0)
     chem = Model(
@@ -281,7 +286,7 @@ def test_flatten_operator_compose_var_placeholder_expansion():
 
 def test_flatten_variable_map_param_to_var():
     """variable_map(param_to_var) removes the parameter and substitutes refs."""
-    chem_o3 = ModelVariable(type="state")
+    chem_o3 = ModelVariable(type="unknown")
     chem_T = ModelVariable(type="parameter", default=298.0)
     chem_eq = Equation(
         lhs=ExprNode(op="D", args=["O3"], wrt="t"),
@@ -293,7 +298,7 @@ def test_flatten_variable_map_param_to_var():
         equations=[chem_eq],
     )
 
-    geos_T = ModelVariable(type="state")
+    geos_T = ModelVariable(type="unknown")
     geos = Model(name="GEOSFP", variables={"T": geos_T})
 
     coupling = VariableMapCoupling(
@@ -320,11 +325,11 @@ def test_flatten_variable_map_param_to_var():
 
 def test_flatten_conflicting_derivatives_raise():
     """Two systems defining different equations for the same variable conflict."""
-    a_var = ModelVariable(type="state")
+    a_var = ModelVariable(type="unknown")
     a_eq = Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs="x")
     a = Model(name="A", variables={"x": a_var}, equations=[a_eq])
 
-    b_var = ModelVariable(type="state")
+    b_var = ModelVariable(type="unknown")
     b_eq = Equation(
         lhs=ExprNode(op="D", args=["x"], wrt="t"),
         rhs=ExprNode(op="*", args=[-1, "x"]),
@@ -349,8 +354,8 @@ def test_flatten_same_system_multi_lhs_passes_through():
     """A single source system with two algebraic equations sharing an LHS is a
     legitimate DAE (e.g. equilibrium model: K = f(T) AND K = product([H+], [OH-])).
     flatten() must not raise — only cross-system conflicts are errors."""
-    K_var = ModelVariable(type="state")
-    OH_var = ModelVariable(type="state")
+    K_var = ModelVariable(type="unknown")
+    OH_var = ModelVariable(type="unknown")
     H_var = ModelVariable(type="parameter", default=1e-4)
     Kref_var = ModelVariable(type="parameter", default=1e-8)
 

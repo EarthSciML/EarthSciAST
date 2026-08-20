@@ -9,16 +9,17 @@ from __future__ import annotations
 
 from earthsci_ast.codegen import to_julia_code, to_python_code
 
-# A small schema-valid ESM file dict: one model (state var + parameter, both
-# with `units` and `default`) and one reaction system whose `reactions` is an
-# ARRAY of reaction objects and whose species carry `units` and `default`.
+# A small schema-valid ESM file dict: one model (an unknown that the `D(T, t)`
+# equation makes an ODE state, plus a parameter, both with `units` and
+# `default`) and one reaction system whose `reactions` is an ARRAY of reaction
+# objects and whose species carry `units` and `default`.
 MODEL_DICT = {
-    "esm": "0.3.0",
+    "esm": "1.0.0",
     "metadata": {"title": "codegen smoke test"},
     "models": {
         "M": {
             "variables": {
-                "T": {"type": "state", "units": "kelvin", "default": 300.0},
+                "T": {"type": "unknown", "units": "kelvin", "default": 300.0},
                 "k": {"type": "parameter", "units": "1/s", "default": 0.5},
             },
             "equations": [
