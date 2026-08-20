@@ -23,35 +23,33 @@ func TestESMFileBasicStructure(t *testing.T) {
 	// Test validation - this should fail because no models, reaction systems, or data loaders
 	err := esmFile.ValidateStruct()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', 'data_loaders', 'expression_templates', or 'coupling_roles' must be present")
+	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', 'data_sources', 'expression_templates', or 'coupling_roles' must be present")
 }
 
-func TestESMFileWithDataLoaderOnly(t *testing.T) {
-	// Test creating an ESM file whose sole component is a data loader.
+func TestESMFileWithDataSourceOnly(t *testing.T) {
+	// A document whose sole payload is the ingest registry. `data_sources` is
+	// still one of the root anyOf payload keys even though a source stopped being
+	// a component -- a file that only registers where bytes live is well-formed.
+	//
+	// Note what the entry no longer carries: no `variables` map. The fields it
+	// supplies are declared by whichever model consumes them.
 	esmFile := ESMFile{
-		ESM: "0.1.0",
+		ESM: "1.0.0",
 		Metadata: Metadata{
-			Name:    "LoaderOnly",
+			Name:    "SourceOnly",
 			Authors: []string{"Test Author"},
 		},
-		DataLoaders: map[string]DataLoader{
+		DataSources: map[string]DataSource{
 			"ERA5_PL": {
 				Kind: "grid",
-				Source: DataLoaderSource{
+				Source: DataSourceLocation{
 					URLTemplate: "cds://reanalysis-era5-pressure-levels/{date:%Y}/era5_pl_{date:%Y}.nc",
-				},
-				Variables: map[string]DataLoaderVariable{
-					"t": {
-						FileVariable: "t",
-						Units:        "K",
-						Description:  strPtr("Air temperature"),
-					},
 				},
 			},
 		},
 	}
 
-	// Test validation - this should pass since data_loaders is present.
+	// Validation passes because data_sources is present.
 	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
@@ -210,11 +208,11 @@ func TestCouplingDeserialization(t *testing.T) {
 		},
 		"models": {
 			"model1": {
-				"variables": {"x": {"type": "state"}},
+				"variables": {"x": {"type": "unknown"}},
 				"equations": []
 			},
 			"model2": {
-				"variables": {"y": {"type": "state"}},
+				"variables": {"y": {"type": "unknown"}},
 				"equations": []
 			}
 		},
@@ -301,7 +299,7 @@ func TestCouplingDeserializationErrors(t *testing.T) {
 			jsonData: `{
 				"esm": "0.1.0",
 				"metadata": {"name": "Test", "authors": ["Test"]},
-				"models": {"model1": {"variables": {"x": {"type": "state"}}, "equations": []}},
+				"models": {"model1": {"variables": {"x": {"type": "unknown"}}, "equations": []}},
 				"coupling": [{"systems": ["model1"]}]
 			}`,
 			errorMsg: "coupling entry missing required 'type' field",
@@ -311,7 +309,7 @@ func TestCouplingDeserializationErrors(t *testing.T) {
 			jsonData: `{
 				"esm": "0.1.0",
 				"metadata": {"name": "Test", "authors": ["Test"]},
-				"models": {"model1": {"variables": {"x": {"type": "state"}}, "equations": []}},
+				"models": {"model1": {"variables": {"x": {"type": "unknown"}}, "equations": []}},
 				"coupling": [{"type": 123}]
 			}`,
 			errorMsg: "coupling entry 'type' field must be a string",
@@ -321,7 +319,7 @@ func TestCouplingDeserializationErrors(t *testing.T) {
 			jsonData: `{
 				"esm": "0.1.0",
 				"metadata": {"name": "Test", "authors": ["Test"]},
-				"models": {"model1": {"variables": {"x": {"type": "state"}}, "equations": []}},
+				"models": {"model1": {"variables": {"x": {"type": "unknown"}}, "equations": []}},
 				"coupling": [{"type": "unknown_type"}]
 			}`,
 			errorMsg: "unknown coupling type: unknown_type",
@@ -348,11 +346,11 @@ func TestCouplingValidationWithTypedEntries(t *testing.T) {
 		},
 		"models": {
 			"model1": {
-				"variables": {"x": {"type": "state"}},
+				"variables": {"x": {"type": "unknown"}},
 				"equations": []
 			},
 			"model2": {
-				"variables": {"y": {"type": "state"}},
+				"variables": {"y": {"type": "unknown"}},
 				"equations": []
 			}
 		},
@@ -416,8 +414,8 @@ func TestEventCouplingPreservesAllFields(t *testing.T) {
 		"esm": "0.8.0",
 		"metadata": {"name": "EventCouplingFields", "authors": ["Test"]},
 		"models": {
-			"m1": {"variables": {"x": {"type": "state"}}, "equations": []},
-			"m2": {"variables": {"y": {"type": "state"}}, "equations": []}
+			"m1": {"variables": {"x": {"type": "unknown"}}, "equations": []},
+			"m2": {"variables": {"y": {"type": "unknown"}}, "equations": []}
 		},
 		"coupling": [
 			{
@@ -425,22 +423,21 @@ func TestEventCouplingPreservesAllFields(t *testing.T) {
 				"event_type": "continuous",
 				"name": "cross_ev",
 				"conditions": [{"op": "-", "args": ["m1.x", 1]}],
+				"affects": [{"lhs": "m2.y", "rhs": 0}],
 				"affect_neg": [{"lhs": "m2.y", "rhs": 1}],
-				"functional_affect": {
-					"handler_id": "h1",
-					"read_vars": ["m1.x"],
-					"read_params": []
-				},
 				"root_find": "left",
 				"reinitialize": true
 			}
 		]
 	}`
 
+	// `functional_affect` is NOT among the fields checked here: it was removed
+	// with esm 1.0.0, and a cross-system event affects unknowns only. Its
+	// successor is `update.handler` on the parameter a handler writes, covered by
+	// parameter_update_test.go.
 	assertFields := func(t *testing.T, ec EventCoupling) {
 		t.Helper()
-		require.NotNil(t, ec.FunctionalAffect, "functional_affect dropped")
-		assert.Equal(t, "h1", ec.FunctionalAffect.HandlerID)
+		require.Len(t, ec.Affects, 1, "affects dropped")
 		require.Len(t, ec.AffectNeg, 1, "affect_neg dropped")
 		assert.Equal(t, "m2.y", ec.AffectNeg[0].LHS)
 		require.NotNil(t, ec.RootFind, "root_find dropped")
@@ -477,7 +474,7 @@ func TestIntegerDefaultRoundTrip(t *testing.T) {
 		"models": {
 			"m": {
 				"variables": {
-					"x": {"type": "state", "default": 1},
+					"x": {"type": "unknown", "default": 1},
 					"z": {"type": "parameter", "default": 2.0}
 				},
 				"equations": [{"lhs": "x", "rhs": 0}],

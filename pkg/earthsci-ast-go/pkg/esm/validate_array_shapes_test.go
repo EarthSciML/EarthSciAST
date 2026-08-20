@@ -7,10 +7,10 @@ import "testing"
 // as given.
 func arrayShapeModel(dpShape []string, operands map[string][]string, rhs Expression) *Model {
 	vars := map[string]ModelVariable{
-		"dp": {Type: VarTypeState, Shape: dpShape},
+		"dp": {Type: VarTypeUnknown, Shape: dpShape},
 	}
 	for name, shape := range operands {
-		vars[name] = ModelVariable{Type: VarTypeObserved, Shape: shape}
+		vars[name] = ModelVariable{Type: VarTypeUnknown, Shape: shape}
 	}
 	return &Model{
 		Variables: vars,
@@ -184,8 +184,8 @@ func TestArrayBroadcastShapeAlignment(t *testing.T) {
 // RHS axes are the author's to spell, so it is left alone.
 func TestArrayBroadcastShapeCheckedPositions(t *testing.T) {
 	vars := map[string]ModelVariable{
-		"dp": {Type: VarTypeState, Shape: []string{"lon", "lat"}},
-		"z1": {Type: VarTypeObserved, Shape: []string{"lev"}},
+		"dp": {Type: VarTypeUnknown, Shape: []string{"lon", "lat"}},
+		"z1": {Type: VarTypeUnknown, Shape: []string{"lev"}},
 	}
 
 	t.Run("bare variable LHS", func(t *testing.T) {
@@ -206,17 +206,47 @@ func TestArrayBroadcastShapeCheckedPositions(t *testing.T) {
 		}
 	})
 
-	t.Run("array-shaped observed expression", func(t *testing.T) {
+	t.Run("array-shaped observed definition", func(t *testing.T) {
+		// An observed unknown's definition is an EQUATION now, so the broadcast
+		// check reaches it through the equation walk and reports at the equation's
+		// RHS rather than at a `variables/<v>/expression` field that no longer
+		// exists.
 		observed := map[string]ModelVariable{
-			"p3": {Type: VarTypeObserved, Shape: []string{"lon", "lat"}, Expression: "z1"},
+			"p3": {Type: VarTypeUnknown, Shape: []string{"lon", "lat"}},
 			"z1": vars["z1"],
 		}
-		errs := arrayShapeFindings(t, &Model{Variables: observed})
-		if len(errs) != 1 {
-			t.Fatalf("expected 1 finding on an observed expression, got %d: %+v", len(errs), errs)
+		model := &Model{
+			Variables: observed,
+			Equations: []Equation{{LHS: "p3", RHS: "z1"}},
 		}
-		if errs[0].Path != "/models/M/variables/p3/expression" {
-			t.Errorf("path = %q, want the observed's expression field", errs[0].Path)
+		errs := arrayShapeFindings(t, model)
+		if len(errs) != 1 {
+			t.Fatalf("expected 1 finding on an observed definition, got %d: %+v", len(errs), errs)
+		}
+		if errs[0].Path != "/models/M/equations/0/rhs" {
+			t.Errorf("path = %q, want the defining equation's RHS", errs[0].Path)
+		}
+	})
+
+	t.Run("array-shaped parameter update expression", func(t *testing.T) {
+		// The position that DID survive onto the variable: the expression
+		// refilling an arrayed parameter's buffer is a bare array-level form under
+		// the same alignment rule.
+		params := map[string]ModelVariable{
+			"buf": {
+				Type: VarTypeParameter, Shape: []string{"lon", "lat"},
+				Update: &ParameterUpdateSpec{Rules: []ParameterUpdate{{
+					Kind: UpdateKindRemesh, Expression: "z1",
+				}}},
+			},
+			"z1": vars["z1"],
+		}
+		errs := arrayShapeFindings(t, &Model{Variables: params})
+		if len(errs) != 1 {
+			t.Fatalf("expected 1 finding on an update expression, got %d: %+v", len(errs), errs)
+		}
+		if errs[0].Path != "/models/M/variables/buf/update/expression" {
+			t.Errorf("path = %q, want the update's expression position", errs[0].Path)
 		}
 	})
 }

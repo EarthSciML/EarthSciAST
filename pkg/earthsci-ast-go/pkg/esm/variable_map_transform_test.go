@@ -169,7 +169,7 @@ const couplingTransformFixture = `{
   "metadata": {"name": "coupling_transform_expansion", "authors": ["esm-go"]},
   "models": {
     "Src": {
-      "variables": {"F": {"type": "state"}},
+      "variables": {"F": {"type": "unknown"}},
       "equations": []
     },
     "Sink": {
@@ -238,7 +238,7 @@ func TestExpressionTemplates_CouplingTransformMatchRule(t *testing.T) {
 	  "esm": "0.4.0",
 	  "metadata": {"name": "coupling_transform_match", "authors": ["esm-go"]},
 	  "models": {
-	    "Src": {"variables": {"F": {"type": "state"}}, "equations": []},
+	    "Src": {"variables": {"F": {"type": "unknown"}}, "equations": []},
 	    "Sink": {
 	      "variables": {"offset": {"type": "parameter"}},
 	      "equations": [],
@@ -275,10 +275,10 @@ func TestExpressionTemplates_CouplingTransformTemplateLessReceiverUnchanged(t *t
 	  "esm": "0.4.0",
 	  "metadata": {"name": "coupling_transform_untouched", "authors": ["esm-go"]},
 	  "models": {
-	    "Src": {"variables": {"F": {"type": "state"}}, "equations": []},
+	    "Src": {"variables": {"F": {"type": "unknown"}}, "equations": []},
 	    "Sink": {"variables": {"offset": {"type": "parameter"}}, "equations": []},
 	    "Other": {
-	      "variables": {"z": {"type": "state"}},
+	      "variables": {"z": {"type": "unknown"}},
 	      "equations": [],
 	      "expression_templates": {
 	        "shrink": {
@@ -341,11 +341,11 @@ func TestFlatten_ExpressionTransformDoesNotError(t *testing.T) {
 	file := &ESMFile{
 		Models: map[string]Model{
 			"Src": {
-				Variables: map[string]ModelVariable{"F": {Type: "state"}},
+				Variables: map[string]ModelVariable{"F": {Type: VarTypeUnknown}},
 				Equations: []Equation{},
 			},
 			"Sink": {
-				Variables: map[string]ModelVariable{"offset": {Type: "parameter"}},
+				Variables: map[string]ModelVariable{"offset": {Type: VarTypeParameter}},
 				Equations: []Equation{},
 			},
 		},

@@ -184,11 +184,12 @@ func TestRewriteEngine_AttrsBindAsScalarMetavariables(t *testing.T) {
       "metadata": {"name": "attrs_match", "authors": ["t"]},
       "models": {"m": {
         "variables": {
-          "u": {"type": "state", "units": "1", "default": 0.0},
-          "y": {"type": "observed", "units": "1",
-            "expression": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
+          "u": {"type": "unknown", "units": "1", "default": 0.0},
+          "y": {"type": "unknown", "units": "1"}
         },
-        "equations": [],
+        "equations": [
+          {"lhs": "y", "rhs": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
+        ],
         "expression_templates": {
           "lower_custom": {
             "params": ["f", "g"],

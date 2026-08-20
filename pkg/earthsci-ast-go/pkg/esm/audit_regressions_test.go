@@ -63,10 +63,10 @@ func TestAuditG2_DAEContractNoDanglingReference(t *testing.T) {
 	  "metadata":{"name":"g2"},
 	  "models":{"M":{
 	    "variables":{
-	      "z":{"type":"state","default":0.0},
+	      "z":{"type": "unknown","default":0.0},
 	      "a":{"type":"parameter","default":2.0},
 	      "w":{"type":"parameter","default":1.0},
-	      "y":{"type":"observed","expression":{"op":"*","args":["a",2.0]}}
+	      "y":{"type":"unknown"}
 	    },
 	    "equations":[
 	      {"lhs":"y","rhs":{"op":"*","args":["a",2.0]}},
@@ -134,7 +134,7 @@ func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
 	  "metadata":{"name":"g4"},
 	  "models":{"M":{
 	    "variables":{
-	      "x":{"type":"state","default":0.0},
+	      "x":{"type": "unknown","default":0.0},
 	      "t_utc":{"type":"parameter","default":0.0},
 	      "yr":{"type":"parameter","default":0.0}
 	    },
@@ -186,9 +186,9 @@ func operatorComposeSwapFile(t *testing.T) *ESMFile {
 	  "esm":"0.2.0",
 	  "metadata":{"name":"g5"},
 	  "models":{
-	    "A":{"variables":{"x":{"type":"state","default":0.0},"q":{"type":"parameter","default":1.0}},
+	    "A":{"variables":{"x":{"type": "unknown","default":0.0},"q":{"type":"parameter","default":1.0}},
 	         "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":{"op":"+","args":["q","q"]}}]},
-	    "B":{"variables":{"y":{"type":"state","default":0.0},"r":{"type":"parameter","default":2.0}},
+	    "B":{"variables":{"y":{"type": "unknown","default":0.0},"r":{"type":"parameter","default":2.0}},
 	         "equations":[{"lhs":{"op":"D","args":["y"],"wrt":"t"},"rhs":"r"}]}
 	  },
 	  "coupling":[{"type":"operator_compose","systems":["A","B"],
@@ -358,7 +358,7 @@ func TestAuditG7_LoaderScopedReferencesResolve(t *testing.T) {
 	  "esm":"0.2.0",
 	  "metadata":{"name":"g7"},
 	  "models":{"Transport":{
-	    "variables":{"c":{"type":"state","default":0.0},"u":{"type":"parameter","default":0.0}},
+	    "variables":{"c":{"type": "unknown","default":0.0},"u":{"type":"parameter","default":0.0}},
 	    "equations":[{"lhs":{"op":"D","args":["c"],"wrt":"t"},
 	                  "rhs":{"op":"*","args":["GEOSFP_MeteoData.u","c"]}}]}},
 	  "data_loaders":{"GEOSFP_MeteoData":{
@@ -517,7 +517,7 @@ func TestAuditG12_MetaparamDoesNotRewriteOpSlot(t *testing.T) {
 	  "metadata":{"name":"g12"},
 	  "metaparameters":{"max":{"type":"integer","default":3}},
 	  "models":{"M":{
-	    "variables":{"x":{"type":"state","default":0.0},"k":{"type":"parameter","default":1.0}},
+	    "variables":{"x":{"type": "unknown","default":0.0},"k":{"type":"parameter","default":1.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},
 	                  "rhs":{"op":"max","args":["k",0.0]}}]}}}`
 
@@ -544,10 +544,10 @@ func TestAuditG13_VariableMapFactorIsParenthesized(t *testing.T) {
 	  "esm":"0.2.0",
 	  "metadata":{"name":"g13"},
 	  "models":{
-	    "A":{"variables":{"p":{"type":"state","default":0.0},"x":{"type":"parameter","default":1.0}},
+	    "A":{"variables":{"p":{"type": "unknown","default":0.0},"x":{"type":"parameter","default":1.0}},
 	         "equations":[{"lhs":{"op":"D","args":["p"],"wrt":"t"},
 	                       "rhs":{"op":"^","args":["x",2.0]}}]},
-	    "B":{"variables":{"q":{"type":"state","default":0.0},"y":{"type":"parameter","default":1.0}},
+	    "B":{"variables":{"q":{"type": "unknown","default":0.0},"y":{"type":"parameter","default":1.0}},
 	         "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},"rhs":"y"}]}
 	  },
 	  "coupling":[{"type":"variable_map","from":"A.x","to":"B.y",
@@ -604,7 +604,7 @@ func TestAuditG15_LowerEnumsReachesEvents(t *testing.T) {
 	  "metadata":{"name":"g15"},
 	  "enums":{"phase":{"solid":1,"liquid":2}},
 	  "models":{"M":{
-	    "variables":{"x":{"type":"state","default":0.0},"s":{"type":"parameter","default":0.0}},
+	    "variables":{"x":{"type": "unknown","default":0.0},"s":{"type":"parameter","default":0.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":1.0}],
 	    "discrete_events":[{
 	      "trigger":{"type":"condition","expression":{"op":"==","args":["s",{"op":"enum","args":["phase","solid"]}]}},
@@ -646,7 +646,7 @@ func TestAuditG15_UnknownEnumIsDiagnosedInEvents(t *testing.T) {
 	  "metadata":{"name":"g15b"},
 	  "enums":{"phase":{"solid":1}},
 	  "models":{"M":{
-	    "variables":{"x":{"type":"state","default":0.0},"s":{"type":"parameter","default":0.0}},
+	    "variables":{"x":{"type": "unknown","default":0.0},"s":{"type":"parameter","default":0.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":1.0}],
 	    "discrete_events":[{
 	      "trigger":{"type":"periodic","interval":1.0},
@@ -761,12 +761,16 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 			Models: map[string]Model{
 				"M": {
 					Variables: map[string]ModelVariable{
-						"x":     {Type: VarTypeState, Units: strPtr("m")},
+						"x":     {Type: VarTypeUnknown, Units: strPtr("m")},
 						"alpha": {Type: VarTypeParameter, Units: strPtr("dimensionless")},
-						"y":     {Type: VarTypeObserved, Units: strPtr("kg"), Expression: expr},
+						"y":     {Type: VarTypeUnknown, Units: strPtr("kg")},
 					},
+					// `y` is an OBSERVED unknown, and in 1.0.0 that is expressed by
+					// giving it a bare-variable-LHS equation rather than an
+					// `expression` field. Two unknowns, two equations: balanced.
 					Equations: []Equation{
 						{LHS: ExprNode{Op: OpDerivative, Args: []any{"x"}, Wrt: strPtr("t")}, RHS: "x"},
+						{LHS: "y", RHS: expr},
 					},
 				},
 			},
@@ -1167,7 +1171,7 @@ func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 	  "esm":"0.8.0",
 	  "metadata":{"name":"implicit-names","authors":["t"]},
 	  "models":{"M":{
-	    "variables":{"u":{"type":"state","units":"1","default":0.0}},
+	    "variables":{"u":{"type": "unknown","units":"1","default":0.0}},
 	    "equations":[
 	      {"lhs":{"op":"ic","args":["u"]},
 	       "rhs":{"op":"tanh","args":[{"op":"-","args":["x",0.3]}]}},
@@ -1203,7 +1207,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	  "metadata":{"name":"operator-placeholder","authors":["t"]},
 	  "models":{
 	    "Chem":{
-	      "variables":{"O3":{"type":"state","units":"ppb","default":30.0},
+	      "variables":{"O3":{"type": "unknown","units":"ppb","default":30.0},
 	                   "k":{"type":"parameter","units":"1/s","default":0.1}},
 	      "equations":[{"lhs":{"op":"D","args":["O3"],"wrt":"t"},
 	                    "rhs":{"op":"*","args":[{"op":"-","args":["k"]},"O3"]}}]},
@@ -1238,7 +1242,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	  "esm":"0.8.0",
 	  "metadata":{"name":"uncoupled","authors":["t"]},
 	  "models":{"M":{
-	    "variables":{"x":{"type":"state","units":"1","default":1.0}},
+	    "variables":{"x":{"type": "unknown","units":"1","default":1.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":0.0}],
 	    "discrete_events":[{"trigger":{"type":"periodic","interval":1.0},
 	                        "affects":[{"lhs":"nonexistent_var","rhs":0.0}]}]}}}`
@@ -1263,11 +1267,11 @@ func TestCheckerB_C_ScopedRefsAreArbitraryDepth(t *testing.T) {
 	      "variables":{"p":{"type":"parameter","units":"Pa","default":101325.0}},
 	      "equations":[],
 	      "subsystems":{"Temperature":{
-	        "variables":{"surface_temp":{"type":"state","units":"K","default":288.0}},
+	        "variables":{"surface_temp":{"type": "unknown","units":"K","default":288.0}},
 	        "equations":[{"lhs":{"op":"D","args":["surface_temp"],"wrt":"t"},"rhs":0.0}]}}},
 	    "Chem":{
 	      "variables":{"T":{"type":"parameter","units":"K","default":298.0},
-	                   "O3":{"type":"state","units":"ppb","default":30.0}},
+	                   "O3":{"type": "unknown","units":"ppb","default":30.0}},
 	      "equations":[{"lhs":{"op":"D","args":["O3"],"wrt":"t"},"rhs":0.0}]}},
 	  "coupling":[{"type":"variable_map",
 	               "from":"Meteorology.Temperature.surface_temp",
@@ -1301,7 +1305,7 @@ func TestCheckerB_D_ReactionRateScopedRefsAndUndefinedParameter(t *testing.T) {
 	  "esm":"0.8.0",
 	  "metadata":{"name":"rate-scope","authors":["t"]},
 	  "models":{"Meteo":{
-	    "variables":{"T":{"type":"state","units":"K","default":298.0}},
+	    "variables":{"T":{"type": "unknown","units":"K","default":298.0}},
 	    "equations":[{"lhs":{"op":"D","args":["T"],"wrt":"t"},"rhs":0.0}]}},
 	  "reaction_systems":{"Chem":{
 	    "species":{"A":{"units":"mol/m^3","default":1.0},"B":{"units":"mol/m^3","default":0.0}},
@@ -1343,8 +1347,8 @@ func TestCheckerB_E_NonlinearEquationBalance(t *testing.T) {
 	  "models":{"Eq":{
 	    "system_kind":"nonlinear",
 	    "variables":{
-	      "H":{"type":"state","units":"mol/m^3","default":1.0e-6},
-	      "SO4":{"type":"state","units":"mol/m^3","default":1.0e-6},
+	      "H":{"type": "unknown","units":"mol/m^3","default":1.0e-6},
+	      "SO4":{"type": "unknown","units":"mol/m^3","default":1.0e-6},
 	      "Ksp":{"type":"parameter","units":"mol^3/m^9","default":1.0e-12}},
 	    "equations":[
 	      {"lhs":"H","rhs":{"op":"*","args":[2,"SO4"]}},
@@ -1424,7 +1428,7 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 		  "esm":"0.8.0",
 		  "metadata":{"name":"unresolved","authors":["t"]},
 		  "models":{"Host":{
-		    "variables":{"x":{"type":"state","units":"1","default":0.0}},
+		    "variables":{"x":{"type": "unknown","units":"1","default":0.0}},
 		    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":0.0}],
 		    "subsystems":{"Sub":{"ref":"./nowhere.esm"}}}}}`
 		if !hasCode(validateSrc(t, src), CodeUnresolvedSubsystemRef) {
@@ -1435,15 +1439,24 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 
 // --- the two adjacent corpus pins Go also left unmet -------------------------
 
-// `discrete_parameters` names the parameters an event may write: a name that is
-// not declared, or that is declared as a STATE, is `invalid_discrete_param`.
-func TestCheckerB_InvalidDiscreteParam(t *testing.T) {
+// An event may affect UNKNOWNS ONLY (esm-spec 5.4). Both fixtures write a
+// PARAMETER from an event -- one through a `condition` trigger, one through a
+// `periodic` one -- and both are `event_affects_parameter`.
+//
+// The pair is what pins that the diagnostic keys off the AFFECTS TARGET rather
+// than off the trigger kind. In 0.x these were `invalid_discrete_param`, reached
+// through a `discrete_parameters` list that 1.0.0 removed; the defect the
+// fixtures pin is unchanged, only the route to it and the code.
+//
+// The second filename still says "discrete_param" because it is hard-referenced
+// from this test and from the Rust suite, and was deliberately kept.
+func TestCheckerB_EventAffectsParameter(t *testing.T) {
 	for _, name := range []string{"invalid_discrete_param.esm", "invalid_discrete_param_not_parameter.esm"} {
 		t.Run(name, func(t *testing.T) {
 			file, content := loadInvalidFixture(t, name)
 			result := ValidateFile(file, content)
-			if !hasCode(result, ErrorInvalidDiscreteParam) {
-				t.Errorf("want invalid_discrete_param: %+v", result.StructuralErrors)
+			if !hasCode(result, ErrorEventAffectsParameter) {
+				t.Errorf("want event_affects_parameter: %+v", result.StructuralErrors)
 			}
 			if result.IsValid {
 				t.Error("fixture is pinned invalid")
@@ -1610,7 +1623,7 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	  "index_sets":{"cells":{"kind":"interval","size":3}},
 	  "models":{"M":{
 	    "variables":{
-	      "u":{"type":"state","units":"1","shape":["cells"],"default":0.0},
+	      "u":{"type": "unknown","units":"1","shape":["cells"],"default":0.0},
 	      "k":{"type":"parameter","units":"1/s","default":0.1}},
 	    "equations":[{
 	      "lhs":{"op":"aggregate","args":[],"output_idx":["i"],
@@ -1653,8 +1666,8 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	  "index_sets":{"cells":{"kind":"interval","size":3}},
 	  "models":{"M":{
 	    "variables":{
-	      "u":{"type":"state","units":"1","shape":["cells"],"default":0.0},
-	      "w":{"type":"state","units":"1","default":0.0}},
+	      "u":{"type": "unknown","units":"1","shape":["cells"],"default":0.0},
+	      "w":{"type": "unknown","units":"1","default":0.0}},
 	    "equations":[
 	      {"lhs":{"op":"aggregate","args":[],"output_idx":["i"],
 	              "expr":{"op":"D","args":[{"op":"index","args":["u","i"]}],"wrt":"t"},

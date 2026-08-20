@@ -42,7 +42,7 @@ func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 		"models": map[string]any{
 			"Inner": map[string]any{
 				"variables": map[string]any{
-					"x": map[string]any{"type": "state"},
+					"x": map[string]any{"type": "unknown"},
 				},
 				"equations": []any{},
 			},

@@ -154,14 +154,17 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 // fixtures through the raw §9.7 pipeline and asserts the lowered
 // models.m.variables subtree is byte-identical to the committed Julia goldens
 // (the goldens carry golden-specific metadata, so the comparison is scoped to
-// the rewritten variables exactly as the reference testset does).
+// the rewritten EQUATIONS exactly as the reference testset does -- in 0.x this
+// compared `variables`, because a rewrite target sat in an observed's
+// `expression`; in 1.0.0 every definition is an equation, so that is where the
+// lowering result shows up).
 func TestMatchScoping_ConformanceGoldens(t *testing.T) {
-	modelMVars := func(doc string) any {
+	modelMEqs := func(doc string) any {
 		var v map[string]any
 		if err := json.Unmarshal([]byte(doc), &v); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		return v["models"].(map[string]any)["m"].(map[string]any)["variables"]
+		return v["models"].(map[string]any)["m"].(map[string]any)["equations"]
 	}
 	for _, group := range []string{
 		"constrained_match_scope",          // shape-constrained div rule; one fires, one survives
@@ -174,10 +177,10 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v", err)
 			}
-			got := tiCanonJSON(t, modelMVars(gotDoc))
-			want := tiCanonJSON(t, modelMVars(string(wantBytes)))
+			got := tiCanonJSON(t, modelMEqs(gotDoc))
+			want := tiCanonJSON(t, modelMEqs(string(wantBytes)))
 			if got != want {
-				t.Errorf("%s: lowered variables diverge from golden:\n got=%s\nwant=%s", group, got, want)
+				t.Errorf("%s: lowered equations diverge from golden:\n got=%s\nwant=%s", group, got, want)
 			}
 		})
 	}
@@ -194,9 +197,12 @@ func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(doc), &v); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	vars := v["models"].(map[string]any)["TwoGrids"].(map[string]any)["variables"].(map[string]any)
+	rhsFor := modelEquationRHS(t, v["models"].(map[string]any)["TwoGrids"].(map[string]any))
 	for name, wantN := range map[string]float64{"div_A": 16, "div_B": 8} {
-		expr := vars[name].(map[string]any)["expression"].(map[string]any)
+		expr, ok := rhsFor[name].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: no defining equation (got %T)", name, rhsFor[name])
+		}
 		if expr["op"] != "*" {
 			t.Errorf("%s: op = %v; want * (div node not lowered)", name, expr["op"])
 		}
@@ -337,9 +343,16 @@ func TestTemplateImports_ValidSuiteMinimalConsumer(t *testing.T) {
 	if m.IndexSets["cells"].Size == nil || *m.IndexSets["cells"].Size != 8 {
 		t.Errorf("cells size = %v; want 8 (§9.7.5 merge into consumer)", m.IndexSets["cells"].Size)
 	}
-	y, ok := m.Models["M"].Variables["y"].Expression.(ExprNode)
+	// `y` is an observed unknown, so its expanded definition is the RHS of its
+	// bare-variable-LHS equation, not a removed `expression` field.
+	model := m.Models["M"]
+	yDef, found := ObservedDefinition(&model, "y")
+	if !found {
+		t.Fatalf("no defining equation for y")
+	}
+	y, ok := yDef.(ExprNode)
 	if !ok {
-		t.Fatalf("y expression is %T; want ExprNode", m.Models["M"].Variables["y"].Expression)
+		t.Fatalf("y definition is %T; want ExprNode", yDef)
 	}
 	if y.Op != "*" {
 		t.Errorf("y op = %s; want *", y.Op)
@@ -371,20 +384,23 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 			if !ok {
 				t.Fatalf("Problem subsystem is %T; want map", f.Models["Sweep"].Subsystems["Problem"])
 			}
-			vars := sub["variables"].(map[string]any)
+			// The metaparameter substitution now lands in the subsystem's
+			// EQUATIONS, since that is where an observed unknown's definition
+			// lives. Index the RHS by the equation's bare-variable LHS.
+			rhsFor := subsystemEquationRHS(t, sub)
 			// Expression position: bare "N" substituted as an integer literal.
-			nptsJSON := mustJSON(t, vars["npts"].(map[string]any)["expression"])
+			nptsJSON := mustJSON(t, rhsFor["npts"])
 			if nptsJSON != fmt.Sprintf("%d", tc.n) {
-				t.Errorf("npts expression = %s; want %d", nptsJSON, tc.n)
+				t.Errorf("npts definition = %s; want %d", nptsJSON, tc.n)
 			}
 			// Expression-position division stays an AST division (no folding).
-			halfJSON := mustJSON(t, vars["half"].(map[string]any)["expression"])
+			halfJSON := mustJSON(t, rhsFor["half"])
 			wantHalf := fmt.Sprintf(`{"args":[%d,2],"op":"/"}`, tc.n)
 			if halfJSON != wantHalf {
-				t.Errorf("half expression = %s; want %s", halfJSON, wantHalf)
+				t.Errorf("half definition = %s; want %s", halfJSON, wantHalf)
 			}
 			// Structural site: the aggregate dense range folded exactly.
-			ramp := vars["ramp"].(map[string]any)["expression"].(map[string]any)
+			ramp := rhsFor["ramp"].(map[string]any)
 			rangesJSON := mustJSON(t, ramp["ranges"])
 			wantRanges := fmt.Sprintf(`{"i":[1,%d]}`, tc.n/2)
 			if rangesJSON != wantRanges {
@@ -423,7 +439,11 @@ func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(problem): %v", err)
 	}
-	nptsDefault := fdef.Models["Problem"].Variables["npts"].Expression
+	pdef := fdef.Models["Problem"]
+	nptsDefault, found := ObservedDefinition(&pdef, "npts")
+	if !found {
+		t.Fatalf("no defining equation for npts")
+	}
 	if got := mustJSON(t, nptsDefault); got != "2" {
 		t.Errorf("default npts = %s; want 2", got)
 	}
@@ -431,7 +451,12 @@ func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(problem, N=6): %v", err)
 	}
-	if got := mustJSON(t, fapi.Models["Problem"].Variables["npts"].Expression); got != "6" {
+	papi := fapi.Models["Problem"]
+	nptsAPI, found := ObservedDefinition(&papi, "npts")
+	if !found {
+		t.Fatalf("no defining equation for npts under the API binding")
+	}
+	if got := mustJSON(t, nptsAPI); got != "6" {
 		t.Errorf("API npts = %s; want 6 (API > default)", got)
 	}
 	// Binding a name the document does not declare is an error.
@@ -541,7 +566,7 @@ func tiModelJSON(extraModelFields, topFields string) string {
       "metadata": {"name": "t"},%s
       "models": {
         "M": {%s
-          "variables": {"x": {"type": "state", "units": "1", "default": 0.5}},
+          "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5}},
           "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                          "rhs": {"op": "-", "args": ["x"]}}]
         }
@@ -693,18 +718,20 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
       "models": {
         "M": {
           "variables": {
-            "x": {"type": "state", "units": "1", "default": 0.5},
-            "agg": {"type": "observed", "units": "1",
-              "expression": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
-                "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
-                "expr": {"op": "*", "args": ["x", "i"]}}},
-            "ma": {"type": "observed", "units": "1",
-              "expression": {"op": "makearray", "args": [],
-                "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
-                "values": [1.5]}}
+            "x": {"type": "unknown", "units": "1", "default": 0.5},
+            "agg": {"type": "unknown", "units": "1"},
+            "ma": {"type": "unknown", "units": "1"}
           },
           "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                         "rhs": {"op": "-", "args": ["x"]}}]
+                         "rhs": {"op": "-", "args": ["x"]}},
+                        {"lhs": "agg",
+                         "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
+                                 "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
+                                 "expr": {"op": "*", "args": ["x", "i"]}}},
+                        {"lhs": "ma",
+                         "rhs": {"op": "makearray", "args": [],
+                                 "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
+                                 "values": [1.5]}}]
         }
       }
     }`)
@@ -723,12 +750,12 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
 	if got := mustJSON(t, doc["index_sets"]); got != `{"cells":{"kind":"interval","size":12}}` {
 		t.Errorf("index_sets = %s; want cells size 12", got)
 	}
-	vars := doc["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)
-	agg := vars["agg"].(map[string]any)["expression"].(map[string]any)
+	rhsFor := modelEquationRHS(t, doc["models"].(map[string]any)["M"].(map[string]any))
+	agg := rhsFor["agg"].(map[string]any)
 	if got := mustJSON(t, agg["ranges"]); got != `{"i":[1,5]}` {
 		t.Errorf("agg ranges = %s; want {\"i\":[1,5]}", got)
 	}
-	ma := vars["ma"].(map[string]any)["expression"].(map[string]any)
+	ma := rhsFor["ma"].(map[string]any)
 	if got := mustJSON(t, ma["regions"]); got != `[[[3,6]]]` {
 		t.Errorf("ma regions = %s; want [[[3,6]]]", got)
 	}
@@ -746,12 +773,12 @@ func TestTemplateImports_ExpressionPositionSubstitutionNeverFolds(t *testing.T) 
       "models": {
         "M": {
           "variables": {
-            "x": {"type": "state", "units": "1", "default": 0.5},
-            "dlon": {"type": "observed", "units": "1",
-                     "expression": {"op": "/", "args": [360, "N"]}}
+            "x": {"type": "unknown", "units": "1", "default": 0.5},
+            "dlon": {"type": "unknown", "units": "1"}
           },
           "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                         "rhs": {"op": "-", "args": ["x"]}}]
+                         "rhs": {"op": "-", "args": ["x"]}},
+                        {"lhs": "dlon", "rhs": {"op": "/", "args": [360, "N"]}}]
         }
       }
     }`
@@ -763,7 +790,7 @@ func TestTemplateImports_ExpressionPositionSubstitutionNeverFolds(t *testing.T) 
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	dlon := doc["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["dlon"].(map[string]any)["expression"]
+	dlon := modelEquationRHS(t, doc["models"].(map[string]any)["M"].(map[string]any))["dlon"]
 	if got := mustJSON(t, dlon); got != `{"args":[360,144],"op":"/"}` {
 		t.Errorf("dlon = %s; want the un-folded AST division {\"args\":[360,144],\"op\":\"/\"}", got)
 	}
@@ -783,7 +810,7 @@ func tiChainDoc(n int) string {
 		}
 	}
 	sb.WriteString(`},
-      "variables": {"x": {"type": "state", "default": 0.5}},
+      "variables": {"x": {"type": "unknown", "default": 0.5}},
       "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                      "rhs": {"op": "-", "args": ["x"]}}]}}}`)
 	return sb.String()
@@ -801,18 +828,19 @@ func TestTemplateImports_BodyCompositionDepthBoundIsExact(t *testing.T) {
             {"op": "apply_expression_template", "args": [], "name": "c3", "bindings": {}}]}},
           "c3": {"params": [], "body": 3}
         },
-        "variables": {"x": {"type": "state", "units": "1", "default": 0.5},
-                      "y": {"type": "observed", "units": "1",
-                            "expression": {"op": "apply_expression_template",
-                                           "args": [], "name": "c1", "bindings": {}}}},
+        "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
+                      "y": {"type": "unknown", "units": "1"}},
         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                       "rhs": {"op": "-", "args": ["x"]}}]}}}`
+                       "rhs": {"op": "-", "args": ["x"]}},
+                      {"lhs": "y",
+                       "rhs": {"op": "apply_expression_template",
+                               "args": [], "name": "c1", "bindings": {}}}]}}}`
 	v := decodeFixture(t, src)
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("lowering failed: %v", err)
 	}
-	y := v["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["y"].(map[string]any)
-	if got := mustJSON(t, y["expression"]); got != `{"args":[1,{"args":[2,3],"op":"+"}],"op":"+"}` {
+	y := modelEquationRHS(t, v["models"].(map[string]any)["M"].(map[string]any))
+	if got := mustJSON(t, y["y"]); got != `{"args":[1,{"args":[2,3],"op":"+"}],"op":"+"}` {
 		t.Errorf("composed y = %s", got)
 	}
 
@@ -869,7 +897,7 @@ func TestTemplateImports_VersionGateFlagsEveryConstruct(t *testing.T) {
 		`"expression_templates": {"t": {"params": [], "body": 1}},`,
 	} {
 		src := fmt.Sprintf(`{"esm": "0.7.0", "metadata": {"name": "old"},%s
-          "models": {"M": {"variables": {"x": {"type": "state", "default": 0.5}},
+          "models": {"M": {"variables": {"x": {"type": "unknown", "default": 0.5}},
                            "equations": []}}}`, snippet)
 		v := decodeFixture(t, src)
 		err := RejectTemplateImportsPreV08(v)
@@ -950,11 +978,11 @@ func TestTemplateImports_EffectiveOrderBeatsSortedNameFallback(t *testing.T) {
       "models": {"M": {
         "expression_template_imports": [
           {"ref": "./lib_first.esm"}, {"ref": "./lib_second.esm"}],
-        "variables": {"x": {"type": "state", "units": "1", "default": 1.5},
-                      "y": {"type": "observed", "units": "1",
-                            "expression": {"op": "lowerme", "args": ["x"]}}},
+        "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5},
+                      "y": {"type": "unknown", "units": "1"}},
         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                       "rhs": {"op": "-", "args": ["x"]}}]}}}`)
+                       "rhs": {"op": "-", "args": ["x"]}},
+                      {"lhs": "y", "rhs": {"op": "lowerme", "args": ["x"]}}]}}}`)
 	data, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -967,8 +995,8 @@ func TestTemplateImports_EffectiveOrderBeatsSortedNameFallback(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	y := doc["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["y"].(map[string]any)
-	if got := mustJSON(t, y["expression"]); got != `{"args":[2,"x"],"op":"*"}` {
+	y := modelEquationRHS(t, doc["models"].(map[string]any)["M"].(map[string]any))
+	if got := mustJSON(t, y["y"]); got != `{"args":[2,"x"],"op":"*"}` {
 		t.Errorf("y = %s; want the FIRST import's rule to win the tie (2*x)", got)
 	}
 }
@@ -980,7 +1008,7 @@ func TestTemplateImports_ZeroParameterTemplatesAreLegal(t *testing.T) {
       "esm": "0.8.0", "metadata": {"name": "zp"},
       "models": {"M": {
         "expression_templates": {"two": {"params": [], "body": 2}},
-        "variables": {"x": {"type": "state", "units": "1", "default": 0.5},
+        "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
                       "y": {"type": "observed", "units": "1",
                             "expression": {"op": "apply_expression_template",
                                            "args": [], "name": "two", "bindings": {}}}},
@@ -993,4 +1021,45 @@ func TestTemplateImports_ZeroParameterTemplatesAreLegal(t *testing.T) {
 	if got := mustJSON(t, y["expression"]); got != "2" {
 		t.Errorf("y expression = %s; want 2", got)
 	}
+}
+
+// subsystemEquationRHS indexes a raw subsystem view's `equations` by the
+// bare-variable LHS each one defines, so a test can look up an observed
+// unknown's definition by name.
+//
+// A subsystem is held as an untyped map (Model.Subsystems is map[string]any),
+// so this walks the raw JSON shape rather than the decoded one.
+func subsystemEquationRHS(t *testing.T, sub map[string]any) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	eqs, _ := sub["equations"].([]any)
+	for _, raw := range eqs {
+		eq, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if lhs, ok := eq["lhs"].(string); ok {
+			out[lhs] = eq["rhs"]
+		}
+	}
+	return out
+}
+
+// modelEquationRHS indexes a raw model view's `equations` by the bare-variable
+// LHS each one defines. Every observed unknown's definition is an equation in
+// esm 1.0.0, so a test that used to read `variables[v].expression` reads here.
+func modelEquationRHS(t *testing.T, model map[string]any) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	eqs, _ := model["equations"].([]any)
+	for _, raw := range eqs {
+		eq, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if lhs, ok := eq["lhs"].(string); ok {
+			out[lhs] = eq["rhs"]
+		}
+	}
+	return out
 }

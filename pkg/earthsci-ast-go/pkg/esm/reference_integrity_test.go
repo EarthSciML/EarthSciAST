@@ -392,14 +392,8 @@ func anyPathMatches(got []string, want string) bool {
 	return false
 }
 
-func sortedSet(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
+// sortedSet now lives in classification.go, where the same helper renders the
+// classification partitions; the identical test-local copy is gone.
 
 // loadErrHasCode reports whether a Load error carries the given stable
 // diagnostic code. The subsystem resolver embeds its code in the message as a
@@ -546,9 +540,9 @@ func TestCallbackVariablesAreADeclarationSite(t *testing.T) {
 	  "esm": "0.1.0",
 	  "metadata": {"name": "CallbackScope", "description": "callback credit is target-scoped"},
 	  "models": {
-	    "Target":  {"variables": {"y": {"type": "state", "units": "1", "default": 0.0}},
+	    "Target":  {"variables": {"y": {"type": "unknown", "units": "1", "default": 0.0}},
 	                "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": "injected"}]},
-	    "Bystander": {"variables": {"z": {"type": "state", "units": "1", "default": 0.0}},
+	    "Bystander": {"variables": {"z": {"type": "unknown", "units": "1", "default": 0.0}},
 	                "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"}, "rhs": "injected"}]}
 	  },
 	  "coupling": [

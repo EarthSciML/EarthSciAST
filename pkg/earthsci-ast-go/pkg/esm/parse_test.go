@@ -20,7 +20,7 @@ func TestLoad(t *testing.T) {
 			"TestModel": {
 				"variables": {
 					"x": {
-						"type": "state",
+						"type": "unknown",
 						"units": "m",
 						"default": 0.0
 					}
@@ -64,7 +64,7 @@ func TestLoadString(t *testing.T) {
 			"TestModel": {
 				"variables": {
 					"x": {
-						"type": "state",
+						"type": "unknown",
 						"units": "m",
 						"default": 0.0
 					}
@@ -110,7 +110,7 @@ func TestLoadStringMissingRequiredFields(t *testing.T) {
 		"models": {
 			"TestModel": {
 				"variables": {
-					"x": {"type": "state"}
+					"x": {"type": "unknown"}
 				},
 				"equations": []
 			}
@@ -185,7 +185,7 @@ func TestValidateJSONSchemaValidDocument(t *testing.T) {
 			"TestModel": {
 				"variables": {
 					"x": {
-						"type": "state",
+						"type": "unknown",
 						"units": "m",
 						"default": 0.0
 					}
@@ -216,8 +216,8 @@ func TestLoadPreservesIntFloatDistinction(t *testing.T) {
 		"models": {
 			"m": {
 				"variables": {
-					"x": {"type": "state"},
-					"y": {"type": "state"}
+					"x": {"type": "unknown"},
+					"y": {"type": "unknown"}
 				},
 				"equations": [
 					{"lhs": "x", "rhs": 1},

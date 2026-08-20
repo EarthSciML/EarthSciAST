@@ -75,7 +75,7 @@ func TestSaveEmitsIntegerFormForIntegralFloat(t *testing.T) {
 		Models: map[string]Model{
 			"m": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{LHS: "x", RHS: float64(1.0)}, // integral float → "1"
@@ -134,7 +134,7 @@ func TestRoundTripNormalizesIntegralFloats(t *testing.T) {
   "metadata": {"name": "roundtrip", "authors": ["Test"]},
   "models": {
     "m": {
-      "variables": {"x": {"type": "state"}, "y": {"type": "state"}},
+      "variables": {"x": {"type": "unknown"}, "y": {"type": "unknown"}},
       "equations": [
         {"lhs": "x", "rhs": 1.0},
         {"lhs": "y", "rhs": 1},
@@ -187,7 +187,7 @@ func TestSaveTypedFloatFields(t *testing.T) {
 		},
 		Models: map[string]Model{
 			"m": {
-				Variables: map[string]ModelVariable{"x": {Type: "state"}},
+				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
 				Equations: []Equation{{LHS: "x", RHS: int64(0)}},
 			},
 		},
@@ -216,7 +216,7 @@ func TestSaveRejectsNonFiniteFloat(t *testing.T) {
 		},
 		Models: map[string]Model{
 			"m": {
-				Variables: map[string]ModelVariable{"x": {Type: "state"}},
+				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
 				Equations: []Equation{{LHS: "x", RHS: math.NaN()}},
 			},
 		},

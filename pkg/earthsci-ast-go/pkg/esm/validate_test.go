@@ -19,13 +19,12 @@ func TestValidateValidModel(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    "state",
+						Type:    VarTypeUnknown,
 						Units:   strPtr("m"),
 						Default: 0.0,
 					},
 					"y": {
-						Type:       "observed",
-						Expression: "x",
+						Type: VarTypeUnknown,
 					},
 				},
 				Equations: []Equation{
@@ -33,6 +32,8 @@ func TestValidateValidModel(t *testing.T) {
 						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
+					// `y` is observed: defined by its bare-variable-LHS equation.
+					{LHS: "y", RHS: "x"},
 				},
 			},
 		},
@@ -53,7 +54,7 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -81,7 +82,7 @@ func TestValidationPathsAreJSONPointer(t *testing.T) {
 		Metadata: Metadata{Name: "TestModel", Authors: []string{"Test Author"}},
 		Models: map[string]Model{
 			"TestModel": {
-				Variables: map[string]ModelVariable{"x": {Type: "state"}},
+				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
 				Equations: []Equation{{
 					LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 					RHS: "unknown_var",
@@ -110,8 +111,8 @@ func TestValidateObservedVariableWithoutExpression(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"y": {Type: "observed"}, // Missing expression
+					"x": {Type: VarTypeUnknown},
+					"y": {Type: VarTypeUnknown}, // Missing expression
 				},
 				Equations: []Equation{
 					{
@@ -251,9 +252,9 @@ func TestValidateComplexExpression(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"y": {Type: "state"},
-					"k": {Type: "parameter"},
+					"x": {Type: VarTypeUnknown},
+					"y": {Type: VarTypeUnknown},
+					"k": {Type: VarTypeParameter},
 				},
 				Equations: []Equation{
 					{
@@ -296,7 +297,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -327,7 +328,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 	assert.Empty(t, result.Messages)
 }
 
-func TestValidateDataLoaders(t *testing.T) {
+func TestValidateDataSources(t *testing.T) {
 	esmFile := &ESMFile{
 		ESM: "0.1.0",
 		Metadata: Metadata{
@@ -337,7 +338,7 @@ func TestValidateDataLoaders(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -347,14 +348,11 @@ func TestValidateDataLoaders(t *testing.T) {
 				},
 			},
 		},
-		DataLoaders: map[string]DataLoader{
-			"TestLoader": {
+		DataSources: map[string]DataSource{
+			"TestSource": {
 				Kind: "grid",
-				Source: DataLoaderSource{
+				Source: DataSourceLocation{
 					URLTemplate: "https://example.com/{date:%Y%m%d}.nc",
-				},
-				Variables: map[string]DataLoaderVariable{
-					"temperature": {FileVariable: "T", Units: "K"},
 				},
 			},
 		},
@@ -365,7 +363,7 @@ func TestValidateDataLoaders(t *testing.T) {
 	assert.Empty(t, result.Messages)
 }
 
-func TestValidateDataLoaderMissingRequiredFields(t *testing.T) {
+func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 	esmFile := &ESMFile{
 		ESM: "0.1.0",
 		Metadata: Metadata{
@@ -375,7 +373,7 @@ func TestValidateDataLoaderMissingRequiredFields(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -385,11 +383,11 @@ func TestValidateDataLoaderMissingRequiredFields(t *testing.T) {
 				},
 			},
 		},
-		DataLoaders: map[string]DataLoader{
-			"BadLoader": {
-				// Missing Kind, Source.URLTemplate, and Variables.
-				Variables: map[string]DataLoaderVariable{},
-			},
+		DataSources: map[string]DataSource{
+			// Missing Kind and Source.URLTemplate -- the only two structural
+			// obligations a source still has. The per-variable checks are gone with
+			// the `variables` map: a source declares no fields in esm 1.0.0.
+			"BadSource": {},
 		},
 	}
 
@@ -419,7 +417,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 			name: "balanced model with one state variable and one ODE",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -434,9 +432,9 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 			name: "balanced model with two state variables and two ODEs",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"y": {Type: "state"},
-					"k": {Type: "parameter"},
+					"x": {Type: VarTypeUnknown},
+					"y": {Type: VarTypeUnknown},
+					"k": {Type: VarTypeParameter},
 				},
 				Equations: []Equation{
 					{
@@ -455,8 +453,8 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 			name: "unbalanced model with state variable but no ODE",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"y": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
+					"y": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -466,14 +464,17 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 			},
 			expectedValid: false,
-			expectedError: "state variables without ODE equations: [y]",
+			expectedError: "Number of equations (1) does not match number of unknowns (2)",
 		},
 		{
-			name: "unbalanced model with ODE for non-state variable",
+			// One unknown, two equations: over-determined. The old check phrased
+			// this as "an ODE equation for a non-state variable"; the 1.0.0 rule
+			// counts, so the surplus equation is what shows up.
+			name: "over-determined model",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"k": {Type: "parameter"},
+					"x": {Type: VarTypeUnknown},
+					"k": {Type: VarTypeParameter},
 				},
 				Equations: []Equation{
 					{
@@ -487,13 +488,13 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 			},
 			expectedValid: false,
-			expectedError: "ODE equations for non-state variables: [k]",
+			expectedError: "Number of equations (2) does not match number of unknowns (1)",
 		},
 		{
-			name: "unbalanced model with no state variables but ODEs",
+			name: "no unknowns but one equation",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"k": {Type: "parameter"},
+					"k": {Type: VarTypeParameter},
 				},
 				Equations: []Equation{
 					{
@@ -503,14 +504,14 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 			},
 			expectedValid: false,
-			expectedError: "found 0 state variables but 1 ODE equations",
+			expectedError: "Number of equations (1) does not match number of unknowns (0)",
 		},
 		{
 			name: "model with non-derivative equations (should be balanced)",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
-					"y": {Type: "observed", Expression: ExprNode{Op: "*", Args: []any{"x", 2.0}}},
+					"x": {Type: VarTypeUnknown},
+					"y": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -580,8 +581,8 @@ func TestValidateFileSpecCompliant(t *testing.T) {
 		"models": {
 			"TestModel": {
 				"variables": {
-					"x": {"type": "state", "default": 0.0},
-					"y": {"type": "state", "default": 0.0}
+					"x": {"type": "unknown", "default": 0.0},
+					"y": {"type": "unknown", "default": 0.0}
 				},
 				"equations": [
 					{
@@ -607,7 +608,8 @@ func TestValidateFileSpecCompliant(t *testing.T) {
 	// Schema should be valid
 	assert.Empty(t, result.SchemaErrors, "No schema errors expected for valid JSON")
 
-	// Should have structural error due to equation-unknown balance (2 state vars, 1 ODE equation)
+	// Should have a structural error from the equation/unknown balance
+	// (2 unknowns, 1 equation).
 	assert.NotEmpty(t, result.StructuralErrors, "Should have structural error for equation count mismatch")
 	assert.False(t, result.IsValid, "Should be invalid due to structural errors")
 
@@ -617,7 +619,7 @@ func TestValidateFileSpecCompliant(t *testing.T) {
 		for _, err := range result.StructuralErrors {
 			if err.Code == ErrorEquationCountMismatch {
 				foundEquationError = true
-				assert.Contains(t, err.Message, "Equation-unknown balance")
+				assert.Contains(t, err.Message, "does not match number of unknowns")
 			}
 		}
 		assert.True(t, foundEquationError, "Should have equation count mismatch error")
@@ -635,7 +637,7 @@ func TestValidateFileValidModel(t *testing.T) {
 		"models": {
 			"TestModel": {
 				"variables": {
-					"x": {"type": "state", "default": 0.0},
+					"x": {"type": "unknown", "default": 0.0},
 					"k": {"type": "parameter", "default": 1.0}
 				},
 				"equations": [
@@ -674,7 +676,7 @@ func TestUndefinedVariableInAggregateBodyFlagged(t *testing.T) {
 		Models: map[string]Model{
 			"AggBody": {
 				Variables: map[string]ModelVariable{
-					"total": {Type: "state"},
+					"total": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -729,8 +731,8 @@ func TestBoundLoopIndexInAggregateNotFlagged(t *testing.T) {
 		Models: map[string]Model{
 			"AggIdx": {
 				Variables: map[string]ModelVariable{
-					"total": {Type: "state"},
-					"u":     {Type: "parameter"},
+					"total": {Type: VarTypeUnknown},
+					"u":     {Type: VarTypeParameter},
 				},
 				Equations: []Equation{
 					{
@@ -776,7 +778,7 @@ func TestUnparseableUnitIsAHardError(t *testing.T) {
 		Models: map[string]Model{
 			"BadUnit": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state", Units: strPtr("notaunit")},
+					"x": {Type: VarTypeUnknown, Units: strPtr("notaunit")},
 				},
 				Equations: []Equation{
 					{

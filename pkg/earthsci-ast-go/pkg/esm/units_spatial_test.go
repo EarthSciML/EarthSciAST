@@ -10,7 +10,7 @@ func spatialUnitEnv(t *testing.T) map[string]Unit {
 	t.Helper()
 	units := func(s string) *string { return &s }
 	m := &Model{Variables: map[string]ModelVariable{
-		"c": {Type: VarTypeState, Units: units("mol/m^3")},
+		"c": {Type: VarTypeUnknown, Units: units("mol/m^3")},
 		"x": {Type: VarTypeParameter, Units: units("m")},
 	}}
 	env, _ := buildModelUnitEnv(m)

@@ -444,8 +444,22 @@ func TestModelSummary(t *testing.T) {
 		Models: map[string]Model{
 			"Advection": {
 				Variables: map[string]ModelVariable{
-					"u_wind": {Type: "parameter", Units: strPtr("m/s"), Default: 0.0},
-					"v_wind": {Type: "parameter", Units: strPtr("m/s"), Default: 0.0},
+					"u_wind": {
+						Type: VarTypeParameter, Units: strPtr("m/s"), Shape: []string{},
+						Update: &ParameterUpdateSpec{Rules: []ParameterUpdate{{
+							Kind:   UpdateKindData,
+							Source: "GEOSFP",
+							From:   &DataSourceBinding{FileVariable: "U"},
+						}}},
+					},
+					"v_wind": {
+						Type: VarTypeParameter, Units: strPtr("m/s"), Shape: []string{},
+						Update: &ParameterUpdateSpec{Rules: []ParameterUpdate{{
+							Kind:   UpdateKindData,
+							Source: "GEOSFP",
+							From:   &DataSourceBinding{FileVariable: "V"},
+						}}},
+					},
 				},
 				Equations: []Equation{
 					{
@@ -473,16 +487,15 @@ func TestModelSummary(t *testing.T) {
 				},
 			},
 		},
-		DataLoaders: map[string]DataLoader{
+		DataSources: map[string]DataSource{
 			"GEOSFP": {
 				Kind: "grid",
-				Source: DataLoaderSource{
+				Source: DataSourceLocation{
 					URLTemplate: "https://example.com/{date:%Y%m%d}.nc",
 				},
-				Variables: map[string]DataLoaderVariable{
-					"u": {FileVariable: "U", Units: "m/s", Description: strPtr("Eastward wind")},
-					"v": {FileVariable: "V", Units: "m/s", Description: strPtr("Northward wind")},
-					"T": {FileVariable: "T", Units: "K", Description: strPtr("Temperature")},
+				Temporal: &DataSourceTemporal{
+					FilePeriod: strPtr("P1D"),
+					Frequency:  strPtr("PT3H"),
 				},
 			},
 		},
@@ -490,24 +503,6 @@ func TestModelSummary(t *testing.T) {
 			OperatorComposeCoupling{
 				Type:    "operator_compose",
 				Systems: [2]string{"SimpleOzone", "Advection"},
-			},
-			VariableMapCoupling{
-				Type:      "variable_map",
-				From:      "GEOSFP.T",
-				To:        "SimpleOzone.T",
-				Transform: "param_to_var",
-			},
-			VariableMapCoupling{
-				Type:      "variable_map",
-				From:      "GEOSFP.u",
-				To:        "Advection.u_wind",
-				Transform: "param_to_var",
-			},
-			VariableMapCoupling{
-				Type:      "variable_map",
-				From:      "GEOSFP.v",
-				To:        "Advection.v_wind",
-				Transform: "param_to_var",
 			},
 		},
 		Domain: &Domain{
@@ -535,8 +530,9 @@ func TestModelSummary(t *testing.T) {
 	// advection terms print as grad(_var). Unary minus is an operator node, so it
 	// is parenthesized inside the product ((−a)·b), per RENDERING_CONTRACT.md.
 	assert.Contains(t, result, "∂_var/∂t = (−u_wind) · grad(_var) + (−v_wind) · grad(_var)")
-	assert.Contains(t, result, "GEOSFP: T, u, v (grid)")
+	// A source no longer lists the variables it provides, so the summary reports
+	// its structural kind, whether it is time-varying, and where the bytes are.
+	assert.Contains(t, result, "GEOSFP: grid, temporal (https://example.com/{date:%Y%m%d}.nc)")
 	assert.Contains(t, result, "operator_compose: SimpleOzone + Advection")
-	assert.Contains(t, result, "variable_map: GEOSFP.T → SimpleOzone.T")
 	assert.Contains(t, result, "2024-05-01 to 2024-05-03")
 }

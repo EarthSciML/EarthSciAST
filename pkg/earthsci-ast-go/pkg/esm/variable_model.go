@@ -498,3 +498,30 @@ func (v *ModelVariable) MapUpdateExpressions(f func(expr Expression, rule int, p
 	}
 	return nil
 }
+
+// MarshalJSON emits the variable, preserving a DECLARED-but-EMPTY `shape`.
+//
+// `shape` cannot use the plain `omitempty` tag: an empty slice and an absent key
+// are different documents. `"shape": []` is a declared scalar shape and is one
+// of the ways a schedule/data/remesh parameter satisfies its schema-required
+// shape, so dropping it on emit turns a valid document into one the schema
+// rejects -- which is exactly what the data-source fixtures' round-trip caught.
+func (v ModelVariable) MarshalJSON() ([]byte, error) {
+	// An alias without this method, so the default struct encoder runs and there
+	// is no recursion. `shape` is shadowed by a pointer field that distinguishes
+	// absent (nil) from present-and-empty (non-nil, len 0).
+	type variableAlias ModelVariable
+	aux := struct {
+		variableAlias
+		Shape *[]string `json:"shape,omitempty"`
+	}{variableAlias: variableAlias(v)}
+	aux.variableAlias.Shape = nil
+	if v.ShapeDeclared() {
+		shape := v.Shape
+		if shape == nil {
+			shape = []string{}
+		}
+		aux.Shape = &shape
+	}
+	return json.Marshal(aux)
+}

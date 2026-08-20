@@ -11,8 +11,8 @@ func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
 		Models: map[string]Model{
 			"Atmos": {
 				Variables: map[string]ModelVariable{
-					"T": {Type: "state"},
-					"k": {Type: "parameter"},
+					"T": {Type: VarTypeUnknown},
+					"k": {Type: VarTypeParameter},
 				},
 				Equations: []Equation{},
 			},
@@ -24,8 +24,8 @@ func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 
-	if !contains(flat.StateVariables, "Atmos.T") {
-		t.Errorf("expected Atmos.T in state variables, got %v", flat.StateVariables)
+	if !contains(flat.ODEStates, "Atmos.T") {
+		t.Errorf("expected Atmos.T in ODE states, got %v", flat.ODEStates)
 	}
 	if !contains(flat.Parameters, "Atmos.k") {
 		t.Errorf("expected Atmos.k in parameters, got %v", flat.Parameters)
@@ -55,8 +55,8 @@ func TestFlatten_ReactionSystemNamespacesSpecies(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 
-	if !contains(flat.StateVariables, "Chem.O3") {
-		t.Errorf("expected Chem.O3 in state variables, got %v", flat.StateVariables)
+	if !contains(flat.ODEStates, "Chem.O3") {
+		t.Errorf("expected Chem.O3 in ODE states, got %v", flat.ODEStates)
 	}
 	if !contains(flat.Parameters, "Chem.k1") {
 		t.Errorf("expected Chem.k1 in parameters, got %v", flat.Parameters)
@@ -109,11 +109,11 @@ func TestFlatten_RecordsCouplingRules(t *testing.T) {
 	file := &ESMFile{
 		Models: map[string]Model{
 			"A": {
-				Variables: map[string]ModelVariable{"x": {Type: "state"}},
+				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
 				Equations: []Equation{},
 			},
 			"B": {
-				Variables: map[string]ModelVariable{"y": {Type: "parameter"}},
+				Variables: map[string]ModelVariable{"y": {Type: VarTypeParameter}},
 				Equations: []Equation{},
 			},
 		},

@@ -18,8 +18,8 @@ func TestComponentGraphFromFile(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state", Units: stringPtr("m")},
-					"y": {Type: "parameter", Units: stringPtr("s")},
+					"x": {Type: VarTypeUnknown, Units: stringPtr("m")},
+					"y": {Type: VarTypeParameter, Units: stringPtr("s")},
 				},
 				Equations: []Equation{
 					{
@@ -55,24 +55,19 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 			},
 		},
-		DataLoaders: map[string]DataLoader{
-			"TestLoader": {
+		DataSources: map[string]DataSource{
+			"TestSource": {
 				Kind: "grid",
-				Source: DataLoaderSource{
+				Source: DataSourceLocation{
 					URLTemplate: "https://example.com/{date:%Y%m%d}.nc",
-				},
-				Variables: map[string]DataLoaderVariable{
-					"temp": {FileVariable: "T", Units: "K"},
 				},
 			},
 		},
+		// A data source is NOT a coupling endpoint in esm 1.0.0, so the
+		// `variable_map` that used to wire TestLoader.temp into the model is gone.
+		// The model reaches the source through a parameter's `update.source`
+		// instead, which is a declaration rather than an edge.
 		Coupling: []CouplingEntry{
-			VariableMapCoupling{
-				Type:      "variable_map",
-				From:      "TestLoader.temp",
-				To:        "TestModel.y",
-				Transform: "identity",
-			},
 			OperatorComposeCoupling{
 				Type:    "operator_compose",
 				Systems: [2]string{"TestModel", "TestReactions"},
@@ -99,13 +94,15 @@ func TestComponentGraphFromFile(t *testing.T) {
 	if nodeTypes["reaction_system"] != 1 {
 		t.Errorf("Expected 1 reaction_system node, got %d", nodeTypes["reaction_system"])
 	}
-	if nodeTypes["data_loader"] != 1 {
-		t.Errorf("Expected 1 data_loader node, got %d", nodeTypes["data_loader"])
+	// A source is still a NODE -- a reader wants to see what the document
+	// ingests -- but it has no coupling edges.
+	if nodeTypes["data_source"] != 1 {
+		t.Errorf("Expected 1 data_source node, got %d", nodeTypes["data_source"])
 	}
 
 	// Check edges
-	if len(graph.Edges) != 2 {
-		t.Errorf("Expected 2 edges, got %d", len(graph.Edges))
+	if len(graph.Edges) != 1 {
+		t.Errorf("Expected 1 edge, got %d", len(graph.Edges))
 	}
 
 	// Check edge types
@@ -114,9 +111,6 @@ func TestComponentGraphFromFile(t *testing.T) {
 		edgeTypes[edge.Data.Type]++
 	}
 
-	if edgeTypes["variable_map"] != 1 {
-		t.Errorf("Expected 1 variable_map edge, got %d", edgeTypes["variable_map"])
-	}
 	if edgeTypes["operator_compose"] != 1 {
 		t.Errorf("Expected 1 operator_compose edge, got %d", edgeTypes["operator_compose"])
 	}
@@ -126,9 +120,9 @@ func TestComponentGraphFromFile(t *testing.T) {
 func TestExpressionGraphFromModel(t *testing.T) {
 	model := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: "state", Units: stringPtr("m")},
-			"y": {Type: "parameter", Units: stringPtr("m/s")},
-			"z": {Type: "observed"},
+			"x": {Type: VarTypeUnknown, Units: stringPtr("m")},
+			"y": {Type: VarTypeParameter, Units: stringPtr("m/s")},
+			"z": {Type: VarTypeUnknown},
 		},
 		Equations: []Equation{
 			{
@@ -175,9 +169,9 @@ func TestExpressionGraphFromModel(t *testing.T) {
 func TestExpressionGraphEquationIndex(t *testing.T) {
 	model := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: "state"},
-			"y": {Type: "parameter"},
-			"z": {Type: "observed"},
+			"x": {Type: VarTypeUnknown},
+			"y": {Type: VarTypeParameter},
+			"z": {Type: VarTypeUnknown},
 		},
 		Equations: []Equation{
 			{

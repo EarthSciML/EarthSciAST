@@ -302,12 +302,13 @@ func scalarFieldParamDoc(templates, bindings, name string) string {
         "variables": {
           "pa": {"type": "parameter"},
           "pb": {"type": "parameter"},
-          "area": {"type": "observed",
-            "expression": {"op": "apply_expression_template", "args": [],
-              "name": "` + name + `",
-              "bindings": ` + bindings + `}}
+          "area": {"type": "unknown"}
         },
-        "equations": [],
+        "equations": [
+          {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
+            "name": "` + name + `",
+            "bindings": ` + bindings + `}}
+        ],
         "expression_templates": ` + templates + `
       }}
     }`

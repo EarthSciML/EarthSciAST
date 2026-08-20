@@ -60,7 +60,7 @@ func TestSaveCompact(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -117,7 +117,7 @@ func TestSaveToFile(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -153,7 +153,7 @@ func TestSaveCompactToFile(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: "state"},
+					"x": {Type: VarTypeUnknown},
 				},
 				Equations: []Equation{
 					{
@@ -301,19 +301,26 @@ func TestRoundTripSerialization(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    "state",
+						Type:    VarTypeUnknown,
 						Units:   strPtr("m"),
 						Default: 1.0,
 					},
 					"y": {
-						Type:       "observed",
-						Expression: ExprNode{Op: "+", Args: []any{"x", 2}},
+						Type: VarTypeUnknown,
 					},
 				},
+				// `y` is an OBSERVED unknown, stated by its bare-variable-LHS
+				// equation. In 0.x this was a `"type": "observed"` variable carrying
+				// an `expression`; 1.0.0 removed the field, so the definition is an
+				// equation like any other.
 				Equations: []Equation{
 					{
 						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: ExprNode{Op: "*", Args: []any{-0.1, "x"}},
+					},
+					{
+						LHS: "y",
+						RHS: ExprNode{Op: "+", Args: []any{"x", 2}},
 					},
 				},
 			},
