@@ -30,7 +30,19 @@ describe('Structural validation', () => {
     expect(result.structural_errors).toHaveLength(1)
     expect(result.structural_errors[0].code).toBe('equation_count_mismatch')
     expect(result.structural_errors[0].path).toBe('/models/TestModel')
-    expect(result.structural_errors[0].details.missing_equations_for).toEqual(['y'])
+    // The balance is UNKNOWNS against EQUATIONS — the only thing it could be
+    // now that ODE-state-ness is derived from the very equations being counted.
+    // The message names both counts, and `missing_equations_for` names the
+    // unknowns nothing defines (the residue that carries what the retired
+    // `missing_observed_expr` used to report).
+    expect(result.structural_errors[0].message).toBe(
+      'Number of equations (1) does not match number of unknowns (2)',
+    )
+    expect(result.structural_errors[0].details).toEqual({
+      unknowns: ['x', 'y'],
+      equations: 1,
+      missing_equations_for: ['y'],
+    })
     expect(result.unit_warnings).toBeDefined()
     expect(Array.isArray(result.unit_warnings)).toBe(true)
   })
@@ -478,9 +490,7 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
           source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
         },
       },
-      coupling: [
-        { type: 'variable_map', from: 'Weather.T', to: 'M.x', transform: 'param_to_var' },
-      ],
+      coupling: [{ type: 'variable_map', from: 'Weather.T', to: 'M.x', transform: 'param_to_var' }],
     })
 
     expect(result.is_valid).toBe(false)

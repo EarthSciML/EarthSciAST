@@ -9,6 +9,7 @@ import { load } from './parse.js'
 import {
   lowerExpressionTemplates,
   expandDocument,
+  rejectExpressionTemplatesPreV04,
   EsmMachineryError,
   // Deprecated same-class alias — imported to assert backward compatibility below.
   ExpressionTemplateError,
@@ -23,7 +24,7 @@ import type { ReactionSystem } from './types.js'
 // Canonical Arrhenius template fixture: 5 reactions sharing one
 // `arrhenius` template and one inline rate, plus an arithmetic check.
 const ARRHENIUS_FIXTURE = {
-  esm: '0.4.0',
+  esm: '1.0.0',
   metadata: { name: 'expr_template_smoke', authors: ['esm-giy'] },
   reaction_systems: {
     chem: {
@@ -80,6 +81,22 @@ const ARRHENIUS_FIXTURE = {
   },
 }
 
+/**
+ * The RHS of the equation that DEFINES the unknown `name` — the equation whose
+ * `lhs` is the bare string `name` (esm-spec §4.4 observed form).
+ *
+ * From esm 1.0.0 a variable has no `expression` field: an unknown's behaviour is
+ * stated by its component's `equations` and nowhere else, so every rewrite that
+ * used to be observed at `component.variables[name].expression` is now observed
+ * at this equation's `rhs`.
+ */
+function definingRhs(component: Record<string, any>, name: string): any {
+  const eqs = (component.equations ?? []) as Array<{ lhs: unknown; rhs: unknown }>
+  const eq = eqs.find((e) => e.lhs === name)
+  if (eq === undefined) throw new Error(`no defining equation with lhs '${name}'`)
+  return eq.rhs
+}
+
 function inlineArrhenius(A: number, Ea: number) {
   return {
     op: '*',
@@ -110,7 +127,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
 
   it('files without templates parse unchanged', () => {
     const noTemplates = {
-      esm: '0.4.0',
+      esm: '1.0.0',
       metadata: { name: 'no_templates', authors: ['t'] },
       reaction_systems: {
         chem: {
@@ -132,11 +149,21 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   })
 
   it('rejects apply_expression_template when esm < 0.4.0', () => {
+    // The §9.6.5 gate itself, exercised DIRECTLY. From esm 1.0.0 no 0.x document
+    // reaches it through `load()` any more — the parser rejects an unsupported
+    // major version first ("Unsupported major version 0") — so driving this
+    // through `load` would only re-pin the major-version check and say nothing
+    // about the template gate. The gate is still live for any caller that
+    // inspects a legacy document, and this is what pins it.
     const oldVersion = {
       ...JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE)),
       esm: '0.3.5',
     }
-    expect(() => load(oldVersion)).toThrow(/version_too_old|0\.4\.0/)
+    expect(() => rejectExpressionTemplatesPreV04(oldVersion)).toThrow(/version_too_old|0\.4\.0/)
+    // A 1.0.0 document carrying the same constructs passes the gate untouched.
+    expect(() =>
+      rejectExpressionTemplatesPreV04(JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))),
+    ).not.toThrow()
   })
 
   it('rejects unknown template name', () => {
@@ -231,7 +258,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
 
 function gradModel(templates: Record<string, unknown>, rhs: unknown) {
   return {
-    esm: '0.4.0',
+    esm: '1.0.0',
     metadata: { name: 'rewrite_rules', authors: ['t'] },
     models: {
       M: {
@@ -393,7 +420,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
 
   it('ignores node fields the pattern omits; leaves non-matching nodes untouched', () => {
     const file = {
-      esm: '0.4.0',
+      esm: '1.0.0',
       metadata: { name: 'partial_match', authors: ['t'] },
       models: {
         M: {
@@ -420,7 +447,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
 
   it('accepts the `match` field through load() and auto-applies the rule', () => {
     const fixture = {
-      esm: '0.4.0',
+      esm: '1.0.0',
       metadata: { name: 'match_load', authors: ['t'] },
       reaction_systems: {
         chem: {
@@ -472,8 +499,13 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
   // load-time lowering directly.
   const lowerFixture = (name: string) =>
     lowerExpressionTemplates(JSON.parse(fixtureText(name))) as any
-  const expandedVars = (name: string) =>
-    JSON.parse(fs.readFileSync(path.join(confDir, name, 'expanded.esm'), 'utf8')).models.m.variables
+  const expandedModel = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(confDir, name, 'expanded.esm'), 'utf8')).models.m
+  const expandedVars = (name: string) => expandedModel(name).variables
+  // From esm 1.0.0 the variables map is just the declaration set (`type`,
+  // `units`, `shape`); the REWRITTEN expressions live in `equations`, so the
+  // golden comparison has to cover both to stay meaningful.
+  const expandedEqs = (name: string) => expandedModel(name).equations
   const goldenError = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'error.json'), 'utf8'))
 
@@ -482,14 +514,15 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     // before the priority:0 central-difference D rule can lower either inner D.
     const out = lowerFixture('godunov_beats_inner_deriv')
     expect(out.models.m.variables).toEqual(expandedVars('godunov_beats_inner_deriv'))
-    expect(out.models.m.variables.grad_mag.expression).toEqual({
+    expect(out.models.m.equations).toEqual(expandedEqs('godunov_beats_inner_deriv'))
+    expect(definingRhs(out.models.m, 'grad_mag')).toEqual({
       op: '*',
       args: ['godunov_coef', 'u'],
     })
     // The per-derivative rule (which alone emits `inv_dx`) never touched the
     // inner D nodes; the marker parameter still appears in the vars dict but not
     // in the rewritten expression.
-    const exprJson = JSON.stringify(out.models.m.variables.grad_mag.expression)
+    const exprJson = JSON.stringify(definingRhs(out.models.m, 'grad_mag'))
     expect(exprJson).not.toContain('inv_dx')
     expect(exprJson).toContain('godunov_coef')
   })
@@ -499,14 +532,15 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     // stencil (pass 2). A produced body is re-scanned only in a subsequent pass.
     const out = lowerFixture('fixpoint_nested_deriv')
     expect(out.models.m.variables).toEqual(expandedVars('fixpoint_nested_deriv'))
-    expect(out.models.m.variables.lap.expression).toEqual({
+    expect(out.models.m.equations).toEqual(expandedEqs('fixpoint_nested_deriv'))
+    expect(definingRhs(out.models.m, 'lap')).toEqual({
       op: '+',
       args: [
         { op: '*', args: ['inv_dx2', 'u'] },
         { op: '*', args: ['inv_dy2', 'u'] },
       ],
     })
-    const exprJson = JSON.stringify(out.models.m.variables.lap.expression)
+    const exprJson = JSON.stringify(definingRhs(out.models.m, 'lap'))
     expect(exprJson).not.toContain('laplacian')
     expect(exprJson).not.toContain('"op":"D"')
   })
@@ -563,19 +597,19 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     // matched literal. Falls out of generic structural matching — no engine
     // special-casing.
     const src = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'attrs_match', authors: ['t'] },
       models: {
         m: {
           variables: {
-            u: { type: 'state', units: '1', default: 0.0 },
-            y: {
-              type: 'observed',
-              units: '1',
-              expression: { op: 'custom_scheme', args: ['u'], attrs: { gamma: 1.4 } },
-            },
+            u: { type: 'unknown', units: '1', default: 0.0 },
+            y: { type: 'unknown', units: '1' },
           },
-          equations: [],
+          // esm 1.0.0: the node under rewrite is `y`'s defining equation RHS.
+          equations: [
+            { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0.0 },
+            { lhs: 'y', rhs: { op: 'custom_scheme', args: ['u'], attrs: { gamma: 1.4 } } },
+          ],
           expression_templates: {
             lower_custom: {
               params: ['f', 'g'],
@@ -587,7 +621,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
       },
     }
     const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
-    expect(out.models.m.variables.y.expression).toEqual({ op: '*', args: [1.4, 'u'] })
+    expect(definingRhs(out.models.m, 'y')).toEqual({ op: '*', args: [1.4, 'u'] })
     // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at load.
     expect('expression_templates' in out.models.m).toBe(true)
   })
@@ -597,11 +631,11 @@ describe('coupling variable_map expression transforms (receiving-component rewri
   // Model "Sink" (the RECEIVER — first dot-segment of the entry's `to`)
   // declares the template; the coupling transform invokes it.
   const couplingFixture = () => ({
-    esm: '0.8.0',
+    esm: '1.0.0',
     metadata: { name: 'coupling_transform_expansion' },
     models: {
       Src: {
-        variables: { F: { type: 'state', default: 1.0 } },
+        variables: { F: { type: 'unknown', default: 1.0 } },
         equations: [{ lhs: { op: 'D', args: ['F'], wrt: 't' }, rhs: 0 }],
       },
       Sink: {
@@ -655,7 +689,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
 
   it('auto-applies the receiving component match rules to the transform (fixpoint)', () => {
     const src = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'coupling_match_rule' },
       models: {
         Sink: {
@@ -689,7 +723,7 @@ describe('coupling variable_map expression transforms (receiving-component rewri
 
   it('resolves a reaction_systems receiver when no model shares the name', () => {
     const src = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'coupling_rs_receiver' },
       reaction_systems: {
         Chem: {

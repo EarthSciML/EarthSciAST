@@ -65,7 +65,13 @@ export function validateEquationBalance(model: Model, modelPath: string): Struct
     .filter(([, variable]) => variable.type === 'unknown')
     .map(([name]) => name)
 
-  const equations = model.equations || []
+  // INITIAL-CONDITION equations do not constrain the dynamics and are not
+  // counted. An `ic(v)` LHS states v's value at t=0 — the inline spelling of
+  // what `initialization_equations` (§6.2) carries as a separate block, which
+  // §4.9.4 likewise excludes. Counting them made every fixture that seeds its
+  // states inline (model_only.esm, the geometry and initial_conditions
+  // fixtures) look like it had twice the equations it has.
+  const equations = (model.equations || []).filter((equation) => !isInitialCondition(equation.lhs))
 
   if (unknownNames.length === equations.length) return errors
 
@@ -97,6 +103,11 @@ export function validateEquationBalance(model: Model, modelPath: string): Struct
   })
 
   return errors
+}
+
+/** Is this equation LHS an `ic(...)` initial-condition form? */
+function isInitialCondition(lhs: Expression): boolean {
+  return isExprNode(lhs) && lhs.op === 'ic'
 }
 
 /**

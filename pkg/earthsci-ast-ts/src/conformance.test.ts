@@ -192,7 +192,7 @@ describe('Conformance Test Suite', () => {
   describe('RFC §5.1 — `index` outside arrayop', () => {
     it('should round-trip scalar `index` RHS (integer and composite args)', () => {
       const original = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: {
           name: 'index_scalar_rhs',
           authors: ['EarthSciAST/polecats/chrome'],
@@ -200,9 +200,9 @@ describe('Conformance Test Suite', () => {
         models: {
           M: {
             variables: {
-              u: { type: 'state' },
-              s_literal: { type: 'state' },
-              s_composite: { type: 'state' },
+              u: { type: 'unknown' },
+              s_literal: { type: 'unknown' },
+              s_composite: { type: 'unknown' },
             },
             equations: [
               {

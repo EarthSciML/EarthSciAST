@@ -14,24 +14,30 @@ import { isExprNode } from '../expression.js'
 import type { Model, Expr, EsmFile } from '../types.js'
 
 describe('Analysis Integration Tests', () => {
+  /**
+   * `P / (R*T)` — the DEFINITION of the observed unknown `density`. From esm
+   * 1.0.0 an observed variable carries no `expression`: its definition is the
+   * RHS of the equation whose LHS is its bare name. It is bound to a name here
+   * so the model and the tests that analyze the definition (complexity,
+   * differentiation) share one expression instead of reaching for a field that
+   * no longer exists.
+   */
+  const densityDefinition: Expr = { op: '/', args: ['P', { op: '*', args: ['R', 'T'] }] }
+
   // Complex example model for testing
   const testModel: Model = {
     variables: {
       T: { type: 'parameter', units: 'K' },
       P: { type: 'parameter', units: 'Pa' },
       R: { type: 'parameter', units: 'J/(mol*K)' },
-      density: {
-        type: 'observed',
-        expression: { op: '/', args: ['P', { op: '*', args: ['R', 'T'] }] },
-        units: 'mol/m³',
-      },
-      pressure_ratio: {
-        type: 'observed',
-        expression: { op: '/', args: ['P', 101325] },
-        units: 'dimensionless',
-      },
+      density: { type: 'unknown', units: 'mol/m³' },
+      pressure_ratio: { type: 'unknown', units: 'dimensionless' },
     },
     equations: [
+      // The two bare-LHS equations are what make `density` and
+      // `pressure_ratio` OBSERVED unknowns (esm-spec §6.3.1).
+      { lhs: 'density', rhs: densityDefinition },
+      { lhs: 'pressure_ratio', rhs: { op: '/', args: ['P', 101325] } },
       {
         lhs: 'dT_dt',
         rhs: {
@@ -113,8 +119,7 @@ describe('Analysis Integration Tests', () => {
   })
 
   it('should analyze expression complexity', () => {
-    const expr = testModel.variables.density.expression!
-    const complexity = analyzeComplexity(expr)
+    const complexity = analyzeComplexity(densityDefinition)
 
     expect(complexity.depth).toBeGreaterThan(0)
     expect(complexity.operationCount).toBeGreaterThan(0)
@@ -127,7 +132,7 @@ describe('Analysis Integration Tests', () => {
   })
 
   it('should perform symbolic differentiation', () => {
-    const expr = testModel.variables.density.expression! // P/(R*T)
+    const expr = densityDefinition // P/(R*T)
 
     // Differentiate with respect to temperature
     const dDensity_dT = differentiate(expr, 'T')
@@ -164,7 +169,7 @@ describe('Analysis Integration Tests', () => {
 
   it('should handle complex ESM file analysis', () => {
     const esmFile: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: {
         name: 'Test System',
         description: 'Integration test system',
@@ -174,9 +179,9 @@ describe('Analysis Integration Tests', () => {
         Simple: {
           variables: {
             x: { type: 'parameter' },
-            y: { type: 'observed', expression: { op: '*', args: ['x', 2] } },
+            y: { type: 'unknown' },
           },
-          equations: [],
+          equations: [{ lhs: 'y', rhs: { op: '*', args: ['x', 2] } }],
         },
       },
     }
@@ -255,37 +260,45 @@ describe('Analysis Integration Tests', () => {
   })
 
   describe('Real-world atmospheric chemistry example', () => {
+    /**
+     * The Arrhenius-form definition of the observed unknown `photolysis_rate`,
+     * bound to a name for the same reason as `densityDefinition` above: 1.0.0
+     * moved an observed variable's defining expression out of the variable and
+     * into its bare-LHS equation.
+     */
+    const photolysisRateDefinition: Expr = {
+      op: '*',
+      args: [
+        'k2',
+        {
+          op: 'exp',
+          args: [
+            {
+              op: '/',
+              args: [{ op: '*', args: [-1370, { op: 'log', args: ['T'] }] }, 'R'],
+            },
+          ],
+        },
+      ],
+    }
+
+    // `NO2` is the one ODE state here — it is the only variable this mock puts
+    // under a `D(·, t)`. `O3` and `NO` are declared unknowns the mock never
+    // writes an equation for, which is all the dependency graph needs of them.
     const atmosphericModel: Model = {
       variables: {
         T: { type: 'parameter', units: 'K' },
         P: { type: 'parameter', units: 'Pa' },
-        NO2: { type: 'state', units: 'mol/m³' },
-        O3: { type: 'state', units: 'mol/m³' },
-        NO: { type: 'state', units: 'mol/m³' },
+        NO2: { type: 'unknown', units: 'mol/m³' },
+        O3: { type: 'unknown', units: 'mol/m³' },
+        NO: { type: 'unknown', units: 'mol/m³' },
         k1: { type: 'parameter', units: 'm³/(mol*s)' },
         k2: { type: 'parameter', units: 's^-1' },
-        photolysis_rate: {
-          type: 'observed',
-          expression: {
-            op: '*',
-            args: [
-              'k2',
-              {
-                op: 'exp',
-                args: [
-                  {
-                    op: '/',
-                    args: [{ op: '*', args: [-1370, { op: 'log', args: ['T'] }] }, 'R'],
-                  },
-                ],
-              },
-            ],
-          },
-        },
+        photolysis_rate: { type: 'unknown' },
       },
       equations: [
         {
-          lhs: 'dNO2_dt',
+          lhs: { op: 'D', args: ['NO2'], wrt: 't' },
           rhs: {
             op: '-',
             args: [
@@ -314,6 +327,7 @@ describe('Analysis Integration Tests', () => {
             ],
           },
         },
+        { lhs: 'photolysis_rate', rhs: photolysisRateDefinition },
       ],
     }
 
@@ -328,8 +342,10 @@ describe('Analysis Integration Tests', () => {
       expect(nodeNames).toContain('default.k1')
       expect(nodeNames).toContain('default.k2')
 
-      // NO2 rate should depend on multiple variables
-      const no2Deps = graph.predecessors('default.dNO2_dt')
+      // The NO2 rate equation's LHS target is `NO2` itself now that it is
+      // spelled `D(NO2, t)` rather than a separate `dNO2_dt` name, so the RHS
+      // variables are NO2's predecessors.
+      const no2Deps = graph.predecessors('default.NO2')
       expect(no2Deps.length).toBeGreaterThan(3)
     })
 
@@ -348,7 +364,7 @@ describe('Analysis Integration Tests', () => {
     })
 
     it('should compute temperature sensitivity via differentiation', () => {
-      const photoRate = atmosphericModel.variables.photolysis_rate.expression!
+      const photoRate = photolysisRateDefinition
       const dRate_dT = differentiate(photoRate, 'T')
 
       // Should have a non-zero derivative (rate depends on temperature)
@@ -360,7 +376,7 @@ describe('Analysis Integration Tests', () => {
     })
 
     it('should assess computational complexity of atmospheric rates', () => {
-      const photoRate = atmosphericModel.variables.photolysis_rate.expression!
+      const photoRate = photolysisRateDefinition
       const complexity = analyzeComplexity(photoRate)
 
       // Should be classified as complex due to exp and log functions

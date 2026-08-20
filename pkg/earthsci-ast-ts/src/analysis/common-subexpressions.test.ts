@@ -152,20 +152,21 @@ describe('Common Subexpression Analysis', () => {
 
   describe('findCommonSubexpressionsInModel', () => {
     it('should find common subexpressions within a model', () => {
+      // `k * T` appears three times, and all three are now EQUATION right-hand
+      // sides: the two observed definitions moved out of `variables[v]
+      // .expression` into bare-LHS equations, which is the only place the
+      // collector looks from 1.0.0 on. The occurrence count is unchanged — the
+      // same three expressions, reached through one field instead of two.
       const model: Model = {
         variables: {
           T: { type: 'parameter' },
           k: { type: 'parameter' },
-          density: {
-            type: 'observed',
-            expression: { op: '/', args: ['P', { op: '*', args: ['k', 'T'] }] },
-          },
-          pressure: {
-            type: 'observed',
-            expression: { op: '*', args: [{ op: '*', args: ['k', 'T'] }, 'V'] },
-          },
+          density: { type: 'unknown' },
+          pressure: { type: 'unknown' },
         },
         equations: [
+          { lhs: 'density', rhs: { op: '/', args: ['P', { op: '*', args: ['k', 'T'] }] } },
+          { lhs: 'pressure', rhs: { op: '*', args: [{ op: '*', args: ['k', 'T'] }, 'V'] } },
           {
             lhs: 'dT_dt',
             rhs: { op: '*', args: ['alpha', { op: '*', args: ['k', 'T'] }] },
@@ -187,32 +188,31 @@ describe('Common Subexpression Analysis', () => {
       )
 
       expect(ktSub).toBeDefined()
-      expect(ktSub?.count).toBeGreaterThanOrEqual(2)
+      expect(ktSub?.count).toBe(3) // one per equation RHS, counted exactly once each
 
-      // Check location descriptions include variable and equation references
+      // Every location names the equation it came from. An observed
+      // definition is one of those equations now, so `equation` is the only
+      // vocabulary a model location uses.
       const locationDescs = ktSub?.locations.map((loc) => loc.description).join(' ')
-      expect(locationDescs).toMatch(/variable|equation/)
+      expect(locationDescs).toMatch(/equation/)
     })
 
     it('should handle models with subsystems', () => {
       const model: Model = {
         variables: {
           global_k: { type: 'parameter' },
-          main_var: {
-            type: 'observed',
-            expression: { op: '*', args: ['global_k', 2] }, // Same expression repeated
-          },
+          main_var: { type: 'unknown' },
         },
-        equations: [],
+        equations: [
+          { lhs: 'main_var', rhs: { op: '*', args: ['global_k', 2] } }, // Repeated expression
+        ],
         subsystems: {
           sub1: {
             variables: {
-              local_var: {
-                type: 'observed',
-                expression: { op: '*', args: ['global_k', 2] }, // Same expression as main_var
-              },
+              local_var: { type: 'unknown' },
             },
             equations: [
+              { lhs: 'local_var', rhs: { op: '*', args: ['global_k', 2] } }, // Same as main_var
               {
                 lhs: 'dx_dt',
                 rhs: { op: '*', args: ['global_k', 2] }, // Same expression again

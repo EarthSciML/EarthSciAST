@@ -47,6 +47,54 @@ function expandRaw(fixturePath: string): unknown {
 
 const golden = (goldenPath: string): unknown => JSON.parse(fs.readFileSync(goldenPath, 'utf8'))
 
+/**
+ * Deep-copy a document with every `equations` list put in a canonical order.
+ *
+ * A component's `equations` are a SYSTEM, not a sequence — esm assigns no
+ * meaning to their order — and from esm 1.0.0 a fixture and its golden no
+ * longer even agree on it: each former `type: 'observed'` variable became a
+ * bare-LHS equation appended in that FILE's own `variables` key order, and the
+ * goldens were regenerated with those keys sorted while the fixtures kept their
+ * authored order (aggregate_int_ratio_golden's fixture yields `dx, c0` where
+ * its golden lists `c0, dx`). Canonicalizing both sides keeps these gates
+ * pinning equation CONTENT — everything else still compares exactly.
+ */
+function canonEqs(v: unknown): unknown {
+  const walk = (n: any): void => {
+    if (Array.isArray(n)) {
+      n.forEach(walk)
+      return
+    }
+    if (n === null || typeof n !== 'object') return
+    if (Array.isArray(n.equations)) {
+      n.equations.sort((a: unknown, b: unknown) =>
+        JSON.stringify(a) < JSON.stringify(b) ? -1 : 1,
+      )
+    }
+    for (const k of Object.keys(n)) walk(n[k])
+  }
+  const out = JSON.parse(JSON.stringify(v))
+  walk(out)
+  return out
+}
+
+/**
+ * The RHS of the equation that DEFINES the unknown `name` — the equation whose
+ * `lhs` is the bare string `name` (esm-spec §4.4 observed form).
+ *
+ * From esm 1.0.0 a variable carries no `expression` field: an unknown's
+ * behaviour is stated by its component's `equations` and nowhere else, so every
+ * read that used to be `component.variables[name].expression` is now this
+ * equation's `rhs`. Looking it up BY LHS rather than by index keeps the
+ * assertions indifferent to equation order.
+ */
+function definingRhs(component: Record<string, any>, name: string): any {
+  const eqs = (component.equations ?? []) as Array<{ lhs: unknown; rhs: unknown }>
+  const eq = eqs.find((e) => e.lhs === name)
+  if (eq === undefined) throw new Error(`no defining equation with lhs '${name}'`)
+  return eq.rhs
+}
+
 /** load() from a fixture path with the fixture's directory as basePath. */
 function loadPath(p: string, metaparameters?: Record<string, number>) {
   return loadFixtureFile(p, { metaparameters })
@@ -54,8 +102,8 @@ function loadPath(p: string, metaparameters?: Record<string, number>) {
 
 describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   it('import_smoke: the §9.7.7 four-file layering matches the golden', () => {
-    expect(expandRaw(conf('import_smoke', 'fixture.esm'))).toEqual(
-      golden(conf('import_smoke', 'expanded.esm')),
+    expect(canonEqs(expandRaw(conf('import_smoke', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('import_smoke', 'expanded.esm'))),
     )
 
     // Typed happy path: index sets merged and folded at the edge bindings.
@@ -69,8 +117,8 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   })
 
   it('import_diamond: deep-equal dedup at first occurrence', () => {
-    expect(expandRaw(conf('import_diamond', 'fixture.esm'))).toEqual(
-      golden(conf('import_diamond', 'expanded.esm')),
+    expect(canonEqs(expandRaw(conf('import_diamond', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('import_diamond', 'expanded.esm'))),
     )
     const f = loadPath(conf('import_diamond', 'fixture.esm')) as any
     expect(f.index_sets.cells.size).toBe(10) // NC default, deduped once
@@ -82,12 +130,12 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // aggregate expr. Julia's JSON3 reader widened it to `1.0/8.0`; every other
     // binding keeps `[1,8]`, so the committed golden is `[1,8]` and this binding
     // must reproduce it.
-    expect(expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm'))).toEqual(
-      golden(conf('aggregate_int_ratio_golden', 'expanded.esm')),
+    expect(canonEqs(expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('aggregate_int_ratio_golden', 'expanded.esm'))),
     )
     const d = expandRaw(conf('aggregate_int_ratio_golden', 'fixture.esm')) as any
-    expect(d.models.M.variables.dx.expression).toEqual({ op: '/', args: [1, 8] })
-    expect(d.models.M.variables.c0.expression.args[0].args[1].expr.args[1]).toEqual({
+    expect(definingRhs(d.models.M, 'dx')).toEqual({ op: '/', args: [1, 8] })
+    expect(definingRhs(d.models.M, 'c0').args[0].args[1].expr.args[1]).toEqual({
       op: '/',
       args: [1, 8],
     })
@@ -97,8 +145,8 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // prefix renames index set / templates / the rule's match `wrt` transitively;
     // per-edge bindings instantiate N; each rule instance fires only on its own
     // axis (fine.x vs coarse.x) with per-instance ranges and spacings.
-    expect(expandRaw(conf('import_rename_two_instances', 'fixture.esm'))).toEqual(
-      golden(conf('import_rename_two_instances', 'expanded.esm')),
+    expect(canonEqs(expandRaw(conf('import_rename_two_instances', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('import_rename_two_instances', 'expanded.esm'))),
     )
     const f = loadPath(conf('import_rename_two_instances', 'fixture.esm')) as any
     expect(f.index_sets['fine.x'].size).toBe(16)
@@ -114,9 +162,11 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // set, so each instance registers and fires only on its own field. Without
     // the rewrite this raised template_constraint_unknown_index_set.
     const d = expandRaw(conf('import_where_rename_two_instances', 'fixture.esm')) as any
-    expect(d).toEqual(golden(conf('import_where_rename_two_instances', 'expanded.esm')))
-    const va = d.models.TwoGrids.variables.div_A.expression
-    const vb = d.models.TwoGrids.variables.div_B.expression
+    expect(canonEqs(d)).toEqual(
+      canonEqs(golden(conf('import_where_rename_two_instances', 'expanded.esm'))),
+    )
+    const va = definingRhs(d.models.TwoGrids, 'div_A')
+    const vb = definingRhs(d.models.TwoGrids, 'div_B')
     expect(va.op).toBe('*') // both div nodes lowered
     expect(vb.op).toBe('*')
     expect(va.args[0].op).toBe('/')
@@ -141,15 +191,15 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // rebind row_count/row_cols/row_w -> meshA_* transitively through the ragged
     // index set's offsets/values AND the rule body; the consumer's own
     // `row_count` parameter coexists (un-reserved).
-    expect(expandRaw(conf('import_rebind_keyed_factors', 'fixture.esm'))).toEqual(
-      golden(conf('import_rebind_keyed_factors', 'expanded.esm')),
+    expect(canonEqs(expandRaw(conf('import_rebind_keyed_factors', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('import_rebind_keyed_factors', 'expanded.esm'))),
     )
     const f = loadPath(conf('import_rebind_keyed_factors', 'fixture.esm')) as any
     expect(f.index_sets.nz_of_row.offsets).toBe('meshA_count')
     expect(f.index_sets.nz_of_row.values).toBe('meshA_cols')
     // rowsum(u) lowered by the rebound rule instance to the aggregate over
     // meshA_cols / meshA_w; the consumer's local `row_count` parameter survives.
-    expect(f.models.Sparse.variables.total.expression.args).toEqual(['u', 'meshA_cols', 'meshA_w'])
+    expect(definingRhs(f.models.Sparse, 'total').args).toEqual(['u', 'meshA_cols', 'meshA_w'])
     expect(f.models.Sparse.variables.row_count.type).toBe('parameter')
   })
 
@@ -157,28 +207,28 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // Edges 1 & 2 (prefix a, NC 6) dedupe deep-equal; edge 3 (prefix b, NC 9)
     // registers distinctly. Both axis-less rule instances match; the §9.7.4
     // effective order breaks the equal-priority tie, so a wins (y = 6 * x).
-    expect(expandRaw(conf('import_rename_diamond', 'fixture.esm'))).toEqual(
-      golden(conf('import_rename_diamond', 'expanded.esm')),
+    expect(canonEqs(expandRaw(conf('import_rename_diamond', 'fixture.esm')))).toEqual(
+      canonEqs(golden(conf('import_rename_diamond', 'expanded.esm'))),
     )
     const f = loadPath(conf('import_rename_diamond', 'fixture.esm')) as any
     expect(f.index_sets['a.cells'].size).toBe(6)
     expect(f.index_sets['b.cells'].size).toBe(9)
-    expect(f.models.Diamond.variables.y.expression).toEqual({ op: '*', args: [6, 'x'] })
+    expect(definingRhs(f.models.Diamond, 'y')).toEqual({ op: '*', args: [6, 'x'] })
   })
 
   it('effective order: import order pins the tie-break, priority flips it', () => {
-    expect(expandRaw(conf('import_order_determinism', 'fixture_import_order.esm'))).toEqual(
-      golden(conf('import_order_determinism', 'expanded_import_order.esm')),
+    expect(canonEqs(expandRaw(conf('import_order_determinism', 'fixture_import_order.esm')))).toEqual(
+      canonEqs(golden(conf('import_order_determinism', 'expanded_import_order.esm'))),
     )
-    expect(expandRaw(conf('import_order_determinism', 'fixture_priority_override.esm'))).toEqual(
-      golden(conf('import_order_determinism', 'expanded_priority_override.esm')),
-    )
+    expect(
+      canonEqs(expandRaw(conf('import_order_determinism', 'fixture_priority_override.esm'))),
+    ).toEqual(canonEqs(golden(conf('import_order_determinism', 'expanded_priority_override.esm'))))
     // Winner sanity, independent of the goldens: earlier import wins the
     // equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
     const d1 = expandRaw(conf('import_order_determinism', 'fixture_import_order.esm')) as any
-    expect(d1.models.M.variables.y.expression.args[0]).toBe(2)
+    expect(definingRhs(d1.models.M, 'y').args[0]).toBe(2)
     const d2 = expandRaw(conf('import_order_determinism', 'fixture_priority_override.esm')) as any
-    expect(d2.models.M.variables.y.expression.args[0]).toBe(5)
+    expect(definingRhs(d2.models.M, 'y').args[0]).toBe(5)
   })
 
   it('valid suite: library file + minimal consumer', () => {
@@ -204,7 +254,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(m.index_sets.cells.size).toBe(8) // §9.7.5 merge into consumer
     // scale_by_n(x) lowered by the imported match rule to x * 8 (the
     // zero-parameter n_cells body composed and N folded at registration).
-    expect(m.models.M.variables.y.expression).toEqual({ op: '*', args: ['x', 8] })
+    expect(definingRhs(m.models.M, 'y')).toEqual({ op: '*', args: ['x', 8] })
   })
 
   it('metaparameter_resolutions: subsystem-ref bindings (§9.7.6 site 3)', async () => {
@@ -217,25 +267,25 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       await resolveSubsystemRefs(f, path.dirname(wrapperPath))
       const sub = f.models.Sweep.subsystems.Problem
       // Expression position: bare "N" substituted as an integer literal.
-      expect(sub.variables.npts.expression).toBe(n)
+      expect(definingRhs(sub, 'npts')).toBe(n)
       // Expression-position division stays an AST division (no folding).
-      expect(sub.variables.half.expression).toEqual({ op: '/', args: [n, 2] })
+      expect(definingRhs(sub, 'half')).toEqual({ op: '/', args: [n, 2] })
       // Structural site: the aggregate dense range folded exactly.
-      expect(sub.variables.ramp.expression.op).toBe('aggregate')
-      expect(sub.variables.ramp.expression.ranges.i).toEqual([1, n / 2])
+      expect(definingRhs(sub, 'ramp').op).toBe('aggregate')
+      expect(definingRhs(sub, 'ramp').ranges.i).toEqual([1, n / 2])
       // Typed round-trip matches the golden, fully structurally.
       const emitted = JSON.parse(save(f))
-      expect(emitted).toEqual(golden(conf('metaparameter_resolutions', goldenName)))
+      expect(canonEqs(emitted)).toEqual(canonEqs(golden(conf('metaparameter_resolutions', goldenName))))
     }
   })
 
   it('loader-API bindings (§9.7.6 site 4) and defaults (site 5)', () => {
     const problem = conf('metaparameter_resolutions', 'problem.esm')
     const fdef = loadPath(problem) as any
-    expect(fdef.models.Problem.variables.npts.expression).toBe(2) // default
+    expect(definingRhs(fdef.models.Problem, 'npts')).toBe(2) // default
     const fapi = loadPath(problem, { N: 6 }) as any
-    expect(fapi.models.Problem.variables.npts.expression).toBe(6) // API > default
-    expect(fapi.models.Problem.variables.ramp.expression.ranges.i).toEqual([1, 3])
+    expect(definingRhs(fapi.models.Problem, 'npts')).toBe(6) // API > default
+    expect(definingRhs(fapi.models.Problem, 'ramp').ranges.i).toEqual([1, 3])
     // Binding a name the document does not declare is an error.
     expect(errCode(() => loadPath(problem, { Q: 1 }))).toBe('template_import_unknown_name')
   })
@@ -317,11 +367,11 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
 
   const modelJson = (extraModelFields: string, topFields = '') => `
   {
-    "esm": "0.8.0",
+    "esm": "1.0.0",
     "metadata": {"name": "t"},${topFields}
     "models": {
       "M": {${extraModelFields}
-        "variables": {"x": {"type": "state", "units": "1", "default": 0.5}},
+        "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5}},
         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                        "rhs": {"op": "-", "args": ["x"]}}]
       }
@@ -358,7 +408,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'lib_only.esm'),
       JSON.stringify({
-        esm: '0.8.0',
+        esm: '1.0.0',
         metadata: { name: 'lib' },
         expression_templates: {
           t_inner: { params: [], body: 7 },
@@ -410,7 +460,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'grid.esm'),
       JSON.stringify({
-        esm: '0.8.0',
+        esm: '1.0.0',
         metadata: { name: 'grid' },
         metaparameters: { NC: { type: 'integer' } },
         index_sets: { cells: { kind: 'interval', size: 'NC' } },
@@ -441,7 +491,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'lib_n.esm'),
       JSON.stringify({
-        esm: '0.8.0',
+        esm: '1.0.0',
         metadata: { name: 'lib' },
         metaparameters: { N: { type: 'integer', default: 8 } },
         expression_templates: { n: { params: [], body: 'N' } },
@@ -469,34 +519,41 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
   })
 
   it('metaparameter fold: ranges / regions / size, exact arithmetic', () => {
+    // esm 1.0.0: `agg` and `ma` are plain unknowns whose structural sites live
+    // in their DEFINING EQUATIONS (three unknowns, three equations — the count
+    // has to stay balanced, esm-spec §4.4).
     const f = loadStr(`
     {
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": {"name": "fold"},
       "metaparameters": {"N": {"type": "integer", "default": 6}},
       "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
       "models": {
         "M": {
           "variables": {
-            "x": {"type": "state", "units": "1", "default": 0.5},
-            "agg": {"type": "observed", "units": "1",
-              "expression": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
-                "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
-                "expr": {"op": "*", "args": ["x", "i"]}}},
-            "ma": {"type": "observed", "units": "1",
-              "expression": {"op": "makearray", "args": [],
-                "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
-                "values": [1.5]}}
+            "x": {"type": "unknown", "units": "1", "default": 0.5},
+            "agg": {"type": "unknown", "units": "1"},
+            "ma": {"type": "unknown", "units": "1"}
           },
-          "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                         "rhs": {"op": "-", "args": ["x"]}}]
+          "equations": [
+            {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+             "rhs": {"op": "-", "args": ["x"]}},
+            {"lhs": "agg",
+             "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
+               "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
+               "expr": {"op": "*", "args": ["x", "i"]}}},
+            {"lhs": "ma",
+             "rhs": {"op": "makearray", "args": [],
+               "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
+               "values": [1.5]}}
+          ]
         }
       }
     }
     `) as any
     expect(f.index_sets.cells.size).toBe(12)
-    expect(f.models.M.variables.agg.expression.ranges.i).toEqual([1, 5])
-    expect(f.models.M.variables.ma.expression.regions).toEqual([[[3, 6]]])
+    expect(definingRhs(f.models.M, 'agg').ranges.i).toEqual([1, 5])
+    expect(definingRhs(f.models.M, 'ma').regions).toEqual([[[3, 6]]])
   })
 
   it('inexact division and unbound names are rejected in structural sites', () => {
@@ -528,23 +585,27 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
   it('expression-position substitution never folds', () => {
     const f = loadStr(`
     {
-      "esm": "0.8.0",
+      "esm": "1.0.0",
       "metadata": {"name": "subst"},
       "metaparameters": {"N": {"type": "integer", "default": 144}},
       "models": {
         "M": {
           "variables": {
-            "x": {"type": "state", "units": "1", "default": 0.5},
-            "dlon": {"type": "observed", "units": "1",
-                     "expression": {"op": "/", "args": [360, "N"]}}
+            "x": {"type": "unknown", "units": "1", "default": 0.5},
+            "dlon": {"type": "unknown", "units": "1"}
           },
-          "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                         "rhs": {"op": "-", "args": ["x"]}}]
+          "equations": [
+            {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+             "rhs": {"op": "-", "args": ["x"]}},
+            {"lhs": "dlon", "rhs": {"op": "/", "args": [360, "N"]}}
+          ]
         }
       }
     }
     `) as any
-    expect(f.models.M.variables.dlon.expression).toEqual({ op: '/', args: [360, 144] })
+    // The substituted metaparameter lands unfolded in the DEFINING EQUATION's
+    // RHS (esm 1.0.0 has no variable-level `expression` field).
+    expect(definingRhs(f.models.M, 'dlon')).toEqual({ op: '/', args: [360, 144] })
   })
 
   it('metaparameter substitution never rewrites a structural `dim` axis name', () => {
@@ -585,12 +646,12 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
             }
     }
     return {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'chain' },
       models: {
         M: {
           expression_templates: tpl,
-          variables: { x: { type: 'state', default: 0.5 } },
+          variables: { x: { type: 'unknown', default: 0.5 } },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } }],
         },
       },
@@ -601,7 +662,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     // A 3-deep local chain: under Option B (esm-spec §9.6.4) the target-free
     // references survive load and `Expand` reproduces the inlined chain.
     const doc = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'chain3' },
       models: {
         M: {
@@ -623,26 +684,30 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
             c3: { params: [], body: 3 },
           },
           variables: {
-            x: { type: 'state', units: '1', default: 0.5 },
-            y: {
-              type: 'observed',
-              units: '1',
-              expression: { op: 'apply_expression_template', args: [], name: 'c1', bindings: {} },
-            },
+            x: { type: 'unknown', units: '1', default: 0.5 },
+            y: { type: 'unknown', units: '1' },
           },
-          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } }],
+          equations: [
+            { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '-', args: ['x'] } },
+            // esm 1.0.0: the call site that used to sit in `y.expression` is
+            // now `y`'s defining equation RHS.
+            {
+              lhs: 'y',
+              rhs: { op: 'apply_expression_template', args: [], name: 'c1', bindings: {} },
+            },
+          ],
         },
       },
     }
     const out = lowerExpressionTemplates(doc) as any
     // Option B: the target-free reference survives load (leaf); Expand inlines.
-    expect(out.models.M.variables.y.expression).toEqual({
+    expect(definingRhs(out.models.M, 'y')).toEqual({
       op: 'apply_expression_template',
       args: [],
       name: 'c1',
       bindings: {},
     })
-    expect((expandDocument(out) as any).models.M.variables.y.expression).toEqual({
+    expect(definingRhs((expandDocument(out) as any).models.M, 'y')).toEqual({
       op: '+',
       args: [1, { op: '+', args: [2, 3] }],
     })

@@ -57,6 +57,19 @@ export type {
   SystemKind,
   ModelClassification,
 } from './classification.js'
+export { observedDefinitions } from './classification.js'
+
+// Cadence-class leaf seeding (CONFORMANCE_SPEC §5.7.2). Seeds FROM the
+// classification API above rather than re-deriving the categories locally.
+export {
+  CadenceSeeder,
+  CadenceCycleError,
+  joinCadence,
+  joinAll,
+  leafCadence,
+  expressionCadence,
+} from './cadence.js'
+export type { CadenceClass } from './cadence.js'
 
 // Export graph utilities
 export {

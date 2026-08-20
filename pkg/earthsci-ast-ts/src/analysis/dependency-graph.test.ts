@@ -32,17 +32,18 @@ describe('Dependency Graph Analysis', () => {
     })
 
     it('should build dependency graph for model with variables', () => {
+      // `rho` is an OBSERVED unknown because its defining equation has a bare
+      // variable LHS (esm-spec §6.3.1). That equation is where the definition
+      // lives from 1.0.0 on; there is no `variables.rho.expression` to read,
+      // and the node's `kind` is derived from the equation, not declared.
       const model: Model = {
         variables: {
           T: { type: 'parameter', units: 'K' },
           P: { type: 'parameter', units: 'Pa' },
-          rho: {
-            type: 'observed',
-            expression: { op: '/', args: ['P', { op: '*', args: ['R', 'T'] }] },
-            units: 'kg/m³',
-          },
+          rho: { type: 'unknown', units: 'kg/m³' },
         },
         equations: [
+          { lhs: 'rho', rhs: { op: '/', args: ['P', { op: '*', args: ['R', 'T'] }] } },
           {
             lhs: 'drho_dt',
             rhs: { op: '*', args: ['k', { op: '-', args: ['rho_eq', 'rho'] }] },
@@ -71,12 +72,15 @@ describe('Dependency Graph Analysis', () => {
 
       const model: Model = {
         variables: {
-          x: { type: 'observed', expression: { op: '+', args: ['z', 'a'] } },
-          z: { type: 'observed', expression: { op: '*', args: ['x', 'b'] } }, // Circular!
+          x: { type: 'unknown' },
+          z: { type: 'unknown' },
           a: { type: 'parameter' },
           b: { type: 'parameter' },
         },
-        equations: [],
+        equations: [
+          { lhs: 'x', rhs: { op: '+', args: ['z', 'a'] } },
+          { lhs: 'z', rhs: { op: '*', args: ['x', 'b'] } }, // Circular!
+        ],
       }
 
       const graph = buildDependencyGraph(model)
@@ -98,11 +102,15 @@ describe('Dependency Graph Analysis', () => {
       const model: Model = {
         variables: {
           a: { type: 'parameter' },
-          b: { type: 'observed', expression: { op: '*', args: ['a', 2] } },
-          c: { type: 'observed', expression: { op: '+', args: ['b', 1] } },
-          d: { type: 'observed', expression: { op: '/', args: ['c', 'a'] } },
+          b: { type: 'unknown' },
+          c: { type: 'unknown' },
+          d: { type: 'unknown' },
         },
-        equations: [],
+        equations: [
+          { lhs: 'b', rhs: { op: '*', args: ['a', 2] } },
+          { lhs: 'c', rhs: { op: '+', args: ['b', 1] } },
+          { lhs: 'd', rhs: { op: '/', args: ['c', 'a'] } },
+        ],
       }
 
       const graph = buildDependencyGraph(model)
@@ -127,9 +135,9 @@ describe('Dependency Graph Analysis', () => {
         subsystems: {
           sub1: {
             variables: {
-              y: { type: 'observed', expression: { op: '+', args: ['x', 1] } },
+              y: { type: 'unknown' },
             },
-            equations: [],
+            equations: [{ lhs: 'y', rhs: { op: '+', args: ['x', 1] } }],
           },
         },
       }
@@ -154,9 +162,9 @@ describe('Dependency Graph Analysis', () => {
         variables: {
           used: { type: 'parameter' },
           unused: { type: 'parameter' },
-          result: { type: 'observed', expression: { op: '*', args: ['used', 2] } },
+          result: { type: 'unknown' },
         },
-        equations: [],
+        equations: [{ lhs: 'result', rhs: { op: '*', args: ['used', 2] } }],
       }
 
       const graph = buildDependencyGraph(model)
@@ -174,10 +182,13 @@ describe('Dependency Graph Analysis', () => {
       const model: Model = {
         variables: {
           input: { type: 'parameter' },
-          intermediate: { type: 'observed', expression: { op: '*', args: ['input', 2] } },
-          output: { type: 'observed', expression: { op: '+', args: ['intermediate', 1] } },
+          intermediate: { type: 'unknown' },
+          output: { type: 'unknown' },
         },
-        equations: [],
+        equations: [
+          { lhs: 'intermediate', rhs: { op: '*', args: ['input', 2] } },
+          { lhs: 'output', rhs: { op: '+', args: ['intermediate', 1] } },
+        ],
       }
 
       const graph = buildDependencyGraph(model)
@@ -195,12 +206,17 @@ describe('Dependency Graph Analysis', () => {
       const model: Model = {
         variables: {
           a: { type: 'parameter' },
-          b: { type: 'observed', expression: { op: '+', args: ['a', 1] } },
-          c: { type: 'observed', expression: { op: '+', args: ['b', 1] } },
-          d: { type: 'observed', expression: { op: '+', args: ['c', 1] } },
-          e: { type: 'observed', expression: { op: '+', args: ['d', 1] } },
+          b: { type: 'unknown' },
+          c: { type: 'unknown' },
+          d: { type: 'unknown' },
+          e: { type: 'unknown' },
         },
-        equations: [],
+        equations: [
+          { lhs: 'b', rhs: { op: '+', args: ['a', 1] } },
+          { lhs: 'c', rhs: { op: '+', args: ['b', 1] } },
+          { lhs: 'd', rhs: { op: '+', args: ['c', 1] } },
+          { lhs: 'e', rhs: { op: '+', args: ['d', 1] } },
+        ],
       }
 
       const graph = buildDependencyGraph(model)
@@ -243,10 +259,13 @@ describe('Dependency Graph Analysis', () => {
       const model: Model = {
         variables: {
           a: { type: 'parameter' },
-          b: { type: 'observed', expression: { op: '+', args: ['a', 1] } },
-          c: { type: 'observed', expression: { op: '*', args: ['b', 2] } },
+          b: { type: 'unknown' },
+          c: { type: 'unknown' },
         },
-        equations: [],
+        equations: [
+          { lhs: 'b', rhs: { op: '+', args: ['a', 1] } },
+          { lhs: 'c', rhs: { op: '*', args: ['b', 2] } },
+        ],
       }
 
       const graph = buildDependencyGraph(model)
