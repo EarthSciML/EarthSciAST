@@ -204,7 +204,7 @@ func buildUnitsFixtureBindings(
 			continue
 		}
 		typ, _ := v["type"].(string)
-		if typ != "parameter" && typ != "state" {
+		if typ != VarTypeParameter && typ != VarTypeUnknown {
 			continue
 		}
 		if d, ok := v["default"].(float64); ok {

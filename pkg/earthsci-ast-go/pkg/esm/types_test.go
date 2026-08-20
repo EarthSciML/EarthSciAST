@@ -66,7 +66,7 @@ func TestESMFileWithModel(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    "state",
+						Type:    VarTypeUnknown,
 						Units:   strPtr("m"),
 						Default: 0.0,
 					},
@@ -132,7 +132,7 @@ func TestJSONSerialization(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    "state",
+						Type:    VarTypeUnknown,
 						Units:   strPtr("m"),
 						Default: 0.0,
 					},

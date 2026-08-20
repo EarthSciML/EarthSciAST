@@ -78,26 +78,26 @@ func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 	}
 }
 
-func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
+// A data source cannot be mounted as a SUBSYSTEM.
+//
+// This pin is INVERTED by esm 1.0.0. In 0.x a data loader was a component, so a
+// loader-only file was a legal `ref` target and this test asserted the mount
+// succeeded. From 1.0.0 a data source is not a component (esm-spec §8): it
+// cannot be a subsystem, a coupling endpoint, or a scoped-name path root. A file
+// whose only content is `data_sources` therefore contains NO mountable system,
+// and §4.7 requires exactly one.
+func TestResolveSubsystemRefs_DataSourceOnlyFileIsNotMountable(t *testing.T) {
 	dir := t.TempDir()
-	// A loader-only referenced file: its sole component is a single data loader.
 	inner := map[string]any{
-		"esm": "0.1.0",
+		"esm": "1.0.0",
 		"metadata": map[string]any{
-			"name": "inner-loader",
+			"name": "inner-source",
 		},
-		"data_loaders": map[string]any{
+		"data_sources": map[string]any{
 			"ERA5_PL": map[string]any{
 				"kind": "grid",
 				"source": map[string]any{
 					"url_template": "cds://reanalysis-era5-pressure-levels/{date:%Y}/era5_pl_{date:%Y}.nc",
-				},
-				"variables": map[string]any{
-					"t": map[string]any{
-						"file_variable": "t",
-						"units":         "K",
-						"description":   "Air temperature",
-					},
 				},
 			},
 		},
@@ -110,28 +110,73 @@ func TestResolveSubsystemRefs_LoaderOnlyFile(t *testing.T) {
 				Variables: map[string]ModelVariable{},
 				Equations: []Equation{},
 				Subsystems: map[string]any{
-					"Loader": map[string]any{"ref": "inner.json"},
+					"Source": map[string]any{"ref": "inner.json"},
+				},
+			},
+		},
+	}
+
+	err := ResolveSubsystemRefs(file, dir)
+	if err == nil {
+		t.Fatal("a data-source-only file is not a mountable subsystem, but the ref resolved")
+	}
+	if code := tiErrCode(t, err); code != CodeAmbiguousSubsystemRef {
+		t.Errorf("code = %s; want %s", code, CodeAmbiguousSubsystemRef)
+	}
+}
+
+// A file carrying a model AND a data source has exactly ONE mountable system:
+// the source does not count toward the §4.7 total, because it is not a
+// component. Before 1.0.0 this same file was AMBIGUOUS (two components), so the
+// change is observable in both directions.
+func TestResolveSubsystemRefs_DataSourceDoesNotMakeRefAmbiguous(t *testing.T) {
+	dir := t.TempDir()
+	inner := map[string]any{
+		"esm": "1.0.0",
+		"metadata": map[string]any{
+			"name": "inner-mixed",
+		},
+		"data_sources": map[string]any{
+			"ERA5_PL": map[string]any{
+				"kind":   "grid",
+				"source": map[string]any{"url_template": "cds://era5/{date:%Y}.nc"},
+			},
+		},
+		"models": map[string]any{
+			"Inner": map[string]any{
+				"variables": map[string]any{
+					"x": map[string]any{"type": "unknown", "units": "1"},
+				},
+				"equations": []any{},
+			},
+		},
+	}
+	writeJSON(t, filepath.Join(dir, "inner.json"), inner)
+
+	file := &ESMFile{
+		Models: map[string]Model{
+			"Outer": {
+				Variables: map[string]ModelVariable{},
+				Equations: []Equation{},
+				Subsystems: map[string]any{
+					"Inner": map[string]any{"ref": "inner.json"},
 				},
 			},
 		},
 	}
 
 	if err := ResolveSubsystemRefs(file, dir); err != nil {
-		t.Fatalf("ResolveSubsystemRefs: %v", err)
+		t.Fatalf("the model is the single component; the source must not make it ambiguous: %v", err)
 	}
-
-	resolved, ok := file.Models["Outer"].Subsystems["Loader"].(map[string]any)
+	resolved, ok := file.Models["Outer"].Subsystems["Inner"].(map[string]any)
 	if !ok {
-		t.Fatalf("Loader not resolved to a map: %T", file.Models["Outer"].Subsystems["Loader"])
+		t.Fatalf("Inner not resolved to a map: %T", file.Models["Outer"].Subsystems["Inner"])
 	}
 	if _, hasRef := resolved["ref"]; hasRef {
-		t.Fatalf("Loader still has ref after resolution: %#v", resolved)
-	}
-	if kind, _ := resolved["kind"].(string); kind != "grid" {
-		t.Fatalf("Loader missing/incorrect kind after resolution: %#v", resolved)
+		t.Fatalf("Inner still has ref after resolution: %#v", resolved)
 	}
 	if _, hasVars := resolved["variables"]; !hasVars {
-		t.Fatalf("Loader missing variables after resolution: %#v", resolved)
+		t.Fatalf("Inner missing variables after resolution: %#v", resolved)
 	}
 }
 

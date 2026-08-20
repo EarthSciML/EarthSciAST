@@ -553,7 +553,7 @@ func (s *structuralScan) validateTestRefs(tests []Test, allVars map[string]bool,
 // index sets, the independent variable and the coordinate names.
 //
 // It is the scope for a DATA LOADER's `unit_conversion` (see
-// validateDataLoaderReferences). A loader is not owned by any one component, and
+// validateDataSourceEntries). A source is not owned by any one component, and
 // its conversion factor legitimately names a parameter declared in a MODEL
 // (tests/invalid/undefined_variable_in_unit_conversion.esm converts with the
 // model parameter `k`), so scoping it to any single component would reject valid

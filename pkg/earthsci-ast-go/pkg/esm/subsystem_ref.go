@@ -421,12 +421,18 @@ func extractRefWithBindings(value any) (string, map[string]any, bool) {
 func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 	models, _ := view["models"].(map[string]any)
 	rss, _ := view["reaction_systems"].(map[string]any)
-	loaders, _ := view["data_loaders"].(map[string]any)
-	total := len(models) + len(rss) + len(loaders)
+	// A `data_sources` entry is NOT a component (esm-spec §8), so it can never be
+	// the single top-level system a subsystem `ref` resolves to. It is counted
+	// only to make the diagnostic say what the file actually contains.
+	sources, _ := view["data_sources"].(map[string]any)
+	// A data source does NOT count toward the total: it is not a component, so a
+	// file containing only sources contains no mountable system at all, and one
+	// containing a model plus a source contains exactly one.
+	total := len(models) + len(rss)
 
 	if total == 0 {
 		return nil, newETErr(CodeAmbiguousSubsystemRef,
-			fmt.Sprintf("referenced file %q contains no models, reaction systems, or data loaders; exactly one is required (esm-spec §4.7)", path))
+			fmt.Sprintf("referenced file %q contains no models or reaction systems (data_sources=%d, which are not components); exactly one is required (esm-spec §4.7)", path, len(sources)))
 	}
 
 	if total > 1 {
@@ -436,18 +442,16 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 		// (tests/invalid/subsystem_ref_ambiguous.esm).
 		return nil, newETErr(CodeAmbiguousSubsystemRef,
 			fmt.Sprintf("referenced file %q contains %d systems (expected exactly 1); "+
-				"models=%d, reaction_systems=%d, data_loaders=%d", path, total, len(models), len(rss), len(loaders)))
+				"models=%d, reaction_systems=%d, data_sources=%d", path, total, len(models), len(rss), len(sources)))
 	}
 
-	// Extract the single system. Precedence: models -> reaction_systems -> data_loaders.
+	// Extract the single system. Precedence: models -> reaction_systems. A data
+	// source is not admissible; see above.
 	for _, m := range models {
 		return m, nil
 	}
 	for _, rs := range rss {
 		return rs, nil
-	}
-	for _, loader := range loaders {
-		return loader, nil
 	}
 
 	// Unreachable, but satisfies the compiler

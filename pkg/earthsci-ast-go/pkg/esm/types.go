@@ -499,7 +499,7 @@ type CouplingCouple struct {
 func (c CouplingCouple) CouplingType() string { return c.Type }
 
 // VariableMapCoupling represents variable mapping.
-// Transform is a union (mirrors DataLoaderVariable.UnitConversion): either one
+// Transform is a union (mirrors DataSourceBinding.UnitConversion): either one
 // of the legacy string kinds ("param_to_var", "identity", "additive",
 // "multiplicative", "conversion_factor") held as a string, or a widened
 // Expression transform held as an ExprNode (esm-spec §8.6/§10.4/§10.5 — the
