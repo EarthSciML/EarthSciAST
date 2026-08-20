@@ -217,8 +217,19 @@ export
     build_evaluator, evaluate_expr, TreeWalkError, BuildInspection,
     # Public template-expansion seam (esm-spec §9.6.4 Option B): the typed
     # model exactly as `build_evaluator` sees it post-expansion, for
-    # downstream analyzers (EarthSciASTDiff differentiates this tree).
-    expanded_model,
+    # downstream analyzers (EarthSciASTDiff differentiates this tree). Two
+    # halves of ONE seam, one per differentiable input shape:
+    # `expanded_model(file, name)` for a single `Model` inside an `EsmFile`,
+    # `expand_flattened_refs(flat)` for a coupled document's `FlattenedSystem`
+    # — whose surviving references resolve against the flattener's MERGED
+    # `template_registry` (§9.6.4 rule 7), not a per-model
+    # `component_templates` entry, so `expanded_model` cannot serve there.
+    # `flatten` ALWAYS hands its consumers reference-preserving expressions, so
+    # any consumer without its own template handling must call this at its
+    # entry ("Expand at your boundary", RFC out-of-line-expression-templates
+    # §7.7) — the MTK `System`/`PDESystem` constructors and EarthSciASTDiff's
+    # `sysview` both do.
+    expanded_model, expand_flattened_refs,
     # Parameter-vector ABI: name → position in a `p` that is an AbstractVector
     # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
     # is a function of `p` and not a sixth `build_evaluator` return value.
