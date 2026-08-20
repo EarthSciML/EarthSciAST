@@ -1618,7 +1618,8 @@ def _fetch_gated_providers(
             # to several arrays has no field to select by name here.
             raise SimulationError(
                 f"gated provider '{key}': applies_to lists {len(applies)} variables; "
-                f"bind one provider per variable (providers['Loader.var']) so each "
+                f"bind one provider per variable "
+                f"(providers['<ModelPath>.<param>']) so each "
                 f"gated fetch is a single field"
             )
 

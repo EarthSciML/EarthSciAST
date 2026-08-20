@@ -6,8 +6,10 @@ Wires the EarthSciIO Julia `Provider` into EarthSciAST's data-provider seam
 automatically whenever `EarthSciIO` is in the session alongside
 EarthSciAST. Before this extension existed the adapter shipped only as
 a doc comment on the seam (`data_refresh.jl`), so every run script had to repeat
-it; now `simulate(...; providers = Dict("Loader.var" => provider))` accepts an
-EarthSciIO provider with no per-script glue.
+it; now `simulate(...; providers = Dict("<ModelPath>.<param>" => provider))`
+accepts an EarthSciIO provider with no per-script glue. The key is the CONSUMING
+PARAMETER's flattened name: from esm 1.0.0 a data source declares no variables of
+its own, so the parameter IS the loaded field (esm-spec §8.5).
 
 DELIBERATELY THIN. EarthSciAST is agnostic to dimension order: the provider sample is
 handed straight to the forcing-write / const-array fold, which
@@ -111,7 +113,8 @@ function provider_sample(p::EarthSciIO.Provider, t::Real; selection = nothing)
     vars = EarthSciIO.variable_names(nds)
     length(vars) == 1 || throw(RefreshError(
         "EarthSciIO provider yields $(length(vars)) variables $(vars); bind one " *
-        "provider per consumer variable (providers[\"Loader.var\"] => provider) so " *
+        "provider per consumer variable (providers[\"<ModelPath>.<param>\"] => " *
+        "provider) so " *
         "each sample is a single field, or slice the provider upstream"))
     return nds[vars[1]].data
 end

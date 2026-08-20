@@ -22,11 +22,17 @@ scoped-`ic`) before an RHS exists. This category is that class.
 ## 2. The provider-injection contract (the core design)
 
 Loaded data enters **only** through each binding's existing data-**Provider**
-seam — never as raw `const_arrays` keyed by internal consumer names. The harness
-installs a **static stub provider** that serves the fixture's *declared* loader
-variables from the manifest's committed arrays; the binding's normal resolution
-then binds loader outputs to consumer parameters and folds scoped-`ic` fields
-into u0. This exercises the real loader path.
+seam — never as raw `const_arrays` pre-seeded around it. The harness installs a
+**static stub provider** per data-fed PARAMETER, serving that parameter's field
+from the manifest's committed arrays; the binding's normal resolution then reads
+each provider into the RHS as a read-only input and folds scoped-`ic` fields into
+u0. This exercises the real loader path.
+
+Manifest `inputs` are keyed by the consuming parameter's flattened name
+(`<ModelPath>.<param>` — `ChemistryICs.O3_init`, `Advection.u_wind`), which from
+esm 1.0.0 is the only name a loaded field has: the source declares no variables
+of its own (§8.5). Do NOT key them `<Source>.<field>` — that spelling names no
+entity in 1.0.0.
 
 Per-binding seam (all already exist):
 
@@ -36,30 +42,42 @@ Per-binding seam (all already exist):
 | Julia | a stub object satisfying `provider_sample(p,t)` / `provider_is_const(p)` / `provider_refresh_times(p)` returning the manifest arrays | `_resolve_field_ic` reads the provider-seeded field instead of a raw `const_arrays` entry |
 | Rust | a `CadenceProvider` impl (`provider.rs`) returning the manifest arrays into the forcing buffer | new build-time channel: ic-resolver pulls the seeded field before `ArrayCompiled::simulate` |
 
-**Requirement R1.** Every loaded field the model consumes is served by the stub
-provider from the manifest `inputs`. No field may be injected by internal
-consumer name. This includes the Julia reference path (it migrates off
-`const_arrays`).
+**Requirement R1.** Every loaded field the model consumes arrives THROUGH THE
+PROVIDER SEAM, served by the stub provider from the manifest `inputs`. No field
+may be injected as a raw pre-seeded array that bypasses that seam. This includes
+the Julia reference path (it migrates off `const_arrays`).
 
-**Requirement R2.** The provider must be reachable at **build time** so
-scoped-`ic` can fold `InitialConditions.*` into u0 before integration.
+> R1 originally read "no field may be injected by internal consumer name",
+> written when a loader was a component and a loaded field therefore had a
+> loader-side name (`<Loader>.<var>`) distinct from its consumer's. esm 1.0.0
+> removed that name: a source declares no variables, and a model reads a field
+> by declaring a PARAMETER whose `update` names the source and binds a
+> `file_variable` (esm-spec §8.5). The consuming parameter's flattened name is
+> now the ONLY name a loaded field has, so manifest `inputs` are keyed
+> `<ModelPath>.<param>` and the old wording would have forbidden the sole
+> correct spelling. What R1 guards is the SEAM, not the spelling.
 
-## 3. Fixture completion (loader → consumer bindings)
+**Requirement R2.** The provider must be reachable at **build time** so the
+scoped-`ic` fields (`ChemistryICs.*_init`, fed by the `InitialConditions`
+source) can be folded into u0 before integration.
 
-The fixture currently declares `data_loaders` but only the scoped-`ic`
-equations reference a loader symbol (`InitialConditions.O3_init`); `u_wind` and
-`*_inflow` are plain parameters filled by the test. To make provider injection
-honest, every loaded input must resolve from its declared loader:
+## 3. Fixture completion (source → consumer bindings)
 
-- `Meteorology.u_wind` → `Advection.u_wind`
-- `BoundaryConditions.{O3,NO,NO2}_inflow` → `Advection.{…}_inflow`
-- `InitialConditions.{O3,NO,NO2}_init` → scoped-`ic` RHS (already done)
+Done. Every loaded input resolves from its declared source through the consuming
+parameter's own `update` rule (esm-spec §8.5) — a declared binding, not a name
+coincidence:
 
-Use the **spec-canonical loader→consumer binding** (esm-spec §11.5 "BCs from
-data" and the data-loader coupling mechanism — a producer-symbol reference /
-coupling edge, *not* a name coincidence). Model equations keep reading the local
-parameter names; the binding is declared. The migrated fixture must still pass
-its inline `tests` block byte-for-byte (same 21/21 values).
+| consuming parameter | `source` | `from.file_variable` |
+|---|---|---|
+| `Advection.u_wind` | `Meteorology` | `U10M` |
+| `Advection.{O3,NO,NO2}_inflow` | `BoundaryConditions` | `{O3,NO,NO2}_bc` |
+| `ChemistryICs.{O3,NO,NO2}_init` | `InitialConditions` | `{O3,NO,NO2}` |
+
+The `*_init` parameters are the RHS of the scoped-reference `ic` equations. Note
+that the file variable and the parameter name differ throughout (`U10M` vs
+`u_wind`, `O3` vs `O3_init`): the remap lives on the binding, so nothing depends
+on the two names matching. Model equations keep reading the local parameter
+names. The fixture passes its inline `tests` block byte-for-byte (21/21).
 
 ## 4. Manifest schema (`pde_simulation_pipeline/manifest.json`)
 
@@ -71,13 +89,13 @@ Same top-level shape as `pde_simulation/manifest.json`, plus per fixture:
   "path": "fixtures/advection_reaction_loaded_ic_bc.esm",
   "pipeline": "full",                    // NEW: run the full lowering pipeline
   "inputs": {                             // NEW: the stub-provider dataset,
-    "InitialConditions.O3_init":  [[38,42],[39,43],[41,45],[43,47]],
-    "InitialConditions.NO_init":  [[0.10,0.12],[0.11,0.13],[0.09,0.14],[0.12,0.15]],
-    "InitialConditions.NO2_init": [[1.0,1.2],[1.1,1.3],[0.9,1.4],[1.2,1.5]],
-    "Meteorology.u_wind":         [[2.0,2.2],[2.1,2.3],[2.2,2.4],[2.3,2.5]],
-    "BoundaryConditions.O3_inflow":  [35.0, 36.0],
-    "BoundaryConditions.NO_inflow":  [0.20, 0.25],
-    "BoundaryConditions.NO2_inflow": [1.5, 1.6]
+    "ChemistryICs.O3_init":  [[38,42],[39,43],[41,45],[43,47]],
+    "ChemistryICs.NO_init":  [[0.10,0.12],[0.11,0.13],[0.09,0.14],[0.12,0.15]],
+    "ChemistryICs.NO2_init": [[1.0,1.2],[1.1,1.3],[0.9,1.4],[1.2,1.5]],
+    "Advection.u_wind":      [[2.0,2.2],[2.1,2.3],[2.2,2.4],[2.3,2.5]],
+    "Advection.O3_inflow":   [35.0, 36.0],
+    "Advection.NO_inflow":   [0.20, 0.25],
+    "Advection.NO2_inflow":  [1.5, 1.6]
   },
   "state_order": ["O3[1,1]", "..."],     // flattened element order
   "rhs_probes": [ { "id": "...", "t": 0.0, "state": {...},

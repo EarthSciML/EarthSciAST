@@ -1051,7 +1051,7 @@ Keyword arguments
 * `providers::AbstractDict` — `<Loader>.<var> => data Provider`, the loaded-data
   injection seam. CONST providers ([`provider_is_const`](@ref)) are materialized
   once at build time into `const_arrays` under their loader variable name — so a
-  scoped-reference `ic(Sys.sp) ~ Loader.var` folds the seeded field into u0 and a
+  scoped-reference `ic(Sys.sp) ~ Model.param` folds the seeded field into u0 and a
   loader→consumer `variable_map` binding resolves the consumer gather from it.
   DISCRETE providers get a [`build_refresh_callback`](@ref) so their forcing
   refreshes in place at its cadence. The provider delivers the native forcing on

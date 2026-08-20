@@ -177,7 +177,7 @@ fn json_to_field(v: &Value) -> Result<ArrayD<f64>, String> {
 /// the whole Rust lowering pipeline (reaction-gen → template `match` →
 /// `operator_compose` → pointwise-lift → scoped-`ic`), install a static stub
 /// provider serving the manifest `inputs` into the forcing buffer (keyed
-/// `<Loader>.<var>`, DESIGN §2), and emit the RHS at each probe state plus the
+/// `<ModelPath>.<param>`, DESIGN §2), and emit the RHS at each probe state plus the
 /// trajectory at each checkpoint. Reuses the Phase-1 machinery of
 /// `tests/loaded_ic_bc_simulation.rs`.
 fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> {
@@ -188,10 +188,11 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
     let compiled = ArrayCompiled::from_flattened(&flat).map_err(|e| format!("compile: {e:?}"))?;
 
     // Install the static stub provider: materialize every manifest input into the
-    // forcing buffer under its declared `<Loader>.<var>` name. No field is
-    // injected by internal consumer name (R1); the scoped-`ic` fold reads
-    // `InitialConditions.*` into u0 (R2) and the lifted gather resolves the wind /
-    // inflow forcing from the loader name.
+    // forcing buffer under the CONSUMING PARAMETER's flattened name — from esm
+    // 1.0.0 the only name a loaded field has, and exactly what the compiled RHS
+    // looks up. Everything arrives through this seam, nothing around it (R1);
+    // the scoped-`ic` fold reads `ChemistryICs.*_init` into u0 (R2) and the
+    // lifted gather resolves the wind / inflow forcing the same way.
     let inputs = fx["inputs"].as_object().ok_or("fixture.inputs missing")?;
     {
         let forcing = compiled.forcing_handle();

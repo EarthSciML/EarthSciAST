@@ -16,14 +16,17 @@ What this exercises:
     ``ic(Chemistry.O3) ~ InitialConditions.O3_init`` (and NO, NO2). Each RHS is a
     LOADED FIELD served by the stub provider; the build-time fold seeds the
     provider [lon,lat] field into u0 cell-by-cell.
-  * The loader→consumer ``variable_map`` bindings (spec §11.5): the wind field
-    (``Meteorology.u_wind → Advection.u_wind``) and the per-species western
-    inflow BCs (``BoundaryConditions.{O3,NO,NO2}_inflow → Advection.*_inflow``).
+  * The source→consumer bindings (esm-spec §8.5): each loaded field is a
+    PARAMETER whose ``update`` names its source and file variable — the wind
+    (``Advection.u_wind`` ← ``Meteorology``/``U10M``) and the per-species western
+    inflow BCs (``Advection.{O3,NO,NO2}_inflow`` ← ``BoundaryConditions``).
 
-Provider injection (NOT raw arrays keyed by consumer name): a static stub
-provider serves the fixture's DECLARED loader variables (keyed ``<Loader>.<var>``)
-from the manifest ``inputs`` arrays. The reaction system's own inline ``tests``
-block is the source of truth: this runner executes every assertion in it.
+Provider injection (NOT raw arrays pre-seeded around the seam): a static stub
+provider per data-fed parameter serves its field from the manifest ``inputs``
+arrays, keyed by the parameter's flattened name (``<ModelPath>.<param>``) — from
+1.0.0 the only name a loaded field has, since a source declares no variables of
+its own. The reaction system's own inline ``tests`` block is the source of truth:
+this runner executes every assertion in it.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from conftest import CONFORMANCE_DIR, VALID_DIR
 
 pytest.importorskip("scipy")
 
+from earthsci_ast.flatten import flatten
 from earthsci_ast.parse import load
 from earthsci_ast.simulation import simulate
 
@@ -47,9 +51,9 @@ MANIFEST = str(CONFORMANCE_DIR / "pde_simulation_pipeline" / "manifest.json")
 
 
 class _StubLoaderProvider:
-    """Static CONST stub Provider (DESIGN §2). Serves one declared loader
-    variable's field from the manifest ``inputs`` arrays; sampled once at build
-    time. ``sample(t)`` returns the same array for every ``t`` (const)."""
+    """Static CONST stub Provider (DESIGN §2). Serves one data-fed PARAMETER's
+    field from the manifest ``inputs`` arrays; sampled once at build time.
+    ``sample(t)`` returns the same array for every ``t`` (const)."""
 
     def __init__(self, field: Any) -> None:
         self.field = np.asarray(field, dtype=float)
@@ -96,15 +100,16 @@ def test_loaded_ic_bc_simulation_via_provider() -> None:
     assert tests, "fixture Chemistry reaction system carries no inline tests block"
 
     inputs = _manifest_inputs()
-    # Every loaded field the model consumes is served by the stub provider, keyed
-    # by its DECLARED loader name (<Loader>.<var>). No field is injected by an
-    # internal consumer name (R1): keys are all loader-qualified.
+    # Every loaded field the model consumes arrives through the provider seam
+    # (R1), keyed by the consuming parameter's flattened name. Assert the
+    # manifest covers exactly the document's data-fed parameters, so a fixture
+    # that gains or renames one cannot silently fall back off the seam.
     providers = {name: _StubLoaderProvider(field) for name, field in inputs.items()}
-    for name in providers:
-        loader = name.split(".", 1)[0]
-        assert loader in {"InitialConditions", "BoundaryConditions", "Meteorology"}, (
-            f"provider key {name!r} is not a declared loader field"
-        )
+    declared = {f.name for f in flatten(load(FIXTURE)).loader_fields}
+    assert set(providers) == declared, (
+        f"manifest inputs {sorted(providers)} do not match the document's "
+        f"data-fed parameters {sorted(declared)}"
+    )
 
     file = load(FIXTURE)
 

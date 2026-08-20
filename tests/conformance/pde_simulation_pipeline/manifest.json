@@ -75,7 +75,7 @@
         "dx": 100.0
       },
       "inputs": {
-        "InitialConditions.O3_init": [
+        "ChemistryICs.O3_init": [
           [
             38,
             42
@@ -93,7 +93,7 @@
             47
           ]
         ],
-        "InitialConditions.NO_init": [
+        "ChemistryICs.NO_init": [
           [
             0.1,
             0.12
@@ -111,7 +111,7 @@
             0.15
           ]
         ],
-        "InitialConditions.NO2_init": [
+        "ChemistryICs.NO2_init": [
           [
             1.0,
             1.2
@@ -129,7 +129,7 @@
             1.5
           ]
         ],
-        "Meteorology.u_wind": [
+        "Advection.u_wind": [
           [
             2.0,
             2.2
@@ -147,15 +147,15 @@
             2.5
           ]
         ],
-        "BoundaryConditions.O3_inflow": [
+        "Advection.O3_inflow": [
           35.0,
           36.0
         ],
-        "BoundaryConditions.NO_inflow": [
+        "Advection.NO_inflow": [
           0.2,
           0.25
         ],
-        "BoundaryConditions.NO2_inflow": [
+        "Advection.NO2_inflow": [
           1.5,
           1.6
         ]
