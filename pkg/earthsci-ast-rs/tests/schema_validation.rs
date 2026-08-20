@@ -228,7 +228,7 @@ fn test_major_version_rejection() {
     // a 0.x document is refused rather than half-read: its `state` / `observed`
     // / `discrete` variable types and its `data_loaders` block no longer mean
     // anything here.
-    let behind = include_str!("../../../tests/version_compatibility/version_0_1_0_baseline.esm");
+    let behind = include_str!("../../../tests/version_compatibility/version_0_1_0_pre_break.esm");
     assert!(
         load(behind).is_err(),
         "Expected major version 0.x.x to be rejected"

@@ -1,12 +1,12 @@
 {
-  "esm": "0.1.5",
+  "esm": "0.1.0",
   "metadata": {
-    "name": "Version_0_1_5_PatchUpgrade",
-    "description": "Test file with patch version 0.1.5 - should load normally with 0.1.0 libraries",
+    "name": "Version_0_1_0_PreBreak",
+    "description": "A pre-1.0 document. esm 1.0.0 is a clean break with no deprecation path, so major 0 is REJECTED rather than migrated.",
     "authors": [
       "ESM Format Team"
     ],
-    "created": "2024-03-01T00:00:00Z"
+    "created": "2024-01-01T00:00:00Z"
   },
   "reaction_systems": {
     "SimpleChemistry": {

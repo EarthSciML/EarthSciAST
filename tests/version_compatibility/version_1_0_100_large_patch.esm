@@ -1,8 +1,8 @@
 {
-  "esm": "0.1.100",
+  "esm": "1.0.100",
   "metadata": {
-    "name": "Version_0_1_100_LargePatch",
-    "description": "Test with large patch number to ensure proper version comparison",
+    "name": "Version_1_0_100_LargePatch",
+    "description": "Three-digit patch number — the parser must not treat it as a minor bump.",
     "authors": [
       "ESM Format Team"
     ],

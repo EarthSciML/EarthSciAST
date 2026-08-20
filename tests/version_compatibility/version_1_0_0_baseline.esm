@@ -1,8 +1,8 @@
 {
   "esm": "1.0.0",
   "metadata": {
-    "name": "Version_1_0_0_MajorUpgrade",
-    "description": "Test file with version 1.0.0 - should be rejected by 0.x.x libraries",
+    "name": "Version_1_0_0_Baseline",
+    "description": "Exact match for the library's supported version — loads with no warning.",
     "authors": [
       "ESM Format Team"
     ],

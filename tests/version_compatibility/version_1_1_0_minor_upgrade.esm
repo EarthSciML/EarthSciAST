@@ -1,12 +1,12 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.1.0",
   "metadata": {
-    "name": "Version_0_1_0_Baseline",
-    "description": "Baseline test for version 0.1.0 compatibility",
+    "name": "Version_1_1_0_MinorUpgrade",
+    "description": "Newer MINOR of the supported major — forward compatible: loads, with a warning.",
     "authors": [
       "ESM Format Team"
     ],
-    "created": "2024-01-01T00:00:00Z"
+    "created": "2024-06-01T00:00:00Z"
   },
   "reaction_systems": {
     "SimpleChemistry": {

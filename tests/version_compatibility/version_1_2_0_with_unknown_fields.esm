@@ -1,8 +1,8 @@
 {
-  "esm": "0.3.0",
+  "esm": "1.2.0",
   "metadata": {
-    "name": "Version_0_3_0_WithUnknownFields",
-    "description": "Test forward compatibility with unknown fields that should be ignored",
+    "name": "Version_1_2_0_WithUnknownFields",
+    "description": "Newer minor carrying two top-level blocks this library does not model (`performance_hints`, `validation_metadata`). Under esm-libraries-spec §8 this should load with a warning and drop them; no binding skips schema validation, so it is rejected instead.",
     "authors": [
       "ESM Format Team"
     ],
@@ -183,5 +183,14 @@
       ],
       "description": "Couple chemistry with transport"
     }
-  ]
+  ],
+  "performance_hints": {
+    "preferred_solver": "rosenbrock23",
+    "chunk_size": 512,
+    "description": "A hypothetical 1.2.0 block a 1.0.x library does not model."
+  },
+  "validation_metadata": {
+    "validated_against": "1.2.0",
+    "validator": "esm-validate 1.2.0"
+  }
 }

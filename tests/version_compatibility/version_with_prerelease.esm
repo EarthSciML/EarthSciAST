@@ -1,8 +1,8 @@
 {
-  "esm": "0.1.0-alpha.1",
+  "esm": "1.0.0-alpha.1",
   "metadata": {
-    "name": "VersionWithPrerelease",
-    "description": "Test with prerelease version identifier - should fail current schema validation",
+    "name": "Version_With_Prerelease",
+    "description": "A prerelease identifier on an otherwise SUPPORTED version — the semver pattern admits major.minor.patch only, so this fails schema validation before the version gate ever sees it.",
     "authors": [
       "ESM Format Team"
     ],

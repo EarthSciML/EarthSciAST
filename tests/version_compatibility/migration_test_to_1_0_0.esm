@@ -1,13 +1,12 @@
 {
-  "esm": "0.1.0",
+  "esm": "1.0.0",
   "metadata": {
-    "name": "MigrationTest_0_1_0",
-    "description": "Same content as migration_test_from_0_0_5.esm but migrated to current format conventions",
+    "name": "MigrationTest_1_0_0",
+    "description": "The migrated form of migration_test_from_0_0_5.esm: same chemistry at esm 1.0.0. Migrated from version 0.0.5. Units converted from ppbv to mol/mol. Missing product species H2O added.",
     "authors": [
       "ESM Format Team"
     ],
-    "created": "2023-10-01T00:00:00Z",
-    "migration_notes": "Migrated from version 0.0.5. Units converted from ppbv to mol/mol."
+    "created": "2023-10-01T00:00:00Z"
   },
   "reaction_systems": {
     "LegacyChemistry": {

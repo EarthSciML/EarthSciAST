@@ -1,63 +1,96 @@
 # ESM Format Version Compatibility Test Fixtures
 
-This directory contains comprehensive test fixtures for validating ESM format version compatibility handling across all library implementations.
+Shared fixtures for the version-compatibility gate, exercised by every language
+binding. `compatibility_matrix.json` is the canonical specification: each fixture
+appears there with its declared version, its expected behavior, and the warning
+or error text that behavior should produce.
 
-## Overview
+## The contract
 
-Based on Section 8 of the ESM Libraries Specification, libraries must handle version compatibility as follows:
+The library implements **major version 1**. Section 8 of the ESM Libraries
+Specification asks for:
 
-- **Reject** files with a major version they don't support
-- **Accept** files with a minor version ≤ their supported minor version (backward compatible)
-- **Warn** on files with a higher minor version but attempt to load (forward compatible)
-- **Skip JSON Schema validation** for forward-compatible files with newer minor versions
+- **Reject** a file whose major version differs from the library's, in *either*
+  direction.
+- **Accept** a file with a minor version ≤ the library's, within that major
+  (backward compatible).
+- **Warn** on a higher minor version but attempt to load it (forward compatible).
+- **Skip JSON Schema validation** for those forward-compatible files, so a block
+  the library cannot model does not make the file unreadable. *(Not implemented
+  — see the OPEN note at the end.)*
+- **Compare version components numerically.** `1.10.0` is newer than `1.2.0`;
+  `1.0.100` is a patch of `1.0`, not a minor bump.
+
+esm 1.0.0 is a **clean break with no deprecation path**, which is why every 0.x
+fixture below sits on the *rejected* side of that line. That is the inversion
+from this category's 0.x form, where major 1 was the thing being refused.
+
+**Every fixture declares the version it is named for.** These files exist to
+exercise the version *gate*, so a fixture restamped to the library's own version
+tests nothing — `version_2_5_1_major_rejection.esm` declaring `1.0.0` would load
+clean and its assertion would pass for the wrong reason.
 
 ## Test Files
 
-### Valid Version Tests
+### The supported major
 
 | File | Version | Expected Behavior | Description |
 |------|---------|-------------------|-------------|
-| `version_0_1_0_baseline.esm` | 0.1.0 | Load successfully | Baseline test for exact version match |
-| `version_0_0_1_backwards_compat.esm` | 0.0.1 | Load successfully | Older minor version (backward compatible) |
-| `version_0_1_5_patch_upgrade.esm` | 0.1.5 | Load successfully | Newer patch version (fully compatible) |
-| `version_0_2_0_minor_upgrade.esm` | 0.2.0 | Load with warning | Newer minor version (forward compatible) |
-| `version_0_3_0_with_unknown_fields.esm` | 0.3.0 | Load with warning | Future version with unknown fields |
+| `version_1_0_0_baseline.esm` | 1.0.0 | Load successfully | Exact version match |
+| `version_1_0_5_patch_upgrade.esm` | 1.0.5 | Load successfully | Newer patch — fully compatible |
+| `version_1_0_100_large_patch.esm` | 1.0.100 | Load successfully | Three-digit patch, not a minor bump |
+| `version_1_1_0_minor_upgrade.esm` | 1.1.0 | Load with warning | Newer minor — forward compatible |
+| `version_1_10_0_double_digit.esm` | 1.10.0 | Load with warning | Double-digit minor; newer than 1.2.0 |
+| `version_1_2_0_with_unknown_fields.esm` | 1.2.0 | **Schema error** | Newer minor carrying two unmodelled top-level blocks — see the OPEN note |
 
-### Invalid Version Tests
+### Rejected — the wrong major
 
 | File | Version | Expected Behavior | Description |
 |------|---------|-------------------|-------------|
-| `version_1_0_0_major_upgrade.esm` | 1.0.0 | Reject with error | Major version 1.x.x not supported by 0.x.x libraries |
-| `version_2_5_1_major_rejection.esm` | 2.5.1 | Reject with error | Major version 2.x.x not supported |
-| `invalid_version_string.esm` | "not.a.version" | Schema validation error | Invalid semver format |
+| `version_0_1_0_pre_break.esm` | 0.1.0 | Reject with error | A pre-1.0 document; no migration path |
+| `version_0_0_1_pre_break.esm` | 0.0.1 | Reject with error | The oldest published version — age earns no leniency |
+| `version_0_9_0_last_pre_break.esm` | 0.9.0 | Reject with error | The release immediately before the break; no deprecation window |
+| `version_2_5_1_major_rejection.esm` | 2.5.1 | Reject with error | A *future* major, refused in the other direction |
+| `version_12_34_56_large_numbers.esm` | 12.34.56 | Reject with error | Large major version |
+
+### Rejected — the version string itself
+
+| File | Version | Expected Behavior | Description |
+|------|---------|-------------------|-------------|
+| `invalid_version_string.esm` | `"not.a.version"` | Schema validation error | Not semver |
 | `missing_version_field.esm` | (missing) | Schema validation error | Missing required `esm` field |
+| `malformed_version_number.esm` | `1.0` (a number) | Schema validation error | `esm` must be a string |
+| `version_with_prerelease.esm` | `"1.0.0-alpha.1"` | Schema validation error | The pattern admits `major.minor.patch` only |
 
-### Migration Tests
+`version_with_prerelease.esm` carries a **supported** major deliberately: at
+`0.1.0-alpha.1` it would fail for two independent reasons, and a test asserting
+the refusal could not tell which rule fired.
+
+### Migration
 
 | Source | Target | Description |
 |---------|--------|-------------|
-| `migration_test_from_0_0_5.esm` | `migration_test_to_0_1_0.esm` | Example migration from older to current format |
+| `migration_test_from_0_0_5.esm` | `migration_test_to_1_0_0.esm` | One reaction system carried across the 1.0.0 break |
 
-## Test Matrix
-
-The `compatibility_matrix.json` file contains the complete test specification including:
-
-- Expected behaviors for each test file
-- Warning messages that should be generated
-- Error codes and messages for rejection cases
-- Migration examples showing format evolution
-- Validation rules that libraries must implement
+The source is **unloadable** by a 1.x library and the target **loads**. That
+asymmetry is the point: under a clean break, migration is a rewrite a human
+performs, not something the loader does. The migration note lives in
+`metadata.description` rather than a bespoke `metadata.migration_notes` key,
+because `metadata` is a closed object — the old 0.1.0 target carried that key and
+was therefore invalid itself, which made it a poor demonstration of a *target*.
 
 ## Library Implementation Requirements
 
 Each ESM format library must:
 
-1. **Parse version strings** using semantic versioning rules (major.minor.patch)
-2. **Check major version compatibility** and reject incompatible files
-3. **Handle minor version differences** according to backward/forward compatibility rules
-4. **Generate appropriate warnings** for forward-compatible files
-5. **Skip schema validation** for newer minor versions to allow unknown fields
-6. **Implement version migration functions** to update files between versions
+1. **Parse version strings** using semantic versioning rules (major.minor.patch),
+   comparing components numerically.
+2. **Check major version compatibility** and reject files on either side of it.
+3. **Handle minor version differences** according to the backward/forward rules
+   above.
+4. **Generate appropriate warnings** for forward-compatible files.
+5. **Skip schema validation** for newer minor versions to allow unknown fields —
+   asked for by the spec, implemented by none of the five; see the OPEN note.
 
 ## Usage in Tests
 
@@ -65,103 +98,90 @@ Each ESM format library must:
 ```typescript
 import { load } from '@earthsciml/ast';
 
-// Should load successfully
-const file1 = load('version_0_1_0_baseline.esm');
+// Loads
+const file1 = load(readFixture('version_compatibility', 'version_1_0_0_baseline.esm'));
 
-// Should reject with error
-try {
-  const file2 = load('version_1_0_0_major_upgrade.esm');
-} catch (error) {
-  expect(error.message).toContain('Unsupported major version');
-}
+// Rejected — wrong major
+expect(() => load(readFixture('version_compatibility', 'version_0_1_0_pre_break.esm')))
+  .toThrow(/Unsupported major version 0/);
 
-// Should warn but load
-const file3 = load('version_0_2_0_minor_upgrade.esm');
-expect(warnings).toContain('File version 0.2.0 is newer');
+// Warns but loads
+const file3 = load(readFixture('version_compatibility', 'version_1_1_0_minor_upgrade.esm'))
+expect(warnings).toContain('1.1.0 is newer')
 ```
 
 ### Julia
 ```julia
 using EarthSciAST
 
-# Should load successfully
-file1 = EarthSciAST.load("version_0_1_0_baseline.esm")
+file1 = EarthSciAST.load("version_1_0_0_baseline.esm")
+@test_throws VersionError EarthSciAST.load("version_0_1_0_pre_break.esm")
 
-# Should reject with error
-@test_throws VersionError EarthSciAST.load("version_1_0_0_major_upgrade.esm")
-
-# Should warn but load
-file3 = EarthSciAST.load("version_0_2_0_minor_upgrade.esm")
-@test length(warnings()) > 0
+file3 = EarthSciAST.load("version_1_1_0_minor_upgrade.esm")   # warns
 ```
 
 ### Python
 ```python
 import earthsci_ast as esm
 
-# Should load successfully
-file1 = esm.load('version_0_1_0_baseline.esm')
+file1 = esm.load(load_fixture('version_1_0_0_baseline.esm'))
 
-# Should reject with error
 with pytest.raises(esm.UnsupportedVersionError):
-    file2 = esm.load('version_1_0_0_major_upgrade.esm')
+    esm.load(load_fixture('version_0_1_0_pre_break.esm'))
 
-# Should warn but load
-with pytest.warns(esm.ForwardCompatibilityWarning):
-    file3 = esm.load('version_0_2_0_minor_upgrade.esm')
+with pytest.warns(UserWarning, match="1.1.0 is newer"):
+    file3 = esm.load(load_fixture('version_1_1_0_minor_upgrade.esm'))
 ```
 
 ## Conformance Testing
 
-All library implementations must pass the same version compatibility tests to ensure consistent behavior across languages. The test matrix serves as the canonical specification for expected behaviors.
+All library implementations must pass the same version compatibility tests, so
+the matrix is the canonical specification of expected behavior rather than any
+one binding's assertions.
 
 ## Future Considerations
 
 As the ESM format evolves:
 
-- **Major version bumps** indicate breaking changes that require library updates
-- **Minor version bumps** add new features but maintain backward compatibility
-- **Patch version bumps** are fully compatible (bug fixes, documentation)
-- **Migration functions** help users upgrade files between incompatible versions
-- **Deprecation warnings** should be used before breaking changes in major versions
+- **Major version bumps** indicate breaking changes that require library updates.
+  When one lands, this category is re-based the way 1.0.0 re-based it: the
+  gradation moves to the new major and one or two files of the outgoing major
+  stay behind as the wrong-major negatives.
+- **Minor version bumps** add new features but maintain backward compatibility.
+- **Patch version bumps** are fully compatible (bug fixes, documentation).
+- **Migration** across a major is a rewrite, demonstrated by a source/target pair
+  rather than performed by the loader.
 
 ## Error Codes
 
 Libraries should use consistent error codes for version-related issues:
 
-- `UNSUPPORTED_MAJOR_VERSION` - File major version not supported
-- `INVALID_VERSION_FORMAT` - Version string doesn't match semver pattern
-- `MISSING_VERSION_FIELD` - Required 'esm' field is missing
-- `SCHEMA_VALIDATION_ERROR` - File doesn't conform to JSON Schema
+- `UNSUPPORTED_MAJOR_VERSION` - File major version is not supported
+- `INVALID_VERSION_FORMAT` - Version string doesn't match the semver pattern
+- `MISSING_VERSION_FIELD` - Required `esm` field is missing
+- `SCHEMA_VALIDATION_ERROR` - File doesn't conform to the JSON Schema
 
-## OPEN: this category still assumes a 0.x library (recorded 2026-08-19)
+## OPEN: no binding skips schema validation for a forward-compatible file
 
-The fixtures below again carry the versions `compatibility_matrix.json` pins for
-them — a blanket bump to `"1.0.0"` during the esm 1.0.0 conversion had flattened
-all 13, which made every one of them vacuous: `version_2_5_1_major_rejection.esm`
-is meant to be REJECTED for its major version and was instead declaring the
-library's own current version, so it loaded clean and the assertion passed for
-the wrong reason. Restoring the strings makes the fixtures test something again,
-and two of them now test what they always claimed to:
-`invalid_version_string.esm` had `not-a-version` where the matrix says
-`not.a.version`, and `version_with_prerelease.esm` declared a plain `0.1.0` —
-schema-VALID — while its whole purpose is to carry a prerelease identifier the
-semver pattern rejects. Both were vacuous before the conversion, not because of
-it.
+`esm-libraries-spec` §8 asks a library to skip JSON Schema validation when the
+file's minor version exceeds its own, so that a block the library cannot model is
+ignored rather than fatal. **No binding does this.** The schema carries
+`additionalProperties: false` at the top level and is applied to every document,
+so `version_1_2_0_with_unknown_fields.esm` is *rejected* — the forward-
+compatibility warning is never reached.
 
-**What is still wrong is the matrix's expectations, not the fixtures.**
-`library_version` reads `0.3.0`, `validation_rules.major_version_compatibility`
-says "Libraries must reject files with different major versions", and
-`version_2_5_1_major_rejection.esm`'s expected error still reads "This library
-supports major version 0 only." At esm 1.0.0 — a clean break with no deprecation
-path — a 1.0.0 library rejects every 0.x document, which inverts
-`expected_behavior` for eight fixtures that currently expect `load_success`.
+The rule went unnoticed because the fixture meant to exercise it carried
+`coupling`, a block the schema *does* model, so the skip path was never entered
+and the case passed for the wrong reason. The fixture now carries two genuinely
+unmodelled blocks, and the matrix records the behavior the five bindings actually
+share rather than the one the spec asks for.
 
-Re-basing the category is deliberately NOT done here, because it is a design
-decision rather than a mechanical fix: collapsing every 0.x fixture to "rejected,
-wrong major" would preserve correctness but destroy the minor/patch/forward-
-compatibility gradation this category exists to cover. Doing it properly means
-new 1.x fixtures (`1.0.1` patch, `1.1.0` minor, `1.2.0` forward-compatible)
-alongside one or two retained 0.x files as the wrong-major negatives, plus the
-matrix rewrite and the binding assertions that name these files. Until that
-lands, treat the `load_success` rows here as describing the OLD contract.
+The companion claim — "unknown fields in forward-compatible files are ignored
+silently" — fails for the same reason and at *every* level, not only the document
+root: the schema sets `additionalProperties: false` on each object it defines, so
+adding a key to `metadata` in a 1.1.0 file makes that file unreadable too.
+
+Closing this is a decision about the loader contract, not a test fix: implementing
+the skip weakens validation for every future minor version, in all five bindings
+at once. Until it is made, forward compatibility here means *"a newer minor loads
+with a warning, provided it uses no block this library does not know about."*

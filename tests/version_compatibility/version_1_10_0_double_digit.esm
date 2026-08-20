@@ -1,8 +1,8 @@
 {
-  "esm": "0.10.0",
+  "esm": "1.10.0",
   "metadata": {
-    "name": "Version_0_10_0_DoubleDigit",
-    "description": "Test with double-digit minor version to ensure proper semver parsing",
+    "name": "Version_1_10_0_DoubleDigit",
+    "description": "Double-digit minor — 1.10.0 is NEWER than 1.2.0, which a string comparison gets wrong.",
     "authors": [
       "ESM Format Team"
     ],

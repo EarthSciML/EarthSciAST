@@ -1,12 +1,12 @@
 {
-  "esm": "0.0.1",
+  "esm": "1.0.5",
   "metadata": {
-    "name": "Version_0_0_1_BackwardsCompat",
-    "description": "Test file with older version 0.0.1 - should load with current 0.1.0 libraries",
+    "name": "Version_1_0_5_PatchUpgrade",
+    "description": "Newer PATCH of the supported major.minor — fully compatible, loads with no warning.",
     "authors": [
       "ESM Format Team"
     ],
-    "created": "2023-12-01T00:00:00Z"
+    "created": "2024-03-01T00:00:00Z"
   },
   "reaction_systems": {
     "SimpleChemistry": {

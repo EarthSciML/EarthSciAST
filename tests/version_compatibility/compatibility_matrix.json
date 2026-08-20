@@ -1,84 +1,110 @@
 {
   "version_compatibility_test_matrix": {
-    "description": "Expected behavior for ESM format version compatibility testing",
-    "library_version": "0.3.0",
+    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 1.0.0: the library implements major version 1, so major 0 is REJECTED (the 1.0.0 break carries no deprecation path) and the backward/forward gradation this category exists to cover is expressed in 1.x fixtures. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
+    "library_version": "1.0.0",
     "migration_notes": {
-      "0.2.0_to_0.3.0": {
-        "summary": "Closed function registry — removes the open-set extension points (`call` op + `registered_functions` block) and the runtime-registered `operators` block; adds a top-level `enums` block and the `fn` / `enum` AST ops. See docs/rfcs/closed-function-registry.md.",
+      "0.x_to_1.0.0": {
+        "summary": "Unified variable model — `states` and `observed` collapse into one `unknown` type whose behaviour is stated by equations, the per-variable `expression` field is removed, `brownian` and `discrete` become parameters carrying a `distribution` / `update`, and `data_loaders` becomes `data_sources`, a pure ingest registry. A CLEAN BREAK: a 1.0.0 library rejects every 0.x document rather than migrating it. See esm-spec.md §6.3 and §8.5.",
         "breaking_changes": [
-          "Top-level `registered_functions` block removed; files declaring it are rejected by the v0.3.0 schema.",
-          "Top-level `operators` block removed; files declaring it are rejected by the v0.3.0 schema.",
-          "AST op `call` (with `handler_id`) removed; replaced by `fn` (with `name`) drawing from the closed registry in esm-spec.md §9.2.",
-          "Coupling type `operator_apply` removed (it referenced the removed `operators` block); grid-level loss processes migrate to discretization schemes per docs/rfcs/discretization.md §7."
+          "Variable `type` admits exactly `unknown` and `parameter`; `state`, `observed`, `brownian` and `discrete` are removed with no deprecation path.",
+          "The per-variable `expression` field is removed. An observed unknown is DEFINED by the bare-variable-LHS equation whose LHS names it (esm-spec §6.3.1).",
+          "`brownian` becomes a parameter with `update: {kind: \"wiener\"}` and a `distribution`; `discrete` becomes a parameter with a schedule `update`.",
+          "Top-level `data_loaders` becomes `data_sources`, and a data source declares NO variables: a model reads a field by declaring a PARAMETER whose `update: {kind: \"data\", source, from: {file_variable}}` names it (esm-spec §8.5).",
+          "Parameter mutation moves out of `events` and onto the parameter's own `update` array."
         ],
         "added": [
-          "Top-level `enums` block — file-local symbol-to-positive-integer mappings (esm-spec.md §9.3).",
-          "AST op `fn` — invokes a spec-defined closed function from §9.2 by dotted name.",
-          "AST op `enum` — resolves a file-local symbol to its declared integer at load time.",
-          "Closed function set v1: `datetime.year`, `datetime.month`, `datetime.day`, `datetime.hour`, `datetime.minute`, `datetime.second`, `datetime.day_of_year`, `datetime.julian_day`, `datetime.is_leap_year`, `interp.searchsorted`."
+          "The classification API — `ode_states`, `observed_unknowns`, `algebraic_unknowns`, `brownian_parameters`, `discrete_parameters`, `system_kind` — which every binding exposes so a consumer derives a variable's ROLE instead of reading a declared type.",
+          "`update` accepts an ARRAY of rules, so one parameter can be both data-fed and event-mutated."
         ],
         "migration_path": [
-          "Math expressible in finite closed form (e.g. `sq(x) = x²`): rewrite as AST (`{op:'^', args:[x,2]}`); delete the corresponding `registered_functions` entry and any `call` node referencing it.",
-          "Tabulated lookups: replace `{op:'call', handler_id:'flux_interp_O3', args:[sza]}` with `{op:'index', args:['table', {op:'fn', name:'interp.searchsorted', args:[sza, {op:'const', value:[...]}]}]}` (boundary handling shifts from per-binding handler to the spec-pinned `searchsorted` semantics).",
-          "Categorical lookups (Wesely-style land-use × season): declare an `enums` block, replace string keys with `{op:'enum', args:['enum_name', 'symbol']}`, and use the existing `index` op into a `const` table.",
-          "State-mutating numerical schemes (advection, diffusion, deposition application): migrate to the `discretizations` block per docs/rfcs/discretization.md §7."
+          "There is no automatic path: a 0.x document must be rewritten. The pair below shows what that looks like for one reaction system.",
+          "A `state` or `observed` variable becomes `\"type\": \"unknown\"`; an observed's `expression` becomes an equation `{\"lhs\": \"<name>\", \"rhs\": <expression>}`.",
+          "A `brownian` variable becomes a parameter with `\"distribution\"` and `\"update\": {\"kind\": \"wiener\"}`.",
+          "A `data_loaders` block becomes `data_sources` with its `variables` deleted; each consuming model declares the parameter that reads the field, with the units the loader used to carry."
         ]
       }
     },
     "test_cases": [
       {
-        "file": "version_0_1_0_baseline.esm",
-        "file_version": "0.1.0",
+        "file": "version_1_0_0_baseline.esm",
+        "file_version": "1.0.0",
         "expected_behavior": "load_success",
         "description": "Exact version match - should load successfully",
         "warnings": []
       },
       {
-        "file": "version_0_0_1_backwards_compat.esm",
-        "file_version": "0.0.1",
+        "file": "version_1_0_5_patch_upgrade.esm",
+        "file_version": "1.0.5",
         "expected_behavior": "load_success",
-        "description": "Older minor version - backward compatible",
+        "description": "Same minor version, newer patch - fully compatible",
         "warnings": []
       },
       {
-        "file": "version_0_1_5_patch_upgrade.esm",
-        "file_version": "0.1.5",
+        "file": "version_1_0_100_large_patch.esm",
+        "file_version": "1.0.100",
         "expected_behavior": "load_success",
-        "description": "Same minor version, newer patch - should load",
+        "description": "Large patch number - should load successfully",
         "warnings": []
       },
       {
-        "file": "version_0_2_0_minor_upgrade.esm",
-        "file_version": "0.2.0",
+        "file": "version_1_1_0_minor_upgrade.esm",
+        "file_version": "1.1.0",
         "expected_behavior": "load_with_warning",
         "description": "Newer minor version - forward compatible with warning",
         "warnings": [
-          "File version 0.2.0 is newer than library version 0.1.0. Unknown fields will be ignored."
+          "File version 1.1.0 is newer than library version 1.0.0. Unknown fields will be ignored."
         ]
       },
       {
-        "file": "version_0_3_0_with_unknown_fields.esm",
-        "file_version": "0.3.0",
+        "file": "version_1_10_0_double_digit.esm",
+        "file_version": "1.10.0",
         "expected_behavior": "load_with_warning",
-        "description": "Much newer minor version with unknown fields - should load but warn",
+        "description": "Double-digit minor version - 1.10.0 is newer than 1.2.0, which a lexicographic comparison gets wrong",
         "warnings": [
-          "File version 0.3.0 is newer than library version 0.1.0. Unknown fields will be ignored.",
-          "Skipping JSON Schema validation due to version mismatch"
+          "File version 1.10.0 is newer than library version 1.0.0. Unknown fields will be ignored."
         ]
       },
       {
-        "file": "version_1_0_0_major_upgrade.esm",
-        "file_version": "1.0.0",
+        "file": "version_1_2_0_with_unknown_fields.esm",
+        "file_version": "1.2.0",
+        "expected_behavior": "schema_error",
+        "description": "Newer minor carrying two top-level blocks this library does not model. esm-libraries-spec §8 asks a library to SKIP schema validation for a forward-compatible file so unknown fields are ignored; no binding implements that, and the schema's `additionalProperties: false` rejects the file before the forward-compatibility warning is reached. This case pins the behavior the five bindings actually share — see the OPEN note in README.md.",
+        "error": "Additional properties are not allowed ('performance_hints', 'validation_metadata' were unexpected)"
+      },
+      {
+        "file": "version_0_1_0_pre_break.esm",
+        "file_version": "0.1.0",
         "expected_behavior": "reject",
-        "description": "Major version 1.x.x - should be rejected by 0.x.x library",
-        "error": "Unsupported major version 1. This library supports major version 0 only."
+        "description": "Major version 0.x.x - rejected by a 1.x.x library; esm 1.0.0 is a clean break with no deprecation path",
+        "error": "Unsupported major version 0. This library supports major version 1 only."
+      },
+      {
+        "file": "version_0_0_1_pre_break.esm",
+        "file_version": "0.0.1",
+        "expected_behavior": "reject",
+        "description": "The oldest published version - rejected for its major like every other 0.x document",
+        "error": "Unsupported major version 0. This library supports major version 1 only."
+      },
+      {
+        "file": "version_0_9_0_last_pre_break.esm",
+        "file_version": "0.9.0",
+        "expected_behavior": "reject",
+        "description": "The release immediately preceding the break - rejected too, because there is no deprecation window",
+        "error": "Unsupported major version 0. This library supports major version 1 only."
       },
       {
         "file": "version_2_5_1_major_rejection.esm",
         "file_version": "2.5.1",
         "expected_behavior": "reject",
-        "description": "Major version 2.x.x - should be rejected",
-        "error": "Unsupported major version 2. This library supports major version 0 only."
+        "description": "Major version 2.x.x - a FUTURE major, rejected in the other direction",
+        "error": "Unsupported major version 2. This library supports major version 1 only."
+      },
+      {
+        "file": "version_12_34_56_large_numbers.esm",
+        "file_version": "12.34.56",
+        "expected_behavior": "reject",
+        "description": "Large major version - should be rejected",
+        "error": "Unsupported major version 12. This library supports major version 1 only."
       },
       {
         "file": "invalid_version_string.esm",
@@ -95,27 +121,6 @@
         "error": "Required property 'esm' is missing"
       },
       {
-        "file": "version_0_10_0_double_digit.esm",
-        "file_version": "0.10.0",
-        "expected_behavior": "load_with_warning",
-        "description": "Double-digit minor version - should load with warning",
-        "warnings": ["File version 0.10.0 is newer than library version 0.1.0"]
-      },
-      {
-        "file": "version_0_1_100_large_patch.esm",
-        "file_version": "0.1.100",
-        "expected_behavior": "load_success",
-        "description": "Large patch number - should load successfully",
-        "warnings": []
-      },
-      {
-        "file": "version_12_34_56_large_numbers.esm",
-        "file_version": "12.34.56",
-        "expected_behavior": "reject",
-        "description": "Large major version - should be rejected",
-        "error": "Unsupported major version 12. This library supports major version 0 only."
-      },
-      {
         "file": "malformed_version_number.esm",
         "file_version": 1.0,
         "expected_behavior": "schema_error",
@@ -124,32 +129,33 @@
       },
       {
         "file": "version_with_prerelease.esm",
-        "file_version": "0.1.0-alpha.1",
+        "file_version": "1.0.0-alpha.1",
         "expected_behavior": "schema_error",
-        "description": "Version with prerelease identifier - should fail current schema",
+        "description": "Prerelease identifier on an otherwise SUPPORTED version - the pattern admits major.minor.patch only, so this fails before the version gate sees it",
         "error": "Version string does not match semver pattern (prerelease not supported)"
       }
     ],
     "migration_tests": [
       {
         "source": "migration_test_from_0_0_5.esm",
-        "target": "migration_test_to_0_1_0.esm",
-        "description": "Example of migrating from version 0.0.5 to 0.1.0",
+        "target": "migration_test_to_1_0_0.esm",
+        "description": "Example of migrating a reaction system from version 0.0.5 across the 1.0.0 break. The SOURCE is unloadable by a 1.x library (wrong major) and the TARGET loads: that asymmetry is the point, because under a clean break migration is a rewrite a human performs, not something the loader does.",
         "changes": [
-          "Updated esm field from '0.0.5' to '0.1.0'",
+          "Updated esm field from '0.0.5' to '1.0.0'",
           "Converted CH4 units from ppbv to mol/mol",
           "Added missing product species H2O",
-          "Added migration_notes to metadata"
+          "Recorded the migration in metadata.description — `metadata` is a closed object, so a bespoke `migration_notes` key would make the migrated file itself invalid"
         ]
       }
     ],
     "validation_rules": {
-      "major_version_compatibility": "Libraries must reject files with different major versions",
-      "minor_version_backward_compatibility": "Libraries must accept files with minor version <= their supported minor version",
-      "minor_version_forward_compatibility": "Libraries should warn but attempt to load files with minor version > their supported minor version",
+      "major_version_compatibility": "Libraries must reject files whose major version differs from their own, in EITHER direction. A 1.x library rejects 0.x and 2.x alike.",
+      "minor_version_backward_compatibility": "Libraries must accept files with minor version <= their supported minor version, within the same major",
+      "minor_version_forward_compatibility": "Libraries should warn but attempt to load files with minor version > their supported minor version, within the same major",
       "patch_version_compatibility": "Patch versions are fully compatible within the same major.minor",
-      "schema_validation": "Skip JSON Schema validation for forward-compatible files (newer minor versions)",
-      "unknown_field_handling": "Unknown fields in forward-compatible files should be ignored silently"
+      "schema_validation": "esm-libraries-spec §8 asks libraries to skip JSON Schema validation for forward-compatible files (newer minor versions). NOT IMPLEMENTED in any binding: the schema is applied to every document, so a newer minor carrying an unmodelled block is rejected. See the OPEN note in README.md.",
+      "unknown_field_handling": "esm-libraries-spec §8 asks that unknown fields in a forward-compatible file be ignored silently. NOT IMPLEMENTED: the schema sets `additionalProperties: false` on every object, not only the document root, so a newer minor version cannot add a field at ANY level without the file becoming unreadable to this library. See `schema_validation` and the OPEN note in README.md.",
+      "version_comparison": "Compare version components NUMERICALLY, never lexicographically: 1.10.0 is newer than 1.2.0, and 1.0.100 is a patch of 1.0, not a minor bump"
     },
     "error_codes": {
       "UNSUPPORTED_MAJOR_VERSION": "File major version is not supported by this library",

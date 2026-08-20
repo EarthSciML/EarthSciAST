@@ -21,21 +21,19 @@ import { readFixture } from './test-helpers.js'
  * rejected side of that line — the polarity of this whole suite is inverted
  * from its 0.x form, where major 1 was the thing being refused.
  *
- * The version each case needs is applied to a base document IN MEMORY rather
- * than read from a per-version fixture. The shared
- * `tests/version_compatibility/` fixtures are named for the version they used
- * to carry, but a blanket sweep in commit 49ca9be8 rewrote every one of them to
- * declare `1.0.0` — so `version_2_5_1_major_rejection.esm` no longer declares
- * 2.5.1, and reading the version out of the file would silently test nothing.
- * Overriding the field here keeps this binding's gating coverage real
- * regardless; the fixtures themselves still need repairing for the other four
- * bindings.
+ * Most cases apply the version under test to a base document IN MEMORY rather
+ * than reading a per-version fixture: the gate is a function of the version
+ * STRING alone, and one carrier document sweeps a whole line of versions
+ * (`0.0.1` … `0.10.0`) without asking for a fixture per point. The shared
+ * `tests/version_compatibility/` fixtures each declare the version they are
+ * named for, so either spelling is sound; the ones read below are read for
+ * content the sweep cannot synthesize.
  */
 describe('Version Compatibility', () => {
   // A schema-valid 1.0.0 document, used as the carrier for every version under
   // test. Its own `esm` field is replaced per case.
   const baseDocument = () =>
-    JSON.parse(readFixture('version_compatibility', 'version_1_0_0_major_upgrade.esm'))
+    JSON.parse(readFixture('version_compatibility', 'version_1_0_0_baseline.esm'))
 
   /** The base document re-stamped with `version`. */
   const atVersion = (version: string) => ({ ...baseDocument(), esm: version })
@@ -62,18 +60,24 @@ describe('Version Compatibility', () => {
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
 
-    it('loads the 1.0.0 baseline without warnings', () => {
-      const { result, warnings } = captureWarnings(() => load(atVersion('1.0.0')))
+    it('loads the 1.0.0 baseline fixture as committed, without warnings', () => {
+      const fixture = JSON.parse(
+        readFixture('version_compatibility', 'version_1_0_0_baseline.esm'),
+      )
+      const { result, warnings } = captureWarnings(() => load(fixture))
 
       expect(result.esm).toBe('1.0.0')
-      expect(result.metadata.name).toBe('Version_1_0_0_MajorUpgrade')
+      expect(result.metadata.name).toBe('Version_1_0_0_Baseline')
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
 
-    it('loads an older patch on the same minor without warnings', () => {
-      const { result, warnings } = captureWarnings(() => load(atVersion('1.0.0')))
+    it('loads a newer patch on the same minor without warnings', () => {
+      const fixture = JSON.parse(
+        readFixture('version_compatibility', 'version_1_0_5_patch_upgrade.esm'),
+      )
+      const { result, warnings } = captureWarnings(() => load(fixture))
 
-      expect(result.esm).toBe('1.0.0')
+      expect(result.esm).toBe('1.0.5')
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
   })
@@ -90,6 +94,11 @@ describe('Version Compatibility', () => {
       ).toBe(true)
     })
 
+    // esm-libraries-spec §8 asks a library to SKIP schema validation here so an
+    // unknown block is ignored. It is not implemented — by this binding or any
+    // other — and `tests/version_compatibility/README.md` carries the OPEN note
+    // saying so, with `version_1_2_0_with_unknown_fields.esm` pinning it in the
+    // shared corpus. What this asserts is the behavior the five bindings share.
     it('does not weaken schema validation for newer minor versions', () => {
       const withUnknownField = { ...atVersion('1.10.0'), definitely_not_a_schema_field: true }
 

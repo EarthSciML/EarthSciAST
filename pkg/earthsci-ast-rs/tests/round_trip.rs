@@ -168,7 +168,7 @@ fn test_data_sources_round_trip() {
 #[test]
 fn test_version_compatibility_round_trip() {
     let fixtures = [
-        include_str!("../../../tests/version_compatibility/version_1_0_0_major_upgrade.esm"),
+        include_str!("../../../tests/version_compatibility/version_1_0_0_baseline.esm"),
         include_str!("../../../tests/version_compatibility/comprehensive_compatibility_test.esm"),
     ];
 
