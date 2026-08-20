@@ -2,12 +2,13 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "discrete_variable_refresh",
-    "description": "M3 schema fixture (RFC semiring-faq-unified-ir §6.1 / §8; bead ess-my4.3.2): the new `discrete` variable kind — a third variable role beside state (CONTINUOUS) and parameter (CONST). A discrete variable has a shape fixed at setup but values that refresh only at discrete events; it is the declared seed for the DISCRETE cadence class that the dependency-partition pass schedules into a per-event handler. This fixture declares one discrete variable for each of the three refresh-trigger forms — a `schedule` (tstops, the MTK PresetTimeCallback analogue; here a met field reloaded on a periodic interval), a `data_ingest` event (a boundary-condition field reloaded when its source advances), and a `remesh` hook (reloadable mesh topology under AMR) — plus one discrete variable with NO refresh trigger (a setup-only buffer, e.g. a mesh loaded once). Each declares its fixed `shape`; the refresh trigger is inert to the algebra. The model also carries an ordinary continuous state, so the partition is genuinely three-cadence. Validates against the schema with no evaluator.",
+    "description": "M3 schema fixture (RFC semiring-faq-unified-ir §6.1 / §8; bead ess-my4.3.2), restated for esm 1.0.0: the DISCRETE cadence class is seeded by a PARAMETER carrying an `update` block (esm-spec §5.4) — there is no third `discrete` variable type any more, and no `refresh` field. Such a parameter has a shape fixed at setup and values that refresh only at discrete events; it is the declared seed the dependency-partition pass schedules into a per-event handler. This fixture declares one parameter for each of the three discrete-cadence update kinds — `schedule` (tstops, the MTK PresetTimeCallback analogue; here a met field reloaded on a periodic interval), `data` (a boundary-condition field reloaded when its `data_sources` entry advances a record), and `remesh` (reloadable mesh topology under AMR) — plus one parameter with NO update at all (a setup-only buffer, e.g. a mesh loaded once, which is simply CONST). Each of the three declares its required `shape` and EXACTLY ONE value form (`from` for the data-bound one, a registered `handler` for the two the format cannot state symbolically). The model also carries an ordinary continuous unknown, so the partition is genuinely three-cadence. Validates against the schema with no evaluator.",
     "authors": [
       "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
-      "discrete-variable",
+      "parameter-update",
+      "discrete-cadence",
       "refresh-trigger",
       "cadence-partition",
       "conformance",
@@ -32,6 +33,22 @@
       "size": 96
     }
   },
+  "data_sources": {
+    "bc_loader": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/bc/inflow_{date:%Y%m%d%H}.nc"
+      },
+      "temporal": {
+        "frequency": "PT3H",
+        "file_period": "P1D",
+        "records_per_file": 8
+      },
+      "metadata": {
+        "description": "Boundary-condition inflow source; its record advance drives the `bc_inflow` parameter refresh."
+      }
+    }
+  },
   "models": {
     "DiscreteFields": {
       "variables": {
@@ -44,46 +61,56 @@
           "description": "Continuous tracer concentration — the integrated state (CONTINUOUS cadence)."
         },
         "wind": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "cells",
             "levels"
           ],
-          "description": "Loaded meteorology (wind) field — shape fixed at setup, values reloaded on a fixed schedule.",
-          "refresh": {
+          "description": "Loaded meteorology (wind) field — shape fixed at setup, values reloaded on a fixed schedule by a registered handler (the reload is not statable as an expression).",
+          "update": {
             "kind": "schedule",
             "interval": 3600.0,
-            "initial_offset": 0.0
+            "initial_offset": 0.0,
+            "handler": {
+              "handler_id": "met_wind_reload"
+            }
           }
         },
         "bc_inflow": {
-          "type": "discrete",
+          "type": "parameter",
+          "units": "kg/m^3",
           "shape": [
             "boundary"
           ],
-          "description": "Boundary-condition inflow field, reloaded when its external data source advances to the next record.",
-          "refresh": {
-            "kind": "data_ingest",
-            "source": "bc_loader"
+          "description": "Boundary-condition inflow field, reloaded when the `bc_loader` data source advances to the next record.",
+          "update": {
+            "kind": "data",
+            "source": "bc_loader",
+            "from": {
+              "file_variable": "boundary_inflow"
+            }
           }
         },
         "edge_normal": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "edges"
           ],
-          "description": "Reloadable mesh topology / edge-normal geometry, recomputed on an AMR remesh event.",
-          "refresh": {
+          "description": "Reloadable mesh topology / edge-normal geometry, recomputed by a registered handler on an AMR remesh event.",
+          "update": {
             "kind": "remesh",
-            "hook": "amr_refine"
+            "hook": "amr_refine",
+            "handler": {
+              "handler_id": "edge_normal_recompute"
+            }
           }
         },
         "cell_area": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "cells"
           ],
-          "description": "Cell areas from a mesh loaded once at setup — a discrete variable with NO refresh trigger (setup-only buffer, never refreshed)."
+          "description": "Cell areas from a mesh loaded once at setup — a shaped parameter with NO `update` at all, so it never refreshes (CONST cadence). Before 1.0.0 this was spelled as a `discrete` variable without a refresh trigger."
         },
         "decay_rate": {
           "type": "parameter",
@@ -93,7 +120,7 @@
       },
       "equations": [
         {
-          "_comment": "An arrayed continuous decay over the cell/level grid; the discrete fields above seed the DISCRETE class and are inert to this algebra.",
+          "_comment": "An arrayed continuous decay over the cell/level grid; the updated parameters above seed the DISCRETE class and are inert to this algebra.",
           "lhs": {
             "op": "index",
             "args": [

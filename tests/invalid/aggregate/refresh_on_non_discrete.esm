@@ -2,12 +2,13 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "refresh_on_non_discrete",
-    "description": "INVALID (bead ess-my4.3.2; RFC semiring-faq-unified-ir §6.1 / §8): a `refresh` trigger placed on a non-`discrete` variable (here a `state`). The refresh-trigger descriptor schedules the per-event recompute of a DISCRETE-cadence buffer and is meaningful only for the `discrete` variable kind; the ModelVariable schema's kind-conditional `allOf` forbids `refresh` whenever `type` is not \"discrete\" (mirroring the existing brownian-only guard for noise_kind / correlation_group). Attaching it to a state variable is a pure schema violation — caught by every binding. The trigger itself is well-formed, so the only failure cause is its placement on a non-discrete variable.",
+    "description": "INVALID (bead ess-my4.3.2; RFC semiring-faq-unified-ir §6.1 / §8), restated for esm 1.0.0: an `update` block placed on an UNKNOWN. From 1.0.0 an `update` says when a PARAMETER refreshes and what from (esm-spec §5.4); an unknown's behavior is stated by the model's `equations` and nowhere else, so the ModelVariable schema's conditional `allOf` forbids both `update` and `distribution` whenever `type` is not \"parameter\" (the guard the pre-1.0.0 schema spelled as brownian-only `noise_kind` / `correlation_group` and discrete-only `refresh`). Attaching an update to an unknown is a pure schema violation — caught by every binding. A `condition` update is used so that no OTHER rule fires: it is well-formed on its own terms (a boolean `when` plus exactly one value form) and, unlike `schedule` / `data` / `remesh`, carries no `shape` requirement. The only failure cause is therefore its placement on a non-parameter.",
     "authors": [
       "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
-      "discrete-variable",
+      "parameter-update",
+      "discrete-cadence",
       "refresh-trigger",
       "invalid",
       "schema"
@@ -18,10 +19,17 @@
       "variables": {
         "u": {
           "type": "unknown",
-          "description": "A continuous state variable that wrongly carries a refresh trigger — invalid.",
-          "refresh": {
-            "kind": "schedule",
-            "interval": 3600.0
+          "description": "A continuous unknown that wrongly carries a parameter `update` block — invalid.",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": ">",
+              "args": [
+                "u",
+                1.0
+              ]
+            },
+            "expression": 0.0
           }
         }
       },

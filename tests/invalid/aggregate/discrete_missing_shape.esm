@@ -2,12 +2,13 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "discrete_missing_shape",
-    "description": "INVALID (bead ess-my4.3.2; RFC semiring-faq-unified-ir §6.1 / §8): a `discrete` variable that omits the required `shape`. A discrete variable's defining property is that its shape is fixed and known at setup (it is the declared seed for the DISCRETE cadence class); the ModelVariable schema's kind-conditional `allOf` requires `shape` when `type` is \"discrete\". Omitting it is a pure schema (conditional-required-property) violation — caught by every binding. The variable is otherwise well-formed (it carries a valid refresh trigger), so the only failure cause is the missing shape.",
+    "description": "INVALID (bead ess-my4.3.2; RFC semiring-faq-unified-ir §6.1 / §8), restated for esm 1.0.0: a parameter whose `update.kind` is `schedule` but which omits the required `shape`. A discrete-cadence parameter's defining property is that its extent is fixed and known at setup — it is a buffer refilled on a discrete cadence, and the declared seed for the DISCRETE cadence class — so the ModelVariable schema's conditional `allOf` requires `shape` whenever `update.kind` is `schedule`, `data`, or `remesh` (esm-spec §5.4, Cadence). Omitting it is a pure schema (conditional-required-property) violation — caught by every binding. The variable is otherwise well-formed (it is a `parameter`, its schedule update names an `interval`, and it carries exactly one value form), so the only failure cause is the missing shape.",
     "authors": [
       "EarthSciAST/polecats/gastown.capable"
     ],
     "tags": [
-      "discrete-variable",
+      "parameter-update",
+      "discrete-cadence",
       "refresh-trigger",
       "invalid",
       "schema"
@@ -17,11 +18,14 @@
     "BadDiscrete": {
       "variables": {
         "wind": {
-          "type": "discrete",
-          "description": "Discrete met field missing its required fixed shape — invalid.",
-          "refresh": {
+          "type": "parameter",
+          "description": "Schedule-updated met field missing its required fixed shape — invalid.",
+          "update": {
             "kind": "schedule",
-            "interval": 3600.0
+            "interval": 3600.0,
+            "handler": {
+              "handler_id": "met_wind_reload"
+            }
           }
         },
         "u": {

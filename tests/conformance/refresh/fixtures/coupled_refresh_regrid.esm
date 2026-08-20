@@ -66,26 +66,34 @@
           "description": "Const conservative-regrid weight matrix W[i,j] (i=1..6 native source cells, j=1..3 sim target cells): the 2:1 area-weighted coarsening. Each target cell j averages its two source cells (W=0.5), so W is the in-model realization of the native->sim regrid. A build-once const observed."
         },
         "F_src": {
-          "type": "discrete",
+          "type": "parameter",
+          "units": "kg/s",
           "shape": [
             "src_cells"
           ],
-          "refresh": {
-            "kind": "data_ingest",
-            "source": "emis"
-          },
-          "description": "Loader-fed source read from the `emis` DataLoader (WITH temporal): DISCRETE cadence, refreshed at each hourly anchor on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
+          "description": "Source field bound to the `emis` data source (WITH temporal), `from.file_variable: surface_source`: DISCRETE cadence, refreshed at each hourly anchor on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip.",
+          "update": {
+            "kind": "data",
+            "source": "emis",
+            "from": {
+              "file_variable": "surface_source"
+            }
+          }
         },
         "scale_src": {
-          "type": "discrete",
+          "type": "parameter",
+          "units": "1",
           "shape": [
             "src_cells"
           ],
-          "refresh": {
-            "kind": "data_ingest",
-            "source": "factors"
-          },
-          "description": "Loader-fed scale factor read from the `factors` DataLoader (NO temporal): CONST cadence, materialized once on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
+          "description": "Scale factor bound to the `factors` data source (NO temporal), `from.file_variable: scale_factor`: CONST cadence, materialized once on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip.",
+          "update": {
+            "kind": "data",
+            "source": "factors",
+            "from": {
+              "file_variable": "scale_factor"
+            }
+          }
         },
         "F_tgt": {
           "type": "unknown",
