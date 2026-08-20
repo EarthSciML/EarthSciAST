@@ -9,18 +9,17 @@
 
 import { isExprNode, forEachChild } from '../expression.js'
 import type { Expr } from '../expression.js'
-import type {
-  EsmFile,
-  Model,
-  DataLoader,
-  ReactionSystem,
-  Expression,
-  SubsystemRef,
-} from '../types.js'
+import type { EsmFile, Model, ReactionSystem, Expression, SubsystemRef } from '../types.js'
 
-/** Narrow a `models` / `subsystems` map value to an inline Model. */
-export function isInlineModel(v: Model | DataLoader | SubsystemRef): v is Model {
-  return !('ref' in v) && !('kind' in v)
+/**
+ * Narrow a `models` / `subsystems` map value to an inline Model.
+ *
+ * The `'kind' in v` half of this test is gone with the inline data loader it
+ * was there to exclude: from 1.0.0 a data source is not a component and cannot
+ * appear in either map.
+ */
+export function isInlineModel(v: Model | SubsystemRef): v is Model {
+  return !('ref' in v)
 }
 
 // ---------------------------------------------------------------------------
@@ -226,19 +225,19 @@ export function countDerivatives(expr: Expression): { [variable: string]: number
  * below, which differ only in WHERE the head segment is resolved.
  *
  * A model declares names in `variables`; a reaction system in `species` /
- * `parameters`; a data loader in `variables`. Reference stubs and loaders carry
- * no `subsystems`, so navigation through them simply fails.
+ * `parameters`. Reference stubs carry no `subsystems`, so navigation through
+ * them simply fails.
  */
 function declaresName(
-  component: Model | ReactionSystem | DataLoader | SubsystemRef,
+  component: Model | ReactionSystem | SubsystemRef,
   pathParts: string[],
   variableName: string,
 ): boolean {
-  let current: Model | ReactionSystem | DataLoader | SubsystemRef = component
+  let current: Model | ReactionSystem | SubsystemRef = component
   for (const pathPart of pathParts) {
     const subsystems = 'subsystems' in current ? current.subsystems : undefined
     if (!subsystems || !subsystems[pathPart]) return false
-    current = subsystems[pathPart] as Model | ReactionSystem | DataLoader | SubsystemRef
+    current = subsystems[pathPart] as Model | ReactionSystem | SubsystemRef
   }
   if ('variables' in current && !!current.variables && variableName in current.variables) {
     return true
@@ -266,7 +265,7 @@ function declaresName(
  * of latent defect that fixing the false-negative hole is meant to surface.)
  *
  * Resolution order: the enclosing component's own subsystems, then the file root
- * (`models` / `reaction_systems` / `data_loaders`).
+ * (`models` / `reaction_systems`).
  */
 export function resolveScopedReference(
   reference: string,
@@ -291,10 +290,10 @@ export function resolveScopedReference(
 
   // Try to find in models
   if (esmFile.models && esmFile.models[systemName]) {
-    let current: Model | DataLoader | SubsystemRef = esmFile.models[systemName]
+    let current: Model | SubsystemRef = esmFile.models[systemName]
 
-    // Navigate through subsystems (unresolved refs and data loaders
-    // carry none, so navigation simply fails for them)
+    // Navigate through subsystems (unresolved refs carry none, so navigation
+    // simply fails for them)
     for (const pathPart of pathParts) {
       const subsystems: Model['subsystems'] =
         'subsystems' in current ? current.subsystems : undefined
@@ -330,15 +329,11 @@ export function resolveScopedReference(
     )
   }
 
-  // Try to find in data loaders (RFC pure-io-data-loaders): a loader-scoped
-  // reference like "InitialConditions.O3_init" names a variable the loader
-  // exposes. Loaders have no subsystems, so only a single-segment path
-  // resolves.
-  const loader = esmFile.data_loaders?.[systemName]
-  if (loader && pathParts.length === 0) {
-    return !!loader.variables && variableName in loader.variables
-  }
-
+  // NOTE: there is no data-source branch. A loader-scoped reference like
+  // "InitialConditions.O3_init" resolved in 0.x because a loader declared the
+  // variables it exposed; from 1.0.0 a source declares none and is not a
+  // scoped-name path root, so such a reference resolves to nothing and is
+  // correctly reported unresolved (esm-spec 5.5).
   return false
 }
 
@@ -351,7 +346,7 @@ export function resolveScopedReference(
  * `"b"`. This matches Go's `strings.SplitN(ref, ".", 2)` remainder semantics,
  * so the (system, variable-path) decomposition is identical across bindings.
  * Callers that need a scoped ref's system head and variable path share this
- * one helper (both `validateCouplingIntegrity` and `validateDataLoaderReferences`
+ * one helper (both `validateCouplingIntegrity` and `validateDataSourceReferences`
  * previously parsed the same field two incompatible ways).
  */
 export function splitScopedRef(ref: string): [string, string] {

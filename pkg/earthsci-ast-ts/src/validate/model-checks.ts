@@ -8,7 +8,14 @@ import { isExprNode, forEachChild } from '../expression.js'
 import { isFloatLit, numericValue } from '../numeric-literal.js'
 import { ERROR_CODES } from '../errors.js'
 import { parseUnit, tryParseUnit, dimsEqual, type ParsedUnit } from '../units.js'
-import type { EsmFile, Model, Expression, ExpressionNode, AffectEquation } from '../types.js'
+import type {
+  EsmFile,
+  Model,
+  Expression,
+  ExpressionNode,
+  AffectEquation,
+  DiscreteEventTrigger,
+} from '../types.js'
 import type { Expr } from '../expression.js'
 import type { StructuralError } from './types.js'
 import {
@@ -22,96 +29,72 @@ import {
 import { isAffineTempUnit } from './unit-format.js'
 import { forEachExpressionScope } from '../traverse.js'
 import { documentDeclaredNames } from './coupling-checks.js'
+import { observedDefinitions } from '../classification.js'
+import { CadenceSeeder } from '../cadence.js'
 
 /**
- * Check equation-unknown balance for a model.
+ * Check equation-unknown balance for a model (esm-spec §4.9.4).
  *
- * The balance rule depends on the model's `system_kind` (spec §4, default
- * `"ode"`), because the two kinds are well-posed in different ways:
+ * The check is **unknowns vs equations**, not *ODE states vs time-derivative
+ * equations*. Since 1.0.0 it is also the only thing it COULD be: `unknown` is
+ * the declared type, and ODE-state-ness is DERIVED from the very equations
+ * being counted (§6.3.1), so counting derivatives to decide how many unknowns
+ * need one is circular.
  *
- *  - **ODE / SDE / PDE** — a TIME-STEPPING system. Each state variable needs a
- *    defining time derivative, so the count is of DERIVATIVES (`D(v,t)`, or the
- *    derivative carried inside an `aggregate` contracted body), plus the
- *    element-defined relational form (`index(v,i) = aggregate(…)`) that credits
- *    the state variable its LHS assigns to.
+ * An equation is CREDITED whichever form its LHS takes — a derivative LHS
+ * (`D(x)/dt ~ …`), a bare-variable LHS (`x ~ …`, an observed or algebraic
+ * equation), or an EXPRESSION LHS (`H*H*SO4 ~ Ksp`, an implicit algebraic
+ * constraint). A checker crediting only a bare-variable derivative LHS
+ * undercounts every algebraic equation in the system:
+ * `tests/valid/nonlinear_isorropia_shape.esm` declares two unknowns and two
+ * algebraic equations and is BALANCED, and reporting "1 ODE equation, 2
+ * unknowns" there is a miscount, not a defect found.
  *
- *  - **NONLINEAR (algebraic)** — a system with NO time derivative at all
- *    (aerosol equilibrium, Mogi inversion). Well-posedness is simply UNKNOWNS vs
- *    EQUATIONS: `n` state variables need `n` equations, and an equation is any
- *    equation — its LHS need not be (and generally is not) a bare variable. In
- *    `tests/valid/nonlinear_isorropia_shape.esm` the closing equation is
- *    `H*H*SO4 = Ksp`, whose LHS is a PRODUCT. Counting only derivative or
- *    bare-assignment LHSs credited it zero, so a perfectly balanced 2×2
- *    equilibrium system was reported as `equation_count_mismatch` — a false
- *    rejection of a valid file, and of the one system kind whose defining
- *    feature is that it has no derivatives.
+ * `initialization_equations` (§6.2) are a SEPARATE block with a separate
+ * balance and are not counted here.
+ *
+ * `missing_equations_for` names the unknowns nothing DEFINES — the residue that
+ * preserves the discriminating power of the retired `missing_observed_expr`
+ * code, which named exactly these. It is omitted when empty.
  */
 export function validateEquationBalance(model: Model, modelPath: string): StructuralError[] {
   const errors: StructuralError[] = []
 
-  // Count state variables — the UNKNOWNS, under either rule.
-  const stateVariables = Object.entries(model.variables || {})
-    .filter(([_, variable]) => variable.type === 'state')
-    .map(([name, _]) => name)
+  // The UNKNOWNS, in declaration order (the shared fixtures pin that order).
+  const unknownNames = Object.entries(model.variables || {})
+    .filter(([, variable]) => variable.type === 'unknown')
+    .map(([name]) => name)
 
   const equations = model.equations || []
 
-  // An algebraic (nonlinear) system balances unknowns against the equation
-  // COUNT: every equation constrains the system, whatever shape its LHS has.
-  if (model.system_kind === 'nonlinear') {
-    if (stateVariables.length !== equations.length) {
-      errors.push({
-        path: modelPath,
-        code: ERROR_CODES.EQUATION_COUNT_MISMATCH,
-        message: `Number of equations (${equations.length}) does not match number of unknowns (${stateVariables.length})`,
-        details: {
-          state_variables: stateVariables,
-          ode_equations: equations.length,
-          missing_equations_for: [],
-        },
-      })
-    }
-    return errors
-  }
+  if (unknownNames.length === equations.length) return errors
 
-  // Count equations driving each state variable. A normal ODE contributes a
-  // D(var,t) derivative; an aggregate LHS contributes the derivative carried
-  // in its contracted body. A relational / algebraic equation with no time
-  // derivative (the aggregate-IR `index(v, i) = aggregate(...)` form emitted
-  // by skolem / distinct / rank) instead credits the state variable its LHS
-  // assigns to, so element-defined state still balances the unknown count.
-  const derivativeCounts: { [variable: string]: number } = {}
-
+  // An unknown is DEFINED when some equation LHS names it, through any of the
+  // derivative / element-index / aggregate-output wrappers. An expression LHS
+  // (`H*H*SO4 ~ Ksp`) names none, so its unknowns are constrained implicitly
+  // and count as undefined here — which is correct: they are what an unbalanced
+  // algebraic system is missing an equation for.
+  const defined = new Set<string>()
   for (const equation of equations) {
-    const lhsDerivatives = countDerivatives(equation.lhs)
-    if (Object.keys(lhsDerivatives).length > 0) {
-      for (const [variable, count] of Object.entries(lhsDerivatives)) {
-        derivativeCounts[variable] = (derivativeCounts[variable] || 0) + count
-      }
-    } else {
-      const target = lhsAssignmentTarget(equation.lhs)
-      if (target !== undefined && stateVariables.includes(target)) {
-        derivativeCounts[target] = (derivativeCounts[target] || 0) + 1
-      }
+    for (const variable of Object.keys(countDerivatives(equation.lhs))) {
+      defined.add(variable)
     }
+    const target = lhsAssignmentTarget(equation.lhs)
+    if (target !== undefined) defined.add(target)
   }
 
-  const odeEquationCount = Object.values(derivativeCounts).reduce((sum, count) => sum + count, 0)
+  const missingEquations = unknownNames.filter((name) => !defined.has(name))
 
-  if (stateVariables.length !== odeEquationCount) {
-    const missingEquations = stateVariables.filter((varName) => !(varName in derivativeCounts))
-
-    errors.push({
-      path: modelPath,
-      code: ERROR_CODES.EQUATION_COUNT_MISMATCH,
-      message: `Number of ODE equations (${odeEquationCount}) does not match number of state variables (${stateVariables.length})`,
-      details: {
-        state_variables: stateVariables,
-        ode_equations: odeEquationCount,
-        missing_equations_for: missingEquations,
-      },
-    })
-  }
+  errors.push({
+    path: modelPath,
+    code: ERROR_CODES.EQUATION_COUNT_MISMATCH,
+    message: `Number of equations (${equations.length}) does not match number of unknowns (${unknownNames.length})`,
+    details: {
+      unknowns: unknownNames,
+      equations: equations.length,
+      ...(missingEquations.length > 0 ? { missing_equations_for: missingEquations } : {}),
+    },
+  })
 
   return errors
 }
@@ -319,22 +302,12 @@ export function validateReferenceIntegrity(
     }
   })
 
-  // Check observed variables have expressions
-  for (const [varName, variable] of Object.entries(model.variables || {})) {
-    // `=== undefined`, NOT `!expression`. An Expression may be the NUMBER ZERO,
-    // and `!0` is `true` — so an observed variable defined as the perfectly legal
-    // constant `0.0` (e.g. `temperature_factor` in
-    // `tests/valid/events_cross_system.esm`) was reported as MISSING its
-    // expression. The same falsy trap would swallow a `0` guess or bound.
-    if (variable.type === 'observed' && variable.expression === undefined) {
-      errors.push({
-        path: `${modelPath}/variables/${varName}`,
-        code: ERROR_CODES.MISSING_OBSERVED_EXPR,
-        message: `Observed variable "${varName}" is missing its expression field`,
-        details: { variable: varName },
-      })
-    }
-  }
+  // NOTE: `missing_observed_expr` is retired at 1.0.0 and there is deliberately
+  // no check here to replace it. An observed unknown is DEFINED BY AN EQUATION,
+  // so an unknown with nothing defining it is no longer a malformed declaration
+  // but an UNBALANCED SYSTEM — reported by `validateEquationBalance` above,
+  // whose `missing_equations_for` detail names exactly the unknowns this code
+  // used to name (esm-spec §4.9.4; tests/invalid/unknown_without_equation.esm).
 
   return errors
 }
@@ -369,6 +342,64 @@ function checkAffectTargets(
         details: { variable: affect.lhs },
       })
     }
+  }
+  return errors
+}
+
+/**
+ * `event_affects_parameter` — an event `affects` LHS naming a PARAMETER.
+ *
+ * From 1.0.0 events affect UNKNOWNS ONLY. A parameter that changes during a run
+ * declares its own `update` block, so `discrete_parameters` and the event
+ * `functional_affect` are gone and there is nothing left for an event to write
+ * a parameter through. The defect is keyed off the AFFECTS TARGET, not off the
+ * trigger kind, so it fires from a discrete event, a continuous event, or an
+ * `event` coupling entry alike.
+ *
+ * The remedy names the legal spelling of the same intent. A fixed-interval
+ * rewrite of a parameter is exactly `update: {kind: "schedule", interval}`, so
+ * a `periodic` trigger gets that concrete replacement; every other trigger gets
+ * the general advice, there being no single mechanical rewrite for it.
+ */
+function checkAffectsNoParameter(
+  affects: AffectEquation[] | null | undefined,
+  declaredParameters: Set<string>,
+  basePath: string,
+  subject: string,
+  baseDetails: Record<string, unknown>,
+  trigger?: DiscreteEventTrigger,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!affects) return errors
+
+  for (let j = 0; j < affects.length; j++) {
+    const affect = affects[j]
+    if (!declaredParameters.has(affect.lhs)) continue
+
+    const periodicInterval =
+      trigger !== undefined &&
+      (trigger as { type?: string }).type === 'periodic' &&
+      typeof (trigger as { interval?: unknown }).interval === 'number'
+        ? (trigger as { interval: number }).interval
+        : undefined
+
+    const remedy =
+      periodicInterval !== undefined
+        ? `declare the change as update: {kind: "schedule", interval: ${periodicInterval}} on '${affect.lhs}' (esm-spec 5.4)`
+        : `declare the change as the parameter's own update (esm-spec 5.4)`
+
+    errors.push({
+      path: `${basePath}/${j}`,
+      code: ERROR_CODES.EVENT_AFFECTS_PARAMETER,
+      message: `${subject} affects '${affect.lhs}', which is a parameter; an event may affect unknowns only`,
+      details: {
+        variable: affect.lhs,
+        variable_type: 'parameter',
+        ...baseDetails,
+        ...(periodicInterval !== undefined ? { trigger_type: 'periodic' } : {}),
+        remedy,
+      },
+    })
   }
   return errors
 }
@@ -421,20 +452,6 @@ export function validateEventConsistency(
     const event = model.discrete_events![i]
     const eventPath = `${modelPath}/discrete_events/${i}`
 
-    // Check discrete_parameters entries
-    if (event.discrete_parameters) {
-      for (const paramName of event.discrete_parameters) {
-        if (!declaredParameters.has(paramName)) {
-          errors.push({
-            path: `${eventPath}/discrete_parameters`,
-            code: ERROR_CODES.INVALID_DISCRETE_PARAM,
-            message: `discrete_parameters entry "${paramName}" does not match a declared parameter`,
-            details: { parameter: paramName },
-          })
-        }
-      }
-    }
-
     // Check affects variables
     errors.push(
       ...checkAffectTargets(
@@ -445,30 +462,17 @@ export function validateEventConsistency(
       ),
     )
 
-    // Check functional affect variables
-    if (event.functional_affect) {
-      for (const varName of event.functional_affect.read_vars || []) {
-        if (!declaredVariables.has(varName)) {
-          errors.push({
-            path: `${eventPath}/functional_affect/read_vars`,
-            code: ERROR_CODES.EVENT_VAR_UNDECLARED,
-            message: `Variable "${varName}" in functional_affect read_vars is not declared`,
-            details: { variable: varName },
-          })
-        }
-      }
-
-      for (const paramName of event.functional_affect.read_params || []) {
-        if (!declaredParameters.has(paramName)) {
-          errors.push({
-            path: `${eventPath}/functional_affect/read_params`,
-            code: ERROR_CODES.EVENT_VAR_UNDECLARED,
-            message: `Parameter "${paramName}" in functional_affect read_params is not declared`,
-            details: { variable: paramName },
-          })
-        }
-      }
-    }
+    // An event may affect UNKNOWNS only (esm-spec §5.4).
+    errors.push(
+      ...checkAffectsNoParameter(
+        event.affects,
+        declaredParameters,
+        `${eventPath}/affects`,
+        `Event '${event.name}'`,
+        { event_name: event.name, event_type: 'discrete' },
+        event.trigger,
+      ),
+    )
   }
 
   // Check continuous events
@@ -545,10 +549,11 @@ export function validatePhysicalConstantUnits(model: Model, modelPath: string): 
     if (declaredUnit === null || canonicalUnit === null) continue
     if (dimsEqual(declaredUnit.dims, canonicalUnit.dims)) continue
 
+    // Which observed unknown USES this constant. Its definition is the RHS of
+    // its bare-LHS equation, not a field on the variable (esm-spec §6.3.1).
     let usageName: string | undefined
-    for (const [otherName, otherVar] of Object.entries(variables)) {
-      if (otherVar.type !== 'observed') continue
-      if (expressionReferencesName(otherVar.expression, name)) {
+    for (const [otherName, otherExpr] of observedDefinitions(model)) {
+      if (expressionReferencesName(otherExpr, name)) {
         usageName = otherName
         break
       }
@@ -585,13 +590,11 @@ export function validateConversionFactorConsistency(
   const errors: StructuralError[] = []
   const variables = model.variables || {}
 
-  for (const [vname, vdef] of Object.entries(variables)) {
-    if (vdef.type !== 'observed') continue
-    if (vdef.expression === undefined || vdef.expression === null) continue
-    const lhsUnits = vdef.units
+  for (const [vname, expr] of observedDefinitions(model)) {
+    const vdef = variables[vname]
+    const lhsUnits = vdef?.units
     if (!lhsUnits) continue
 
-    const expr = vdef.expression
     if (!isExprNode(expr)) continue
     const node = expr
     if (node.op !== '*' || !node.args || node.args.length !== 2) continue
@@ -709,8 +712,14 @@ function joinKeyColumns(agg: ExpressionNode): Set<string> {
   const cols = new Set<string>()
   const joins = agg.join
   if (!Array.isArray(joins)) return cols
-  for (const clause of joins) {
-    for (const pair of clause?.on ?? []) {
+  // A join clause is `oneOf: [{required:[on]}, {required:[overlap]}]`, which
+  // json2ts renders as two bare index signatures, so `clause.on` arrives
+  // untyped. Narrow it here rather than trusting the generated shape.
+  for (const clause of joins as { on?: unknown }[]) {
+    const on = clause?.on
+    if (!Array.isArray(on)) continue
+    for (const pair of on) {
+      if (!Array.isArray(pair)) continue
       for (const col of pair) if (typeof col === 'string') cols.add(col)
     }
   }
@@ -858,12 +867,17 @@ export function validateRelationalNodesInContinuous(
   modelPath: string,
 ): StructuralError[] {
   const errors: StructuralError[] = []
-  const stateVariables = new Set(
-    Object.entries(model.variables || {})
-      .filter(([, variable]) => variable.type === 'state')
-      .map(([name]) => name),
+  // The CONTINUOUS leaves, seeded through the §5.7.2 table rather than by
+  // reading a declared type: ODE states and algebraic unknowns, the Brownian
+  // parameters that are resampled every step, and any observed unknown whose
+  // DEFINING EQUATION resolves continuous. The 0.x code tested
+  // `variable.type === 'state'`, which 1.0.0 does not declare, and which never
+  // saw the observed case at all.
+  const seeder = new CadenceSeeder(model)
+  const continuousNames = new Set(
+    Object.keys(model.variables || {}).filter((name) => seeder.leaf(name) === 'continuous'),
   )
-  if (stateVariables.size === 0) return errors
+  if (continuousNames.size === 0) return errors
 
   forEachExpressionScope(model, modelPath, (scope) => {
     for (const site of scope) {
@@ -880,7 +894,7 @@ export function validateRelationalNodesInContinuous(
           if (field === undefined) continue
           for (const ref of extractVariableReferences(field as Expression)) referenced.add(ref)
         }
-        const stateRead = [...referenced].find((ref) => stateVariables.has(ref))
+        const stateRead = [...referenced].find((ref) => continuousNames.has(ref))
         if (stateRead !== undefined) {
           errors.push({
             path: site.path,

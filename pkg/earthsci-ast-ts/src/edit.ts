@@ -512,9 +512,9 @@ export function merge(fileA: EsmFile, fileB: EsmFile): EsmFile {
     ...fileA.reaction_systems,
     ...fileB.reaction_systems,
   })
-  result = withCollection(result, 'data_loaders', {
-    ...fileA.data_loaders,
-    ...fileB.data_loaders,
+  result = withCollection(result, 'data_sources', {
+    ...fileA.data_sources,
+    ...fileB.data_sources,
   })
   result = withCollection(result, 'coupling', [
     ...(fileA.coupling || []),
@@ -548,11 +548,11 @@ export function extract(file: EsmFile, componentName: string): EsmFile {
     return extracted
   }
 
-  // Check data loaders
-  if (file.data_loaders && componentName in file.data_loaders) {
-    extracted.data_loaders = { [componentName]: file.data_loaders[componentName] }
-    return extracted
-  }
+  // NOTE: `data_sources` is deliberately NOT searched. From 1.0.0 a data source
+  // is not a component — it cannot be a coupling endpoint or a subsystem — so
+  // there is no such thing as extracting one as a standalone document. A model
+  // that consumes a source carries the binding on its own parameter, and
+  // extracting that model is what carries the dependency with it.
 
   throw new EntityNotFoundError('Component', componentName)
 }
@@ -630,11 +630,9 @@ function forEachModelExpressionSite(
     visit(equation.rhs, `${prefix}equation ${i}`)
   })
 
-  forEachModelVariable(model, (variable, name) => {
-    if (variable.expression !== undefined) {
-      visit(variable.expression, `${prefix}variable ${name} expression`)
-    }
-  })
+  // NOTE: no per-variable expression to visit. An observed unknown's defining
+  // expression is one of the equations already visited above; visiting it again
+  // from the variable would rename inside it twice.
 
   for (const [i, event] of (model.continuous_events ?? []).entries()) {
     for (const condition of event.conditions ?? []) {

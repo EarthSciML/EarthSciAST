@@ -187,6 +187,30 @@ export function observedUnknowns(model: Model): string[] {
 }
 
 /**
+ * The DEFINING EXPRESSION of every observed unknown: the RHS of the
+ * bare-variable-LHS equation whose LHS is that name.
+ *
+ * This is the 1.0.0 relocation, in one place. An observed unknown's definition
+ * used to live in `variables[v].expression`; it now lives in the model's
+ * `equations` array. Every site that read the removed field reads this instead,
+ * so the relocation is expressed once rather than in each of the ten passes
+ * that used to reach for `variable.expression`.
+ *
+ * Only the first equation for a name is recorded: a second one is an unbalanced
+ * system, which {@link validateEquationBalance} reports rather than this.
+ */
+export function observedDefinitions(model: Model): Map<string, Expression> {
+  const observed = new Set(observedUnknowns(model))
+  const defs = new Map<string, Expression>()
+  for (const eq of equationsOf(model)) {
+    if (typeof eq.lhs !== 'string') continue
+    if (!observed.has(eq.lhs) || defs.has(eq.lhs)) continue
+    defs.set(eq.lhs, eq.rhs)
+  }
+  return defs
+}
+
+/**
  * Unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`) — everything left once
  * the ODE states and the observed unknowns are removed. Defining this set by
  * elimination is what makes the three sets a partition by construction.

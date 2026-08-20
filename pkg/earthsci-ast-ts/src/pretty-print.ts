@@ -1871,8 +1871,8 @@ function formatReactionSystemSummary(reactionSystem: ReactionSystem): string {
 function formatEsmFileSummary(esmFile: EsmFile): string {
   const models = Object.keys(esmFile.models || {}).length
   const reactionSystems = Object.keys(esmFile.reaction_systems || {}).length
-  const dataLoaders = Object.keys(esmFile.data_loaders || {}).length
+  const dataSources = Object.keys(esmFile.data_sources || {}).length
   const name = esmFile.metadata?.name || 'Untitled'
 
-  return `ESM v${esmFile.esm}: ${name} (${models} models, ${reactionSystems} reaction systems, ${dataLoaders} data loaders)`
+  return `ESM v${esmFile.esm}: ${name} (${models} models, ${reactionSystems} reaction systems, ${dataSources} data sources)`
 }

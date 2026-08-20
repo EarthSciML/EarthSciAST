@@ -137,18 +137,12 @@ function resolveScopedReference(reference: string, esmFile: EsmFile): Expr | nul
     }
   }
 
-  // Data loaders declare no default value, so a reference into one has nothing
-  // to inline: it does NOT resolve to a substitutable expression. Return `null`
-  // (an explicit "not resolved") so the caller leaves the reference string
-  // untouched — the same net result the former `return reference` produced,
-  // but no longer masquerading as a successful resolution.
-  if (esmFile.data_loaders && esmFile.data_loaders[systemName]) {
-    const dataLoader = esmFile.data_loaders[systemName]
-    if (dataLoader.variables && dataLoader.variables[variableName]) {
-      return null
-    }
-  }
-
+  // NOTE: no data-source branch. A `data_sources` entry exposes no variables of
+  // its own from 1.0.0 and is not a path root in a scoped reference, so
+  // `Source.field` names nothing and there is nothing here to resolve. The
+  // 0.x branch returned `null` for a loader variable anyway — a loader declared
+  // no default, so a reference into one never inlined — which is exactly what
+  // falling through to the final `return null` still does.
   return null
 }
 
@@ -191,18 +185,9 @@ export function substituteInModel(
     rhs: substitute(eq.rhs, bindings, context),
   })) as Model['equations']
 
-  // Substitute in variable expressions (for observed variables)
-  const variables = Object.fromEntries(
-    Object.entries(model.variables || {}).map(([name, variable]) => [
-      name,
-      {
-        ...variable,
-        ...(variable.expression && {
-          expression: substitute(variable.expression, bindings, context),
-        }),
-      },
-    ]),
-  ) as Model['variables']
+  // Variables carry no expression from 1.0.0 — an observed unknown's definition
+  // is an equation, substituted above — so they pass through unchanged.
+  const variables = model.variables
 
   // Substitute in inline-model subsystems recursively; data loaders and
   // unresolved refs pass through unchanged.

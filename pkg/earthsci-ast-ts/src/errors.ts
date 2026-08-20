@@ -58,13 +58,22 @@ export const ERROR_CODES = {
   //   error, not a warning and not a runtime concern.
   ARRAY_SHAPE_MISMATCH: 'array_shape_mismatch',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
+  // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
+  //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that
+  //   changes during a run declares its own `update` block, so the
+  //   `discrete_parameters` list and the event `functional_affect` are gone and
+  //   there is nothing left for an event to write a parameter through. Fires
+  //   from a model `discrete_events` / `continuous_events` block or from an
+  //   `event` coupling entry — it keys off the AFFECTS TARGET, not the trigger.
+  //   Replaces `invalid_discrete_param` and `undeclared_discrete_parameter`,
+  //   which asked whether a parameter was correctly DECLARED on a list that no
+  //   longer exists; touching a parameter from an event is now wrong outright.
+  EVENT_AFFECTS_PARAMETER: 'event_affects_parameter',
   EVENT_VAR_UNDECLARED: 'event_var_undeclared',
   FACTOR_WITH_EXPRESSION_TRANSFORM: 'factor_with_expression_transform',
   IC_IN_REACTION_SYSTEM: 'ic_in_reaction_system',
-  INVALID_DISCRETE_PARAM: 'invalid_discrete_param',
   INVALID_STOICHIOMETRY: 'invalid_stoichiometry',
   INVALID_TEMPORAL_DURATION: 'invalid_temporal_duration',
-  MISSING_OBSERVED_EXPR: 'missing_observed_expr',
   NULL_REACTION: 'null_reaction',
   // ---- subsystem-ref resolution (§4.7) ----
   // The canonical, cross-binding names, pinned by
@@ -78,7 +87,14 @@ export const ERROR_CODES = {
   //   than one top-level system; §4.7 requires exactly one. Only the resolver
   //   can raise this: it is the only layer that reads the referenced file.
   AMBIGUOUS_SUBSYSTEM_REF: 'ambiguous_subsystem_ref',
-  UNDEFINED_DATA_LOADER_VARIABLE: 'undefined_data_loader_variable',
+  // `data_source_undefined` — a parameter's `update.source` names no entry in
+  //   the document's top-level `data_sources`. From 1.0.0 a data source is not
+  //   a coupling endpoint, so `update.source` is the ONLY way to name one — and
+  //   being an ordinary string it is schema-valid by construction, which is
+  //   what makes this reachable structural validation rather than a schema
+  //   error. Replaces `undefined_data_loader_variable`, whose coupling-to-a-
+  //   loader-variable shape no longer exists.
+  DATA_SOURCE_UNDEFINED: 'data_source_undefined',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
@@ -134,7 +150,6 @@ export const ERROR_CODES = {
   TEMPLATE_IMPORT_UNKNOWN_NAME: 'template_import_unknown_name',
   TEMPLATE_IMPORT_UNRESOLVED: 'template_import_unresolved',
   TEMPLATE_IMPORT_VERSION_TOO_OLD: 'template_import_version_too_old',
-  TEMPLATE_INJECT_TARGET_IS_LOADER: 'template_inject_target_is_loader',
   TEMPLATE_INJECT_TARGET_NOT_COMPONENT: 'template_inject_target_not_component',
   TEMPLATE_INJECT_TARGET_UNKNOWN: 'template_inject_target_unknown',
 

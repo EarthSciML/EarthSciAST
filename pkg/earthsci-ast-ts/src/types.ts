@@ -91,7 +91,15 @@ import type {
   Model as GeneratedModel,
   SubsystemRef as GeneratedSubsystemRef,
 } from './generated.js'
-export type EsmFile = ESMFormat
+export type EsmFile = ESMFormat & {
+  /**
+   * Narrowed so that a model reached from the document root is the 1.0.0
+   * {@link Model} — closed variables, no data-source subsystem — rather than the
+   * generated shape. Without this the strictness stops at the root and
+   * `file.models[m].variables[v].expression` reads as `unknown` again.
+   */
+  models?: { [k: string]: Model | GeneratedSubsystemRef }
+}
 
 /** @deprecated Prefer {@link EsmFile}. Identical to the generated `ESMFormat`. */
 export type EsmFormat = ESMFormat

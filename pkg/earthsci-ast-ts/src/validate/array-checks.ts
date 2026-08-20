@@ -254,11 +254,9 @@ export function validateArrayBroadcastShapes(model: Model, modelPath: string): S
     checkOperandAxes(equation.rhs, target, axesOf, `${modelPath}/equations/${index}/rhs`, errors)
   }
 
-  for (const [name, variable] of Object.entries(model.variables ?? {})) {
-    const expression = variable?.expression
-    if (expression === undefined || expression === null) continue
-    checkOperandAxes(expression, name, axesOf, `${modelPath}/variables/${name}/expression`, errors)
-  }
+  // An observed unknown's definition is one of the equations walked above, so
+  // its operand axes are already checked there. Before 1.0.0 the definition sat
+  // on the variable and needed this second pass.
 
   return errors
 }

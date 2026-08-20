@@ -11,6 +11,16 @@ import type { DependencyGraph, DependencyNode, DependencyRelation } from './type
 import { freeVariables } from '../expression.js'
 import { buildGraph, lhsTargetName } from '../graph.js'
 import { forEachModelVariable, forEachEquation, isReferenceStub } from '../traverse.js'
+import {
+  odeStates,
+  observedUnknowns,
+  algebraicUnknowns,
+  brownianParameters,
+  discreteParameters,
+  sampledParameters,
+  constantParameters,
+  observedDefinitions,
+} from '../classification.js'
 
 /**
  * `system` value stamped on nodes when {@link buildDependencyGraph} is called
@@ -89,28 +99,51 @@ export function buildDependencyGraph(
     })
   }
 
+  /** Every variable's DERIVED kind for this model (esm-spec §6.3.1). */
+  function variableKinds(model: Model): Map<string, DependencyNode['kind']> {
+    const kinds = new Map<string, DependencyNode['kind']>()
+    for (const name of odeStates(model)) kinds.set(name, 'state')
+    for (const name of observedUnknowns(model)) kinds.set(name, 'observed')
+    for (const name of algebraicUnknowns(model)) kinds.set(name, 'algebraic')
+    for (const name of brownianParameters(model)) kinds.set(name, 'brownian')
+    for (const name of discreteParameters(model)) kinds.set(name, 'discrete')
+    for (const name of sampledParameters(model)) kinds.set(name, 'parameter')
+    for (const name of constantParameters(model)) kinds.set(name, 'parameter')
+    return kinds
+  }
+
   // Process a model (variables, equations, and inline subsystems recursively).
   function processModel(model: Model, systemId: string) {
+    // DERIVED kinds (esm-spec §6.3.1). `includeObserved` filters on the derived
+    // observed set, not on a declared type — 1.0.0 has none to read.
+    const kinds = variableKinds(model)
+    const observedDefs = observedDefinitions(model)
+
     forEachModelVariable(model, (variable, varName) => {
+      const kind = kinds.get(varName) ?? 'parameter'
       if (variable.type === 'parameter' && !includeParameters) return
-      if (variable.type === 'observed' && !includeObserved) return
+      if (kind === 'observed' && !includeObserved) return
 
-      addNode(varName, variable.type, systemId, variable.units, variable.expression)
+      addNode(varName, kind, systemId, variable.units, observedDefs.get(varName))
+    })
 
-      // A variable with a definition expression depends on its free variables.
-      if (variable.expression) {
-        for (const depVar of freeVariables(variable.expression)) {
+    // An observed unknown depends on the free variables of its DEFINING
+    // EQUATION's RHS. That definition used to live on the variable; from 1.0.0
+    // it is the bare-variable-LHS equation naming it.
+    if (includeObserved) {
+      for (const [varName, expression] of observedDefs) {
+        for (const depVar of freeVariables(expression)) {
           // Referenced-but-undeclared variables default to 'parameter'.
-          addNode(depVar, 'parameter', systemId)
+          addNode(depVar, kinds.get(depVar) ?? 'parameter', systemId)
           addDependency(
             scopedName(depVar, systemId),
             scopedName(varName, systemId),
             'definition_dependency',
-            variable.expression,
+            expression,
           )
         }
       }
-    })
+    }
 
     forEachEquation(model, (equation) => processEquation(equation, systemId))
 
@@ -169,6 +202,9 @@ export function buildDependencyGraph(
   function processEquation(equation: Equation, systemId: string) {
     const targetName = lhsTargetName(equation.lhs)
     if (targetName === undefined) return // no recognizable defined variable
+    // `'state'` is the synthesized kind for an equation target that was not
+    // declared in this model (a coupled reference). A declared one already has
+    // its DERIVED kind from processModel, and addNode does not overwrite.
     addNode(targetName, 'state', systemId)
 
     for (const rhsVar of freeVariables(equation.rhs)) {

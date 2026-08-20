@@ -154,16 +154,12 @@ function collectModelExpressions(
   prefix: string,
   out: Array<{ expr: Expr; name: string }>,
 ): void {
-  if (model.variables) {
-    for (const [varName, variable] of Object.entries(model.variables)) {
-      if (variable.expression) {
-        out.push({
-          expr: variable.expression,
-          name: `${prefix}variable.${varName}`,
-        })
-      }
-    }
-  }
+  // NOTE: no per-variable expressions to collect. Until 1.0.0 an observed
+  // variable carried its definition in `variables[v].expression` and it was
+  // gathered here; that definition is now the model's bare-variable-LHS
+  // equation, which the `model.equations` walk below already covers. Collecting
+  // it again from `observedDefinitions` would double-count every observed
+  // definition and inflate every subexpression's occurrence count.
 
   if (model.equations) {
     model.equations.forEach((equation, index) => {

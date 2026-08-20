@@ -33,7 +33,7 @@ const COUPLING_IMPORT_TYPE = 'coupling_import'
 const LIBRARY_FORBIDDEN_KEYS = [
   'models',
   'reaction_systems',
-  'data_loaders',
+  'data_sources',
   'domain',
   'index_sets',
   'metaparameters',
@@ -179,15 +179,10 @@ function rewriteEntryInPlace(entry: Record<string, unknown>, structFn: RefFn, ex
       ) {
         entry.trigger.expression = rewriteExprInPlace(entry.trigger.expression, exprFn)
       }
-      if (isObject(entry.functional_affect)) {
-        const fa = entry.functional_affect
-        for (const key of ['read_vars', 'read_params', 'modified_params']) {
-          if (Array.isArray(fa[key])) fa[key] = mapStringRefs(fa[key], structFn)
-        }
-      }
-      if (Array.isArray(entry.discrete_parameters)) {
-        entry.discrete_parameters = mapStringRefs(entry.discrete_parameters, structFn)
-      }
+      // NOTE: no `functional_affect` / `discrete_parameters` rewriting. Both are
+      // gone at 1.0.0 — parameter mutation moved onto the parameter's own
+      // `update`, and an event affects UNKNOWNS only — so an entry carrying
+      // either is schema-invalid and never reaches this rewrite.
       break
     }
   }
@@ -279,13 +274,8 @@ function forEachEntryRef(
       ) {
         forEachExprRef(entry.trigger.expression, exprVisit)
       }
-      if (isObject(entry.functional_affect)) {
-        const fa = entry.functional_affect
-        for (const key of ['read_vars', 'read_params', 'modified_params']) {
-          if (Array.isArray(fa[key])) visitSystems(fa[key])
-        }
-      }
-      if (Array.isArray(entry.discrete_parameters)) visitSystems(entry.discrete_parameters)
+      // See the rewrite twin above: `functional_affect` and
+      // `discrete_parameters` no longer exist to visit.
       break
     }
   }
@@ -496,15 +486,16 @@ function expandOne(
 }
 
 /**
- * Resolve a `bind` value as a component path (esm-spec §10.10.1) — a system or
- * loader node, walking `models`/`reaction_systems`/`data_loaders` then nested
- * `subsystems`, never terminating on a variable.
+ * Resolve a `bind` value as a component path (esm-spec §10.10.1) — a system
+ * node, walking `models`/`reaction_systems` then nested `subsystems`, never
+ * terminating on a variable. A data source is not a component from 1.0.0 and so
+ * is not a bindable path.
  */
 function resolvesToComponent(file: EsmFile, value: string): boolean {
   const segs = value.split('.')
   const top = segs[0]
   const f = file as unknown as Record<string, Record<string, unknown> | undefined>
-  let node: unknown = f.models?.[top] ?? f.reaction_systems?.[top] ?? f.data_loaders?.[top]
+  let node: unknown = f.models?.[top] ?? f.reaction_systems?.[top]
   if (!isObject(node)) return false
   for (let i = 1; i < segs.length; i++) {
     const subs = node.subsystems

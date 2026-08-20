@@ -14,6 +14,7 @@ import type {
   CouplingCouple,
   CouplingVariableMap,
   SubsystemRef,
+  ParameterUpdate,
 } from '../types.js'
 import type { StructuralError } from './types.js'
 import {
@@ -100,10 +101,9 @@ export function validateSubsystemRefs(esmFile: EsmFile): StructuralError[] {
  */
 function systemPathExists(ref: string, esmFile: EsmFile): boolean {
   const [head, rest] = splitScopedRef(ref)
-  const root =
-    (esmFile.models || {})[head] ??
-    (esmFile.reaction_systems || {})[head] ??
-    (esmFile.data_loaders || {})[head]
+  // A data source is NOT a path root: from 1.0.0 it is not a component, so
+  // `Source.field` names nothing resolvable (esm-spec 5.5).
+  const root = (esmFile.models || {})[head] ?? (esmFile.reaction_systems || {})[head]
   if (!root) return false
   if (rest === '') return true
 
@@ -128,10 +128,11 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
   if (!esmFile.coupling) return errors
 
   // Collect all available systems
+  // Data sources are deliberately absent: a source cannot be a coupling
+  // endpoint from 1.0.0, so naming one here is an `undefined_system`.
   const availableSystems = new Set([
     ...Object.keys(esmFile.models || {}),
     ...Object.keys(esmFile.reaction_systems || {}),
-    ...Object.keys(esmFile.data_loaders || {}),
   ])
 
   for (let i = 0; i < esmFile.coupling.length; i++) {
@@ -219,10 +220,9 @@ export function validateCouplingIntegrity(esmFile: EsmFile): StructuralError[] {
             // `resolveScopedReference` walks the `subsystems` chain and then
             // checks `variables` / `species` / `parameters`.
             //
-            // Whether a DATA LOADER exposes a variable is NOT resolved here —
-            // that is the sole responsibility of `validateDataLoaderReferences`
-            // (which covers both `from` and `to`), so a loader-only head falls
-            // through this branch entirely.
+            // There is no data-source carve-out any more: a source is not a
+            // coupling endpoint, so every head reaching here is a model or a
+            // reaction system and resolves (or fails) on its own terms.
             if (!resolveScopedReference(ref, esmFile)) {
               const variableName = variablePath.split('.').pop() ?? variablePath
               errors.push({
@@ -324,56 +324,73 @@ export function validateCircularReferences(esmFile: EsmFile): StructuralError[] 
 }
 
 /**
- * Validate data-loader variable references in coupling entries.
- *
- * This pass is the SINGLE authority for whether a data-loader-exposed variable
- * resolves, covering BOTH endpoints of a `variable_map` (`from` AND `to`): a
- * scoped ref whose head names a data loader is checked here and only here,
- * always emitting `undefined_data_loader_variable`. `validateCouplingIntegrity`
- * deliberately does NOT resolve loader-headed refs (it keeps only model /
- * reaction_system membership handling), so the two passes no longer overlap —
- * even for a name collision (a head that resolves as both a model/reaction_system
- * AND a data loader): the loader-exposed-variable question is answered solely
- * here, while `validateCouplingIntegrity`'s model-membership check independently
- * governs the model side.
+ * Every `(variableName, update-rule, jsonPointer)` in the document, including
+ * subsystems. A parameter's `update` is either ONE rule object or an ordered
+ * array of two or more, and the pointer reflects which: the object form points
+ * at `update` itself, the array form at `update/<i>`.
  */
-export function validateDataLoaderReferences(esmFile: EsmFile): StructuralError[] {
-  const errors: StructuralError[] = []
-  if (!esmFile.coupling || !esmFile.data_loaders) return errors
-
-  for (let i = 0; i < esmFile.coupling.length; i++) {
-    const coupling = esmFile.coupling[i]
-    const couplingPath = `/coupling/${i}`
-    if (coupling.type !== 'variable_map') continue
-    const vmEntry = coupling as CouplingVariableMap
-
-    for (const field of ['from', 'to'] as const) {
-      const ref = vmEntry[field]
-      if (typeof ref !== 'string' || !ref.includes('.')) continue
-      // Keep the FULL variable path after the source head — a 2-limit split
-      // (`ref.split('.', 2)`) would truncate "Loader.a.b" to variable "a"
-      // (a JS-vs-Go SplitN discrepancy). splitScopedRef mirrors Go's
-      // strings.SplitN(ref, ".", 2) remainder semantics.
-      const [sourceName, varName] = splitScopedRef(ref)
-      // Only a data-loader head is this pass's concern.
-      const loader = esmFile.data_loaders[sourceName]
-      if (!loader) continue
-      const loaderVariables = loader.variables || {}
-      if (!(varName in loaderVariables)) {
-        errors.push({
-          path: `${couplingPath}/${field}`,
-          message: `Data loader '${sourceName}' does not expose variable '${varName}'`,
-          code: ERROR_CODES.UNDEFINED_DATA_LOADER_VARIABLE,
-          details: {
-            data_loader: sourceName,
-            variable: varName,
-            available: Object.keys(loaderVariables),
-          },
-        })
+function* forEachParameterUpdate(esmFile: EsmFile): Generator<{
+  variableName: string
+  rule: ParameterUpdate
+  path: string
+}> {
+  function* walkModel(
+    model: Model,
+    modelPath: string,
+  ): Generator<{ variableName: string; rule: ParameterUpdate; path: string }> {
+    for (const [variableName, variable] of Object.entries(model.variables ?? {})) {
+      if (variable?.type !== 'parameter' || variable.update === undefined) continue
+      const base = `${modelPath}/variables/${variableName}/update`
+      if (Array.isArray(variable.update)) {
+        for (const [i, rule] of variable.update.entries()) {
+          yield { variableName, rule, path: `${base}/${i}` }
+        }
+      } else {
+        yield { variableName, rule: variable.update, path: base }
       }
+    }
+    for (const [childName, child] of Object.entries(model.subsystems ?? {})) {
+      if (child === null || typeof child !== 'object' || 'ref' in child) continue
+      yield* walkModel(child as Model, `${modelPath}/subsystems/${childName}`)
     }
   }
 
+  for (const [modelName, model] of Object.entries(esmFile.models ?? {})) {
+    if (model === null || typeof model !== 'object' || 'ref' in model) continue
+    yield* walkModel(model as Model, `/models/${modelName}`)
+  }
+}
+
+/**
+ * `data_source_undefined` - a parameter's `update.source` names no entry in the
+ * document's top-level `data_sources` (esm-spec 5.5).
+ *
+ * This REPLACES the 0.x `validateDataLoaderReferences`, which asked whether a
+ * coupling endpoint `Loader.field` named a variable the loader exposed. From
+ * 1.0.0 a data source is not a coupling endpoint and exposes no variables, so
+ * that question cannot be asked. `update.source` is the only way to name a
+ * source, and being an ordinary string it is schema-valid by construction and
+ * therefore genuinely reaches structural validation.
+ */
+export function validateDataSourceReferences(esmFile: EsmFile): StructuralError[] {
+  const errors: StructuralError[] = []
+  const available = Object.keys(esmFile.data_sources ?? {})
+  const declared = new Set(available)
+
+  for (const { variableName, rule, path } of forEachParameterUpdate(esmFile)) {
+    if (rule.kind !== 'data') continue
+    if (declared.has(rule.source)) continue
+    errors.push({
+      path,
+      code: ERROR_CODES.DATA_SOURCE_UNDEFINED,
+      message: `Parameter update names data source '${rule.source}', which the document does not declare`,
+      details: {
+        variable: variableName,
+        source: rule.source,
+        available_sources: available,
+      },
+    })
+  }
   return errors
 }
 
@@ -458,12 +475,13 @@ export function validateCouplingDomainUnits(esmFile: EsmFile): StructuralError[]
 }
 
 /**
- * Validate file_period and frequency fields in data loader temporal sections
- * are valid ISO 8601 durations
+ * Validate `file_period` and `frequency` in a data SOURCE's temporal section
+ * are valid ISO 8601 durations. Only the enclosing block was renamed by 1.0.0;
+ * the rule is unchanged.
  */
 export function validateTemporalResolution(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
-  if (!esmFile.data_loaders) return errors
+  if (!esmFile.data_sources) return errors
 
   // ISO 8601 duration pattern: P[nY][nM][nD][T[nH][nM][nS]]
   const iso8601DurationPattern =
@@ -473,14 +491,14 @@ export function validateTemporalResolution(esmFile: EsmFile): StructuralError[] 
 
   const durationFields: Array<'file_period' | 'frequency'> = ['file_period', 'frequency']
 
-  for (const [loaderName, loader] of Object.entries(esmFile.data_loaders)) {
-    const temporal = loader.temporal
+  for (const [sourceName, source] of Object.entries(esmFile.data_sources)) {
+    const temporal = source.temporal
     if (!temporal || typeof temporal !== 'object') continue
     for (const field of durationFields) {
       const value = temporal[field]
       if (value !== undefined && !isValidDuration(value)) {
         errors.push({
-          path: `/data_loaders/${loaderName}/temporal/${field}`,
+          path: `/data_sources/${sourceName}/temporal/${field}`,
           message: `Invalid ISO 8601 duration: '${value}'`,
           code: ERROR_CODES.INVALID_TEMPORAL_DURATION,
           details: { field, value },
@@ -493,15 +511,15 @@ export function validateTemporalResolution(esmFile: EsmFile): StructuralError[] 
 }
 
 /**
- * Every name declared anywhere in the document: each model's `variables`, each
- * reaction system's `species` / `parameters`, and each data loader's `variables`.
+ * Every name declared anywhere in the document: each model's `variables` and
+ * each reaction system's `species` / `parameters`.
  *
- * This is the scope a DATA LOADER's `unit_conversion` resolves against. A loader
- * is pure I/O with no equations of its own, and its conversion expression may
- * scale a loaded field by a model's declared parameter — so the loader's own
- * variable map is too narrow a scope. (`tests/invalid/undefined_variable_in_unit_conversion.esm`
- * states this explicitly: "`y` and `k` are declared; the ONLY defect is the
- * undefined name `undefined_xyz`", where `y`/`k` belong to a MODEL.)
+ * This is the scope a `unit_conversion` resolves against. The conversion may
+ * scale a loaded field by a model's declared parameter, so the CONSUMING
+ * model's own scope would still be too narrow for a document-wide answer.
+ * (`tests/invalid/undefined_variable_in_unit_conversion.esm` states this
+ * explicitly: "`y` and `k` are declared; the ONLY defect is the undefined name
+ * `undefined_xyz`".)
  */
 export function documentDeclaredNames(esmFile: EsmFile): Set<string> {
   const names = new Set<string>()
@@ -517,52 +535,51 @@ export function documentDeclaredNames(esmFile: EsmFile): Set<string> {
       names.add(name)
     }
   }
-  for (const loader of Object.values(esmFile.data_loaders ?? {})) {
-    for (const name of Object.keys(loader.variables ?? {})) names.add(name)
-  }
+  // A data SOURCE contributes no names: from 1.0.0 it declares no variables of
+  // its own. The parameter that reads it is a model variable and is already
+  // counted above.
   return names
 }
 
 /**
- * (h) site 9 — reference integrity for a data loader's `unit_conversion`
- * expression (spec §8.5 / §4.9.5).
+ * (h) site 9 - reference integrity for a `unit_conversion` expression
+ * (esm-spec 8.5 / 4.9.5).
  *
- * `unit_conversion` is `oneOf` a plain numeric factor or a full Expression AST.
- * The Expression form was never reference-checked, so an undefined name in it
- * was invisible.
+ * `unit_conversion` is a full Expression AST (a plain number is one), and its
+ * free names must resolve. In 0.x it lived on a loader variable; from 1.0.0 it
+ * lives on the CONSUMING parameter's `update.from` binding, since the parameter
+ * IS the loaded field and owns the units.
  */
-export function validateDataLoaderExpressions(esmFile: EsmFile): StructuralError[] {
+export function validateDataSourceExpressions(esmFile: EsmFile): StructuralError[] {
   const errors: StructuralError[] = []
-  if (!esmFile.data_loaders) return errors
 
   const declared = documentDeclaredNames(esmFile)
   const declaredIndexSets = new Set(Object.keys(esmFile.index_sets || {}))
 
-  for (const [loaderName, loader] of Object.entries(esmFile.data_loaders)) {
-    for (const [varName, variable] of Object.entries(loader.variables ?? {})) {
-      const conversion = (variable as { unit_conversion?: unknown }).unit_conversion
-      // The numeric-factor alternative carries no references.
-      if (!isExpressionLike(conversion) || typeof conversion === 'number') continue
-      const path = `/data_loaders/${loaderName}/variables/${varName}/unit_conversion`
-      const bound = collectIndexSymbols(conversion as Expression)
-      for (const ref of extractVariableReferences(conversion as Expression)) {
-        if (ref.includes('.')) {
-          if (!resolveScopedReference(ref, esmFile)) {
-            errors.push({
-              path,
-              code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
-              message: `Variable "${ref}" referenced in unit_conversion expression does not resolve`,
-              details: { variable: ref },
-            })
-          }
-        } else if (!declared.has(ref) && !declaredIndexSets.has(ref) && !bound.has(ref)) {
+  for (const { rule, path: updatePath } of forEachParameterUpdate(esmFile)) {
+    if (rule.kind === 'wiener') continue
+    const conversion = rule.from?.unit_conversion
+    // The numeric-factor spelling carries no references.
+    if (!isExpressionLike(conversion) || typeof conversion === 'number') continue
+    const path = `${updatePath}/from/unit_conversion`
+    const bound = collectIndexSymbols(conversion as Expression)
+    for (const ref of extractVariableReferences(conversion as Expression)) {
+      if (ref.includes('.')) {
+        if (!resolveScopedReference(ref, esmFile)) {
           errors.push({
             path,
-            code: ERROR_CODES.UNDEFINED_VARIABLE,
-            message: `Variable "${ref}" referenced in unit_conversion expression but not declared`,
+            code: ERROR_CODES.UNRESOLVED_SCOPED_REF,
+            message: `Variable "${ref}" referenced in unit_conversion expression does not resolve`,
             details: { variable: ref },
           })
         }
+      } else if (!declared.has(ref) && !declaredIndexSets.has(ref) && !bound.has(ref)) {
+        errors.push({
+          path,
+          code: ERROR_CODES.UNDEFINED_VARIABLE,
+          message: `Variable "${ref}" referenced in unit_conversion expression but not declared`,
+          details: { variable: ref },
+        })
       }
     }
   }

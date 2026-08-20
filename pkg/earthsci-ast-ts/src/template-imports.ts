@@ -95,7 +95,7 @@ const COMPONENT_KINDS = ['models', 'reaction_systems'] as const
 const LIBRARY_FORBIDDEN_KEYS = [
   'models',
   'reaction_systems',
-  'data_loaders',
+  'data_sources',
   'coupling',
   'domain',
 ] as const
@@ -2033,7 +2033,7 @@ function applyCouplingInjections(root: JsonObject): void {
   if (!Array.isArray(coupling)) return
   const models = root.models
   const rsystems = root.reaction_systems
-  const loaders = root.data_loaders
+  const loaders = root.data_sources
   const hasKey = (d: unknown, k: string): boolean =>
     isObject(d) && Object.prototype.hasOwnProperty.call(d, k)
   for (const entry of coupling) {
@@ -2061,15 +2061,10 @@ function applyCouplingInjections(root: JsonObject): void {
         comp = (models as JsonObject)[tname]
       } else if (hasKey(rsystems, tname)) {
         comp = (rsystems as JsonObject)[tname]
-      } else if (hasKey(loaders, tname)) {
-        throw new EsmMachineryError(
-          ERROR_CODES.TEMPLATE_INJECT_TARGET_IS_LOADER,
-          `coupling entry \`expression_template_imports\` key '${tname}' resolves to a data loader, which is pure I/O with no expression positions to rewrite (esm-spec §9.7.10 / §14).`,
-        )
       } else {
         throw new EsmMachineryError(
           ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
-          `coupling entry \`expression_template_imports\` key '${tname}' resolves to neither a top-level model, reaction system, nor data loader (esm-spec §9.7.10). Nested \`Parent.Child\` targets are out of scope.`,
+          `coupling entry \`expression_template_imports\` key '${tname}' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). Nested \`Parent.Child\` targets are out of scope.`,
         )
       }
       if (!isObject(comp)) {

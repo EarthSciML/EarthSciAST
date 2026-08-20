@@ -35,10 +35,13 @@ export function deriveODEs(system: ReactionSystem): Model {
   const variables: { [key: string]: ModelVariable } = {}
   const equations: Equation[] = []
 
-  // Convert species to state variables
+  // Convert species to UNKNOWNS. Each gets a `D(s,t)` equation below, which is
+  // what makes it an ODE state under the derived classification — the 0.x
+  // `type: 'state'` declaration said the same thing twice, and 1.0.0 keeps only
+  // the equation (esm-spec 6.3.1).
   for (const [speciesName, species] of Object.entries(system.species)) {
     variables[speciesName] = {
-      type: 'state',
+      type: 'unknown',
       units: species.units,
       default: species.default,
       description: species.description,

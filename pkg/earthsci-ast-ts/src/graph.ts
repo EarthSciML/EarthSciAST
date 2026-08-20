@@ -26,6 +26,16 @@ import {
   type ComponentEntry,
 } from './traverse.js'
 import { formatChemicalName } from './pretty-print.js'
+import {
+  odeStates,
+  observedUnknowns,
+  algebraicUnknowns,
+  brownianParameters,
+  discreteParameters,
+  sampledParameters,
+  constantParameters,
+  observedDefinitions,
+} from './classification.js'
 
 /** Graph node representing a component in the system */
 export interface ComponentNode {
@@ -33,8 +43,12 @@ export interface ComponentNode {
   id: string
   /** Display name for the component */
   name: string
-  /** Type of component */
-  type: 'model' | 'reaction_system' | 'data_loader'
+  /**
+   * Type of component. From 1.0.0 there is no `data_loader`: a data source is
+   * ingest configuration, not a component, so it is neither a graph node nor a
+   * coupling endpoint (esm-spec §5.5).
+   */
+  type: 'model' | 'reaction_system'
   /** Optional description */
   description?: string
   /** Optional reference information */
@@ -99,8 +113,26 @@ export interface Graph<N, E> {
 export interface VariableNode {
   /** Unique identifier for this variable (scoped, e.g., "Transport.temperature") */
   name: string
-  /** Type of variable */
-  kind: 'state' | 'parameter' | 'observed' | 'brownian' | 'discrete' | 'species'
+  /**
+   * The variable's DERIVED category (esm-spec §6.3.1), not its declared type.
+   * The format declares only `unknown` and `parameter`; these are the finer
+   * categories a consumer of the graph actually wants, recovered from the
+   * equations and from each parameter's `distribution` / `update`.
+   *
+   * `state` is an ODE state, `observed` an unknown with a bare-variable-LHS
+   * definition, `algebraic` an implicitly-constrained unknown, `brownian` a
+   * wiener-updated parameter, `discrete` a parameter with any other update,
+   * `parameter` a sampled or constant one, and `species` a reaction-system
+   * species.
+   */
+  kind:
+    | 'state'
+    | 'algebraic'
+    | 'parameter'
+    | 'observed'
+    | 'brownian'
+    | 'discrete'
+    | 'species'
   /** Units if specified */
   units?: string
   /** System/component this variable belongs to */
@@ -281,28 +313,17 @@ function extractComponentGraph(esmFile: EsmFile): ComponentGraph {
     }
   }
 
-  // Data loaders
-  if (esmFile.data_loaders) {
-    for (const [id, dataLoader] of Object.entries(esmFile.data_loaders)) {
-      nodes.push({
-        id,
-        name: id,
-        type: 'data_loader',
-        description: dataLoader.reference?.notes,
-        reference: dataLoader.reference,
-        metadata: {
-          var_count: dataLoader.variables ? Object.keys(dataLoader.variables).length : 0,
-          eq_count: 0,
-          species_count: 0,
-        },
-      })
-    }
-  }
+  // NOTE: `data_sources` contributes NO nodes. Until 1.0.0 each `data_loaders`
+  // entry was a component node with a variable count and could sit at either
+  // end of a coupling edge. A data source is now a document-scoped ingest
+  // registry that exposes no variables of its own; a model reaches it through a
+  // parameter whose `update` names it, so the dependency it creates is already
+  // represented by that parameter (esm-spec §5.5).
 
   // Extract edges from coupling entries
   if (esmFile.coupling) {
-    // The set of declared component node ids (models + reaction_systems +
-    // data_loaders). Coupling edges reference endpoints by id; any endpoint
+    // The set of declared component node ids (models + reaction_systems).
+    // Coupling edges reference endpoints by id; any endpoint
     // that is not a declared node (a dangling reference to a nonexistent
     // component or a subsystem member) is skipped rather than fabricated,
     // matching the Rust/Go/Julia reference model.
@@ -452,11 +473,7 @@ export function component_graph(esmFile: EsmFile): ComponentGraph {
  * Utility to check if a component exists in the ESM file
  */
 export function componentExists(esmFile: EsmFile, componentId: string): boolean {
-  return !!(
-    esmFile.models?.[componentId] ||
-    esmFile.reaction_systems?.[componentId] ||
-    esmFile.data_loaders?.[componentId]
-  )
+  return !!(esmFile.models?.[componentId] || esmFile.reaction_systems?.[componentId])
 }
 
 /**
@@ -468,7 +485,6 @@ export function getComponentType(
 ): ComponentNode['type'] | null {
   if (esmFile.models?.[componentId]) return 'model'
   if (esmFile.reaction_systems?.[componentId]) return 'reaction_system'
-  if (esmFile.data_loaders?.[componentId]) return 'data_loader'
   return null
 }
 
@@ -567,26 +583,56 @@ export function lhsTargetName(lhs: Expr): string | undefined {
 
 /** Add a model's variables (+ observed-definition edges) and equations. */
 function processModel(b: ExprGraphBuilder, model: Model, systemId: string): void {
-  forEachModelVariable(model, (variable, varName) => {
-    b.addNode(varName, variable.type, variable.units, systemId)
+  // The node kind is DERIVED (esm-spec §6.3.1), never read off `variable.type`:
+  // the format declares only `unknown` and `parameter`, so classifying here is
+  // the only way the graph can still distinguish a state from an observed or a
+  // Brownian parameter from a constant.
+  const kinds = variableKinds(model)
+  const observedDefs = observedDefinitions(model)
 
-    // If it's an observed variable with an expression, create dependencies.
-    if (variable.type === 'observed' && variable.expression) {
-      const observedVar = b.addNode(varName, 'observed', variable.units, systemId)
-      for (const freeVar of freeVariables(variable.expression)) {
-        const sourceVar = b.addNode(freeVar, 'parameter', undefined, systemId)
-        b.addDependency(
-          sourceVar,
-          observedVar,
-          EDGE_PROVENANCE.definition,
-          NON_EQUATION_INDEX,
-          variable.expression,
-        )
-      }
-    }
+  forEachModelVariable(model, (variable, varName) => {
+    b.addNode(varName, kinds.get(varName) ?? 'parameter', variable.units, systemId)
   })
 
+  // An observed unknown's definition is the RHS of its bare-LHS equation. Each
+  // free name in it is a dependency of the observed variable.
+  for (const [varName, expression] of observedDefs) {
+    const observedVar = b.addNode(
+      varName,
+      'observed',
+      model.variables?.[varName]?.units,
+      systemId,
+    )
+    for (const freeVar of freeVariables(expression)) {
+      const sourceVar = b.addNode(freeVar, kinds.get(freeVar) ?? 'parameter', undefined, systemId)
+      b.addDependency(
+        sourceVar,
+        observedVar,
+        EDGE_PROVENANCE.definition,
+        NON_EQUATION_INDEX,
+        expression,
+      )
+    }
+  }
+
   forEachEquation(model, (equation, index) => processEquation(b, equation, index, systemId))
+}
+
+/**
+ * Every variable's DERIVED graph kind, by name (esm-spec §6.3.1). Computed once
+ * per model rather than per reference, since each classifier walks the equation
+ * list.
+ */
+function variableKinds(model: Model): Map<string, VariableNode['kind']> {
+  const kinds = new Map<string, VariableNode['kind']>()
+  for (const name of odeStates(model)) kinds.set(name, 'state')
+  for (const name of observedUnknowns(model)) kinds.set(name, 'observed')
+  for (const name of algebraicUnknowns(model)) kinds.set(name, 'algebraic')
+  for (const name of brownianParameters(model)) kinds.set(name, 'brownian')
+  for (const name of discreteParameters(model)) kinds.set(name, 'discrete')
+  for (const name of sampledParameters(model)) kinds.set(name, 'parameter')
+  for (const name of constantParameters(model)) kinds.set(name, 'parameter')
+  return kinds
 }
 
 /** Add a reaction system's species, parameters, reactions, and constraints. */
@@ -864,7 +910,7 @@ function nodeLabel(node: object): string {
 
 /**
  * Export graph as Graphviz DOT format.
- * Node shapes: box for models, ellipse for data_loaders, diamond for operators.
+ * Node shapes: box for models and reaction systems, diamond for operators.
  * Edge styles: solid for compose, dashed for variable_map.
  */
 export function toDot<N extends object, E>(graph: Graph<N, E>): string {
@@ -892,10 +938,6 @@ export function toDot<N extends object, E>(graph: Graph<N, E>): string {
           shape = 'box'
           color = 'lightcoral'
           break
-        case 'data_loader':
-          shape = 'ellipse'
-          color = 'lightyellow'
-          break
       }
     }
     // Type-specific formatting for VariableNode
@@ -913,9 +955,21 @@ export function toDot<N extends object, E>(graph: Graph<N, E>): string {
           shape = 'box'
           color = 'lightyellow'
           break
+        // An implicitly-constrained unknown is solved for like a state, so it
+        // renders like one, in its own colour.
+        case 'algebraic':
+          shape = 'box'
+          color = 'palegreen'
+          break
         case 'brownian':
           shape = 'diamond'
           color = 'lightgrey'
+          break
+        // A parameter that refreshes at events. Had no arm before 1.0.0, when
+        // `discrete` was a declared type nothing in this package derived.
+        case 'discrete':
+          shape = 'diamond'
+          color = 'lightyellow'
           break
         case 'species':
           shape = 'ellipse'
@@ -1016,9 +1070,6 @@ export function toMermaid<N extends object, E>(graph: Graph<N, E>): string {
         case 'reaction_system':
           shape = `[${label}]` // Rectangle
           break
-        case 'data_loader':
-          shape = `((${label}))` // Circle
-          break
         default:
           shape = `[${label}]`
       }
@@ -1028,6 +1079,7 @@ export function toMermaid<N extends object, E>(graph: Graph<N, E>): string {
       switch (node.kind) {
         case 'state':
         case 'observed':
+        case 'algebraic':
           shape = `[${label}]` // Rectangle
           break
         case 'parameter':
@@ -1035,6 +1087,7 @@ export function toMermaid<N extends object, E>(graph: Graph<N, E>): string {
           shape = `((${label}))` // Circle
           break
         case 'brownian':
+        case 'discrete':
           shape = `{${label}}` // Diamond-like
           break
         default:

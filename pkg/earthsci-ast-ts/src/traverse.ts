@@ -27,7 +27,6 @@ import type {
   Equation,
   Expression,
   SubsystemRef,
-  DataLoader,
 } from './types.js'
 
 /** The two top-level containers a component can live under. */
@@ -35,25 +34,26 @@ export type ContainerKind = 'models' | 'reaction_systems'
 
 /**
  * A component entry as it appears in a `models`/`reaction_systems` map or in a
- * component's `subsystems` map. It is either a real inline component
- * (`Model` / `ReactionSystem`), an include-by-reference stub (`SubsystemRef`,
- * discriminated by `ref`), or — for a model subsystem only — an inline data
- * loader (`DataLoader`, discriminated by `kind`).
+ * component's `subsystems` map: either a real inline component (`Model` /
+ * `ReactionSystem`) or an include-by-reference stub (`SubsystemRef`,
+ * discriminated by `ref`).
+ *
+ * From 1.0.0 an inline DATA LOADER is no longer among them. A data source is
+ * ingest configuration rather than a component, so it cannot be a subsystem.
  */
-export type ComponentEntry = Model | ReactionSystem | SubsystemRef | DataLoader
+export type ComponentEntry = Model | ReactionSystem | SubsystemRef
 
 /**
- * A reference-stub subsystem: either a `{ref}` include (`SubsystemRef`) or a
- * `{kind}` data loader (`DataLoader`). These are resolved/bound elsewhere, so
- * the traversal treats them as opaque leaves.
+ * A reference-stub subsystem: a `{ref}` include. Resolved elsewhere, so the
+ * traversal treats it as an opaque leaf.
  */
-export type ReferenceStub = SubsystemRef | DataLoader
+export type ReferenceStub = SubsystemRef
 
 /**
  * One visit emitted by {@link forEachComponent}. `isReference` discriminates
  * the payload: real inline components (`false`) carry a `Model | ReactionSystem`;
- * reference stubs (`true`) carry a `SubsystemRef | DataLoader`. Narrow on
- * `isReference` first, then on `kind` to pick `Model` vs `ReactionSystem`.
+ * reference stubs (`true`) carry a `SubsystemRef`. Narrow on `isReference`
+ * first, then on shape to pick `Model` vs `ReactionSystem`.
  */
 export type ComponentVisit =
   | {
@@ -74,13 +74,17 @@ export type ComponentVisit =
     }
 
 /**
- * A reference-stub entry is one carrying `ref` (a `SubsystemRef` include) or
- * `kind` (an inline `DataLoader`). Real components (`Model` / `ReactionSystem`)
- * carry neither — a `Model` uses `system_kind`, and both use `reference`
- * (not `ref`) for provenance — so this test cleanly separates the two.
+ * A reference-stub entry is one carrying `ref` (a `SubsystemRef` include). Real
+ * components (`Model` / `ReactionSystem`) do not — a `Model` uses `system_kind`,
+ * and both use `reference` (not `ref`) for provenance — so this test cleanly
+ * separates the two.
+ *
+ * The `'kind' in entry` half of this test is gone with the inline data loader
+ * it was there to catch; `kind` is no longer a discriminator any subsystem
+ * carries.
  */
 export function isReferenceStub(entry: ComponentEntry): entry is ReferenceStub {
-  return 'ref' in entry || 'kind' in entry
+  return 'ref' in entry
 }
 
 /**
@@ -97,10 +101,10 @@ export function isReferenceStub(entry: ComponentEntry): entry is ReferenceStub {
  *   - Real inline components (`Model` / `ReactionSystem`) are visited with
  *     `isReference: false` and, under `recurse`, descended into.
  *   - Reference-stub subsystems — entries carrying `ref` (a `SubsystemRef`
- *     include) or `kind` (an inline `DataLoader`) — are visited as LEAVES with
- *     `isReference: true` and are NEVER descended into, even under `recurse`.
- *     Their contents are resolved elsewhere (ref resolution / loader binding),
- *     so any nested structure they happen to carry is intentionally ignored.
+ *     include) — are visited as LEAVES with `isReference: true` and are NEVER
+ *     descended into, even under `recurse`. Their contents are resolved
+ *     elsewhere (ref resolution), so any nested structure they happen to carry
+ *     is intentionally ignored.
  *
  * The callback order is: each entry is emitted before its own subsystems
  * (pre-order), in `Object.entries` iteration order.
@@ -236,7 +240,6 @@ export type ExpressionScope = ExpressionSite[]
  * document was INVISIBLE — a false negative that nothing caught and no fixture
  * pinned. The positions below were all unchecked:
  *
- *   - `variables[v].expression`            — an OBSERVED variable's defining expression
  *   - `initialization_equations[i].lhs/rhs` — t=0 equations
  *   - `guesses[v]`                          — nonlinear-solver initial guesses
  *   - `discrete_events[i].trigger.expression`     — a `type: "condition"` trigger
@@ -291,13 +294,11 @@ export function forEachExpressionScope(
     })
   }
 
-  // An OBSERVED variable's defining expression — the named hole.
-  for (const [name, variable] of Object.entries(model.variables ?? {})) {
-    const expression = (variable as ModelVariable)?.expression
-    if (expression !== undefined && expression !== null) {
-      cb([{ expr: expression, path: `${componentPath}/variables/${name}/expression` }])
-    }
-  }
+  // NOTE: no `variables[v].expression` scope any more. An observed unknown's
+  // defining expression is now the RHS of its bare-variable-LHS equation, which
+  // the `equations` walk above already yields at `/equations/<i>/rhs`. Emitting
+  // it a second time from the variable would make every checker composed on
+  // this walker report the same defect twice.
 
   // Nonlinear-solver initial guesses.
   for (const [name, guess] of Object.entries(model.guesses ?? {})) {

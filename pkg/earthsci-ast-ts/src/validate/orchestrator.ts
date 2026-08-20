@@ -52,8 +52,8 @@ import {
   validateSubsystemRefs,
   validateCouplingIntegrity,
   validateCircularReferences,
-  validateDataLoaderReferences,
-  validateDataLoaderExpressions,
+  validateDataSourceReferences,
+  validateDataSourceExpressions,
   validateCouplingExpressions,
   validateCouplingDomainUnits,
   validateTemporalResolution,
@@ -146,7 +146,8 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
   }
 
   // Validate models. Unresolved SubsystemRef entries are reported by
-  // validateSubsystemRefs below; DataLoader subsystems carry no equations.
+  // validateSubsystemRefs below. (A data source is not a subsystem from 1.0.0,
+  // so there is no longer a loader-shaped entry to skip here.)
   if (esmFile.models) {
     for (const [modelName, model] of Object.entries(esmFile.models)) {
       if (!isInlineModel(model)) continue
@@ -282,19 +283,20 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
   // Check for circular cross-model references
   errors.push(...validateCircularReferences(esmFile))
 
-  // Validate data loader variable references in coupling
-  errors.push(...validateDataLoaderReferences(esmFile))
+  // Every parameter `update.source` names a declared data source.
+  errors.push(...validateDataSourceReferences(esmFile))
 
-  // (h) sites 9-11: the expression positions outside any component — a data
-  // loader's `unit_conversion`, a coupling `transform`, a connector equation.
-  errors.push(...validateDataLoaderExpressions(esmFile))
+  // (h) sites 9-11: the expression positions outside any component — a
+  // parameter's `update.from.unit_conversion`, a coupling `transform`, a
+  // connector equation.
+  errors.push(...validateDataSourceExpressions(esmFile))
   errors.push(...validateCouplingExpressions(esmFile))
 
   // (F-6) Reject an identity variable_map coupling whose endpoints carry
   // declared, different units (esm-spec §4.7.6).
   errors.push(...validateCouplingDomainUnits(esmFile))
 
-  // Validate temporal resolution in data loaders
+  // Validate temporal resolution in data sources
   errors.push(...validateTemporalResolution(esmFile))
 
   return errors

@@ -29,7 +29,7 @@ export type VariableKind = VariableNode['kind']
 export interface DependencyNode {
   /** Variable name */
   name: string
-  /** Type of variable (state, parameter, observed, brownian, discrete, species) */
+  /** DERIVED variable category (state, algebraic, observed, parameter, brownian, discrete, species) — see {@link VariableKind}. */
   kind: VariableKind
   /** System/model this variable belongs to */
   system: string

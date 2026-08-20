@@ -23,6 +23,7 @@ import {
   REWRITE_TARGET_DERIVATIVE_ARITY,
 } from './op-registry.js'
 import { forEachComponent, forEachEquation } from './traverse.js'
+import { observedDefinitions } from './classification.js'
 
 export type { CanonicalDims, ParsedUnit } from './unit-conversion.js'
 
@@ -1009,9 +1010,18 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       })
 
       if ('variables' in component && component.variables) {
+        // An observed unknown's defining expression comes from the model's
+        // equations (esm-spec §6.3.1), not from a field on the variable. The
+        // finding is still reported against the VARIABLE's pointer: the defect
+        // is a disagreement between the declared units and what the definition
+        // evaluates to, and the declaration is what a reader must fix.
+        // `observedDefinitions` reads `variables` + `equations`; a component
+        // with neither yields an empty map, so no shape test is needed.
+        const observedDefs = observedDefinitions(component as Model)
         for (const [varName, variable] of Object.entries(component.variables)) {
-          if (variable.type === 'observed' && variable.expression) {
-            const expression = variable.expression
+          const observedExpr = observedDefs.get(varName)
+          if (observedExpr !== undefined) {
+            const expression = observedExpr
             const varLocation = `${location}/variables/${varName}`
             checkAndReport(
               warnings,

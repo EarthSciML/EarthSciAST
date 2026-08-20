@@ -32,7 +32,7 @@ import { formatExpectedRateUnits } from './unit-format.js'
  * system — `MeteorologicalSystem.temperature` in a temperature-dependent
  * Arrhenius rate is the canonical case (`tests/valid/events_cross_system.esm`) —
  * and such a reference is resolved exactly like a scoped reference in a model
- * equation, by navigating `models` / `reaction_systems` / `data_loaders`. The
+ * equation, by navigating `models` / `reaction_systems`. The
  * checker previously tested every rate reference against THIS system's species
  * and parameters alone, so every cross-system rate was reported
  * `undefined_parameter`. When `esmFile` is omitted the scoped reference is left

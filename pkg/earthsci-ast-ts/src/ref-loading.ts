@@ -19,7 +19,7 @@
  * fully resolvable only under Node (or a host supplying its own readFile hook).
  */
 
-import type { DataLoader, EsmFile, Model, ReactionSystem, SubsystemRef } from './types.js'
+import type { EsmFile, Model, ReactionSystem, SubsystemRef } from './types.js'
 import {
   EsmMachineryError,
   deepEqual,
@@ -120,10 +120,12 @@ export class RefLoadError extends Error {
  * corpus pins for `subsystem_ref_ambiguous.esm`.
  */
 function assertSingleTopLevelSystem(parsed: EsmFile, ref: string, path: string): void {
+  // `data_sources` is NOT counted: from 1.0.0 a data source is not a component,
+  // so a file carrying models plus an ingest registry still holds exactly one
+  // top-level system (esm-spec 5.5).
   const systems = [
     ...Object.keys(parsed.models ?? {}),
     ...Object.keys(parsed.reaction_systems ?? {}),
-    ...Object.keys(parsed.data_loaders ?? {}),
   ]
   if (systems.length > 1) {
     throw new RefLoadError(
@@ -576,8 +578,8 @@ function resolveModelRefs(
 
       // esm-spec §4.7 invariant: a referenced subsystem file holds exactly ONE
       // top-level component — enforced, not assumed. A referenced file with no
-      // `models` and no `data_loaders` leaves the original `{ref}` stub in
-      // place; nothing is inlined here.
+      // `models` leaves the original `{ref}` stub in place; nothing is inlined
+      // here.
       assertSingleTopLevelSystem(parsed, ref, subPointer)
       if (parsed.models) {
         const firstEntry = Object.entries(parsed.models)[0]
@@ -597,17 +599,13 @@ function resolveModelRefs(
             subPointer,
           )
         }
-      } else if (parsed.data_loaders) {
-        // Loader-only file (RFC pure-io-data-loaders §4.3): the referenced
-        // file's sole component is `data_loaders`. The schema allows a
-        // DataLoader inside Model.subsystems, so inline the first loader
-        // keyed by the parent subName. A loader has no subsystems, so there
-        // is nothing to recurse into.
-        const firstEntry = Object.entries(parsed.data_loaders)[0]
-        if (firstEntry) {
-          subsystems[subName] = firstEntry[1] as DataLoader
-        }
       }
+      // NOTE: no loader-only branch. In 0.x a referenced file whose sole
+      // component was `data_loaders` had its first loader inlined as a
+      // subsystem. From 1.0.0 a data source cannot BE a subsystem, so such a
+      // file contributes no component and the `{ref}` stub stays put — which
+      // the unresolved-ref diagnostic then reports, rather than the reference
+      // silently binding to ingest configuration.
     },
     (subsystem, subName, subPointer) =>
       resolveModelRefs(
