@@ -549,13 +549,12 @@ fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareEr
     Ok(ordered)
 }
 
-/// name → defining expression, for every `observed` variable of `model`.
+/// name → DEFINING EQUATION RHS, for every observed unknown of `model`
+/// (esm-spec §6.3.1).
 fn observed_defs(model: &Model) -> HashMap<String, Expr> {
-    model
-        .variables
-        .iter()
-        .filter(|(_, v)| v.var_type == VariableType::Observed && v.expression.is_some())
-        .map(|(k, v)| (k.clone(), v.expression.clone().unwrap()))
+    crate::classify::observed_definitions(model)
+        .into_iter()
+        .map(|(k, e)| (k.to_string(), e.clone()))
         .collect()
 }
 

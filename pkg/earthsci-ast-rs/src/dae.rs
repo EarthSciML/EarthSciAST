@@ -328,13 +328,9 @@ fn factor_model(model: &mut Model, indep: &str) -> (usize, Vec<usize>) {
             eq.rhs = substitute(&eq.rhs, &subs);
         }
 
-        // Also substitute into model variables' observed expressions and
-        // into initialization equations so the model remains consistent.
-        for var_def in model.variables.values_mut() {
-            if let Some(expr) = var_def.expression.as_mut() {
-                *expr = substitute(expr, &subs);
-            }
-        }
+        // (An observed's defining expression is an ordinary equation since
+        // 1.0.0, substituted with the rest above.) Initialization equations
+        // still need their own pass so the model stays consistent.
         if let Some(init_eqs) = model.initialization_equations.as_mut() {
             for eq in init_eqs.iter_mut() {
                 eq.lhs = substitute(&eq.lhs, &subs);

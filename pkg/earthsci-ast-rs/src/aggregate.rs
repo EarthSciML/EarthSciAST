@@ -249,11 +249,8 @@ pub fn resolve_aggregate_ranges_with_extents(
             resolve_expr_ranges_with_extents(&mut eq.rhs, index_sets, derived_extents)?;
         }
     }
-    for var in model.variables.values_mut() {
-        if let Some(expr) = &mut var.expression {
-            resolve_expr_ranges_with_extents(expr, index_sets, derived_extents)?;
-        }
-    }
+    // (An observed's defining expression is an ordinary equation since 1.0.0,
+    // so the equation walk above already reached it.)
     Ok(())
 }
 

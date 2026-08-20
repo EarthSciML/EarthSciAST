@@ -436,14 +436,33 @@ fn extract_from_model(
 
     // Add variable declarations as nodes with proper types (sorted so node
     // order is deterministic).
+    // The graph's variable kinds are DERIVED categories (esm-spec §6.3.1), so
+    // they are seeded from `crate::classify` rather than from the declared
+    // type, which since 1.0.0 only separates `unknown` from `parameter`.
+    let observed: std::collections::HashSet<String> =
+        crate::classify::observed_unknowns(model).into_iter().collect();
+    let brownian: std::collections::HashSet<String> = crate::classify::brownian_parameters(model)
+        .into_iter()
+        .collect();
+    let discrete: std::collections::HashSet<String> = crate::classify::discrete_parameters(model)
+        .into_iter()
+        .collect();
+
     for var_name in sorted_keys(&model.variables) {
         let var_def = &model.variables[var_name];
         let kind = match var_def.var_type {
-            crate::VariableType::State => VariableKind::State,
+            // An ODE state and an algebraic unknown are both carried states.
+            crate::VariableType::Unknown if observed.contains(var_name.as_str()) => {
+                VariableKind::Observed
+            }
+            crate::VariableType::Unknown => VariableKind::State,
+            crate::VariableType::Parameter if brownian.contains(var_name.as_str()) => {
+                VariableKind::Brownian
+            }
+            crate::VariableType::Parameter if discrete.contains(var_name.as_str()) => {
+                VariableKind::Discrete
+            }
             crate::VariableType::Parameter => VariableKind::Parameter,
-            crate::VariableType::Observed => VariableKind::Observed,
-            crate::VariableType::Brownian => VariableKind::Brownian,
-            crate::VariableType::Discrete => VariableKind::Discrete,
         };
 
         nodes.push(VariableNode {

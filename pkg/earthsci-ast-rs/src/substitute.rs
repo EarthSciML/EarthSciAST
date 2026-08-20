@@ -77,10 +77,6 @@ fn map_exprs_in_discrete_event(
                 .map(|affect| map_exprs_in_affect(affect, m))
                 .collect()
         }),
-        // Functional affects are opaque platform snippets, carried verbatim
-        // rather than substituted (matching the sibling bindings).
-        functional_affect: event.functional_affect.clone(),
-        discrete_parameters: event.discrete_parameters.clone(),
         reinitialize: event.reinitialize,
         description: event.description.clone(),
     }
@@ -106,7 +102,6 @@ fn map_exprs_in_continuous_event(
         }),
         root_find: event.root_find.clone(),
         reinitialize: event.reinitialize,
-        discrete_parameters: event.discrete_parameters.clone(),
         priority: event.priority,
         description: event.description.clone(),
     }

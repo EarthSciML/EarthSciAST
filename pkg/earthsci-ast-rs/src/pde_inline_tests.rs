@@ -441,7 +441,11 @@ fn observed_field(
         .get(model_name)?
         .variables
         .get(variable)?;
-    if v.var_type != VariableType::Observed {
+    if v.var_type != VariableType::Unknown
+        || !crate::classify::observed_unknowns(file.models.as_ref()?.get(model_name)?)
+            .iter()
+            .any(|n| n == variable)
+    {
         return None;
     }
     let shape = v.shape.as_ref()?;

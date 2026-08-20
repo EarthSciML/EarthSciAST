@@ -1082,14 +1082,8 @@ fn classify_equations(
     let mut state_ic_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
     let mut observed_rhs_raw: Vec<Option<Expr>> = vec![None; flat.observed_variables.len()];
 
-    // Pull observed defining expressions out of the variable struct as a
-    // fallback (some flattening pipelines store the expression there
-    // rather than as an algebraic equation).
-    for (idx, (_name, mv)) in flat.observed_variables.iter().enumerate() {
-        if let Some(expr) = &mv.expression {
-            observed_rhs_raw[idx] = Some(expr.clone());
-        }
-    }
+    // (No variable-struct fallback since 1.0.0: an observed's defining
+    // expression is an ordinary algebraic equation, picked up below.)
 
     // `ic(state) = rhs` (esm-spec §11.4) declares the target's INITIAL value,
     // not its dynamics, so `flatten` routes every one of them out of

@@ -9,7 +9,7 @@ use crate::aggregate::{effective_reduce_kind, is_aggregate_op, resolve_aggregate
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::OpError;
 use crate::simulate::{CompileError, SimulateError};
-use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
+use crate::types::{Equation, EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use crate::value_invention::{
     ValueInventionResult, materialize_value_invention, rewrite_derived_index_sets,
 };
@@ -253,11 +253,10 @@ pub(super) fn mount_subsystems(
                     ),
                 });
             }
-            let mut var = var.clone();
-            if let Some(expr) = &var.expression {
-                var.expression = Some(rename_all(expr));
-            }
-            model.variables.insert(mounted, var);
+            // An observed's defining expression is an ordinary equation since
+            // 1.0.0, so the `sub_model.equations` loop below renames it; the
+            // variable itself carries no expression to rewrite.
+            model.variables.insert(mounted, var.clone());
         }
         for eq in &sub_model.equations {
             model.equations.push(crate::types::Equation {
@@ -614,13 +613,11 @@ impl ArrayCompiled {
         // an out-of-range index by its declared boundary policy instead of the
         // state gather's zero ghost, which §5.5.5 says is never a const array's.
         let const_scope = Rc::new(ConstArrayScope::from_names(
-            model_owned
-                .variables
-                .iter()
-                .filter(|(_, v)| {
-                    matches!(v.expression.as_ref(), Some(Expr::Operator(n)) if n.op == "const")
-                })
-                .map(|(n, _)| n.clone()),
+            crate::classify::observed_definitions(&model_owned)
+                .into_iter()
+                .filter(|(_, rhs)| matches!(rhs, Expr::Operator(n) if n.op == "const"))
+                .map(|(name, _)| name.to_string())
+                .collect::<Vec<_>>(),
         ));
         // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
         // aggregate range still carries its `{ "from": <index set> }` linkage so
@@ -752,11 +749,6 @@ fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
         check_no_spatial_ops(&eq.lhs)?;
         check_no_spatial_ops(&eq.rhs)?;
     }
-    for var in model.variables.values() {
-        if let Some(expr) = &var.expression {
-            check_no_spatial_ops(expr)?;
-        }
-    }
     Ok(())
 }
 
@@ -843,12 +835,6 @@ fn check_free_variables(
         collect_index_head_names(&eq.lhs, &mut bound);
         collect_index_head_names(&eq.rhs, &mut bound);
     }
-    for var in model.variables.values() {
-        if let Some(expr) = &var.expression {
-            collect_dim_symbols(expr, &mut bound);
-            collect_index_head_names(expr, &mut bound);
-        }
-    }
 
     // ---- Check every equation (skipping `ic`) and observed expression. -------
     for eq in &model.equations {
@@ -861,14 +847,22 @@ fn check_free_variables(
         check_expr_free_vars(&eq.lhs, &scope)?;
         check_expr_free_vars(&eq.rhs, &scope)?;
     }
-    for var in model.variables.values() {
-        if let Some(expr) = &var.expression {
-            let mut scope = bound.clone();
-            collect_binders(expr, &mut scope);
-            check_expr_free_vars(expr, &scope)?;
-        }
-    }
     Ok(())
+}
+
+/// The name an equation DEFINES when its LHS is a bare variable (optionally
+/// indexed) — the 1.0.0 home of what 0.x kept in `variables[v].expression`.
+/// Returns `None` for a derivative LHS, an `ic` LHS, or a compound expression
+/// LHS (an implicit algebraic constraint).
+fn observed_defining_name(lhs: &Expr) -> Option<&str> {
+    match lhs {
+        Expr::Variable(name) => Some(name.as_str()),
+        Expr::Operator(node) if node.op == "index" => match node.args.first() {
+            Some(Expr::Variable(name)) => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?
@@ -1040,8 +1034,12 @@ fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), Comp
 }
 
 /// (1) Collect state / parameter / observed variables (sorted by name for a
-/// deterministic build). A brownian variable is an explicit
+/// deterministic build). A Brownian parameter is an explicit
 /// unsupported-feature error, never a silent drop.
+///
+/// The categories are DERIVED (esm-spec §6.3.1), so they come from
+/// [`crate::classify`] rather than from the declared type, which since 1.0.0
+/// only separates `unknown` from `parameter`.
 fn classify_variables(
     model: &Model,
 ) -> Result<(Vec<&String>, Vec<&String>, Vec<(&String, &ModelVariable)>), CompileError> {
@@ -1049,36 +1047,67 @@ fn classify_variables(
     let mut param_vars: Vec<&String> = Vec::new();
     let mut observed_vars: Vec<(&String, &ModelVariable)> = Vec::new();
 
+    let observed: HashSet<String> = crate::classify::observed_unknowns(model)
+        .into_iter()
+        .collect();
+    let brownian: HashSet<String> = crate::classify::brownian_parameters(model)
+        .into_iter()
+        .collect();
+    let discrete: HashSet<String> = crate::classify::discrete_parameters(model)
+        .into_iter()
+        .collect();
+
     let mut var_keys: Vec<&String> = model.variables.keys().collect();
     var_keys.sort();
     for name in var_keys {
         let var = &model.variables[name];
         match var.var_type {
-            VariableType::State => state_vars.push(name),
-            VariableType::Parameter => param_vars.push(name),
-            VariableType::Observed => observed_vars.push((name, var)),
-            VariableType::Discrete => {
-                // A discrete variable is piecewise-constant and refreshed by an
-                // event / cadence / loader. The array backend has no refresh
-                // machinery, so binning it as a state (integrated) or a
-                // parameter (frozen) would both be WRONG — and silently so. Fail
-                // loudly instead; the document still VALIDATES, it just cannot be
-                // simulated by this backend yet.
-                return Err(CompileError::UnsupportedFeatureError {
-                    feature: "discrete".to_string(),
-                    message: format!(
-                        "Rust array simulation backend does not yet support discrete (piecewise-constant) variables; variable '{name}' is discrete"
-                    ),
-                });
+            // An ODE state and an ALGEBRAIC unknown are both carried and
+            // solved for; only an observed is eliminable.
+            VariableType::Unknown if observed.contains(name.as_str()) => {
+                observed_vars.push((name, var))
             }
-            VariableType::Brownian => {
+            VariableType::Unknown => state_vars.push(name),
+
+            VariableType::Parameter if brownian.contains(name.as_str()) => {
                 return Err(CompileError::UnsupportedFeatureError {
                     feature: "brownian".to_string(),
                     message: format!(
-                        "Rust simulation backend does not support SDE (brownian) models; variable '{name}' is brownian"
+                        "Rust simulation backend does not support SDE (brownian) models; parameter '{name}' has a wiener update"
                     ),
                 });
             }
+            VariableType::Parameter if discrete.contains(name.as_str()) => {
+                // A `data` update is an external input bound once at build
+                // time through the provider seam — the 1.0.0 spelling of what
+                // 0.x mounted as a loader subsystem — so it binds like a
+                // parameter. Every OTHER update kind needs refresh machinery
+                // the array backend does not have; binning such a parameter as
+                // a state (integrated) or a plain parameter (frozen) would both
+                // be WRONG, and silently so. Fail loudly instead: the document
+                // still VALIDATES, it just cannot be simulated by this backend.
+                let all_data = var
+                    .update
+                    .as_ref()
+                    .is_some_and(|u| u.rules().iter().all(|r| r.source().is_some()));
+                if all_data {
+                    param_vars.push(name);
+                } else {
+                    let kinds: Vec<&str> = var
+                        .update
+                        .as_ref()
+                        .map(|u| u.rules().iter().map(|r| r.kind()).collect())
+                        .unwrap_or_default();
+                    return Err(CompileError::UnsupportedFeatureError {
+                        feature: "discrete".to_string(),
+                        message: format!(
+                            "Rust array simulation backend does not yet support discrete (piecewise-constant) parameters; parameter '{name}' has update kind(s) {}",
+                            kinds.join(", ")
+                        ),
+                    });
+                }
+            }
+            VariableType::Parameter => param_vars.push(name),
         }
     }
     Ok((state_vars, param_vars, observed_vars))
@@ -1258,7 +1287,7 @@ fn build_observed_rules(
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
 
-    // Declared observed variables with an `expression` field. An array-shaped
+    // Observed unknowns and their DEFINING EQUATIONS. An array-shaped
     // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
     // `U_n`, `S_n`, a `const`-op field, a keyed-factor alias — is evaluated
     // WHOLESALE here: `eval` looks each array-valued observed reference up in
@@ -1267,18 +1296,30 @@ fn build_observed_rules(
     // rules are dependency-ordered below, so `grad_mag` materializes before
     // `U_n`/`S_n` read it.
     //
-    // The body is MOVED out of the (compile-private) model rather than cloned:
-    // for a large expanded discretization the observed bodies are the model's
-    // dominant allocation, and nothing downstream of this stage reads
-    // `variables[..].expression`. `observed_names` preserves the sorted order
-    // `classify_variables` produced, so the rule order — and the stable
-    // dependency ordering below — is unchanged.
+    // Since 1.0.0 the body is the RHS of the equation whose LHS is the bare
+    // observed name, so the defining equations are DRAINED out of the
+    // (compile-private) model here: they become algebraic rules, and leaving
+    // them in `model.equations` would double-count them as state ODEs
+    // downstream. Draining also preserves the 0.x memory behaviour — for a
+    // large expanded discretization the observed bodies are the model's
+    // dominant allocation, and they are moved rather than cloned.
+    // `observed_names` fixes the sorted order `classify_variables` produced, so
+    // the rule order — and the stable dependency ordering below — is unchanged.
+    let observed_set: HashSet<&str> = observed_names.iter().map(String::as_str).collect();
+    let mut bodies: HashMap<String, Expr> = HashMap::new();
+    let mut kept: Vec<Equation> = Vec::with_capacity(model.equations.len());
+    for eq in std::mem::take(&mut model.equations) {
+        match observed_defining_name(&eq.lhs) {
+            Some(name) if observed_set.contains(name) && !bodies.contains_key(name) => {
+                bodies.insert(name.to_string(), eq.rhs);
+            }
+            _ => kept.push(eq),
+        }
+    }
+    model.equations = kept;
+
     for name in observed_names {
-        if let Some(expr) = model
-            .variables
-            .get_mut(name)
-            .and_then(|var| var.expression.take())
-        {
+        if let Some(expr) = bodies.remove(name.as_str()) {
             observed_rules.push(lower_algebraic_body(name, expr, &array_axes, index_sets)?);
         }
     }
@@ -1895,11 +1936,6 @@ pub(super) fn strip_value_invention(
     for eq in &model.equations {
         collect_geometry_producer_ids(&eq.rhs, &mut geom_ids);
     }
-    for var in model.variables.values() {
-        if let Some(expr) = &var.expression {
-            collect_geometry_producer_ids(expr, &mut geom_ids);
-        }
-    }
     // (a) A variable shaped over a `kind: "derived"` index set whose FAQ producer
     //     is NOT a geometry ring producer — a relational membership / candidate
     //     set the dense runtime does not enumerate.
@@ -1953,11 +1989,6 @@ pub(super) fn strip_value_invention(
         strip_vi_joins(&mut eq.lhs, &vi_cols);
         strip_vi_joins(&mut eq.rhs, &vi_cols);
     }
-    for var in model.variables.values_mut() {
-        if let Some(expr) = &mut var.expression {
-            strip_vi_joins(expr, &vi_cols);
-        }
-    }
     Ok(())
 }
 
@@ -1983,18 +2014,16 @@ fn expr_contains_arg_witness(expr: &Expr) -> bool {
 }
 
 fn model_contains_arg_witness(model: &Model) -> bool {
+    // An observed's defining expression is an ordinary equation RHS since
+    // 1.0.0, so scanning the equations covers it.
     model
         .equations
         .iter()
         .any(|eq| expr_contains_arg_witness(&eq.lhs) || expr_contains_arg_witness(&eq.rhs))
-        || model
-            .variables
-            .values()
-            .any(|v| v.expression.as_ref().is_some_and(expr_contains_arg_witness))
 }
 
 /// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
-/// (`index(gx, g)` etc.): every variable whose `expression` is a `const` op (the
+/// (`index(gx, g)` etc.): every observed unknown DEFINED BY a `const` op (the
 /// established self-contained build-time array channel — see the geometry
 /// `src_poly`/`tgt_poly` fixtures). Each is evaluated once, with no state /
 /// params / `t` (a `const` literal needs none), into its dense `ArrayD`. This is
@@ -2002,20 +2031,17 @@ fn model_contains_arg_witness(model: &Model) -> bool {
 /// Python interpreter's join-free const-observed pre-materialization.
 fn collect_const_factor_arrays(model: &Model) -> HashMap<String, ArrayD<f64>> {
     let mut out: HashMap<String, ArrayD<f64>> = HashMap::new();
-    for (name, var) in &model.variables {
-        let Some(expr) = var.expression.as_ref() else {
-            continue;
-        };
+    for (name, expr) in crate::classify::observed_definitions(model) {
         let Expr::Operator(node) = expr else { continue };
         if node.op != "const" {
             continue;
         }
         match eval_expression(expr, &HashMap::new(), &[], &[], 0.0) {
             Ok(Value::Array(a)) => {
-                out.insert(name.clone(), *a);
+                out.insert(name.to_string(), *a);
             }
             Ok(Value::Scalar(s)) => {
-                out.insert(name.clone(), ArrayD::from_elem(IxDyn(&[]), s));
+                out.insert(name.to_string(), ArrayD::from_elem(IxDyn(&[]), s));
             }
             Err(_) => {}
         }
@@ -2102,8 +2128,13 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
             replaced = true;
         }
     }
-    if !replaced && let Some(var) = model.variables.get_mut(name) {
-        var.expression = Some(const_node);
+    if !replaced && model.variables.contains_key(name) {
+        // No defining equation yet: since 1.0.0 a variable carries no
+        // expression, so the materialized constant is introduced AS one.
+        model.equations.push(Equation {
+            lhs: Expr::Variable(name.to_string()),
+            rhs: const_node,
+        });
     }
 }
 

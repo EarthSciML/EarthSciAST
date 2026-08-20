@@ -48,6 +48,7 @@ pub mod analysis;
 pub mod broad_phase;
 pub mod cadence;
 pub mod canonicalize;
+pub mod classify;
 pub mod intern;
 pub mod coupling;
 pub mod coupling_imports;
@@ -203,8 +204,9 @@ pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole, DaeInfo,
     DataSource, DataSourceDeterminism, DataSourceKind, DataSourceMetadata, DataSourceSource,
     DataSourceTemporal, DataSourceBinding, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
-    EsmFile, Expr, ExpressionNode, FunctionalAffect, Metadata, Model, ModelTest,
+    EsmFile, Expr, ExpressionNode, FunctionalUpdate, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, Reaction, ReactionSystem, RecordsPerFile, Species,
+    ParameterUpdate, ParameterUpdateSpec, Distribution, Scalars, CrossingDirection,
     StoichiometricEntry, TimeSpan, Tolerance, UnitConversion, VariableMapTransform, VariableType,
 };
 pub use validate::{

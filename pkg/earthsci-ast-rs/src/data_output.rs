@@ -551,6 +551,10 @@ pub struct OutputMeta {
     /// Variable name → declared kind, so observed fields can be gated on the
     /// caller's request list (RFC decision 8).
     pub var_types: BTreeMap<String, VariableType>,
+    /// Keys (bare and qualified) of the variables that are OBSERVED unknowns.
+    /// Observedness is derived from the equations (esm-spec §6.3.1), not from
+    /// the declared type, so it needs its own set alongside `var_types`.
+    pub observed_keys: std::collections::BTreeSet<String>,
     /// The additive document-scoped `coordinates` registry (§8.3), verbatim.
     pub coordinates: BTreeMap<String, Coordinate>,
     /// Record-axis name: `domain.independent_variable`, else `"time"`.
@@ -582,6 +586,16 @@ impl OutputMeta {
     #[must_use]
     pub fn type_of(&self, base: &str) -> Option<&VariableType> {
         self.lookup(&self.var_types, base)
+    }
+
+    /// Is `base` an OBSERVED unknown (esm-spec §6.3.1)?
+    #[must_use]
+    pub fn is_observed(&self, base: &str) -> bool {
+        self.observed_keys.contains(base)
+            || self
+                .model_names
+                .iter()
+                .any(|m| self.observed_keys.contains(&format!("{m}.{base}")))
     }
 
     /// The retained CF attributes of `base`.
@@ -644,6 +658,8 @@ pub fn derive_output_meta(doc: &EsmFile) -> OutputMeta {
 
     for mname in &meta.model_names {
         let model = &models[mname];
+        let observed: std::collections::HashSet<String> =
+            crate::classify::observed_unknowns(model).into_iter().collect();
         let mut vnames: Vec<&String> = model.variables.keys().collect();
         vnames.sort();
         for vn in vnames {
@@ -671,7 +687,10 @@ pub fn derive_output_meta(doc: &EsmFile) -> OutputMeta {
                 if !attrs.is_empty() {
                     meta.var_attrs.insert(key.clone(), attrs.clone());
                 }
-                meta.var_types.insert(key, v.var_type.clone());
+                if observed.contains(vn.as_str()) {
+                    meta.observed_keys.insert(key.clone());
+                }
+                meta.var_types.insert(key, v.var_type);
             }
         }
     }
@@ -973,7 +992,7 @@ pub fn derive_output_plan(
     let mut kept: Vec<VarGridding> = Vec::new();
     for g in gridding {
         let requested = match_requested(&mut wanted, &g.base);
-        let is_observed = meta.type_of(&g.base) == Some(&VariableType::Observed);
+        let is_observed = meta.is_observed(&g.base);
         if !is_observed || requested {
             kept.push(g);
         }

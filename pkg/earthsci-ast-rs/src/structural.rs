@@ -13,7 +13,7 @@
 
 use crate::EsmFile;
 use crate::units::{
-    build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
+    build_unit_env, check_equation_dimensions, parse_unit,
 };
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use std::collections::{HashMap, HashSet};
@@ -28,20 +28,24 @@ pub(crate) fn validate_model(
 ) {
     let model_path = format!("/models/{model_name}");
 
-    // Create a map of defined variables by type
+    // The balance is UNKNOWNS vs EQUATIONS (esm-spec §4.9.4). Since 1.0.0
+    // `unknown` is the declared type and ODE-state-ness is derived from the
+    // very equations being counted, so every unknown counts here — an ODE
+    // state, an observed, and an implicitly-constrained algebraic unknown
+    // alike. Sorted lexicographically: the diagnostic's job is to NAME the
+    // unknowns, and `model.variables` is a HashMap that discards declaration
+    // order outright.
     let mut state_vars = Vec::new();
     let mut defined_vars = HashSet::new();
 
     for (var_name, var) in &model.variables {
         defined_vars.insert(var_name.clone());
 
-        if matches!(var.var_type, crate::VariableType::State) {
+        if matches!(var.var_type, crate::VariableType::Unknown) {
             state_vars.push(var_name.clone());
         }
-
-        // Note: The current type system doesn't have expressions on ModelVariable yet
-        // This validation would be added once the types are updated to match the spec
     }
+    state_vars.sort();
 
     // esm-spec §4.9.1: three classes of symbol are in scope WITHOUT appearing in
     // the `variables` map, and none of them is an `undefined_variable`. Adding
@@ -109,19 +113,15 @@ pub(crate) fn validate_model(
     // balance and are deliberately NOT counted here.
     let defining_equations = count_defining_equations(&model.equations);
     if !is_coupled && defining_equations != state_vars.len() {
-        let (extra_equations_for, missing_equations_for) =
-            analyze_equation_mismatch(&model.equations, &state_vars);
+        let missing_equations_for = analyze_equation_mismatch(&model.equations, &state_vars);
 
         let mut details = serde_json::json!({
-            "state_variables": state_vars,
+            "unknowns": state_vars,
             "equations": defining_equations,
         });
 
         if !missing_equations_for.is_empty() {
             details["missing_equations_for"] = serde_json::json!(missing_equations_for);
-        }
-        if !extra_equations_for.is_empty() {
-            details["extra_equations_for"] = serde_json::json!(extra_equations_for);
         }
 
         errors.push(StructuralError {
@@ -227,13 +227,52 @@ pub(crate) fn validate_model(
         // propagation over the Expr AST. Every finding is reported: a provable
         // mismatch is a hard `unit_inconsistency` error, an undeterminable
         // dimension stays a non-blocking warning. See `record_unit_findings`.
+        //
+        // An equation whose LHS is a bare UNKNOWN is that unknown's DEFINITION
+        // (the 1.0.0 home of the 0.x `variables[v].expression`), so its finding
+        // is attributed to the VARIABLE — `/models/<M>/variables/<v>` — which is
+        // where `tests/invalid/expected_errors.json` pins every observed-side
+        // units defect. A derivative or expression LHS stays at the equation.
+        let defined = match &equation.lhs {
+            crate::Expr::Variable(name) if state_vars.iter().any(|v| v == name) => {
+                Some(name.as_str())
+            }
+            _ => None,
+        };
+        let (finding_path, finding_subject) = match defined {
+            Some(name) => (
+                format!("{model_path}/variables/{name}"),
+                format!("Observed variable \"{name}\""),
+            ),
+            None => (eq_path.clone(), format!("Equation {eq_idx}")),
+        };
         record_unit_findings(
             check_equation_dimensions(equation, &unit_env),
-            &eq_path,
-            &format!("Equation {eq_idx}"),
+            &finding_path,
+            &finding_subject,
             errors,
             warnings,
         );
+
+        // The linear-conversion-factor check is a property of a DEFINITION, so
+        // it runs only for the bare-unknown-LHS form.
+        if let Some(name) = defined {
+            if let Some(declared) = model
+                .variables
+                .get(name)
+                .and_then(|v| v.units.as_deref())
+                .and_then(|u| parse_unit(u).ok())
+            {
+                check_linear_conversion_factor(
+                    &equation.rhs,
+                    &declared,
+                    model,
+                    &format!("{model_path}/variables/{name}"),
+                    name,
+                    errors,
+                );
+            }
+        }
     }
 
     // Static `aggregate`-node constraints (RFC semiring-faq-unified-ir): an
@@ -284,57 +323,13 @@ pub(crate) fn validate_model(
         });
     }
 
-    // Validate observed variable expressions
-    for (var_name, variable) in &model.variables {
-        if variable.var_type == crate::VariableType::Observed && variable.expression.is_none() {
-            errors.push(StructuralError {
-                path: format!("{model_path}/variables/{var_name}"),
-                code: StructuralErrorCode::MissingObservedExpr,
-                message: format!(
-                    "Observed variable \"{var_name}\" is missing its expression field"
-                ),
-                details: serde_json::json!({
-                    // The settled cross-binding key is `variable`
-                    // (CONFORMANCE_SPEC row (j)), not `variable_name`.
-                    "variable": var_name,
-                    "field": "expression"
-                }),
-            });
-        } else if variable.var_type == crate::VariableType::Observed {
-            // If the expression exists, validate its variable references
-            if let Some(ref expr) = variable.expression {
-                let expr_path = format!("{model_path}/variables/{var_name}/expression");
-                check_refs(expr, &expr_path, 0, errors);
-
-                // Dimension-check the defining expression. This is where most
-                // of the shared `units_*.esm` fixtures put their defect (an
-                // observed variable whose expression adds `m` to `kg`, or takes
-                // `ln` of a mass), and it went entirely unchecked while only
-                // `equations` were propagated. The error path is the VARIABLE
-                // — `/models/<M>/variables/<v>` — as pinned by
-                // `tests/invalid/expected_errors.json`.
-                let declared = variable.units.as_deref().and_then(|u| parse_unit(u).ok());
-                record_unit_findings(
-                    check_expression_dimensions(expr, declared.as_ref(), &unit_env),
-                    &format!("{model_path}/variables/{var_name}"),
-                    &format!("Observed variable \"{var_name}\""),
-                    errors,
-                    warnings,
-                );
-
-                if let Some(declared) = &declared {
-                    check_linear_conversion_factor(
-                        expr,
-                        declared,
-                        model,
-                        &format!("{model_path}/variables/{var_name}"),
-                        var_name,
-                        errors,
-                    );
-                }
-            }
-        }
-    }
+    // (1.0.0 retires `missing_observed_expr`. An unknown's behaviour is stated
+    // by an equation and nowhere else, so an observed with nothing defining it
+    // is not a malformed declaration but an UNBALANCED SYSTEM — reported above
+    // as `equation_count_mismatch`, naming it in `missing_equations_for`. The
+    // reference and dimensional checks its defining expression used to get
+    // here now run in the equations loop, which attributes a finding to the
+    // variable it defines.)
 
     // Validate discrete events
     if let Some(ref discrete_events) = model.discrete_events {
@@ -355,7 +350,14 @@ pub(crate) fn validate_model(
     // Validate continuous events
     if let Some(ref continuous_events) = model.continuous_events {
         for (event_idx, event) in continuous_events.iter().enumerate() {
-            validate_continuous_event(event, event_idx, &model_path, &defined_vars, errors);
+            validate_continuous_event(
+                event,
+                event_idx,
+                &model_path,
+                &defined_vars,
+                &model.variables,
+                errors,
+            );
         }
     }
 }
@@ -508,12 +510,67 @@ pub(crate) fn coupled_system_names(esm_file: &EsmFile) -> HashSet<String> {
 /// consuming model), so it resolves against the DOCUMENT-WIDE declared set
 /// rather than the loader's own variables alone. Nothing checked this field at
 /// all, so a typo'd conversion factor silently produced a wrongly-scaled input.
+/// Every `update: {kind: "data", source: …}` on a parameter must name a
+/// declared `data_sources` entry — `data_source_undefined` otherwise
+/// (esm-spec §5.4). This is the only way a model reaches a data source in
+/// 1.0.0: a source is a document-scoped ingest registry, not a component, so
+/// a dangling name here is not an undefined SYSTEM but an undefined SOURCE.
+pub(crate) fn validate_data_source_references(
+    esm_file: &EsmFile,
+    errors: &mut Vec<StructuralError>,
+) {
+    let Some(models) = &esm_file.models else {
+        return;
+    };
+    let mut available: Vec<String> = esm_file
+        .data_sources
+        .iter()
+        .flatten()
+        .map(|(k, _)| k.clone())
+        .collect();
+    available.sort();
+
+    for (model_name, model) in models {
+        for (var_name, var) in &model.variables {
+            let Some(update) = &var.update else {
+                continue;
+            };
+            let indexed = matches!(update, crate::types::ParameterUpdateSpec::Many(_));
+            for (rule_idx, rule) in update.rules().iter().enumerate() {
+                let Some(source) = rule.source() else {
+                    continue;
+                };
+                if available.iter().any(|s| s == source) {
+                    continue;
+                }
+                let path = if indexed {
+                    format!("/models/{model_name}/variables/{var_name}/update/{rule_idx}")
+                } else {
+                    format!("/models/{model_name}/variables/{var_name}/update")
+                };
+                errors.push(StructuralError {
+                    path,
+                    code: StructuralErrorCode::DataSourceUndefined,
+                    message: format!(
+                        "Parameter update names data source '{source}', which the document does not declare"
+                    ),
+                    details: serde_json::json!({
+                        "variable": var_name,
+                        "source": source,
+                        "available_sources": available,
+                    }),
+                });
+            }
+        }
+    }
+}
+
 pub(crate) fn validate_data_source_unit_conversions(
     esm_file: &EsmFile,
     system_refs: &HashMap<String, SystemInfo>,
     errors: &mut Vec<StructuralError>,
 ) {
-    let Some(loaders) = &esm_file.data_sources else {
+    let Some(models) = &esm_file.models else {
         return;
     };
 
@@ -522,20 +579,41 @@ pub(crate) fn validate_data_source_unit_conversions(
     scope.extend(document_declared_names(esm_file));
 
     let empty = HashSet::new();
-    for (loader_name, loader) in loaders {
-        for (var_name, var) in &loader.variables {
-            let Some(crate::types::UnitConversion::Expression(expr)) = &var.unit_conversion else {
-                continue; // a bare multiplicative factor names nothing
+    // Since 1.0.0 a `unit_conversion` lives on the CONSUMING parameter's
+    // `update.from` binding, not on the data source (a source no longer
+    // declares the fields it provides). The JSON pointer follows: a single
+    // rule is `.../update/from/unit_conversion`, one of an ordered array is
+    // `.../update/<i>/from/unit_conversion`.
+    for (model_name, model) in models {
+        for (var_name, var) in &model.variables {
+            let Some(update) = &var.update else {
+                continue;
             };
-            validate_expression_references_with_systems(
-                expr,
-                &scope,
-                system_refs,
-                &empty,
-                &format!("/data_sources/{loader_name}/variables/{var_name}/unit_conversion"),
-                0,
-                errors,
-            );
+            let indexed = matches!(update, crate::types::ParameterUpdateSpec::Many(_));
+            for (rule_idx, rule) in update.rules().iter().enumerate() {
+                let Some(binding) = rule.from() else {
+                    continue;
+                };
+                let Some(crate::types::UnitConversion::Expression(expr)) =
+                    &binding.unit_conversion
+                else {
+                    continue; // a bare multiplicative factor names nothing
+                };
+                let update_path = if indexed {
+                    format!("/models/{model_name}/variables/{var_name}/update/{rule_idx}")
+                } else {
+                    format!("/models/{model_name}/variables/{var_name}/update")
+                };
+                validate_expression_references_with_systems(
+                    expr,
+                    &scope,
+                    system_refs,
+                    &empty,
+                    &format!("{update_path}/from/unit_conversion"),
+                    0,
+                    errors,
+                );
+            }
         }
     }
 }
@@ -563,9 +641,8 @@ pub(crate) fn validate_data_source_unit_conversions(
 /// 3. **`_var`** — §6.4, the operator-model placeholder, legal wherever a state
 ///    variable is legal (equation LHS/RHS, a continuous event's
 ///    `affects`/`affect_neg`, a `functional_affect`'s `read_vars`).
-/// Every name DECLARED anywhere in the document: each model's `variables`, each
-/// reaction system's `species` and `parameters`, and each data loader's
-/// `variables`. Does NOT include the implicit symbols (`t`, coordinates, index
+/// Every name DECLARED anywhere in the document: each model's `variables` and
+/// each reaction system's `species` and `parameters`. Does NOT include the implicit symbols (`t`, coordinates, index
 /// sets, `_var`, callback-injected names) — combine with
 /// `implicitly_declared_symbols` for the full document scope. Mirrors Julia
 /// `_document_declared_names`, TS `documentDeclaredNames`, Go `documentWideScope`.
@@ -578,9 +655,9 @@ fn document_declared_names(esm_file: &EsmFile) -> HashSet<String> {
         names.extend(rs.species.keys().cloned());
         names.extend(rs.parameters.keys().cloned());
     }
-    for loader in esm_file.data_sources.iter().flatten().map(|(_, l)| l) {
-        names.extend(loader.variables.keys().cloned());
-    }
+    // A data source declares NO names since 1.0.0: it is a document-scoped
+    // ingest registry, not a component, and the fields it reads are named by
+    // the consuming parameter's `update.from.file_variable` instead.
     names
 }
 
@@ -635,11 +712,6 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
                 }
                 collect_coordinate_symbols(&eq.lhs, &mut symbols);
                 collect_coordinate_symbols(&eq.rhs, &mut symbols);
-            }
-            for var in model.variables.values() {
-                if let Some(expr) = &var.expression {
-                    collect_coordinate_symbols(expr, &mut symbols);
-                }
             }
         }
     }
@@ -784,17 +856,14 @@ fn validate_array_broadcast_shapes(
         );
     }
 
-    // A declared array-shaped observed's defining expression is the same bare
+    // A declared array-shaped observed's DEFINING EQUATION is the same bare
     // array-level form with the same alignment rule.
-    for (var_name, variable) in &model.variables {
-        let Some(expr) = &variable.expression else {
-            continue;
-        };
+    for (var_name, expr) in crate::classify::observed_definitions(model) {
         check_operand_axes(
             expr,
             var_name,
             &declared_axes,
-            &format!("{model_path}/variables/{var_name}/expression"),
+            &format!("{model_path}/variables/{var_name}"),
             errors,
         );
     }
@@ -1122,13 +1191,7 @@ fn check_physical_constant_units(
             continue;
         }
         let mut usage_site: Option<&str> = None;
-        for (other_name, other_var) in &model.variables {
-            if other_var.var_type != crate::VariableType::Observed {
-                continue;
-            }
-            let Some(expr) = other_var.expression.as_ref() else {
-                continue;
-            };
+        for (other_name, expr) in crate::classify::observed_definitions(model) {
             if expr_references_name(expr, constant_name) {
                 usage_site = Some(other_name);
                 break;
@@ -1204,7 +1267,7 @@ fn count_defining_equations(equations: &[crate::Equation]) -> usize {
 fn analyze_equation_mismatch(
     equations: &[crate::Equation],
     state_vars: &[String],
-) -> (Vec<String>, Vec<String>) {
+) -> Vec<String> {
     let state_vars_set: HashSet<_> = state_vars.iter().cloned().collect();
     let mut lhs_vars = HashSet::new();
 
@@ -1234,10 +1297,16 @@ fn analyze_equation_mismatch(
         }
     }
 
-    let extra_equations_for: Vec<_> = lhs_vars.difference(&state_vars_set).cloned().collect();
-    let missing_equations_for: Vec<_> = state_vars_set.difference(&lhs_vars).cloned().collect();
+    // Only the UNKNOWNS nothing defines are reported. An `extra_equations_for`
+    // list is not part of the diagnostic's contract: the equation COUNT already
+    // carries the too-many-equations case, and a name appearing on an LHS
+    // without being a declared unknown is an undefined-reference defect, caught
+    // by reference integrity rather than by the balance check.
+    let mut missing_equations_for: Vec<_> =
+        state_vars_set.difference(&lhs_vars).cloned().collect();
+    missing_equations_for.sort();
 
-    (extra_equations_for, missing_equations_for)
+    missing_equations_for
 }
 
 pub(crate) fn validate_reaction_system(
@@ -2121,49 +2190,34 @@ fn validate_discrete_event(
         );
     }
 
-    // Validate affects
+    // Validate affects. A `periodic` trigger is the one case 1.0.0 has an
+    // exact replacement for — a fixed-interval rewrite of a parameter IS
+    // `update: {kind: "schedule", interval}` — so the remedy names it.
+    let schedule_remedy = match &event.trigger {
+        crate::DiscreteEventTrigger::Periodic { interval, .. } => Some((
+            "periodic",
+            format!("update: {{kind: \"schedule\", interval: {interval:?}}}"),
+        )),
+        _ => None,
+    };
     if let Some(ref affects) = event.affects {
         validate_event_affects(
             affects,
             defined_vars,
+            variables,
             &event_path,
             "affects",
             event_name,
             "discrete",
+            schedule_remedy.as_ref().map(|(t, r)| (*t, r.clone())),
             errors,
         );
     }
 
-    // `discrete_parameters` (§5.3): every entry must name a variable of type
-    // `parameter` — not a state/observed variable and not an undeclared name.
-    // The carrying field (§7.1.2) is the `discrete_parameters` array itself.
-    if let Some(ref dps) = event.discrete_parameters {
-        for dp in dps {
-            let declared_type = variables.get(dp).map(|v| &v.var_type);
-            if matches!(declared_type, Some(crate::VariableType::Parameter)) {
-                continue;
-            }
-            let found = match declared_type {
-                Some(crate::VariableType::State) => "found as state variable",
-                Some(crate::VariableType::Observed) => "found as observed variable",
-                Some(_) => "found as non-parameter variable",
-                None => "not declared in model",
-            };
-            errors.push(StructuralError {
-                path: format!("{event_path}/discrete_parameters"),
-                code: StructuralErrorCode::InvalidDiscreteParam,
-                message: format!(
-                    "Discrete parameter '{dp}' in event is not declared as a parameter ({found})"
-                ),
-                details: serde_json::json!({
-                    "parameter": dp,
-                    "event_name": event_name,
-                    "event_type": "discrete",
-                    "expected_in": "parameters",
-                }),
-            });
-        }
-    }
+    // (1.0.0 retires `invalid_discrete_param`: `discrete_parameters` is gone
+    // and a parameter that changes during a run carries its own `update`. The
+    // defect it caught — an event writing a parameter — is now reached through
+    // `affects` as `event_affects_parameter`, above.)
 }
 
 /// Structural checks for a continuous event (esm-spec §6.3): every zero-cross
@@ -2174,6 +2228,7 @@ fn validate_continuous_event(
     event_idx: usize,
     parent_path: &str,
     defined_vars: &HashSet<String>,
+    variables: &HashMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
     let event_path = format!("{parent_path}/continuous_events/{event_idx}");
@@ -2190,20 +2245,24 @@ fn validate_continuous_event(
     validate_event_affects(
         &event.affects,
         defined_vars,
+        variables,
         &event_path,
         "affects",
         event_name,
         "continuous",
+        None,
         errors,
     );
     if let Some(ref affect_neg) = event.affect_neg {
         validate_event_affects(
             affect_neg,
             defined_vars,
+            variables,
             &event_path,
             "affect_neg",
             event_name,
             "continuous",
+            None,
             errors,
         );
     }
@@ -2216,13 +2275,56 @@ fn validate_continuous_event(
 fn validate_event_affects(
     affects: &[crate::AffectEquation],
     defined_vars: &HashSet<String>,
+    variables: &HashMap<String, crate::types::ModelVariable>,
     event_path: &str,
     location: &str,
     event_name: &str,
     event_type: &str,
+    schedule_remedy: Option<(&str, String)>,
     errors: &mut Vec<StructuralError>,
 ) {
     for (affect_idx, affect) in affects.iter().enumerate() {
+        // Events affect UNKNOWNS only (esm-spec §5.4). A parameter that changes
+        // during a run declares its own `update` instead, so an `affects` LHS
+        // naming a parameter is `event_affects_parameter`. The carrying field
+        // (§7.1.2) is the affect itself, not its `lhs`.
+        if variables
+            .get(&affect.lhs)
+            .is_some_and(|v| v.var_type == crate::VariableType::Parameter)
+        {
+            let mut details = serde_json::json!({
+                "variable": affect.lhs,
+                "variable_type": "parameter",
+                "event_name": event_name,
+                "event_type": event_type,
+            });
+            match &schedule_remedy {
+                // A fixed-interval rewrite of a parameter has an EXACT 1.0.0
+                // replacement, so the remedy names it.
+                Some((trigger_type, remedy_update)) => {
+                    details["trigger_type"] = serde_json::json!(trigger_type);
+                    details["remedy"] = serde_json::json!(format!(
+                        "declare the change as {remedy_update} on '{}' (esm-spec 5.4)",
+                        affect.lhs
+                    ));
+                }
+                None => {
+                    details["remedy"] = serde_json::json!(
+                        "declare the change as the parameter's own update (esm-spec 5.4)"
+                    );
+                }
+            }
+            errors.push(StructuralError {
+                path: format!("{event_path}/{location}/{affect_idx}"),
+                code: StructuralErrorCode::EventAffectsParameter,
+                message: format!(
+                    "Event '{event_name}' affects '{}', which is a parameter; an event may affect unknowns only",
+                    affect.lhs
+                ),
+                details,
+            });
+        }
+
         // The assignment TARGET (LHS) must be a declared variable — a distinct
         // defect (`event_var_undeclared`) from an ordinary reference. The
         // carrying field (§7.1.2) is the affect's own `lhs`.
@@ -2309,12 +2411,6 @@ pub(crate) fn check_circular_dependencies_in_models(
             extract_model_dependencies(&equation.lhs, &mut model_deps, model_name, models);
         }
 
-        // Also check observed variable expressions
-        for variable in model.variables.values() {
-            if let Some(ref expr) = variable.expression {
-                extract_model_dependencies(expr, &mut model_deps, model_name, models);
-            }
-        }
 
         dependencies.insert(model_name.clone(), model_deps);
     }

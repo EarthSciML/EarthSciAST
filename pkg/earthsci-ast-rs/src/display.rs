@@ -1904,14 +1904,12 @@ impl fmt::Display for EsmFile {
                     crate::DataSourceKind::Points => "points",
                     crate::DataSourceKind::Static => "static",
                 };
+                // A data source declares no variables since 1.0.0 — the
+                // consuming parameter names the file variable it binds.
                 writeln!(
                     f,
-                    "    {}: [{}] {} ({} variable{})",
-                    name,
-                    kind,
-                    loader.source.url_template,
-                    loader.variables.len(),
-                    if loader.variables.len() == 1 { "" } else { "s" },
+                    "    {}: [{}] {}",
+                    name, kind, loader.source.url_template,
                 )?;
             }
             writeln!(f)?;

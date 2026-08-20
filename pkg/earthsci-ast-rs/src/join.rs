@@ -160,11 +160,8 @@ pub fn resolve_aggregate_joins(
             lower_expr_joins(&mut eq.rhs, index_sets)?;
         }
     }
-    for var in model.variables.values_mut() {
-        if let Some(expr) = &mut var.expression {
-            lower_expr_joins(expr, index_sets)?;
-        }
-    }
+    // (An observed's defining expression is an ordinary equation since 1.0.0,
+    // so the equation walk above already reached it.)
     Ok(())
 }
 
@@ -376,11 +373,8 @@ pub fn resolve_overlap_join_syms(model: &mut Model) {
             resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
         }
     }
-    for var in model.variables.values_mut() {
-        if let Some(expr) = &mut var.expression {
-            resolve_overlap_syms_expr(expr, &var_shapes);
-        }
-    }
+    // (An observed's defining expression is an ordinary equation since 1.0.0,
+    // so the equation walk above already reached it.)
 }
 
 /// Every declared variable's shape (index-set names), for

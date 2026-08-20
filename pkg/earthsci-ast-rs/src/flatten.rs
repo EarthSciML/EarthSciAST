@@ -33,7 +33,7 @@
 //! reached flatten without being discretized.
 
 use crate::types::{
-    ContinuousEvent, CouplingEntry, DataSource, DiscreteEvent, Domain, Equation, EsmFile, Expr,
+    ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr,
     ExpressionNode, IndexSet, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec,
     ReactionSystem, VariableMapTransform, VariableType,
 };
@@ -196,21 +196,6 @@ pub enum FlattenError {
         "Malformed connector equation in couple({systems}): '{side}' is absent or did not deserialize as an expression"
     )]
     MalformedConnectorEquation { systems: String, side: String },
-
-    /// A model subsystem that structurally declares itself a [`DataSource`] —
-    /// it carries the discriminating `kind` / `source` keys — failed to
-    /// deserialize as one. Distinguished from a nested model or a
-    /// `{ "ref": … }` reference, which are legitimately not loaders and are
-    /// left for the array runtime (esm-spec §4.6; RFC `pure-io-data-loaders`
-    /// §4.3).
-    #[error(
-        "Malformed data-loader subsystem '{subsystem}' in model '{system}': carries loader keys but did not deserialize as a DataSource: {reason}"
-    )]
-    MalformedLoaderSubsystem {
-        system: String,
-        subsystem: String,
-        reason: String,
-    },
 
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
@@ -681,12 +666,16 @@ fn apply_variable_map_removals(
                 }
                 // Expression transform (esm-spec §10.4): the entry binds the
                 // target to a DERIVED value. Remove the `to` parameter and
-                // introduce in its place an observed variable — same name,
-                // units, shape, description — whose defining expression is the
-                // transform VERBATIM (its references are, by contract, already
-                // fully scoped, so no namespacing is applied). References to
-                // `to` in the equations are left intact: they now resolve to
-                // the observed, exactly as if the author had declared it.
+                // introduce in its place an OBSERVED UNKNOWN — same name,
+                // units, shape, description — defined by a new equation
+                // `to ~ <transform>` (the transform VERBATIM: its references
+                // are, by contract, already fully scoped, so no namespacing is
+                // applied). Since 1.0.0 an unknown's behaviour is stated by an
+                // equation and nowhere else, so the defining expression goes
+                // into `parts.equations` rather than onto the variable.
+                // References to `to` in the equations are left intact: they now
+                // resolve to the observed, exactly as if the author had
+                // declared it.
                 VariableMapTransform::Expression(node) => {
                     let removed = parts.parameters.shift_remove(to);
                     let (units, shape, description) = removed
@@ -695,18 +684,21 @@ fn apply_variable_map_removals(
                     parts.observed_variables.insert(
                         to.clone(),
                         ModelVariable {
-                            var_type: VariableType::Observed,
+                            var_type: VariableType::Unknown,
                             units,
                             default: None,
                             default_units: None,
                             description,
-                            expression: Some(Expr::operator(node.clone())),
+                            distribution: None,
+                            update: None,
                             shape,
                             location: None,
-                            noise_kind: None,
-                            correlation_group: None,
                         },
                     );
+                    parts.equations.push(Equation {
+                        lhs: Expr::Variable(to.clone()),
+                        rhs: Expr::operator(node.clone()),
+                    });
                 }
                 VariableMapTransform::Named(_) => {}
             }
@@ -815,94 +807,6 @@ struct SystemBlock {
     discrete_events: Vec<DiscreteEvent>,
 }
 
-/// Lower every DataSource mounted as a model subsystem (esm-spec §4.6; RFC
-/// `pure-io-data-loaders` §4.3; CONFORMANCE_SPEC §5.11) into const-array-backed
-/// observeds named `<system>.<sub>.<var>` — one per exposed loader variable,
-/// carrying **no defining expression**: their values are pure-I/O external
-/// inputs injected at the RHS boundary through the data-Provider forcing seam
-/// ([`crate::simulate_array::ArrayCompiled::forcing_handle`]), keyed by the same
-/// name. So the owning model's own equations consume a subsystem field both as a
-/// bare scalar (`raw.k` → observed `Box.raw.k`) and via a gather
-/// (`index(raw.wind, 2)` → observed `Box.raw.wind`).
-///
-/// Returns `(observeds, subsys_keys)`. `subsys_keys` is the set of loader
-/// subsystem names whose bare dotted references (`raw.k`) must be
-/// model-namespaced (`Box.raw.k`) by [`namespace_expr_with_subsys`]. A nested
-/// MODEL subsystem — one that structurally is not a [`DataSource`] (it carries
-/// none of the discriminating `kind` / `source` loader keys) — is left
-/// untouched here (and out of `subsys_keys`); the array runtime mounts those via
-/// its own `mount_subsystems`. A subsystem that DOES declare itself a loader
-/// (carries `kind`/`source`) but fails to deserialize is surfaced as
-/// [`FlattenError::MalformedLoaderSubsystem`] rather than being silently
-/// misread as a nested model. Byte-identical (empty result) for a model with no
-/// subsystems.
-fn lower_loader_subsystems(
-    system_name: &str,
-    model: &Model,
-) -> Result<(IndexMap<String, ModelVariable>, HashSet<String>), FlattenError> {
-    let mut observeds = IndexMap::new();
-    let mut keys = HashSet::new();
-    let Some(subs) = &model.subsystems else {
-        return Ok((observeds, keys));
-    };
-    let mut sub_names: Vec<&String> = subs.keys().collect();
-    sub_names.sort();
-    for sub_name in sub_names {
-        // A DataSource subsystem round-trips through `DataSource`; a nested
-        // model or a `{ "ref": … }` does not. Distinguish a deserialize failure
-        // on something that DECLARES itself a loader (discriminating `kind` /
-        // `source` keys) — a real error — from a subsystem that structurally
-        // isn't one, which is legitimately skipped here.
-        let loader = match serde_json::from_value::<DataSource>(subs[sub_name].clone()) {
-            Ok(loader) => loader,
-            Err(err) => {
-                if declares_data_source(&subs[sub_name]) {
-                    return Err(FlattenError::MalformedLoaderSubsystem {
-                        system: system_name.to_string(),
-                        subsystem: sub_name.clone(),
-                        reason: err.to_string(),
-                    });
-                }
-                continue;
-            }
-        };
-        keys.insert(sub_name.clone());
-        let mut var_names: Vec<&String> = loader.variables.keys().collect();
-        var_names.sort();
-        for vname in var_names {
-            let lv = &loader.variables[vname];
-            let observed_name = format!("{system_name}.{sub_name}.{vname}");
-            observeds.insert(
-                observed_name,
-                ModelVariable {
-                    var_type: VariableType::Observed,
-                    units: Some(lv.units.clone()),
-                    default: None,
-                    default_units: None,
-                    description: lv.description.clone(),
-                    // No defining equation: the value is served at the RHS
-                    // boundary by the provider forcing seam, keyed by this name.
-                    expression: None,
-                    shape: None,
-                    location: None,
-                    noise_kind: None,
-                    correlation_group: None,
-                },
-            );
-        }
-    }
-    Ok((observeds, keys))
-}
-
-/// Heuristic: a subsystem JSON value "declares itself" a [`DataSource`] when it
-/// carries a discriminating loader key (`kind` or `source`) — both required by
-/// the loader schema and absent from a nested model or a `{ "ref": … }`
-/// reference. Used to tell an invalid-fields loader apart from a subsystem that
-/// is legitimately not a loader.
-fn declares_data_source(value: &serde_json::Value) -> bool {
-    value.get("kind").is_some() || value.get("source").is_some()
-}
-
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
@@ -910,55 +814,68 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     let mut brownian_vars = IndexMap::new();
     let mut discrete_vars = IndexMap::new();
 
-    // Lower each DataSource mounted as a subsystem into const-array-backed
-    // observeds `<system>.<sub>.<var>` (RFC `pure-io-data-loaders` §4.3). Their
-    // bare references (`raw.k`) must be model-namespaced (`Box.raw.k`), which the
-    // generic `namespace_expr` — treating any dotted reference as
-    // already-namespaced — would otherwise leave untouched.
-    let (loader_observeds, subsys_keys) = lower_loader_subsystems(system_name, model)?;
+    // Since 1.0.0 a data source is a document-scoped registry entry, NOT a
+    // component: it can no longer be mounted as a subsystem, so there are no
+    // `<system>.<sub>.<var>` loader observeds to lower. A model consumes a
+    // source by declaring a PARAMETER whose `update` names it, which the
+    // ordinary parameter path below already handles.
+    let subsys_keys: HashSet<String> = HashSet::new();
 
     // The component's own declared names — the gate for namespacing the
-    // plain-string references a `join` clause carries (§5.5.6). Subsystem keys
-    // join the set so a `raw.k` join column follows its `raw.k` reference.
+    // plain-string references a `join` clause carries (§5.5.6).
     // Mirrors Julia `_collect_model!`'s `local_names`.
-    let mut locals: HashSet<String> = model.variables.keys().cloned().collect();
-    locals.extend(subsys_keys.iter().cloned());
+    let locals: HashSet<String> = model.variables.keys().cloned().collect();
+
+    // The five output buckets are DERIVED categories, so they are seeded from
+    // the §6.3.1 classification functions rather than from a declared type
+    // (which since 1.0.0 only distinguishes `unknown` from `parameter`).
+    // An ALGEBRAIC unknown joins `state_vars`: like an ODE state it is a
+    // quantity the solver carries and solves for, unlike an observed it cannot
+    // be eliminated by substitution. That matches what 0.x expressed by
+    // declaring such a variable `state`.
+    let ode_states: HashSet<String> = crate::classify::ode_states(model).into_iter().collect();
+    let observed: HashSet<String> = crate::classify::observed_unknowns(model)
+        .into_iter()
+        .collect();
+    let brownian: HashSet<String> = crate::classify::brownian_parameters(model)
+        .into_iter()
+        .collect();
+    let discrete: HashSet<String> = crate::classify::discrete_parameters(model)
+        .into_iter()
+        .collect();
 
     let mut var_names: Vec<&String> = model.variables.keys().collect();
     var_names.sort();
     for var_name in var_names {
         let var = &model.variables[var_name];
         let namespaced = format!("{system_name}.{var_name}");
-        let mut cloned = var.clone();
-        if let Some(expr) = cloned.expression {
-            cloned.expression = Some(namespace_expr_with_subsys(
-                &expr,
-                system_name,
-                &subsys_keys,
-                &locals,
-            ));
-        }
+        let cloned = var.clone();
         match var.var_type {
-            VariableType::State => {
-                state_vars.insert(namespaced, cloned);
+            VariableType::Unknown => {
+                if observed.contains(var_name) {
+                    observed_vars.insert(namespaced, cloned);
+                } else {
+                    // ODE state, or an algebraic unknown.
+                    debug_assert!(
+                        ode_states.contains(var_name) || !observed.contains(var_name),
+                        "unknown {var_name} must fall in exactly one class"
+                    );
+                    state_vars.insert(namespaced, cloned);
+                }
             }
             VariableType::Parameter => {
-                parameters.insert(namespaced, cloned);
-            }
-            VariableType::Observed => {
-                observed_vars.insert(namespaced, cloned);
-            }
-            VariableType::Discrete => {
-                discrete_vars.insert(namespaced, cloned);
-            }
-            VariableType::Brownian => {
-                brownian_vars.insert(namespaced, cloned);
+                if brownian.contains(var_name) {
+                    brownian_vars.insert(namespaced, cloned);
+                } else if discrete.contains(var_name) {
+                    discrete_vars.insert(namespaced, cloned);
+                } else {
+                    // Constant or sampled-once-at-setup: both are supplied to
+                    // the solver as parameters.
+                    parameters.insert(namespaced, cloned);
+                }
             }
         }
     }
-    // The subsystem-loader observeds carry no defining expression (value injected
-    // at the RHS through the provider forcing seam), so they need no namespacing.
-    observed_vars.extend(loader_observeds);
 
     let equations: Vec<Equation> = model
         .equations
@@ -1019,17 +936,16 @@ fn build_reaction_block(
             var_type: if species.constant == Some(true) {
                 VariableType::Parameter
             } else {
-                VariableType::State
+                VariableType::Unknown
             },
             units: species.units.clone(),
             default: species.default,
             default_units: None,
             description: species.description.clone(),
-            expression: None,
+            distribution: None,
+            update: None,
             shape: None,
             location: None,
-            noise_kind: None,
-            correlation_group: None,
         };
         if species.constant == Some(true) {
             parameters.insert(namespaced, var);
@@ -1051,11 +967,10 @@ fn build_reaction_block(
                 default: param.default,
                 default_units: None,
                 description: param.description.clone(),
-                expression: None,
+                distribution: None,
+                update: None,
                 shape: None,
                 location: None,
-                noise_kind: None,
-                correlation_group: None,
             },
         );
     }
@@ -1703,21 +1618,11 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
             eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
             eq.rhs = rename_join_names(&crate::substitute::substitute(&eq.rhs, &subs), to, from);
         }
-        // A `variable_map` also removes the mapped parameter from the system, so
-        // it must reach OBSERVED-variable expressions too — otherwise an observed
-        // defined by its `expression` (e.g. a `wind_speed` reading a coupled
-        // ground-level wind, or a `surface_heat_flux` reading a coupled flux
-        // field) keeps a dangling reference to the now-removed parameter and
-        // evaluates to NaN. Mirrors the equation rewrite above.
-        for var in block.observed_vars.values_mut() {
-            if let Some(expr) = &var.expression {
-                var.expression = Some(rename_join_names(
-                    &crate::substitute::substitute(expr, &subs),
-                    to,
-                    from,
-                ));
-            }
-        }
+        // (An observed's DEFINING expression needs no separate rewrite since
+        // 1.0.0: it is an ordinary equation with a bare-variable LHS, so the
+        // equation loop above already reached it. In 0.x the definition hid on
+        // the variable, which is exactly why this pass had to walk observeds
+        // as well.)
         // ...and event conditions / affect RHS (continuous + discrete), for the
         // same reason: an event whose condition or affect referenced the removed
         // `to` parameter would otherwise keep a dangling reference. The event

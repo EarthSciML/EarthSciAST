@@ -90,16 +90,17 @@ pub enum StructuralErrorCode {
     UndefinedParameter,
     /// Reaction with both substrates and products null
     NullReaction,
-    /// Observed variable missing expression
-    MissingObservedExpr,
+    /// An event `affects` LHS names a parameter; events affect unknowns only
+    /// (esm-spec §5.4). The 1.0.0 replacement for `invalid_discrete_param`.
+    EventAffectsParameter,
+    /// A parameter's `update.source` names no declared `data_sources` entry.
+    DataSourceUndefined,
     /// Scoped reference cannot be resolved
     UnresolvedScopedRef,
     /// Variable in event is not declared
     EventVarUndeclared,
     /// Operator referenced but not declared
     UndefinedOperator,
-    /// Discrete parameter not properly declared
-    InvalidDiscreteParam,
     /// System referenced but not declared
     UndefinedSystem,
     /// Data loader variable not provided
@@ -171,11 +172,11 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UndefinedSpecies => "undefined_species",
             Self::UndefinedParameter => "undefined_parameter",
             Self::NullReaction => "null_reaction",
-            Self::MissingObservedExpr => "missing_observed_expr",
+            Self::EventAffectsParameter => "event_affects_parameter",
+            Self::DataSourceUndefined => "data_source_undefined",
             Self::UnresolvedScopedRef => "unresolved_scoped_ref",
             Self::EventVarUndeclared => "event_var_undeclared",
             Self::UndefinedOperator => "undefined_operator",
-            Self::InvalidDiscreteParam => "invalid_discrete_param",
             Self::UndefinedSystem => "undefined_system",
             Self::DataSourceBindingMissing => "data_source_variable_missing",
             Self::OperatorVariableMissing => "operator_variable_missing",
@@ -294,6 +295,10 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
         &system_refs,
         &mut structural_errors,
     );
+
+    // A parameter's `update.source` MUST name a declared `data_sources` entry
+    // (esm-spec §5.4, §8.5).
+    crate::structural::validate_data_source_references(esm_file, &mut structural_errors);
 
     // Validate coupling
     if let Some(ref coupling) = esm_file.coupling {
@@ -506,21 +511,11 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
         }
     }
 
-    // Add data loaders. Schema-level variable names (keys of DataSource.variables)
-    // are what coupling `from`/`to` references point at, so they go in `variables`.
-    if let Some(ref data_sources) = esm_file.data_sources {
-        for (name, loader) in data_sources {
-            let variables: HashSet<String> = loader.variables.keys().cloned().collect();
-            systems.insert(
-                name.clone(),
-                SystemInfo {
-                    variables,
-                    species: HashSet::new(),
-                    parameters: HashSet::new(),
-                },
-            );
-        }
-    }
+    // Data sources are deliberately NOT registered as systems. Since 1.0.0 a
+    // source is a document-scoped ingest registry, not a component: it is not
+    // a coupling endpoint, not a subsystem, and not a path root in a scoped
+    // reference (esm-spec §8). A model reaches one only through a parameter's
+    // `update.source`, checked by `validate_data_source_references`.
 
     // Add operators
     if let Some(ref operators) = esm_file.operators {
