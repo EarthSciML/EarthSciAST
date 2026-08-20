@@ -1387,7 +1387,8 @@ func buildRewriteContext(tplMap map[string]any, order []string, isetNames map[st
 // entry point then Expands them in place (RFC out-of-line-expression-templates
 // §7.7 Expand-at-build), so callers see the Option-A image (references replaced
 // by their expansion, registries stripped) exactly as before. The
-// reference-preserving form is available via loadOptionB / EmitReferencePreserving.
+// reference-preserving form is available via ResolveAndLowerReferencePreserving
+// (raw §9.7 pipeline) or EmitReferencePreserving (canonical emitted bytes).
 func LowerExpressionTemplates(view map[string]any) error {
 	if err := lowerExpressionTemplatesOrdered(view, nil); err != nil {
 		return err
@@ -1626,11 +1627,53 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 
 // ResolveAndLower is the exported raw §9.7 pipeline — resolveAndLowerJSON
 // verbatim: load-time template-import/metaparameter resolution against
-// basePath, then the §9.6.3 rewrite fixpoint, returning the post-lowering
-// document as JSON (numeric tokens preserved via json.Number). This is the
-// entry point external conformance runners drive to reproduce the Julia
-// reference's expansion goldens (CONFORMANCE_SPEC.md §5.9) without going
-// through the typed Load round-trip, whose serializer normalizes fields.
+// basePath, then the §9.6.3 rewrite fixpoint AND Expand-at-build, returning the
+// post-lowering Option-A image as JSON (numeric tokens preserved via
+// json.Number). This is the entry point that reproduces the committed
+// `expanded.esm` goldens (CONFORMANCE_SPEC.md §5.9) without going through the
+// typed Load round-trip, whose serializer normalizes fields.
+//
+// It is NOT the right entry point for a conformance runner that must be
+// compared against the other four bindings: they all stop at the Option-B
+// image, and expansion multiplies out a reference-dense document. Use
+// ResolveAndLowerReferencePreserving, of which this is Expand ∘ that.
 func ResolveAndLower(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
 	return resolveAndLowerJSON(jsonStr, basePath, metaparameters)
+}
+
+// ResolveAndLowerReferencePreserving is the raw §9.7 pipeline WITHOUT the
+// Expand-at-build step: load-time template-import/metaparameter resolution
+// against basePath, §9.7.10 form-B coupling injection, then the §9.6.3 rewrite
+// fixpoint — stopping at the Option-B image. Surviving
+// `apply_expression_template` references stay as leaves (§9.6.4 rule 4) and
+// each component keeps its `expression_templates` registry (rule 5). Returns
+// the post-lowering document as JSON, numeric tokens preserved via json.Number.
+//
+// This is what a conformance runner should drive to produce an artifact
+// COMPARABLE WITH THE OTHER FOUR BINDINGS. The Julia reference, Python
+// (`resolve_template_machinery` → `lower_expression_templates`), TypeScript
+// (`resolveTemplateMachinery` → `lowerExpressionTemplates`) and Rust all stop
+// here; only Go's fused ResolveAndLower went on to Expand, so Go alone emitted
+// the Option-A image and could not be compared to the other four structurally.
+//
+// It is also the only pipeline that TERMINATES on a reference-dense document.
+// Expansion is what Option B exists to avoid: it substitutes each reference's
+// body at every call site, so a document whose templates reference templates
+// multiplies out. EarthSciDiscretizations' `duo_*` cases were OOM-killed past
+// 9 GB going through ResolveAndLower, which is why the Go runner had no output
+// to compare at all on that family.
+//
+// ResolveAndLower remains the Option-A surface: it is this function followed
+// by Expand, and reproduces the committed `expanded.esm` goldens. Prefer this
+// one unless you specifically need the expanded image.
+func ResolveAndLowerReferencePreserving(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
+	view, err := loadOptionB(jsonStr, basePath, metaparameters)
+	if err != nil {
+		return "", err
+	}
+	out, err := json.Marshal(view)
+	if err != nil {
+		return "", fmt.Errorf("template resolution pass: re-marshal: %w", err)
+	}
+	return string(out), nil
 }
