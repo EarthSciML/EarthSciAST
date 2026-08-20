@@ -48,12 +48,12 @@ describe('edit', () => {
     model = {
       variables: {
         x: {
-          type: 'state',
+          type: 'unknown',
           units: 'm',
           description: 'Position',
         },
         v: {
-          type: 'state',
+          type: 'unknown',
           units: 'm/s',
           description: 'Velocity',
         },
@@ -113,10 +113,12 @@ describe('edit', () => {
 
   describe('Variable Operations', () => {
     it('should add a new variable', () => {
+      // An OBSERVED variable in 1.0.0 is declared as a plain `unknown`; its
+      // defining expression is a bare-LHS equation rather than an `expression`
+      // field, so adding one is `addVariable` followed by `addEquation`.
       const newVar: ModelVariable = {
-        type: 'observed',
+        type: 'unknown',
         units: 'K',
-        expression: 'x',
         description: 'Temperature',
       }
 
@@ -125,6 +127,11 @@ describe('edit', () => {
       expect(result).not.toBe(model) // immutable
       expect(result.variables.temp).toEqual(newVar)
       expect(result.variables.x).toEqual(model.variables.x) // original preserved
+
+      // The definition half of the same edit: `temp ~ x`.
+      const defined = addEquation(result, { lhs: 'temp', rhs: 'x' })
+      expect(defined.equations).toHaveLength(3)
+      expect(defined.equations[2]).toEqual({ lhs: 'temp', rhs: 'x' })
     })
 
     it('should remove a variable when not in use', () => {
@@ -170,7 +177,7 @@ describe('edit', () => {
 
     it('renames references inside event conditions and affect RHSs (unified sites)', () => {
       const m: Model = {
-        variables: { x: { type: 'state' }, v: { type: 'state' } },
+        variables: { x: { type: 'unknown' }, v: { type: 'unknown' } },
         equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'v' }],
         continuous_events: [
           {
@@ -191,7 +198,7 @@ describe('edit', () => {
 
     it('detects references inside event conditions (unified sites)', () => {
       const m: Model = {
-        variables: { x: { type: 'state' }, v: { type: 'state' } },
+        variables: { x: { type: 'unknown' }, v: { type: 'unknown' } },
         equations: [{ lhs: { op: 'D', args: ['v'], wrt: 't' }, rhs: 0 }],
         continuous_events: [
           {
@@ -483,7 +490,7 @@ describe('edit', () => {
         metadata: { name: 'fileB', version: '0.1.0' },
         models: {
           ModelB: {
-            variables: { y: { type: 'state', units: 'm' } },
+            variables: { y: { type: 'unknown', units: 'm' } },
             equations: [{ lhs: 'y', rhs: 1 }],
           },
         },
@@ -506,6 +513,20 @@ describe('edit', () => {
 
     it('should throw error when extracting non-existent component', () => {
       expect(() => extract(esmFile, 'NonExistent')).toThrow(EntityNotFoundError)
+    })
+
+    it('does not extract a data source — a data source is not a component', () => {
+      // 1.0.0: `data_sources` entries are not components (not coupling
+      // endpoints, not subsystems), so there is no standalone document to
+      // extract one into. `extract` searches models and reaction_systems only,
+      // and a source name is simply not found.
+      const withSource = {
+        metadata: { name: 'test' },
+        models: { TestModel: model },
+        data_sources: { met: { kind: 'netcdf', path: 'met.nc' } },
+      } as unknown as EsmFile
+
+      expect(() => extract(withSource, 'met')).toThrow(EntityNotFoundError)
     })
   })
 
@@ -569,15 +590,17 @@ describe('edit', () => {
 
     it('merge omits collections that neither input contributes', () => {
       // Deliberately schema-incomplete fixtures: only esm/metadata, no models,
-      // reaction_systems, data_loaders, or coupling.
-      const a = { esm: '0.8.0', metadata: { name: 'a' } } as unknown as EsmFile
-      const b = { esm: '0.8.0', metadata: { name: 'b' } } as unknown as EsmFile
+      // reaction_systems, data_sources, or coupling.
+      const a = { esm: '1.0.0', metadata: { name: 'a' } } as unknown as EsmFile
+      const b = { esm: '1.0.0', metadata: { name: 'b' } } as unknown as EsmFile
 
       const result = merge(a, b)
 
       removedKeyIsAbsent(result, 'models')
       removedKeyIsAbsent(result, 'reaction_systems')
-      removedKeyIsAbsent(result, 'data_loaders')
+      // `data_sources` is the 1.0.0 spelling of the collection merge unions;
+      // `data_loaders` no longer exists as a top-level key.
+      removedKeyIsAbsent(result, 'data_sources')
       removedKeyIsAbsent(result, 'coupling')
     })
 
@@ -593,8 +616,8 @@ describe('edit', () => {
       expect(result.models!.TestModel).toBeDefined()
       expect(result.models!.ModelB).toBeDefined()
       expect(result.reaction_systems!.TestSystem).toBeDefined()
-      // Neither input has data_loaders or coupling, so those stay omitted.
-      removedKeyIsAbsent(result, 'data_loaders')
+      // Neither input has data_sources or coupling, so those stay omitted.
+      removedKeyIsAbsent(result, 'data_sources')
       removedKeyIsAbsent(result, 'coupling')
     })
   })

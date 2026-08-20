@@ -6,7 +6,7 @@
  */
 
 import type { Expression, ExpressionNode, Model } from './types.js'
-import { isNumericLiteral, numericValue, type NumericLiteral } from './numeric-literal.js'
+import { isNumericLiteral, numericValue } from './numeric-literal.js'
 import { evaluateExpression } from './codegen.js'
 
 /**

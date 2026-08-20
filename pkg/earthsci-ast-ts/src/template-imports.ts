@@ -2023,7 +2023,7 @@ function couplingReferencedSystems(entry: JsonObject): Set<string> {
  *
  * Diagnostics (esm-spec §9.6.6): a key naming no system the entry references
  * is `template_inject_target_unknown`; a key resolving to a data loader is
- * `template_inject_target_is_loader`; a key resolving to neither model,
+ * `template_inject_target_not_component`; a key resolving to neither model,
  * reaction system, nor loader is `template_inject_target_not_component`. Only
  * top-level system targets are resolved by this binding — a nested
  * `Parent.Child` key is out of scope (RFC §8.3) → `..._not_component`.
@@ -2033,7 +2033,6 @@ function applyCouplingInjections(root: JsonObject): void {
   if (!Array.isArray(coupling)) return
   const models = root.models
   const rsystems = root.reaction_systems
-  const loaders = root.data_sources
   const hasKey = (d: unknown, k: string): boolean =>
     isObject(d) && Object.prototype.hasOwnProperty.call(d, k)
   for (const entry of coupling) {

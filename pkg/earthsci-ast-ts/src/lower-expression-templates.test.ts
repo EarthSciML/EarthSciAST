@@ -803,24 +803,29 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
     bindings: Record<string, unknown>,
     name = 'overlap_area',
   ) => ({
-    esm: '0.8.0',
+    esm: '1.0.0',
     metadata: { name: 'scalar_field_param_unit', authors: ['t'] },
     models: {
       M: {
         variables: {
           pa: { type: 'parameter' },
           pb: { type: 'parameter' },
-          area: {
-            type: 'observed',
-            expression: {
+          area: { type: 'unknown' },
+        },
+        // esm 1.0.0: `area` is an unknown, and the call site that used to live
+        // in its `expression` field is its defining equation's RHS (one unknown,
+        // one equation — the count stays balanced).
+        equations: [
+          {
+            lhs: 'area',
+            rhs: {
               op: 'apply_expression_template',
               args: [],
               name,
               bindings,
             },
           },
-        },
-        equations: [],
+        ],
         expression_templates: templates,
       },
     },
@@ -843,7 +848,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
     // Option B: `polygon_intersection_area` is evaluable-core (not a T-op), so
     // the reference survives lowering; Expand instantiates the scalar-field param.
     const out = expandDocument(lowerExpressionTemplates(src)) as any
-    expect(out.models.M.variables.area.expression).toEqual({
+    expect(definingRhs(out.models.M, 'area')).toEqual({
       op: 'polygon_intersection_area',
       manifold: 'planar',
       args: ['pa', 'pb'],
@@ -883,7 +888,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
     // Option B: the `outer`→`inner` DAG is checked (not inlined) at registration
     // and both references survive lowering; Expand inlines the whole chain.
     const out = expandDocument(lowerExpressionTemplates(src)) as any
-    expect(out.models.M.variables.area.expression).toEqual({
+    expect(definingRhs(out.models.M, 'area')).toEqual({
       op: '*',
       args: [
         {
@@ -933,7 +938,7 @@ describe('scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6
       'shadowed',
     )
     const out = expandDocument(lowerExpressionTemplates(src)) as any
-    expect(out.models.M.variables.area.expression.manifold).toBe('spherical')
+    expect(definingRhs(out.models.M, 'area').manifold).toBe('spherical')
   })
 })
 
@@ -949,9 +954,9 @@ describe('scalar_field_param conformance fixture', () => {
     // Option B: Expand reproduces the pinned Option-A expanded form (RFC bridge).
     const out = expandDocument(lowerExpressionTemplates(fixture)) as any
     expect(out.models).toEqual(expanded.models)
-    const vars = out.models.Overlap.variables
-    expect(vars.area_planar.expression.manifold).toBe('planar')
-    expect(vars.area_spherical.expression.manifold).toBe('spherical')
+    const overlap = out.models.Overlap
+    expect(definingRhs(overlap, 'area_planar').manifold).toBe('planar')
+    expect(definingRhs(overlap, 'area_spherical').manifold).toBe('spherical')
   })
 })
 
@@ -977,11 +982,11 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     // survives as the un-lowered rewrite-target (loading is permissive).
     const out = lower('constrained_match_scope')
     expect(out.models).toEqual(golden('constrained_match_scope').models)
-    expect(out.models.m.variables.div_edge.expression).toEqual({
+    expect(definingRhs(out.models.m, 'div_edge')).toEqual({
       op: '*',
       args: ['inv_area', 'F_edge'],
     })
-    expect(out.models.m.variables.div_cell.expression).toEqual({ op: 'div', args: ['F_cell'] })
+    expect(definingRhs(out.models.m, 'div_cell')).toEqual({ op: 'div', args: ['F_cell'] })
   })
 
   it('two_div_two_meshes: identical patterns routed by shape at equal priority', () => {
@@ -990,11 +995,11 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     // lowers by its own mesh's rule.
     const out = lower('two_div_two_meshes')
     expect(out.models).toEqual(golden('two_div_two_meshes').models)
-    expect(out.models.m.variables.div_a.expression).toEqual({
+    expect(definingRhs(out.models.m, 'div_a')).toEqual({
       op: '*',
       args: ['inv_area_a', 'F_a'],
     })
-    expect(out.models.m.variables.div_b.expression).toEqual({
+    expect(definingRhs(out.models.m, 'div_b')).toEqual({
       op: '*',
       args: ['inv_area_b', 'F_b'],
     })
@@ -1006,8 +1011,8 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     // D(u, x); central_D_any captures every other D(·, x).
     const out = lower('per_variable_scheme_literal_args')
     expect(out.models).toEqual(golden('per_variable_scheme_literal_args').models)
-    expect(out.models.m.variables.du.expression).toEqual({ op: '*', args: ['upwind_coef', 'u'] })
-    expect(out.models.m.variables.dv.expression).toEqual({ op: '*', args: ['central_coef', 'v'] })
+    expect(definingRhs(out.models.m, 'du')).toEqual({ op: '*', args: ['upwind_coef', 'u'] })
+    expect(definingRhs(out.models.m, 'dv')).toEqual({ op: '*', args: ['central_coef', 'v'] })
   })
 
   it('constraint_unknown_index_set: unknown shape name rejected at registration', () => {
@@ -1032,21 +1037,21 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     // because F_cell is not over [edges]; a low-priority (0) generic rule must
     // still fire there. Pins that `where` is part of eligibility, not selection.
     const src = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'filter_before_priority', authors: ['t'] },
       index_sets: { cells: { kind: 'interval', size: 3 }, edges: { kind: 'interval', size: 5 } },
       models: {
         m: {
           variables: {
-            F_cell: { type: 'state', units: '1', shape: ['cells'] },
-            d: {
-              type: 'observed',
-              units: '1',
-              shape: ['cells'],
-              expression: { op: 'div', args: ['F_cell'] },
-            },
+            F_cell: { type: 'unknown', units: '1', shape: ['cells'] },
+            d: { type: 'unknown', units: '1', shape: ['cells'] },
           },
-          equations: [],
+          // esm 1.0.0: `d` is an unknown defined by an equation; the `where`
+          // constraint is still judged against F_cell's DECLARED shape.
+          equations: [
+            { lhs: { op: 'D', args: ['F_cell'], wrt: 't' }, rhs: 0.0 },
+            { lhs: 'd', rhs: { op: 'div', args: ['F_cell'] } },
+          ],
           expression_templates: {
             hi_edges_only: {
               params: ['F'],
@@ -1066,7 +1071,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
       },
     }
     const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
-    expect(out.models.m.variables.d.expression).toEqual({ op: 'generic_div', args: ['F_cell'] })
+    expect(definingRhs(out.models.m, 'd')).toEqual({ op: 'generic_div', args: ['F_cell'] })
   })
 
   it('compound argument fails the constraint conservatively (no error, no rewrite)', () => {
@@ -1074,21 +1079,19 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     // compound sub-AST fails conservatively — the node is left un-lowered, and
     // loading stays permissive (no error).
     const src = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'compound_arg_conservative', authors: ['t'] },
       index_sets: { edges: { kind: 'interval', size: 5 } },
       models: {
         m: {
           variables: {
-            F: { type: 'state', units: '1', shape: ['edges'] },
-            d: {
-              type: 'observed',
-              units: '1',
-              shape: ['edges'],
-              expression: { op: 'div', args: [{ op: '*', args: [2, 'F'] }] },
-            },
+            F: { type: 'unknown', units: '1', shape: ['edges'] },
+            d: { type: 'unknown', units: '1', shape: ['edges'] },
           },
-          equations: [],
+          equations: [
+            { lhs: { op: 'D', args: ['F'], wrt: 't' }, rhs: 0.0 },
+            { lhs: 'd', rhs: { op: 'div', args: [{ op: '*', args: [2, 'F'] }] } },
+          ],
           expression_templates: {
             fv: {
               params: ['F'],
@@ -1102,7 +1105,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     }
     const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
     // The div of a compound flux is NOT rewritten (bare-var-only judgment).
-    expect(out.models.m.variables.d.expression).toEqual({
+    expect(definingRhs(out.models.m, 'd')).toEqual({
       op: 'div',
       args: [{ op: '*', args: [2, 'F'] }],
     })
@@ -1110,7 +1113,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
 
   it('`where` without `match` is a malformed declaration', () => {
     const src = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'where_without_match', authors: ['t'] },
       index_sets: { edges: { kind: 'interval', size: 5 } },
       models: {
@@ -1184,11 +1187,11 @@ describe('rulePriority — non-finite priority does not poison rule selection', 
     // comparator fall back to declaration order, so `ruleNaN` (declIndex 0)
     // shadowed `rule5`. With the fix (`NaN` -> 0) the priority-5 rule wins.
     const file = {
-      esm: '0.8.0',
+      esm: '1.0.0',
       metadata: { name: 'nan_priority' },
       models: {
         m: {
-          variables: { x: { type: 'variable', units: '1' } },
+          variables: { x: { type: 'unknown', units: '1' } },
           expression_templates: {
             ruleNaN: {
               params: ['a'],
@@ -1275,23 +1278,34 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     // Skipping `expression_templates` blocks in the stray-apply scan must not
     // blind it to a real unexpanded call: an `apply_expression_template` naming a
     // template that does not exist, in an EQUATION (a call site, not a body).
-    expect(() =>
+    //
+    // The call node is spelled WELL-FORMED (`name` + `bindings`) on purpose, so
+    // the rejection has to come from the template machinery resolving the name
+    // against the component registry — a malformed node would be turned away by
+    // schema validation first and this would pin nothing about the scan.
+    const stray = () =>
       load({
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: { name: 'stray' },
         models: {
           M: {
-            variables: { u: { type: 'state', units: '1' } },
+            variables: { u: { type: 'unknown', units: '1' } },
             expression_templates: { known: { params: ['x'], body: { op: '*', args: ['x', 2] } } },
             equations: [
               {
                 lhs: { op: 'D', args: ['u'], wrt: 't' },
-                rhs: { op: 'apply_expression_template', template: 'does_not_exist', args: ['u'] },
+                rhs: {
+                  op: 'apply_expression_template',
+                  args: [],
+                  name: 'does_not_exist',
+                  bindings: {},
+                },
               },
             ],
           },
         },
-      }),
-    ).toThrow()
+      })
+    expect(stray).toThrow(EsmMachineryError)
+    expect(stray).toThrow(/apply_expression_template_unknown_template/)
   })
 })

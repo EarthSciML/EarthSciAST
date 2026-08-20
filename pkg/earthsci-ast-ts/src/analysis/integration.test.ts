@@ -11,7 +11,7 @@ import {
 } from './index.js'
 import { toDot, toMermaid } from '../graph.js'
 import { isExprNode } from '../expression.js'
-import type { Model, Expr, EsmFile } from '../types.js'
+import type { Model, Expr, Expression, EsmFile } from '../types.js'
 
 describe('Analysis Integration Tests', () => {
   /**
@@ -22,10 +22,13 @@ describe('Analysis Integration Tests', () => {
    * differentiation) share one expression instead of reaching for a field that
    * no longer exists.
    */
-  const densityDefinition: Expr = { op: '/', args: ['P', { op: '*', args: ['R', 'T'] }] }
+  const densityDefinition: Expression = { op: '/', args: ['P', { op: '*', args: ['R', 'T'] }] }
 
-  // Complex example model for testing
-  const testModel: Model = {
+  // Complex example model for testing. `satisfies` rather than a `: Model`
+  // annotation: the document type narrows `models[k]` to the hand-written
+  // `Model` intersected with the generated one, and a `Model`-annotated
+  // variable does not satisfy that intersection.
+  const testModel = {
     variables: {
       T: { type: 'parameter', units: 'K' },
       P: { type: 'parameter', units: 'Pa' },
@@ -55,7 +58,7 @@ describe('Analysis Integration Tests', () => {
         },
       },
     ],
-  }
+  } satisfies Model
 
   it('should perform comprehensive analysis of a model', () => {
     // Build dependency graph
@@ -266,7 +269,7 @@ describe('Analysis Integration Tests', () => {
      * moved an observed variable's defining expression out of the variable and
      * into its bare-LHS equation.
      */
-    const photolysisRateDefinition: Expr = {
+    const photolysisRateDefinition: Expression = {
       op: '*',
       args: [
         'k2',

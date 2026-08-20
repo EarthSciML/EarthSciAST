@@ -34,7 +34,6 @@ import {
   discreteParameters,
   sampledParameters,
   constantParameters,
-  observedDefinitions,
 } from './classification.js'
 
 /** Graph node representing a component in the system */
@@ -588,7 +587,6 @@ function processModel(b: ExprGraphBuilder, model: Model, systemId: string): void
   // the only way the graph can still distinguish a state from an observed or a
   // Brownian parameter from a constant.
   const kinds = variableKinds(model)
-  const observedDefs = observedDefinitions(model)
 
   forEachModelVariable(model, (variable, varName) => {
     b.addNode(varName, kinds.get(varName) ?? 'parameter', variable.units, systemId)

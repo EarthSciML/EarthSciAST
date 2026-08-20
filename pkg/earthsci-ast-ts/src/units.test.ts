@@ -404,20 +404,21 @@ describe('Unit parsing and dimensional analysis', () => {
 
       it('does not report acos() against a rad-declared observed variable', () => {
         // The lib/solar.esm shape, reduced: declared `rad`, computed by `acos`.
+        // `solar_zenith_angle` is an OBSERVED unknown — a plain `unknown` whose
+        // defining expression is a bare-LHS equation — and the declared-vs-
+        // computed comparison is still made, and reported, at the VARIABLE.
         const file: EsmFile = {
-          esm: '0.1.0',
+          esm: '1.0.0',
           metadata: { name: 'solar' },
           models: {
             Solar: {
               variables: {
                 cos_zenith: { type: 'parameter', units: '1', default: 0.5 },
-                solar_zenith_angle: {
-                  type: 'observed',
-                  units: 'rad',
-                  expression: { op: 'acos', args: ['cos_zenith'] },
-                },
+                solar_zenith_angle: { type: 'unknown', units: 'rad' },
               },
-              equations: [],
+              equations: [
+                { lhs: 'solar_zenith_angle', rhs: { op: 'acos', args: ['cos_zenith'] } },
+              ],
             },
           },
         }
@@ -532,7 +533,7 @@ describe('Unit parsing and dimensional analysis', () => {
   describe('validateUnits', () => {
     it('should validate simple ESM file with no errors', () => {
       const esmFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -541,8 +542,8 @@ describe('Unit parsing and dimensional analysis', () => {
         models: {
           TestModel: {
             variables: {
-              x: { type: 'state', units: 'm', description: 'Position' },
-              v: { type: 'state', units: 'm/s', description: 'Velocity' },
+              x: { type: 'unknown', units: 'm', description: 'Position' },
+              v: { type: 'unknown', units: 'm/s', description: 'Velocity' },
               t: { type: 'parameter', units: 's', description: 'Time' },
             },
             equations: [
@@ -561,7 +562,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should detect dimensional inconsistencies', () => {
       const esmFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -570,7 +571,7 @@ describe('Unit parsing and dimensional analysis', () => {
         models: {
           TestModel: {
             variables: {
-              x: { type: 'state', units: 'm', description: 'Position' },
+              x: { type: 'unknown', units: 'm', description: 'Position' },
               f: { type: 'parameter', units: 's', description: 'Force (wrong units)' },
             },
             equations: [
@@ -590,7 +591,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should validate observed variables', () => {
       const esmFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test',
           description: 'test model',
@@ -600,15 +601,15 @@ describe('Unit parsing and dimensional analysis', () => {
           TestModel: {
             variables: {
               k: { type: 'parameter', units: '1/s', description: 'Rate constant' },
-              x: { type: 'state', units: 'm', description: 'Position' },
+              x: { type: 'unknown', units: 'm', description: 'Position' },
               rate: {
-                type: 'observed',
+                type: 'unknown',
                 units: 'm/s',
-                expression: { op: '*', args: ['k', 'x'] },
                 description: 'Rate of change',
               },
             },
-            equations: [],
+            // `rate` is observed: its definition is the bare-LHS equation.
+            equations: [{ lhs: 'rate', rhs: { op: '*', args: ['k', 'x'] } }],
           },
         },
       }
@@ -619,7 +620,7 @@ describe('Unit parsing and dimensional analysis', () => {
 
     it('should handle reaction systems', () => {
       const esmFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test',
           description: 'test reaction',
@@ -659,7 +660,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // surface as a WARNING with the variable's dimension left UNKNOWN
       // (unbound), which suppresses the mismatch and keeps validation valid.
       const esmFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test',
           description: 'unparseable unit',
@@ -668,8 +669,8 @@ describe('Unit parsing and dimensional analysis', () => {
         models: {
           TestModel: {
             variables: {
-              x: { type: 'state', units: 'notaunit', description: 'Unparseable unit' },
-              v: { type: 'state', units: 'm/s', description: 'Velocity' },
+              x: { type: 'unknown', units: 'notaunit', description: 'Unparseable unit' },
+              v: { type: 'unknown', units: 'm/s', description: 'Velocity' },
               t: { type: 'parameter', units: 's', description: 'Time' },
             },
             equations: [
@@ -710,7 +711,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // fictional — so the declared side is left UNKNOWN and the comparison is
       // skipped.
       const esmFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: {
           name: 'test',
           description: 'unparseable observed unit',
@@ -720,15 +721,15 @@ describe('Unit parsing and dimensional analysis', () => {
           TestModel: {
             variables: {
               k: { type: 'parameter', units: '1/s', description: 'Rate constant' },
-              x: { type: 'state', units: 'm', description: 'Position' },
+              x: { type: 'unknown', units: 'm', description: 'Position' },
               rate: {
-                type: 'observed',
+                type: 'unknown',
                 units: 'notaunit',
-                expression: { op: '*', args: ['k', 'x'] },
                 description: 'Rate of change',
               },
             },
-            equations: [],
+            // `rate` is observed: its definition is the bare-LHS equation.
+            equations: [{ lhs: 'rate', rhs: { op: '*', args: ['k', 'x'] } }],
           },
         },
       }

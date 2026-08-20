@@ -41,14 +41,18 @@ describe('Expression structural operations', () => {
   })
 
   describe('freeParameters', () => {
+    // `C` is an OBSERVED unknown: in 1.0.0 that is a plain `unknown` whose
+    // defining expression lives in a bare-LHS equation, not in an `expression`
+    // field on the variable. It is here so the fixture contains a non-parameter
+    // that `freeParameters` must decline to report.
     const testModel: Model = {
       variables: {
-        x: { type: 'state' },
+        x: { type: 'unknown' },
         k: { type: 'parameter' },
         T: { type: 'parameter' },
-        C: { type: 'observed', expression: { op: '*', args: ['k', 'T'] } },
+        C: { type: 'unknown' },
       },
-      equations: [],
+      equations: [{ lhs: 'C', rhs: { op: '*', args: ['k', 'T'] } }],
     }
 
     it('should return empty set for expression with no parameters', () => {

@@ -22,7 +22,7 @@ import type {
 import { substituteInModel } from './substitute.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepEqualExpr, forEachChild, isExprNode } from './expression.js'
-import { forEachEquation, forEachModelVariable, isReferenceStub } from './traverse.js'
+import { forEachEquation, isReferenceStub } from './traverse.js'
 
 /**
  * Error thrown when attempting to remove a variable that is still referenced

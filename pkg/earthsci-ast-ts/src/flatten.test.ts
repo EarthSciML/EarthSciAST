@@ -5,12 +5,12 @@ import type { EsmFile } from './types.js'
 describe('flatten', () => {
   it('namespaces variables from a single model', () => {
     const file = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         Atmos: {
           variables: {
-            T: { type: 'state' },
+            T: { type: 'unknown' },
             k: { type: 'parameter' },
           },
           equations: [
@@ -24,6 +24,9 @@ describe('flatten', () => {
     } satisfies EsmFile
 
     const flat = flatten(file)
+    // `stateVariables` is DERIVED in 1.0.0, not read off a declared type: it
+    // holds the unknowns the solver carries (ODE states plus algebraic
+    // unknowns). `T` is an unknown under `D(·,t)`, so it is an ODE state.
     expect(flat.stateVariables).toEqual(['Atmos.T'])
     expect(flat.parameters).toEqual(['Atmos.k'])
     expect(flat.metadata.sourceSystems).toEqual(['Atmos'])
@@ -36,7 +39,7 @@ describe('flatten', () => {
 
   it('namespaces species and parameters from a reaction system', () => {
     const file = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       reaction_systems: {
         Chem: {
@@ -63,10 +66,10 @@ describe('flatten', () => {
 
   it('records coupling rules in metadata', () => {
     const file = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
-        A: { variables: { x: { type: 'state' } }, equations: [] },
+        A: { variables: { x: { type: 'unknown' } }, equations: [] },
         B: { variables: { y: { type: 'parameter' } }, equations: [] },
       },
       coupling: [
@@ -87,10 +90,10 @@ describe('flatten', () => {
 
   it('handles an expression (object) transform in variable_map', () => {
     const file = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
-        Src: { variables: { F: { type: 'state' } }, equations: [] },
+        Src: { variables: { F: { type: 'unknown' } }, equations: [] },
         Sink: {
           variables: {
             offset: { type: 'parameter' },
@@ -123,10 +126,10 @@ describe('flatten', () => {
       factor?: number,
     ) =>
       ({
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: { name: 'test' },
         models: {
-          A: { variables: { x: { type: 'state' } }, equations: [] },
+          A: { variables: { x: { type: 'unknown' } }, equations: [] },
           B: { variables: { y: { type: 'parameter' } }, equations: [] },
         },
         coupling: [{ type: 'variable_map', from: 'A.x', to: 'B.y', transform, factor }],
@@ -145,15 +148,15 @@ describe('flatten', () => {
 
   it('produces nested dot-namespacing for subsystems', () => {
     const file = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         Outer: {
-          variables: { y: { type: 'state' } },
+          variables: { y: { type: 'unknown' } },
           equations: [],
           subsystems: {
             Inner: {
-              variables: { x: { type: 'state' } },
+              variables: { x: { type: 'unknown' } },
               equations: [],
             },
           },
@@ -164,5 +167,44 @@ describe('flatten', () => {
     const flat = flatten(file)
     expect(flat.stateVariables).toContain('Outer.y')
     expect(flat.stateVariables).toContain('Outer.Inner.x')
+  })
+
+  it('derives the state / observed / brownian buckets from equations and updates', () => {
+    // The three output buckets used to mirror three DECLARED variable types
+    // (`state` / `observed` / `brownian`). 1.0.0 declares only `unknown` and
+    // `parameter`, so each bucket is now derived:
+    //   - `S` is an unknown under `D(·,t)`             -> stateVariables
+    //   - `C` is an unknown with a BARE-string LHS      -> variables (observed),
+    //     mapped to its defining expression, namespaced
+    //   - `W` is a parameter with a `wiener` update     -> brownianVariables
+    //   - `k` is a plain parameter                      -> parameters
+    const file = {
+      esm: '1.0.0',
+      metadata: { name: 'test' },
+      models: {
+        Box: {
+          variables: {
+            S: { type: 'unknown' },
+            C: { type: 'unknown' },
+            W: {
+              type: 'parameter',
+              distribution: { kind: 'normal', mean: 0, std: 1 },
+              update: { kind: 'wiener' },
+            },
+            k: { type: 'parameter' },
+          },
+          equations: [
+            { lhs: { op: 'D', args: ['S'], wrt: 't' }, rhs: { op: '*', args: ['k', 'S'] } },
+            { lhs: 'C', rhs: { op: '*', args: ['k', 'S'] } },
+          ],
+        },
+      },
+    } satisfies EsmFile
+
+    const flat = flatten(file)
+    expect(flat.stateVariables).toEqual(['Box.S'])
+    expect(flat.parameters).toEqual(['Box.k'])
+    expect(flat.brownianVariables).toEqual(['Box.W'])
+    expect(flat.variables).toEqual({ 'Box.C': '(Box.k * Box.S)' })
   })
 })
