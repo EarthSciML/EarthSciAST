@@ -128,7 +128,7 @@ let n = EarthSciAST.MAX_TEMPLATE_EXPANSION_DEPTH + 1
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "expression_templates" => tpl,
             "variables" => Dict{String,Any}(
-                "x" => Dict{String,Any}("type" => "state", "units" => "1", "default" => 0.0)),
+                "x" => Dict{String,Any}("type" => "unknown", "units" => "1", "default" => 0.0)),
             "equations" => Any[Dict{String,Any}(
                 "lhs" => Dict{String,Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
                 "rhs" => Dict{String,Any}("op" => "-", "args" => Any["x"]))])))

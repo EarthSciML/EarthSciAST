@@ -277,7 +277,7 @@ def build_1d_diffusion(fid, n, dx, bc, *, neumann=(0.5, -0.5), robin=(0.5, 0.3),
     ma = makearray(regions, values)
     model = {
         "tolerance": {"rel": 1e-3, "abs": 0.0},
-        "variables": {"u": {"type": "state", "shape": ["i"]}},
+        "variables": {"u": {"type": "unknown", "shape": ["i"]}},
         "equations": [
             {
                 "lhs": arrayop_lhs(["i"], "u", rng),
@@ -300,7 +300,7 @@ def build_advection(fid, n, dx, a=1.0, t_end=0.1):
     ma = makearray(regions, values)
     model = {
         "tolerance": {"rel": 1e-3, "abs": 0.0},
-        "variables": {"u": {"type": "state", "shape": ["i"]}},
+        "variables": {"u": {"type": "unknown", "shape": ["i"]}},
         "equations": [
             {
                 "lhs": arrayop_lhs(["i"], "u", rng),
@@ -331,7 +331,7 @@ def build_2d_diffusion(fid, n, h, t_end=0.03):
     )
     model = {
         "tolerance": {"rel": 1e-3, "abs": 0.0},
-        "variables": {"u": {"type": "state", "shape": ["i", "j"]}},
+        "variables": {"u": {"type": "unknown", "shape": ["i", "j"]}},
         "equations": [
             {
                 "lhs": arrayop_lhs(["i", "j"], "u", rng),

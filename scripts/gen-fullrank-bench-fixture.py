@@ -128,7 +128,7 @@ doc = {
         "Transport": {
             "expression_templates": templates,
             "variables": {
-                "q": {"type": "state", "units": "1",
+                "q": {"type": "unknown", "units": "1",
                       "shape": ["x", "y", "z"], "default": 1.5},
             },
             "equations": [

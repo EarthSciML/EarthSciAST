@@ -69,15 +69,25 @@ def main(esd_root, out, nlev, hybrid_json=None):
     ]
     v = m["variables"]
 
+    def derived(nm, expression, **decl):
+        """Declare `nm` as an unknown and define it with a bare-LHS equation.
+
+        esm 1.0.0 has no `observed` type and no variable `expression` field: a
+        derived quantity is an unknown whose defining expression is an ordinary
+        equation (esm-spec §6.3). Appending here keeps the emitted order stable.
+        """
+        v[nm] = {"type": "unknown", **decl}
+        m["equations"].append({"lhs": nm, "rhs": expression})
+
     # 2. CONUS-centered native GEOS-FP 4x5 slice
     v["lon0_deg"] = {"type": "parameter", "units": "deg", "default": -112.5,
                      "description": "West EDGE of the slice (native GEOS-FP 4x5 cell edge)."}
     v["lat0_deg"] = {"type": "parameter", "units": "deg", "default": 26.0,
                      "description": "Southern-most lat POINT of the slice (native GEOS-FP 4x5 point)."}
-    v["dlon_deg"] = {"type": "observed", "units": "deg", "expression": 5.0,
-                     "description": "GEOS-FP 4x5 native zonal spacing. Open west/east walls."}
-    v["dlat_deg"] = {"type": "observed", "units": "deg", "expression": 4.0,
-                     "description": "GEOS-FP 4x5 native meridional spacing. Open south/north walls."}
+    derived("dlon_deg", 5.0, units="deg",
+            description="GEOS-FP 4x5 native zonal spacing. Open west/east walls.")
+    derived("dlat_deg", 4.0, units="deg",
+            description="GEOS-FP 4x5 native meridional spacing. Open south/north walls.")
 
     def agg(idx, ranges, args, expr):
         return {"op": "aggregate", "output_idx": idx,
@@ -95,27 +105,29 @@ def main(esd_root, out, nlev, hybrid_json=None):
 
     # 3. PS constant for this analytic stage
     PS0 = 101325.0
-    v["PS"] = {"type": "observed", "units": "Pa", "shape": ["lon", "lat"],
-               "description": "Surface pressure, constant 101325 Pa (analytic Stage-B forcing).",
-               "expression": agg(["gi", "gj"], {"gi": "lon", "gj": "lat"}, [], PS0)}
+    derived("PS", agg(["gi", "gj"], {"gi": "lon", "gj": "lat"}, [], PS0),
+            units="Pa", shape=["lon", "lat"],
+            description="Surface pressure, constant 101325 Pa (analytic Stage-B forcing).")
 
     # 4. dp = dA[k] + dB[k]*PS(i,j)
-    v["dp"] = {"type": "observed", "units": "Pa", "shape": ["lon", "lat", "lev"],
-               "description": "Hybrid sigma-pressure thickness dp = dA[k] + dB[k]*PS(i,j).",
-               "expression": agg(["gi", "gj", "gk"], {"gi": "lon", "gj": "lat", "gk": "lev"},
-                                 ["PS", "dA", "dB"],
-                                 {"op": "+", "args": [ix("dA", "gk"),
-                                                      {"op": "*", "args": [ix("dB", "gk"), ix("PS", "gi", "gj")]}]})}
+    derived("dp",
+            agg(["gi", "gj", "gk"], {"gi": "lon", "gj": "lat", "gk": "lev"},
+                ["PS", "dA", "dB"],
+                {"op": "+", "args": [ix("dA", "gk"),
+                                     {"op": "*", "args": [ix("dB", "gk"), ix("PS", "gi", "gj")]}]}),
+            units="Pa", shape=["lon", "lat", "lev"],
+            description="Hybrid sigma-pressure thickness dp = dA[k] + dB[k]*PS(i,j).")
 
     # 6. Mz: analytic vertical air-mass flux, vanishing at both walls
     s = {"op": "/", "args": [{"op": "-", "args": ["ck", 1]}, float(NLEV)]}
-    v["Mz"] = {"type": "observed", "units": "Pa/s", "shape": ["lon", "lat", "lev_nodes"],
-               "description": "Analytic vertical face-normal air-mass flux, positive UPWARD; "
-                              "vanishes exactly at surface (k=1) and lid (k=NLEV+1).",
-               "expression": agg(["ci", "cj", "ck"], {"ci": "lon", "cj": "lat", "ck": "lev_nodes"}, [],
-                                 {"op": "*", "args": [0.05, {"op": "*", "args": [
-                                     4.0, s, {"op": "-", "args": [1.0, s]},
-                                     {"op": "-", "args": [1.0, {"op": "*", "args": [2.0, s]}]}]}]})}
+    derived("Mz",
+            agg(["ci", "cj", "ck"], {"ci": "lon", "cj": "lat", "ck": "lev_nodes"}, [],
+                {"op": "*", "args": [0.05, {"op": "*", "args": [
+                    4.0, s, {"op": "-", "args": [1.0, s]},
+                    {"op": "-", "args": [1.0, {"op": "*", "args": [2.0, s]}]}]}]}),
+            units="Pa/s", shape=["lon", "lat", "lev_nodes"],
+            description="Analytic vertical face-normal air-mass flux, positive UPWARD; "
+                        "vanishes exactly at surface (k=1) and lid (k=NLEV+1).")
 
     # 7. add the vertical term to the three tendency equations
     def Dlev(a):

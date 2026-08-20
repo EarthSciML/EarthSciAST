@@ -108,25 +108,32 @@ def _join(*classes: str) -> str:
     return RANK_CLASS[max(CLASS_RANK[c] for c in classes)] if classes else "const"
 
 
-def _loader_without_temporal(var: dict, model: dict) -> bool:
-    """True iff `var` is a discrete variable whose `data_ingest` refresh names a
-    DataLoader — found in the document's top-level `data_loaders`, attached to the
-    model by `load_model` — that declares no `temporal` block. Such a loader
-    describes non-time-varying data, so its output variable seeds CONST (folds at
-    bind), not DISCRETE (RFC pure-io-data-loaders §4.6 / §5.7.2)."""
-    refresh = var.get("refresh")
-    if not isinstance(refresh, dict) or refresh.get("kind") != "data_ingest":
+def _source_without_temporal(var: dict, model: dict) -> bool:
+    """True iff `var` is a parameter whose `data` update names a DataSource —
+    found in the document's top-level `data_sources`, attached to the model by
+    `load_model` — that declares no `temporal` block. Such a source describes
+    non-time-varying data, so the parameter reading it seeds CONST (folds at
+    bind), not DISCRETE (RFC pure-io-data-loaders §4.6 / §5.7.2). The rule is
+    unchanged from 0.x; only its spelling is, since a `discrete` variable with a
+    `data_ingest` refresh is now a parameter with a `data` update."""
+    update = var.get("update")
+    if not isinstance(update, dict) or update.get("kind") != "data":
         return False
-    loaders = model.get("data_loaders") or {}
-    loader = loaders.get(refresh.get("source"))
-    return isinstance(loader, dict) and "temporal" not in loader
+    sources = model.get("data_sources") or {}
+    source = sources.get(update.get("source"))
+    return isinstance(source, dict) and "temporal" not in source
 
 
 def seed_leaf(leaf: Any, model: dict) -> str:
-    """Seed a leaf's cadence from its declared role (§5.7 leaf-seed table):
-    state → continuous, parameter/literal → const, discrete → discrete. The
-    independent variable `t` is continuous (an explicit continuous-t forcing is
-    not piecewise-constant between events). Index-set names are CONST topology;
+    """Seed a leaf's cadence from its DERIVED role (§5.7 leaf-seed table).
+
+    From esm 1.0.0 the seed cannot be read off a declared type, because there are
+    only two of those. It comes from the classification (esm-spec §6.3.1):
+    an unknown seeds CONTINUOUS, a Brownian parameter (`update.kind == "wiener"`)
+    seeds CONTINUOUS, a discrete-cadence parameter (any other `update`) seeds
+    DISCRETE, and a plain or sampled parameter seeds CONST. The independent
+    variable `t` is continuous (an explicit continuous-t forcing is not
+    piecewise-constant between events). Index-set names are CONST topology;
     bound index symbols, numeric literals, and relation-name tags are CONST."""
     if isinstance(leaf, (int, float)) and not isinstance(leaf, bool):
         return "const"
@@ -136,26 +143,30 @@ def seed_leaf(leaf: Any, model: dict) -> str:
         return "continuous"
     variables = model.get("variables", {})
     if leaf in variables:
-        kind = variables[leaf].get("type")
-        if kind == "state":
+        var = variables[leaf]
+        kind = var.get("type")
+        if kind == "unknown":
+            # An unknown is CONTINUOUS whether it is an ODE state or an observed
+            # one: an observed leaf resolves to its defining equation's class
+            # elsewhere, and CONTINUOUS is the sound seed here either way.
             return "continuous"
-        if kind == "discrete":
-            # Loader-seeded cadence refinement (RFC pure-io-data-loaders §4.6 /
-            # §5.7.2): a discrete variable fed by a `data_ingest` refresh whose
-            # source DataLoader declares no `temporal` block is non-time-varying
-            # and seeds CONST (folds at bind). With `temporal` (or any other
-            # trigger / an unresolvable source) it keeps the declared DISCRETE
-            # seed and refreshes on each ingest event.
-            if _loader_without_temporal(variables[leaf], model):
+        if kind == "parameter":
+            update = var.get("update")
+            if not isinstance(update, dict):
+                # constant or sampled-once — CONST either way.
+                return "const"
+            if update.get("kind") == "wiener":
+                # A driving Wiener process is resampled every step.
+                return "continuous"
+            # Source-seeded cadence refinement (RFC pure-io-data-loaders §4.6 /
+            # §5.7.2): a parameter fed by a `data` update whose source declares
+            # no `temporal` block is non-time-varying and seeds CONST (folds at
+            # bind). With `temporal` — or any other update kind, or an
+            # unresolvable source — it seeds DISCRETE and refreshes on each
+            # event.
+            if _source_without_temporal(var, model):
                 return "const"
             return "discrete"
-        if kind == "brownian":
-            return "continuous"
-        if kind in ("parameter", "observed"):
-            # parameter = CONST. observed leaves resolve to their defining
-            # expression's class elsewhere; none of the §6.1 fixtures read an
-            # observed as a leaf, so CONST is the conservative seed here.
-            return "const"
         raise CadenceError(f"leaf {leaf!r}: unknown variable kind {kind!r}")
     # index-set name, bound index symbol (i, k, e, f, le), relation tag
     # ("edge"), or numeric-string literal — all CONST.
@@ -389,12 +400,12 @@ def load_model(repo_root: Path, fixture_rel: str, model_name: str) -> dict:
     if model_name not in models:
         raise CadenceError(f"{fixture_rel}: model {model_name!r} not found")
     model = models[model_name]
-    # Attach the document's top-level `data_loaders` so the loader-seeded cadence
+    # Attach the document's top-level `data_sources` so the source-seeded cadence
     # refinement (§5.7.2) can resolve a `discrete` variable's `data_ingest`
     # source loader and decide DISCRETE (temporal) vs CONST (no temporal).
-    loaders = doc.get("data_loaders")
-    if loaders and "data_loaders" not in model:
-        model = {**model, "data_loaders": loaders}
+    sources = doc.get("data_sources")
+    if sources and "data_sources" not in model:
+        model = {**model, "data_sources": sources}
     # Attach the document's top-level `index_sets` too: in ESM v0.8.0 `index_sets`
     # moved to the document level, so the partition's structural check (which reads
     # `model["index_sets"]` to confirm an output buffer targets a declared index
@@ -622,7 +633,7 @@ def _negative_controls(models: dict) -> int:
 
     # E2: a CONTINUOUS relational (distinct) node must be rejected (guard 2).
     bad_model = {
-        "variables": {"u": {"type": "state"}, "lo": {"type": "parameter"}},
+        "variables": {"u": {"type": "unknown"}, "lo": {"type": "parameter"}},
         "index_sets": {"faces": {"kind": "interval", "size": 4}},
         "equations": [
             {
