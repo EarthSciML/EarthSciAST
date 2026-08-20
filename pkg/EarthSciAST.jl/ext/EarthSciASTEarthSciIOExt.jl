@@ -180,7 +180,10 @@ end
 
 """One column of a record-table loader: where it comes from, how it decodes."""
 struct ColumnSpec
-    name::String              # the loader-level variable name
+    # The CONSUMING PARAMETER's flattened name ("Ingest.lon") — the column's
+    # identity, because two models may bind a same-named parameter to one source
+    # with different `file_variable`s and their columns must not collide.
+    name::String
     file_variable::String     # the on-disk column
     codes::Union{Nothing,CodeMap}
     # The declared `unit_conversion` (esm-spec §8.5), parsed; `nothing` when the
@@ -467,8 +470,8 @@ format's decode options, an optional shared [`RecordTable`], the per-axis
 degenerates to a bare EarthSciIO provider read whole — the pre-§8.9 behaviour.
 """
 struct DeclaredProvider
-    key::String                                   # "<Loader>.<var>"
-    varname::String
+    key::String                                   # "<ModelPath>.<param>"
+    varname::String                               # its LOCAL name (the model array)
     inner::EarthSciIO.Provider
     table::Union{Nothing,RecordTable}
     column::String
@@ -643,7 +646,7 @@ function providers_from_document(doc;
         columns = ColumnSpec[]
         for b in binds
             fv = String(get(b.from, "file_variable", b.local_name))
-            push!(columns, ColumnSpec(b.local_name, fv,
+            push!(columns, ColumnSpec(b.key, fv,
                 _parse_codes("$(b.key).update.from", b.from),
                 parse_unit_conversion(get(b.from, "unit_conversion", nothing);
                                       variable_name = b.key)))
@@ -678,7 +681,10 @@ function providers_from_document(doc;
             push_down = sel !== nothing && table === nothing &&
                         EarthSciIO.supports_selection(inner) &&
                         !any(ax isa AbstractDict && haskey(ax, "gated_by") for ax in sel)
-            out[key] = DeclaredProvider(key, spec.name, inner, table, spec.name,
+            # `varname` is the LOCAL name — it is what the gate's `applies_to`
+            # names, i.e. the model array. `column` is the flattened name, which
+            # is how the shared decode indexes this parameter's column.
+            out[key] = DeclaredProvider(key, b.local_name, inner, table, spec.name,
                                         sel, push_down, extent_mp,
                                         spec.unit_conversion)
         end

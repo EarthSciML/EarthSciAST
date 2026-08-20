@@ -293,6 +293,38 @@ def test_loader_variables_that_disagree_on_the_count_are_an_error(doc_and_tmp, m
     assert "not aligned on one record axis" in msg
 
 
+def test_same_named_parameters_in_two_models_keep_their_own_columns(doc_and_tmp):
+    """Two models may declare the SAME parameter name against one source, bound
+    to different columns. The provider key separates them (it is the flattened
+    name), and so must the shared decode's column identity -- keyed by the LOCAL
+    name, both resolve to one column and one model silently reads the other's
+    data (and `require_finite` follows it onto the wrong column)."""
+    doc, tmp_path = doc_and_tmp
+    # A second model reading the same source, whose `lon` is the LATITUDE column
+    # -- so a collision is visible as latitude values.
+    doc["models"]["Ingest2"] = {
+        "system_kind": "nonlinear",
+        "equations": [],
+        "variables": {
+            "lon": {
+                "type": "parameter",
+                "units": "degree",
+                "default": 0.0,
+                "shape": ["emis_records"],
+                "update": {
+                    "kind": "data",
+                    "source": "EGU_Emis",
+                    "from": {"file_variable": "LATITUDE"},
+                },
+            }
+        },
+    }
+    providers = _providers(doc, tmp_path)
+    assert "Ingest.lon" in providers and "Ingest2.lon" in providers
+    assert _sample(doc, tmp_path, "Ingest.lon") == [-90.0, -92.0, -93.0]
+    assert _sample(doc, tmp_path, "Ingest2.lon") == [40.0, 43.0, 44.0]
+
+
 def test_a_text_column_with_no_codes_map_is_a_boundary_error(doc_and_tmp):
     """FORMAT-08-A-007: a model forcing must be numeric, so a text column with
     no ``codes`` map fails at the loader boundary, not as an absent forcing."""

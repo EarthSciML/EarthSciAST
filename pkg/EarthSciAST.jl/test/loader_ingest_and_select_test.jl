@@ -201,6 +201,41 @@ end
         end
     end
 
+    # Two models may declare the SAME parameter name against one source, binding
+    # it to different columns. The provider key separates them (it is the
+    # flattened name), and so must the shared decode's column identity — keyed by
+    # the LOCAL name, both would resolve to one column and one of the two models
+    # would silently read the other's data.
+    @testset "same-named parameters in two models keep their own columns" begin
+        mktempdir() do dir
+            doc = _lis_document(dir)
+            # A second model reading the same source, whose `lon` is the LATITUDE
+            # column — so a collision would be visible as latitude values.
+            doc["models"]["Ingest2"] = Dict{String,Any}(
+                "system_kind" => "nonlinear",
+                "equations" => Any[],
+                "variables" => Dict{String,Any}(
+                    "lon" => Dict{String,Any}(
+                        "type" => "parameter",
+                        "units" => "degree",
+                        "default" => 0.0,
+                        "shape" => Any["emis_records"],
+                        "update" => Dict{String,Any}(
+                            "kind" => "data",
+                            "source" => "EGU_Emis",
+                            "from" => Dict{String,Any}("file_variable" => "LATITUDE"),
+                        ),
+                    ),
+                ),
+            )
+            cache = joinpath(dir, "cache")
+            provs = EA_LIS.providers_from_document(doc; cache_root = cache)
+            @test haskey(provs, "Ingest.lon") && haskey(provs, "Ingest2.lon")
+            @test _lis_sample(doc, cache, "Ingest.lon") == [-90.0, -92.0, -93.0]
+            @test _lis_sample(doc, cache, "Ingest2.lon") == [40.0, 43.0, 44.0]
+        end
+    end
+
     @testset "a text column with no codes map is a boundary error" begin
         mktempdir() do dir
             doc = _lis_document(dir)
