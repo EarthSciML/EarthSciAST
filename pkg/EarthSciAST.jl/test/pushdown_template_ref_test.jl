@@ -42,7 +42,32 @@ function _agg(output_idx, ranges, expr; reduce=nothing, args=String[], extra...)
     return d
 end
 _param(shape) = Dict{String,Any}("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-_obs(shape, expr) = Dict{String,Any}("type"=>"observed", "shape"=>shape, "expression"=>expr)
+# The DECLARATION of an observed unknown. From esm 1.0.0 the body is not here —
+# it is the variable's defining equation; see `_define!`.
+_obs(shape) = Dict{String,Any}("type"=>"unknown", "shape"=>shape)
+
+# The defining right-hand side of `name`, where 0.x kept `variables[name]["expression"]`.
+function _defrhs(model, name)
+    for eq in model["equations"]
+        get(eq, "lhs", nothing) == name && return eq["rhs"]
+    end
+    error("$(name) has no defining equation")
+end
+
+# Declare `name` an observed unknown of `model` and DEFINE it by the
+# bare-variable-LHS equation whose LHS is `name`, replacing any definition
+# already there (these testsets redeclare `E_PM25` over `base_doc`'s).
+function _define!(model, name, shape, expr)
+    model["variables"][name] = _obs(shape)
+    for eq in model["equations"]
+        if get(eq, "lhs", nothing) == name
+            eq["rhs"] = expr
+            return model
+        end
+    end
+    push!(model["equations"], Dict{String,Any}("lhs"=>name, "rhs"=>expr))
+    return model
+end
 _contain() = _op("and",
     _op("<=", _ix("src_W","c"), _ix("px","r")), _op("<", _ix("px","r"), _ix("src_E","c")),
     _op("<=", _ix("src_S","c"), _ix("py","r")), _op("<", _ix("py","r"), _ix("src_N","c")))
@@ -57,22 +82,25 @@ function base_doc()
     for n in ("src_W","src_S","src_E","src_N"); v[n] = _param(["src_cells"]); end
     for n in ("px","py","emis_annual"); v[n] = _param(["emis_records"]); end
     v["SR_PM25"] = _param(["src_cells","rcv_cells"])
-    v["E_PM25"] = _obs(["src_cells"], _agg(["c"], _ERANGES(),
-        _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("emis_annual","r"));
-        reduce="+", args=_EARGS))
-    v["conc_PM25"] = _obs(["rcv_cells"], _agg(["rcv"],
-        Dict{String,Any}("s"=>Dict{String,Any}("from"=>"src_cells"),
-                         "rcv"=>Dict{String,Any}("from"=>"rcv_cells")),
-        _op("*", _ix("SR_PM25","s","rcv"), _ix("E_PM25","s"));
-        reduce="+", args=["SR_PM25","E_PM25"]))
-    return Dict{String,Any}(
-        "esm"=>"0.9.0", "metadata"=>Dict{String,Any}("name"=>"pd_tmpl"),
+    d = Dict{String,Any}(
+        "esm"=>"1.0.0", "metadata"=>Dict{String,Any}("name"=>"pd_tmpl"),
         "index_sets"=>Dict{String,Any}(
             "src_cells"=>Dict{String,Any}("kind"=>"interval","size"=>4),
             "rcv_cells"=>Dict{String,Any}("kind"=>"interval","size"=>2),
             "emis_records"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
         "models"=>Dict{String,Any}("Binned"=>Dict{String,Any}(
             "variables"=>v, "equations"=>Any[])))
+    m = d["models"]["Binned"]
+    # Listed in the §5.5.7 canonical order — definitions sorted by defined name.
+    _define!(m, "E_PM25", ["src_cells"], _agg(["c"], _ERANGES(),
+        _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("emis_annual","r"));
+        reduce="+", args=_EARGS))
+    _define!(m, "conc_PM25", ["rcv_cells"], _agg(["rcv"],
+        Dict{String,Any}("s"=>Dict{String,Any}("from"=>"src_cells"),
+                         "rcv"=>Dict{String,Any}("from"=>"rcv_cells")),
+        _op("*", _ix("SR_PM25","s","rcv"), _ix("E_PM25","s"));
+        reduce="+", args=["SR_PM25","E_PM25"]))
+    return d
 end
 
 @testset "pushdown sees through surviving template references" begin
@@ -90,7 +118,7 @@ end
             "body"=>_op("*", _op("ifelse", _op("and",
                 _op("<=", "lo_x", "x"), _op("<", "x", "hi_x"),
                 _op("<=", "lo_y", "y"), _op("<", "y", "hi_y")), 1.0, 0.0), "wgt")))
-        m["variables"]["E_PM25"] = _obs(["src_cells"], _agg(["c"], _ERANGES(),
+        _define!(m, "E_PM25", ["src_cells"], _agg(["c"], _ERANGES(),
             _apply("bin2", ["lo_x"=>_ix("src_W","c"), "lo_y"=>_ix("src_S","c"),
                             "hi_x"=>_ix("src_E","c"), "hi_y"=>_ix("src_N","c"),
                             "x"=>_ix("px","r"), "y"=>_ix("py","r"),
@@ -102,8 +130,9 @@ end
         @test r !== d                                            # it fired
         rv = r["models"]["Binned"]["variables"]
         @test rv["E_PM25"]["shape"] == Any["pd_support__src_cells"]
-        @test rv["E_PM25"]["expression"]["ranges"]["c"]["from"] == "pd_support__src_cells"
-        b = rv["E_PM25"]["expression"]["expr"]["bindings"]
+        edef = _defrhs(r["models"]["Binned"], "E_PM25")
+        @test edef["ranges"]["c"]["from"] == "pd_support__src_cells"
+        b = edef["expr"]["bindings"]
         @test b["lo_x"]["args"][1] == "pd_cell__src_cells__src_W"
         @test b["hi_y"]["args"][1] == "pd_cell__src_cells__src_N"
         @test b["x"]["args"][1] == "px"                          # records untouched
@@ -124,7 +153,7 @@ end
         m["expression_templates"] = Dict{String,Any}("bin3"=>Dict{String,Any}(
             "params"=>Any["wgt"],
             "body"=>_op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("wgt","r"))))
-        m["variables"]["E_PM25"] = _obs(["src_cells"], _agg(["c"], _ERANGES(),
+        _define!(m, "E_PM25", ["src_cells"], _agg(["c"], _ERANGES(),
             _apply("bin3", ["wgt"=>"emis_annual"]); reduce="+", args=_EARGS))
         err = try
             EA.desugar_pushdown(d; model_name="Binned"); nothing
@@ -141,7 +170,7 @@ end
         # (a) genuinely dense: no containment anywhere ⇒ SILENT. Firing here
         #     would cry wolf on every ordinary reduction in every document.
         dense = base_doc()
-        dense["models"]["Binned"]["variables"]["E_PM25"] = _obs(["src_cells"],
+        _define!(dense["models"]["Binned"], "E_PM25", ["src_cells"],
             _agg(["c"], _ERANGES(), _op("*", _ix("emis_annual","r"), 1.0);
                  reduce="+", args=["emis_annual"]))
         @test isempty(EA.pushdown_diagnostics(dense; model_name="Binned"))
@@ -151,7 +180,7 @@ end
         #     because the registry is gone, so expansion cannot resolve it. The
         #     document is join-shaped, so this is reported, naming the template.
         orphan = base_doc()
-        orphan["models"]["Binned"]["variables"]["E_PM25"] = _obs(["src_cells"],
+        _define!(orphan["models"]["Binned"], "E_PM25", ["src_cells"],
             _agg(["c"], _ERANGES(), _apply("gone", ["wgt"=>"emis_annual"]);
                  reduce="+", args=_EARGS))
         dg = EA.pushdown_diagnostics(orphan; model_name="Binned")
@@ -188,7 +217,7 @@ end
         # naming them in the body would trip the flatten guard; they ride as bindings.
         for (Ename, isp) in (("E_VOC","is_VOC"), ("E_NOx","is_NOx"), ("E_NH3","is_NH3"),
                              ("E_SOx","is_SOx"), ("E_PM25","is_PM25"))
-            m["variables"][Ename]["expression"]["expr"] = _apply("bin_emissions",
+            _defrhs(m, Ename)["expr"] = _apply("bin_emissions",
                 ["xmin"=>"src_W", "ymin"=>"src_S", "xmax"=>"src_E", "ymax"=>"src_N",
                  "ptx"=>"X", "pty"=>"Y", "tot"=>"emis_annual", "frac"=>isp])
         end
@@ -207,7 +236,7 @@ end
         @test sort(String.(rec["gated_select"]["applies_to"])) ==
               ["SR_PrimaryPM25", "SR_SOA", "SR_pNH4", "SR_pNO3", "SR_pSO4"]
         for E in ("E_VOC","E_NOx","E_NH3","E_SOx","E_PM25")
-            ex = r["models"]["ISRM"]["variables"][E]["expression"]
+            ex = _defrhs(r["models"]["ISRM"], E)
             @test r["models"]["ISRM"]["variables"][E]["shape"] == Any["pd_support__src_cells"]
             @test ex["ranges"]["c"]["from"] == "pd_support__src_cells"
             @test haskey(ex, "join")
