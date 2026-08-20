@@ -272,29 +272,29 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
 
     // ---- providers: mocks only, keyed by the document's loader variables ----
     let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
-        ("MockSR.TotalPop".into(), Box::new(MockConst(total_pop.to_vec()))),
+        ("ISRM.TotalPop".into(), Box::new(MockConst(total_pop.to_vec()))),
         (
-            "MockSR.MortalityRate".into(),
+            "ISRM.MortalityRate".into(),
             Box::new(MockConst(mortality.to_vec())),
         ),
-        ("MockPts.lon".into(), Box::new(MockConst(lon.clone()))),
-        ("MockPts.lat".into(), Box::new(MockConst(lat.clone()))),
+        ("ISRM.emis_lon".into(), Box::new(MockConst(lon.clone()))),
+        ("ISRM.emis_lat".into(), Box::new(MockConst(lat.clone()))),
         (
-            "MockPts.annual".into(),
+            "ISRM.emis_annual".into(),
             Box::new(MockConst(emis_annual.to_vec())),
         ),
-        ("MockPts.vVOC".into(), Box::new(MockConst(is_voc.to_vec()))),
-        ("MockPts.vNOx".into(), Box::new(MockConst(is_nox.to_vec()))),
-        ("MockPts.vNH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
-        ("MockPts.vSOx".into(), Box::new(MockConst(is_sox.to_vec()))),
-        ("MockPts.vPM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
+        ("ISRM.is_VOC".into(), Box::new(MockConst(is_voc.to_vec()))),
+        ("ISRM.is_NOx".into(), Box::new(MockConst(is_nox.to_vec()))),
+        ("ISRM.is_NH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
+        ("ISRM.is_SOx".into(), Box::new(MockConst(is_sox.to_vec()))),
+        ("ISRM.is_PM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
     ];
     let mut call_logs: HashMap<String, Rc<RefCell<Vec<Call>>>> = HashMap::new();
     for v in LVARS {
         let calls = Rc::new(RefCell::new(Vec::new()));
         call_logs.insert(v.to_string(), calls.clone());
         providers.push((
-            format!("MockSR.{v}"),
+            format!("ISRM.SR_{v}"),
             Box::new(MockGated {
                 full: full_sr[v].clone(),
                 calls,
@@ -496,29 +496,29 @@ fn prepare_pushdown_l1_single_member_support_set() {
             .expect("parse pushdown_l1.esm");
 
     let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
-        ("MockSR.TotalPop".into(), Box::new(MockConst(total_pop.to_vec()))),
+        ("ISRM.TotalPop".into(), Box::new(MockConst(total_pop.to_vec()))),
         (
-            "MockSR.MortalityRate".into(),
+            "ISRM.MortalityRate".into(),
             Box::new(MockConst(mortality.to_vec())),
         ),
-        ("MockPts.lon".into(), Box::new(MockConst(lon.clone()))),
-        ("MockPts.lat".into(), Box::new(MockConst(lat.clone()))),
+        ("ISRM.emis_lon".into(), Box::new(MockConst(lon.clone()))),
+        ("ISRM.emis_lat".into(), Box::new(MockConst(lat.clone()))),
         (
-            "MockPts.annual".into(),
+            "ISRM.emis_annual".into(),
             Box::new(MockConst(emis_annual.to_vec())),
         ),
-        ("MockPts.vVOC".into(), Box::new(MockConst(is_voc.to_vec()))),
-        ("MockPts.vNOx".into(), Box::new(MockConst(is_nox.to_vec()))),
-        ("MockPts.vNH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
-        ("MockPts.vSOx".into(), Box::new(MockConst(is_sox.to_vec()))),
-        ("MockPts.vPM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
+        ("ISRM.is_VOC".into(), Box::new(MockConst(is_voc.to_vec()))),
+        ("ISRM.is_NOx".into(), Box::new(MockConst(is_nox.to_vec()))),
+        ("ISRM.is_NH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
+        ("ISRM.is_SOx".into(), Box::new(MockConst(is_sox.to_vec()))),
+        ("ISRM.is_PM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
     ];
     let mut call_logs: HashMap<String, Rc<RefCell<Vec<Call>>>> = HashMap::new();
     for v in LVARS {
         let calls = Rc::new(RefCell::new(Vec::new()));
         call_logs.insert(v.to_string(), calls.clone());
         providers.push((
-            format!("MockSR.{v}"),
+            format!("ISRM.SR_{v}"),
             Box::new(MockGated {
                 full: full_sr[v].clone(),
                 calls,

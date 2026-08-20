@@ -21,18 +21,23 @@ from earthsci_ast.esm_types import (  # noqa: E402
     DataSourceKind,
     DataSourceLocation,
     DataSourceTemporal,
-    DataSourceBinding,
 )
 from earthsci_ast.flatten import LoaderField  # noqa: E402
 
 
 def _field(url, *, temporal=None, fmt_meta=None, variables=("u",), name="ERA5.pl", file_vars=None):
+    """One data-fed PARAMETER lowered to a `LoaderField`.
+
+    esm 1.0.0: a data source declares no variables of its own, so the source
+    carries only ingest configuration and the binding (`file_variable`, units,
+    `select`) lives on the consuming parameter -- which is what a `LoaderField`
+    describes, and what its `name` is (esm-spec §8.5).
+    """
     file_vars = file_vars or {v: v for v in variables}
-    dl = DataSource(
+    ds = DataSource(
         name=name,
         kind=DataSourceKind.GRID,
         source=DataSourceLocation(url_template=url),
-        variables={v: DataSourceBinding(file_variable=file_vars[v], units="1") for v in variables},
         temporal=temporal,
         metadata=fmt_meta or {},
     )
@@ -41,8 +46,8 @@ def _field(url, *, temporal=None, fmt_meta=None, variables=("u",), name="ERA5.pl
         name=f"{name}.{var0}",
         owner=name.split(".")[0],
         subkey=name.split(".")[-1],
-        var=var0,
-        loader=dl,
+        var=file_vars[var0],
+        data_source=ds,
         cadence="discrete" if temporal else "const",
     )
 
@@ -71,8 +76,8 @@ _LANDFIRE_META = {
 
 
 def test_format_inferred_from_url_suffix():
-    assert _esio_format(_field("https://x/era5_{date:%Y}_{date:%m}.nc").loader) == "netcdf"
-    assert _esio_format(_field("https://x/points.csv").loader) == "csv"
+    assert _esio_format(_field("https://x/era5_{date:%Y}_{date:%m}.nc").data_source) == "netcdf"
+    assert _esio_format(_field("https://x/points.csv").data_source) == "csv"
 
 
 def test_to_esio_loader_maps_url_vars_and_temporal():
@@ -80,10 +85,13 @@ def test_to_esio_loader_maps_url_vars_and_temporal():
         start="2018-11-08T00:00:00Z", frequency="PT1H", file_period="P1M", time_variable="time"
     )
     edl = to_esio_loader(
-        _field("https://x/era5_{date:%Y}_{date:%m}.nc", temporal=t, variables=("t", "u"))
+        _field("https://x/era5_{date:%Y}_{date:%m}.nc", temporal=t, variables=("t",))
     )
     assert edl.format == "netcdf"
-    assert list(edl.variables) == ["t", "u"]
+    # ONE field is ONE parameter reading ONE file variable: from 1.0.0 the
+    # binding is the consuming parameter's, so a provider reads exactly the
+    # variable that parameter names (esm-spec §8.5).
+    assert list(edl.variables) == ["t"]
     # url is a per-anchor resolver expanding the ESS template
     assert edl.url(_dt.datetime(2018, 11, 8)).endswith("era5_2018_11.nc")
     # temporal converted to naive-UTC start + timedelta cadence
@@ -158,20 +166,23 @@ def test_cds_loader_builds_era5_request_url(monkeypatch):
         "https://data.earthsci.dev/era5/era5_pl_{date:%Y}_{date:%m}.nc",
         temporal=t,
         fmt_meta=meta,
-        variables=("u", "t"),
+        variables=("u",),
     )
     target = _Target([-121.6, -121.4], [39.7, 39.9])
 
     edl = to_esio_loader(field, target=target)
     assert edl.format == "netcdf"  # downloaded asset is NetCDF
-    assert list(edl.variables) == ["u", "t"]  # on-disk short names kept
+    # ONE field is ONE parameter reading ONE file variable (esm-spec §8.5), so
+    # the request names the one CDS variable that parameter's `file_variable`
+    # maps to. A model wanting `t` as well declares a SECOND parameter.
+    assert list(edl.variables) == ["u"]  # on-disk short name kept
 
     url = edl.url(_dt.datetime(2018, 11, 8, 14))
     dataset, request = esio.decode_cds_url(url)
     assert dataset == "reanalysis-era5-pressure-levels"
     assert request["area"] == era5_area_from_bbox(-121.6, 39.7, -121.4, 39.9)
     assert request["pressure_level"] == ["1000"]  # trimmed via metadata
-    assert sorted(request["variable"]) == ["temperature", "u_component_of_wind"]
+    assert sorted(request["variable"]) == ["u_component_of_wind"]
     assert request["year"] == ["2018"] and request["month"] == ["11"]
 
     # the cds transport is registered, so a provider builds without a network hit

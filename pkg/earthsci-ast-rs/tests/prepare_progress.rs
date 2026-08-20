@@ -204,25 +204,25 @@ fn run(
 
     let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
         (
-            "MockSR.TotalPop".into(),
+            "ISRM.TotalPop".into(),
             Box::new(MockConst(total_pop.to_vec())),
         ),
         (
-            "MockSR.MortalityRate".into(),
+            "ISRM.MortalityRate".into(),
             Box::new(MockConst(mortality.to_vec())),
         ),
-        ("MockPts.lon".into(), Box::new(MockConst(lon))),
-        ("MockPts.lat".into(), Box::new(MockConst(lat))),
+        ("ISRM.emis_lon".into(), Box::new(MockConst(lon))),
+        ("ISRM.emis_lat".into(), Box::new(MockConst(lat))),
         (
-            "MockPts.annual".into(),
+            "ISRM.emis_annual".into(),
             Box::new(MockConst(emis_annual.to_vec())),
         ),
-        ("MockPts.vVOC".into(), Box::new(MockConst(is_voc.to_vec()))),
-        ("MockPts.vNOx".into(), Box::new(MockConst(is_nox.to_vec()))),
-        ("MockPts.vNH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
-        ("MockPts.vSOx".into(), Box::new(MockConst(is_sox.to_vec()))),
+        ("ISRM.is_VOC".into(), Box::new(MockConst(is_voc.to_vec()))),
+        ("ISRM.is_NOx".into(), Box::new(MockConst(is_nox.to_vec()))),
+        ("ISRM.is_NH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
+        ("ISRM.is_SOx".into(), Box::new(MockConst(is_sox.to_vec()))),
         (
-            "MockPts.vPM25".into(),
+            "ISRM.is_PM25".into(),
             Box::new(MockConst(is_pm25.to_vec())),
         ),
     ];
@@ -240,9 +240,9 @@ fn run(
             }
         }
         let calls = Rc::new(RefCell::new(Vec::new()));
-        call_logs.insert(format!("MockSR.{v}"), calls.clone());
+        call_logs.insert(format!("ISRM.SR_{v}"), calls.clone());
         providers.push((
-            format!("MockSR.{v}"),
+            format!("ISRM.SR_{v}"),
             Box::new(MockGated { full: a, calls }),
         ));
     }
@@ -341,7 +341,7 @@ fn the_observer_fires_in_every_phase_and_names_each_item() {
         .collect();
     assert_eq!(gated.len(), LVARS.len(), "{gated:#?}");
     for v in LVARS {
-        assert!(gated.iter().any(|e| e.item == format!("MockSR.{v}")));
+        assert!(gated.iter().any(|e| e.item == format!("ISRM.SR_{v}")));
     }
 
     // 4. The counters are usable: monotone within a phase, and ending at the
@@ -402,7 +402,7 @@ fn a_batched_gated_fetch_reports_per_batch_and_is_bit_identical() {
     // The unbatched run made ONE request per gated provider, selecting the
     // whole support set; the batched run made one per member, in order.
     for v in LVARS {
-        let key = format!("MockSR.{v}");
+        let key = format!("ISRM.SR_{v}");
         assert_eq!(plain_calls[&key].len(), 1, "{key} unbatched");
         assert_eq!(
             plain_calls[&key][0][1],
@@ -484,7 +484,7 @@ fn cancelling_stops_at_a_named_point_and_is_distinguishable_from_a_failure() {
         "the message does not name the phase: {e}"
     );
     assert!(
-        e.0.contains("MockSR."),
+        e.0.contains("ISRM.SR_"),
         "the message does not name the item: {e}"
     );
     assert!(

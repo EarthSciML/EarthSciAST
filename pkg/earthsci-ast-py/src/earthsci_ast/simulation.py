@@ -152,7 +152,7 @@ def simulate(
         Inject a real EarthSciIO provider here. Ignored for systems without data
         loaders, and superseded by ``loader_provider`` when both are given.
     providers:
-        Optional ``{"<Loader>.<var>": provider}`` map — the loaded-data injection
+        Optional ``{"<ModelPath>.<param>": provider}`` map — the loaded-data injection
         seam for TOP-LEVEL ``data_sources`` bound through ``variable_map`` /
         scoped-reference ``ic`` (DESIGN pde_simulation_pipeline §2). Each provider
         is either a callable ``(t) -> array_like`` or an object exposing
@@ -223,7 +223,7 @@ def simulate(
     # Provider injection for top-level ``data_sources`` bound through
     # ``variable_map`` / scoped-reference ``ic`` (DESIGN pde_simulation_pipeline
     # §2). Loaded fields enter ONLY through the data-Provider seam, keyed by their
-    # declared ``<Loader>.<var>`` name — never as raw arrays keyed by an internal
+    # consuming parameter's flattened name — never as raw arrays keyed around
     # consumer name. Each provider is materialized ONCE at build time (t0),
     # reachable when a scoped-``ic`` folds ``Loader.*`` into u0 (R2) and when a
     # loader→consumer ``variable_map`` routes a lifted gather to the loader name.

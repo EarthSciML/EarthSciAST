@@ -323,11 +323,11 @@ def test_pushdown_provider_gates_from_record_and_template():
     # A provider key is "<Source>.<parameter>": from esm 1.0.0 the parameter IS
     # the loaded field, so it is the parameter -- not a loader variable -- that
     # a provider serves and that the rewrite record gates.
-    providers = {f"MockSR.SR_{v}": object() for v in ["SOA", "pNO3"]}
-    providers["MockPts.emis_lon"] = object()  # not one of the gated arrays
+    providers = {f"ISRM.SR_{v}": object() for v in ["SOA", "pNO3"]}
+    providers["ISRM.emis_lon"] = object()  # not one of the gated arrays
     gates = _pushdown_provider_gates(doc, providers)
-    assert sorted(gates) == ["MockSR.SR_SOA", "MockSR.SR_pNO3"]
-    g = gates["MockSR.SR_SOA"]
+    assert sorted(gates) == ["ISRM.SR_SOA", "ISRM.SR_pNO3"]
+    g = gates["ISRM.SR_SOA"]
     # the source template's fixed layer survives; the STALE gated_by name is
     # replaced by the record's generated set. The template is parsed through the
     # shared §8.9.2 selector vocabulary, so the emitted `fixed` is the spec's
@@ -353,15 +353,15 @@ def test_pushdown_provider_gates_template_axis_mismatch_raises():
     from earthsci_ast.pushdown_rewrite import PushdownRewriteError
 
     with pytest.raises(PushdownRewriteError, match="disagree"):
-        _pushdown_provider_gates(doc, {"MockSR.SR_SOA": object()})
+        _pushdown_provider_gates(doc, {"ISRM.SR_SOA": object()})
 
 
 def test_inject_pushdown_aliases():
-    dst = {"src_W": 1, "MockPts.lon": 2, "already.there": 3}
+    dst = {"src_W": 1, "ISRM.lon": 2, "already.there": 3}
     _inject_pushdown_aliases(
         dst,
         ["ISRM.src_W", "ISRM.emis_lon", "already.there"],
-        [("MockPts.lon", "ISRM.emis_lon")],
+        [("ISRM.lon", "ISRM.emis_lon")],
     )
     assert dst["ISRM.src_W"] == 1  # bare → flattened suffix alias
     assert dst["ISRM.emis_lon"] == 2  # coupling from → to alias

@@ -1059,6 +1059,32 @@ an author writes and the spelling the rewrite generates are one thing. Only
 are pushed down to the reader or applied after the read MUST NOT change the
 delivered array.
 
+**The provider key (normative).** A binding that accepts injected data
+providers — `prepare(providers=...)`, `simulate(providers=...)`, or a forcing
+buffer seeded from a conformance manifest's `inputs` — MUST key each provider by
+the **consuming parameter's flattened name**, `"<ModelPath>.<param>"`
+(`"Ingest.lon"`, `"Parent.Child.lon"`). It MUST NOT require a source-qualified
+spelling.
+
+This is the only spelling that names one loaded field and every loaded field.
+From esm 1.0.0 a data source declares no variables, so there is no loader-side
+name left (§8.5); `"<Source>.<file_variable>"` is ambiguous, because two
+parameters may read one `file_variable` with different `select` or
+`unit_conversion` bindings; and `"<Source>.<param>"` is ambiguous, because two
+models may declare the same parameter name against one source. Both also name
+entities the document no longer relates.
+
+A binding MAY additionally accept a `"<Source>.<file_variable>"` key as an alias
+onto the consumer it routes to, provided the routing is DERIVED from the
+document's `update` rules rather than inferred from a matching name tail. A
+tail-matching fallback is not conformant on its own: it makes the binding depend
+on a name coincidence where the document states a relation.
+
+`record_filter.require_finite` is stated in the reader's vocabulary and names
+`file_variable` names (esm-spec §8.9), not the consuming parameters'. A source
+MAY filter on a column no parameter reads, so a binding MUST fetch such a column
+in order to compute the mask.
+
 **Loader-discovered extents.** A loader declaring `extent: {"metaparameter": M}`
 (esm-spec §8.9.4) is materialised BEFORE metaparameters are closed, and the
 length of its delivered record axis binds `M`. Bindings MUST (a) sample such a

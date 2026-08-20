@@ -223,19 +223,19 @@ def test_prepare_pushdown_record_gate_end_to_end(oracle):
 
     gmocks = {v: MockGated(oracle["full_sr"][v]) for v in LVARS}
     providers = {
-        "MockSR.TotalPop": MockConst(oracle["total_pop"]),
-        "MockSR.MortalityRate": MockConst(oracle["mortality"]),
-        "MockPts.emis_lon": MockConst(oracle["lon"]),
-        "MockPts.emis_lat": MockConst(oracle["lat"]),
-        "MockPts.emis_annual": MockConst(oracle["emis_annual"]),
-        "MockPts.is_VOC": MockConst(oracle["masks"]["SOA"]),
-        "MockPts.is_NOx": MockConst(oracle["masks"]["pNO3"]),
-        "MockPts.is_NH3": MockConst(oracle["masks"]["pNH4"]),
-        "MockPts.is_SOx": MockConst(oracle["masks"]["pSO4"]),
-        "MockPts.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+        "ISRM.TotalPop": MockConst(oracle["total_pop"]),
+        "ISRM.MortalityRate": MockConst(oracle["mortality"]),
+        "ISRM.emis_lon": MockConst(oracle["lon"]),
+        "ISRM.emis_lat": MockConst(oracle["lat"]),
+        "ISRM.emis_annual": MockConst(oracle["emis_annual"]),
+        "ISRM.is_VOC": MockConst(oracle["masks"]["SOA"]),
+        "ISRM.is_NOx": MockConst(oracle["masks"]["pNO3"]),
+        "ISRM.is_NH3": MockConst(oracle["masks"]["pNH4"]),
+        "ISRM.is_SOx": MockConst(oracle["masks"]["pSO4"]),
+        "ISRM.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
     }
     for v in LVARS:
-        providers[f"MockSR.SR_{v}"] = gmocks[v]
+        providers[f"ISRM.SR_{v}"] = gmocks[v]
 
     # src rects ride const_arrays under their BARE authored names (the alias
     # injection must surface them under the flattened spelling).
@@ -307,19 +307,19 @@ def test_prepare_pushdown_single_member_support_set(oracle):
 
     gmocks = {v: MockGated(oracle["full_sr"][v]) for v in LVARS}
     providers = {
-        "MockSR.TotalPop": MockConst(oracle["total_pop"]),
-        "MockSR.MortalityRate": MockConst(oracle["mortality"]),
-        "MockPts.emis_lon": MockConst(lon),
-        "MockPts.emis_lat": MockConst(lat),
-        "MockPts.emis_annual": MockConst(oracle["emis_annual"]),
-        "MockPts.is_VOC": MockConst(oracle["masks"]["SOA"]),
-        "MockPts.is_NOx": MockConst(oracle["masks"]["pNO3"]),
-        "MockPts.is_NH3": MockConst(oracle["masks"]["pNH4"]),
-        "MockPts.is_SOx": MockConst(oracle["masks"]["pSO4"]),
-        "MockPts.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+        "ISRM.TotalPop": MockConst(oracle["total_pop"]),
+        "ISRM.MortalityRate": MockConst(oracle["mortality"]),
+        "ISRM.emis_lon": MockConst(lon),
+        "ISRM.emis_lat": MockConst(lat),
+        "ISRM.emis_annual": MockConst(oracle["emis_annual"]),
+        "ISRM.is_VOC": MockConst(oracle["masks"]["SOA"]),
+        "ISRM.is_NOx": MockConst(oracle["masks"]["pNO3"]),
+        "ISRM.is_NH3": MockConst(oracle["masks"]["pNH4"]),
+        "ISRM.is_SOx": MockConst(oracle["masks"]["pSO4"]),
+        "ISRM.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
     }
     for v in LVARS:
-        providers[f"MockSR.SR_{v}"] = gmocks[v]
+        providers[f"ISRM.SR_{v}"] = gmocks[v]
     ca = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
 
     insp = BuildInspection()
@@ -373,14 +373,14 @@ def test_observed_field_reports_hoist_skip_root_cause(oracle):
     and the name the caller reads is usually far downstream of the defect."""
     doc = json.loads(_FIXTURE.read_text())
     providers = {
-        "MockPts.emis_lon": MockConst(oracle["lon"]),
-        "MockPts.emis_lat": MockConst(oracle["lat"]),
-        "MockPts.emis_annual": MockConst(oracle["emis_annual"]),
-        "MockPts.is_VOC": MockConst(oracle["masks"]["SOA"]),
-        "MockPts.is_NOx": MockConst(oracle["masks"]["pNO3"]),
-        "MockPts.is_NH3": MockConst(oracle["masks"]["pNH4"]),
-        "MockPts.is_SOx": MockConst(oracle["masks"]["pSO4"]),
-        "MockPts.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+        "ISRM.emis_lon": MockConst(oracle["lon"]),
+        "ISRM.emis_lat": MockConst(oracle["lat"]),
+        "ISRM.emis_annual": MockConst(oracle["emis_annual"]),
+        "ISRM.is_VOC": MockConst(oracle["masks"]["SOA"]),
+        "ISRM.is_NOx": MockConst(oracle["masks"]["pNO3"]),
+        "ISRM.is_NH3": MockConst(oracle["masks"]["pNH4"]),
+        "ISRM.is_SOx": MockConst(oracle["masks"]["pSO4"]),
+        "ISRM.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
         # MortalityRate / TotalPop / the gated SR providers are intentionally
         # ABSENT: everything downstream of them is dropped by the hoist.
     }

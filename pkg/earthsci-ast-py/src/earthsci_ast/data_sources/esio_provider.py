@@ -480,13 +480,31 @@ class _RecordTable:
         n = nrec or 0
         if keep is None:
             keep = np.ones(0, dtype=bool)
+        # `require_finite` names FILE variables (esm-spec §8.9): from 1.0.0 a
+        # source declares no variables of its own, so the filter is stated in the
+        # reader's vocabulary. Resolve it there -- through a bound parameter's
+        # already-decoded column when one reads it, and straight from the reader
+        # otherwise, since a source may filter on a column no parameter reads.
+        by_file: dict[str, np.ndarray] = {}
+        for spec in self.columns:
+            by_file.setdefault(spec.file_variable, raw[spec.name])
         for name in self.require_finite:
-            if name not in raw:
+            if name in by_file:
+                col = by_file[name]
+            elif name in nds:
+                col = _widen(name, nds[name].data)
+            else:
                 raise ValueError(
                     f"loader {self.loader_name!r}: record_filter.require_finite "
-                    f"names {name!r}, which is not one of its variables"
+                    f"names file variable {name!r}, which the source does not "
+                    f"deliver"
                 )
-            keep &= np.isfinite(raw[name])
+            if len(col) != n:
+                raise ValueError(
+                    f"loader {self.loader_name!r}: record_filter.require_finite "
+                    f"column {name!r} has {len(col)} records but the table has {n}"
+                )
+            keep &= np.isfinite(col)
 
         kept = int(keep.sum())
         out = {name: col[keep] for name, col in raw.items()}
@@ -792,8 +810,8 @@ def _parse_codes(ctx: str, vd: Any) -> _CodeMap | None:
     return _CodeMap(map=out, case_insensitive=case_insensitive, unmapped=unmapped)
 
 
-def _document_bindings(doc: dict) -> dict[str, list[tuple[str, dict]]]:
-    """``{data_sources key -> [(parameter name, binding dict), ...]}``.
+def _document_bindings(doc: dict) -> dict[str, list[tuple[str, str, dict]]]:
+    """``{data_sources key -> [(flattened parameter name, local name, binding)]}``.
 
     From 1.0.0 a data source declares no variables: the CONSUMING PARAMETER
     carries `update: {kind: "data", source, from: {file_variable, ...}}` and owns
@@ -801,19 +819,25 @@ def _document_bindings(doc: dict) -> dict[str, list[tuple[str, dict]]]:
     `data_loaders[l].variables` map, and it is where the provider path now reads
     what to decode.
 
-    Parameters are collected across every model (and nested subsystem), sorted by
-    name, so the constructed provider set -- and therefore the diagnostics -- are
-    deterministic. A name declared by two models against one source is a single
-    provider key; the first binding wins, which is the same last-writer rule the
-    0.x variables map had.
-    """
-    out: dict[str, list[tuple[str, dict]]] = {}
-    seen: set[tuple[str, str]] = set()
+    The flattened name is the parameter's namespaced path
+    (``"Ingest.lon"``, ``"Parent.Child.lon"``), which is what keys the provider:
+    it is the only spelling that names one parameter and every parameter. Neither
+    half of the source-qualified alternative works -- two parameters may read one
+    `file_variable` differently (the ingest fixture's `W` / `src_W` / `emis_W`
+    all read `Grid`'s `W`), and two models may declare the same parameter name
+    against one source.
 
-    def visit(model: Any) -> None:
+    Parameters are collected across every model and nested subsystem, walked in
+    sorted order, so the constructed provider set -- and therefore the
+    diagnostics -- are deterministic.
+    """
+    out: dict[str, list[tuple[str, str, dict]]] = {}
+
+    def visit(model: Any, prefix: str) -> None:
         if not isinstance(model, dict):
             return
-        for vname, vdef in (model.get("variables") or {}).items():
+        for vname in sorted((model.get("variables") or {}).keys()):
+            vdef = (model.get("variables") or {})[vname]
             if not isinstance(vdef, dict) or vdef.get("type") != "parameter":
                 continue
             update = vdef.get("update")
@@ -825,15 +849,15 @@ def _document_bindings(doc: dict) -> dict[str, list[tuple[str, dict]]]:
                 source = rule.get("source")
                 if not isinstance(binding, dict) or not isinstance(source, str):
                     continue
-                if (source, str(vname)) in seen:
-                    continue
-                seen.add((source, str(vname)))
-                out.setdefault(source, []).append((str(vname), binding))
-        for sub in (model.get("subsystems") or {}).values():
-            visit(sub)
+                key = f"{prefix}.{vname}" if prefix else str(vname)
+                out.setdefault(source, []).append((key, str(vname), binding))
+                break  # the FIRST data rule of an `update` (esm-spec §5.4)
+        for sname in sorted((model.get("subsystems") or {}).keys()):
+            sub = (model.get("subsystems") or {})[sname]
+            visit(sub, f"{prefix}.{sname}" if prefix else str(sname))
 
-    for model in (doc.get("models") or {}).values():
-        visit(model)
+    for mname in sorted((doc.get("models") or {}).keys()):
+        visit((doc.get("models") or {})[mname], str(mname))
     for entries in out.values():
         entries.sort(key=lambda kv: kv[0])
     return out
@@ -934,15 +958,18 @@ def providers_from_document(
 
         specs = [
             _ColumnSpec(
-                name=vname,
+                # The column's identity is the CONSUMING PARAMETER's flattened
+                # name: two models may bind a same-named parameter to one source
+                # with different `file_variable`s, and the decoded columns must
+                # not collide.
+                name=key,
                 file_variable=str(binding.get("file_variable", vname)),
-                codes=_parse_codes(f"models.*.variables.{vname}.update.from", binding),
+                codes=_parse_codes(f"{key}.update.from", binding),
                 unit_conversion=parse_unit_conversion(
-                    binding.get("unit_conversion"),
-                    variable_name=f"{lname}.{vname}",
+                    binding.get("unit_conversion"), variable_name=key
                 ),
             )
-            for vname, binding in consumers
+            for key, vname, binding in consumers
         ]
 
         def _loader(vars_: list[str], _l=lname, _f=fmt, _u=url, _o=reader_options):
@@ -956,17 +983,16 @@ def providers_from_document(
         if require_finite or any(s.codes is not None for s in specs):
             table = _RecordTable(
                 lname,
-                _loader(sorted({s.file_variable for s in specs})),
+                # A `require_finite` column no parameter reads is still
+                # needed to compute the mask, so it is fetched alongside.
+                _loader(sorted({s.file_variable for s in specs} | set(require_finite))),
                 cache,
                 specs,
                 require_finite,
             )
 
-        for spec, (vname, binding) in zip(specs, consumers):
-            key = f"{lname}.{spec.name}"
-            declared = _parse_declared_select(
-                doc, f"models.*.variables.{vname}.update.from", binding
-            )
+        for spec, (key, _vname, binding) in zip(specs, consumers):
+            declared = _parse_declared_select(doc, f"{key}.update.from", binding)
             if declared is None and source_select is not None:
                 declared = list(source_select)
             # Resolving the reader NOW (rather than mid-solve) is also what

@@ -171,7 +171,10 @@ def prepare(
     when ``pushdown_rewrite=True`` — the rewrite needs the raw authored
     document, before the typed parse).
 
-    ``providers`` maps ``"<Loader>.<var>"`` to a data provider: an EarthSciIO
+    ``providers`` maps ``"<ModelPath>.<param>"`` — the CONSUMING parameter's
+    flattened name, the only spelling that names one loaded field and every one,
+    since a source declares no variables of its own (esm-spec §8.5) — to a data
+    provider: an EarthSciIO
     ``Provider`` (``materialize()``/``refresh_times()``), a callable
     ``(t) -> array``, or an object exposing ``sample(t)``. CONST providers
     (no refresh times) are materialized once here; a provider gated by the

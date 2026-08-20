@@ -2440,7 +2440,8 @@ def _simulate_with_numpy(
 ) -> SimulationResult:
     """Simulate a flattened system containing array ops via the NumPy interpreter.
 
-    ``loader_arrays`` maps each declared loader field name (``<Loader>.<var>``) to
+    ``loader_arrays`` maps each loaded field's flattened parameter name
+    (``<ModelPath>.<param>``) to
     its provider-materialized array (DESIGN pde_simulation_pipeline §2): the
     RHS resolves those names through :class:`EvalContext.input_arrays`, and any
     scoped-reference ``ic`` folds them into u0 at build time (R2).

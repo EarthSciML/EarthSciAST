@@ -177,7 +177,7 @@ impl AxisSel {
 }
 
 /// The CONST data-provider contract [`prepare`] consumes: one provider feeds
-/// ONE field (the `providers["<Loader>.<var>"]` convention shared with the
+/// ONE field (the `providers["<ModelPath>.<param>"]` convention shared with the
 /// Julia/Python bindings). A gated provider may additionally honour a pushed-
 /// down per-axis selection; one that cannot is fetched whole and sliced
 /// engine-side (the fallback matches the pushdown result exactly).
@@ -955,11 +955,16 @@ pub(crate) fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f6
 /// gated providers pre-sliced, and evaluate the whole observed graph in
 /// dependency order. Returns the [`Prepared`] artifact.
 ///
-/// `providers` maps `"<Loader>.<var>"` to a CONST [`PrepareProvider`]; an
-/// entry the rewrite record's coupling routes onto a gated array is DEFERRED
-/// and fetched pre-sliced after value-invention. `const_arrays` are the
-/// caller-supplied build-time factor arrays (keyed by model-local or
-/// `Loader.var` names — the coupling aliasing surfaces both spellings).
+/// `providers` maps the CONSUMING PARAMETER's namespaced name
+/// (`"<ModelPath>.<param>"`) to a CONST [`PrepareProvider`]; an entry the
+/// rewrite record's gate routes onto a gated array is DEFERRED and fetched
+/// pre-sliced after value-invention. From esm 1.0.0 a data source declares no
+/// variables, so the consuming parameter is the only spelling that names one
+/// field and every field: two parameters may read one `file_variable`
+/// differently, and two models may declare the same parameter name against one
+/// source. `const_arrays` are the caller-supplied build-time factor arrays
+/// (keyed by model-local or `<Source>.<file_variable>` names — the routing
+/// aliasing surfaces both spellings).
 ///
 /// # Watching a long build
 ///
@@ -1328,7 +1333,7 @@ pub fn prepare(
         if gate.applies_to.len() != 1 {
             return Err(err(format!(
                 "gated provider '{key}': applies_to lists {} variables; bind one \
-                 provider per variable (providers[\"Loader.var\"]) so each gated \
+                 provider per variable (providers[\"<ModelPath>.<param>\"]) so each gated \
                  fetch is a single field",
                 gate.applies_to.len()
             )));
@@ -1373,23 +1378,27 @@ pub fn prepare(
                 plan.gated_extent
             )));
         }
-        // Surface the compact slab under the MODEL variable the coupling routes
-        // this provider onto (its local tail — the authored spelling), falling
-        // back to the gate's loader-variable tail. ONE registry entry per slab,
-        // and it must be THIS provider's own: the SR slabs are hundreds of MB so
-        // aliasing would deep-copy, and — load-bearing for CORRECTNESS, not only
-        // for memory — sibling loaders may expose the SAME variable name.
-        // `isrm.esm` fetches one zarr array at three emission layers through
-        // `ISRM_SR_L0.SOA` / `ISRM_SR_L1.SOA` / `ISRM_SR_L2.SOA`, which differ in
-        // nothing but the `{"fixed": [layer]}` axis of their `gated_select`.
-        // Publishing a slab under every key with the same dotted TAIL (as the
-        // Julia and Python hooks once did) makes all three providers claim all
-        // three keys, so whichever is written last silently wins for all of them
-        // and every layer is contracted against one arbitrary sibling's slab.
-        // Keep this a per-provider lookup by `key`; never a name-tail expansion.
+        // Surface the compact slab under the MODEL variable this provider feeds
+        // (its local tail — the authored spelling the un-flattened expressions
+        // use). From esm 1.0.0 the key IS that variable's namespaced name, so it
+        // answers on the routing's `to` side; the `frm` side still answers for a
+        // provider registered under the SOURCE's spelling, and the gate's tail is
+        // the last resort.
+        //
+        // ONE registry entry per slab, and it must be THIS provider's own: the SR
+        // slabs are hundreds of MB so aliasing would deep-copy, and — load-bearing
+        // for CORRECTNESS, not only for memory — sibling sources may feed the SAME
+        // variable name. `isrm.esm` fetches one zarr array at three emission
+        // layers through three providers that differ in nothing but the
+        // `{"fixed": [layer]}` axis of their `gated_select`. Publishing a slab
+        // under every key with the same dotted TAIL (as the Julia and Python hooks
+        // once did) makes all three providers claim all three keys, so whichever
+        // is written last silently wins for all of them and every layer is
+        // contracted against one arbitrary sibling's slab. Both arms below match
+        // a key EXACTLY; never a name-tail expansion.
         let target = pd_coupling
             .iter()
-            .find(|(frm, _)| frm == &key)
+            .find(|(frm, to)| frm == &key || to == &key)
             .map(|(_, to)| to.rsplit('.').next().unwrap_or(to).to_string())
             .unwrap_or_else(|| gate.applies_to[0].clone());
         log(&format!(

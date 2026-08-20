@@ -912,7 +912,7 @@ mod prepare_impl {
     /// name); the runner no longer hand-constructs providers — it asks the
     /// document.
     ///
-    /// One provider PER VARIABLE (keyed `"<Loader>.<var>"`), matching (a)
+    /// One provider PER VARIABLE (keyed `"<ModelPath>.<param>"`), matching (a)
     /// `prepare`'s providers contract, (b) the single-field sample, and (c)
     /// the per-key gate the record-derived pushdown path attaches. All of a
     /// loader's providers share one [`Cache`] (a per-loader subdir under

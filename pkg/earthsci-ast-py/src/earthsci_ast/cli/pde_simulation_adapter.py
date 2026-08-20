@@ -90,7 +90,7 @@ def run_fixture(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
 def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
     """Full-pipeline path (DESIGN pde_simulation_pipeline §7): load the fixture,
     install a static stub provider serving the manifest ``inputs`` (keyed
-    ``<Loader>.<var>``), run the whole lowering pipeline (reaction-gen → template
+    ``<ModelPath>.<param>``), run the whole lowering pipeline (reaction-gen → template
     ``match`` → ``operator_compose`` → pointwise-lift → scoped-``ic``) with the
     loaded fields injected ONLY through the provider seam, and emit the RHS at
     each probe state and the trajectory at each checkpoint. Reuses the exact

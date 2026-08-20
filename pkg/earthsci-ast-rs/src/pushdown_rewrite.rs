@@ -1643,12 +1643,15 @@ pub struct ProviderGate {
     pub applies_to: Vec<String>,
 }
 
-/// The `(provider key, model variable)` pairs of a raw document: which external
-/// field feeds which declared array.
+/// The `(external name, model variable)` routings of a raw document: which
+/// external field feeds which declared array.
 ///
-/// The provider key is `"<source>.<file_variable>"`, which is how a runner
-/// registers a provider and how [`pushdown_provider_gates`] finds the one to
-/// gate.
+/// The `from` side is `"<source>.<file_variable>"` and the `to` side is the
+/// consuming parameter's namespaced name. A PROVIDER is keyed by the `to` side —
+/// the consuming parameter is the only spelling that names one field and every
+/// field, since a source declares no variables — so [`pushdown_provider_gates`]
+/// matches on `to`. These pairs remain the routing that lets an array supplied
+/// under the SOURCE's spelling still reach its consumer.
 ///
 /// esm 1.0.0 moved where this is written. It used to be a `variable_map`
 /// coupling edge from a loader COMPONENT to a model parameter; a data source is
@@ -1792,7 +1795,8 @@ fn pushdown_gate_axes(
 /// (`metadata.x_esd.pushdown.gated_select`).
 ///
 /// A provider is GATED when its key names a `data_sources` variable
-/// (`"<Loader>"` or `"<Loader>.<var>"`) that a coupling `variable_map` routes
+/// (`"<Loader>"` or `"<ModelPath>.<param>"`) that the document's `update`
+/// rules — or a coupling `variable_map` — route
 /// onto one of the record's `applies_to` model arrays. The gate's per-NATIVE-
 /// axis `axes` come from the loader's own `metadata.x_esd.gated_select.axes`
 /// template when it declares one (with the record's GENERATED set name
@@ -1825,7 +1829,8 @@ pub fn pushdown_provider_gates(
         return Ok(gates);
     }
 
-    // coupling: "<Loader>.<var>" => the gated model array's LOCAL (tail) name.
+    // routing: "<Loader>.<var>" => the gated model array (its `to` side is the
+    // consuming parameter, which is what a provider is keyed by).
     let mut fed: Vec<(String, String)> = Vec::new();
     for (frm, to) in pushdown_coupling_pairs(doc) {
         if !frm.contains('.') {
@@ -1842,23 +1847,27 @@ pub fn pushdown_provider_gates(
 
     let mrank = pushdown_gated_rank(doc, &applies);
     for k in provider_keys {
-        let (loader, lvars) = if fed.iter().any(|(f, _)| f == k) {
-            let (loader, tail) = k
-                .split_once('.')
-                .expect("fed keys always carry a '.' separator");
+        let (loader, lvars) = if let Some((frm, to)) = fed.iter().find(|(_, to)| to == k) {
+            // A provider for ONE data-fed parameter: its key IS the consumer, so
+            // the SOURCE comes from the routing rather than from the key prefix
+            // (which names the consuming MODEL).
+            let loader = frm.split_once('.').map(|(l, _)| l).unwrap_or(frm.as_str());
+            let tail = to.rsplit('.').next().unwrap_or(to);
             (loader.to_string(), vec![tail.to_string()])
         } else {
+            // A provider for a WHOLE source, serving several of its columns.
             let mut lvars: Vec<String> = fed
                 .iter()
-                .filter_map(|(f, _)| {
-                    let (l, tail) = f.split_once('.')?;
-                    (l == k).then(|| tail.to_string())
+                .filter_map(|(f, to)| {
+                    let (l, _) = f.split_once('.')?;
+                    (l == k).then(|| to.rsplit('.').next().unwrap_or(to).to_string())
                 })
                 .collect();
             if lvars.is_empty() {
                 continue;
             }
             lvars.sort();
+            lvars.dedup();
             (k.clone(), lvars)
         };
         let axes = pushdown_gate_axes(doc, &loader, &gset, gaxis, mrank)?;

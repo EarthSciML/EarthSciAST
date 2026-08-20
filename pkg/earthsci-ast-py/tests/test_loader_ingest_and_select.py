@@ -37,7 +37,24 @@ import numpy as np
 import pytest
 
 esio = pytest.importorskip("earthsciio")
-pytest.importorskip("zarr")
+
+
+def _requires_zarr_store() -> None:
+    """Skip a test that READS the Zarr grid source.
+
+    Writing the store is raw bytes (:func:`_write_grid_store`), so only the read
+    path needs the library — and earthsciio's backend imports `zarr.abc.store`,
+    which is zarr v3. Gating per-test rather than per-module keeps the FF10
+    table half running wherever `earthsciio` is importable.
+    """
+    zarr = pytest.importorskip("zarr")
+    version = getattr(zarr, "__version__", "0")
+    try:
+        major = int(str(version).split(".", 1)[0])
+    except ValueError:  # a dev/unparseable version: let the test try
+        return
+    if major < 3:
+        pytest.skip(f"earthsciio's zarr backend needs zarr v3 (found {version})")
 
 from conftest import VALID_DIR  # noqa: E402
 
@@ -159,6 +176,23 @@ def _sample(doc, tmp_path, key):
     return list(np.asarray(_providers(doc, tmp_path)[key].sample(0.0), dtype=float))
 
 
+def _binding(doc, key):
+    """The ``update.from`` binding of the parameter a provider key names.
+
+    From esm 1.0.0 the data binding lives on the CONSUMER: ``codes``, ``select``
+    and ``unit_conversion`` are fields of the reading parameter's
+    ``update.from``, not of a variable the source declares -- a source declares
+    none (esm-spec §8.5)."""
+    model, param = key.split(".", 1)
+    return doc["models"][model]["variables"][param]["update"]["from"]
+
+
+def _source_of(doc, key):
+    """The ``data_sources`` key the parameter a provider key names reads."""
+    model, param = key.split(".", 1)
+    return doc["models"][model]["variables"][param]["update"]["source"]
+
+
 def _field(prep, name):
     return np.asarray(prep.observed_field(name), dtype=float)
 
@@ -173,10 +207,10 @@ def test_the_document_alone_decodes_maps_and_filters_the_ff10_table(doc_and_tmp)
     # reader_options selected the two *egu* members and dropped their header
     # lines; codes mapped POLID; record_filter removed the unmapped CO record
     # and the SO2 record with no longitude. All of it from the declaration.
-    assert _sample(doc, tmp_path, "EGU_Emis.pollutant") == [36.0, 36.0, 1.0]
-    assert _sample(doc, tmp_path, "EGU_Emis.annual") == [100.0, 7.0, 3.0]
-    assert _sample(doc, tmp_path, "EGU_Emis.lon") == [-90.0, -92.0, -93.0]
-    assert _sample(doc, tmp_path, "EGU_Emis.lat") == [40.0, 43.0, 44.0]
+    assert _sample(doc, tmp_path, "Ingest.pollutant") == [36.0, 36.0, 1.0]
+    assert _sample(doc, tmp_path, "Ingest.annual") == [100.0, 7.0, 3.0]
+    assert _sample(doc, tmp_path, "Ingest.lon") == [-90.0, -92.0, -93.0]
+    assert _sample(doc, tmp_path, "Ingest.lat") == [40.0, 43.0, 44.0]
 
 
 def test_an_unrecognised_reader_option_is_refused_at_construction(doc_and_tmp):
@@ -195,21 +229,27 @@ def test_reader_options_are_load_bearing_not_decorative(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
     doc["data_sources"]["EGU_Emis"]["reader_options"] = {}
     with pytest.raises(Exception):  # noqa: B017 - a whole-zip read cannot decode
-        _sample(doc, tmp_path, "EGU_Emis.annual")
+        _sample(doc, tmp_path, "Ingest.annual")
 
 
-def test_every_variable_of_a_filtered_loader_declares_the_same_extent(doc_and_tmp):
+def test_every_parameter_fed_by_a_filtered_source_declares_the_same_extent(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
-    for key, prov in _providers(doc, tmp_path).items():
+    providers = _providers(doc, tmp_path)
+    assert providers
+    for key, prov in providers.items():
         declared = prov.extent_metaparameter
-        if key.startswith("EGU_Emis."):
-            assert declared == "N_REC", f"{key} must bind the loader's extent"
+        # `extent` is the SOURCE's, inherited by every parameter that reads it. A
+        # provider key names the consuming parameter, so the source comes from
+        # that parameter's own `update` rather than from a prefix on the key.
+        if _source_of(doc, key) == "EGU_Emis":
+            assert declared == "N_REC", f"{key} must bind the source's extent"
         else:
             assert declared is None, f"{key} declares no extent"
 
 
 def test_prepare_discovers_n_rec_and_the_graph_is_sized_by_it(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
+    _requires_zarr_store()
     # NOTE the absent metaparameters: the caller passes NO N_REC. The document
     # declares that the loader knows it.
     prep = prepare(
@@ -244,12 +284,12 @@ def test_loader_variables_that_disagree_on_the_count_are_an_error(doc_and_tmp, m
     disagreement names both providers rather than picking one."""
     doc, tmp_path = doc_and_tmp
     provs = _providers(doc, tmp_path)
-    short = provs["EGU_Emis.lat"]
+    short = provs["Ingest.lat"]
     monkeypatch.setattr(short, "sample", lambda t=0.0, selection=None: np.zeros(2))
     with pytest.raises(SimulationError) as e:
         prepare(doc, providers=provs, pushdown_rewrite=True)
     msg = str(e.value)
-    assert "EGU_Emis.lat" in msg and "EGU_Emis.annual" in msg
+    assert "Ingest.lat" in msg and "Ingest.annual" in msg
     assert "not aligned on one record axis" in msg
 
 
@@ -257,9 +297,9 @@ def test_a_text_column_with_no_codes_map_is_a_boundary_error(doc_and_tmp):
     """FORMAT-08-A-007: a model forcing must be numeric, so a text column with
     no ``codes`` map fails at the loader boundary, not as an absent forcing."""
     doc, tmp_path = doc_and_tmp
-    del doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"]["codes"]
+    del _binding(doc, "Ingest.pollutant")["codes"]
     with pytest.raises(ValueError) as e:
-        _sample(doc, tmp_path, "EGU_Emis.pollutant")
+        _sample(doc, tmp_path, "Ingest.pollutant")
     assert "decoded as strings" in str(e.value)
     assert "codes" in str(e.value)
 
@@ -267,22 +307,22 @@ def test_a_text_column_with_no_codes_map_is_a_boundary_error(doc_and_tmp):
 def test_an_unmapped_code_can_error_or_substitute_instead_of_dropping(doc_and_tmp):
     """``unmapped`` is a three-way policy, and ``error`` is the default."""
     doc, tmp_path = doc_and_tmp
-    codes = doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"]["codes"]
+    codes = _binding(doc, "Ingest.pollutant")["codes"]
 
     codes["unmapped"] = "error"
     with pytest.raises(ValueError) as e:
-        _sample(doc, tmp_path, "EGU_Emis.pollutant")
+        _sample(doc, tmp_path, "Ingest.pollutant")
     assert "'CO'" in str(e.value)
 
     del codes["unmapped"]  # default IS error
     with pytest.raises(ValueError):
-        _sample(doc, tmp_path, "EGU_Emis.pollutant")
+        _sample(doc, tmp_path, "Ingest.pollutant")
 
     codes["unmapped"] = 0
     # The CO record now survives with code 0; only the coordinate-less SO2 row
     # is dropped, and every column keeps that same 4 records.
-    assert _sample(doc, tmp_path, "EGU_Emis.pollutant") == [36.0, 0.0, 36.0, 1.0]
-    assert _sample(doc, tmp_path, "EGU_Emis.annual") == [100.0, 50.0, 7.0, 3.0]
+    assert _sample(doc, tmp_path, "Ingest.pollutant") == [36.0, 0.0, 36.0, 1.0]
+    assert _sample(doc, tmp_path, "Ingest.annual") == [100.0, 50.0, 7.0, 3.0]
 
 
 def test_the_record_filter_drops_the_record_from_every_variable(doc_and_tmp):
@@ -290,7 +330,7 @@ def test_the_record_filter_drops_the_record_from_every_variable(doc_and_tmp):
     of alignment — every variable delivers the same records, in the same order."""
     doc, tmp_path = doc_and_tmp
     lengths = {
-        v: len(_sample(doc, tmp_path, f"EGU_Emis.{v}"))
+        v: len(_sample(doc, tmp_path, f"Ingest.{v}"))
         for v in ("pollutant", "annual", "lon", "lat")
     }
     assert set(lengths.values()) == {3}, lengths
@@ -298,11 +338,11 @@ def test_the_record_filter_drops_the_record_from_every_variable(doc_and_tmp):
     # record — to EVERY variable at once, NaN longitude and all. The columns
     # move together or they do not move; that is the whole point of the mask
     # being the loader's.
-    doc["data_sources"]["EGU_Emis"]["record_filter"]["require_finite"] = ["annual"]
-    lon = _sample(doc, tmp_path, "EGU_Emis.lon")
+    doc["data_sources"]["EGU_Emis"]["record_filter"]["require_finite"] = ["ANN_VALUE"]
+    lon = _sample(doc, tmp_path, "Ingest.lon")
     assert lon[0] == -90.0 and np.isnan(lon[1]) and lon[2:] == [-92.0, -93.0]
-    assert _sample(doc, tmp_path, "EGU_Emis.pollutant") == [36.0, 41.0, 36.0, 1.0]
-    assert _sample(doc, tmp_path, "EGU_Emis.annual") == [100.0, 25.0, 7.0, 3.0]
+    assert _sample(doc, tmp_path, "Ingest.pollutant") == [36.0, 41.0, 36.0, 1.0]
+    assert _sample(doc, tmp_path, "Ingest.annual") == [100.0, 25.0, 7.0, 3.0]
 
 
 # --------------------------------------------------------------------------- #
@@ -312,23 +352,25 @@ def test_the_record_filter_drops_the_record_from_every_variable(doc_and_tmp):
 
 def test_a_range_select_delivers_a_prefix_of_the_same_on_disk_array(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
-    full = _sample(doc, tmp_path, "Grid.W")
+    _requires_zarr_store()
+    full = _sample(doc, tmp_path, "Ingest.W")
     assert len(full) == 10, "the unselected variable is unaffected"
     assert full[0] == 100.0
 
     # stop is the METAPARAMETER name N_SRC (default 4), not a repeated literal.
-    prefix = _sample(doc, tmp_path, "Grid.src_W")
+    prefix = _sample(doc, tmp_path, "Ingest.src_W")
     assert prefix == full[:4] == [100.0, 101.0, 102.0, 103.0]
 
 
 def test_pushing_a_select_to_the_reader_and_applying_it_after_agree(doc_and_tmp, monkeypatch):
     """FORMAT-08-A-009: which side honours the selection is an optimization, so
     the two MUST deliver the identical array."""
+    _requires_zarr_store()
     doc, tmp_path = doc_and_tmp
-    pushed = _sample(doc, tmp_path, "Grid.src_W")
+    pushed = _sample(doc, tmp_path, "Ingest.src_W")
 
     provs = _providers(doc, tmp_path)
-    engine = provs["Grid.src_W"]
+    engine = provs["Ingest.src_W"]
     assert engine._reader_select is not None, "the zarr reader takes the pushdown"
     # Force the engine-side arm: read whole, slice after.
     monkeypatch.setattr(engine, "_reader_select", None)
@@ -341,16 +383,17 @@ def test_a_range_select_over_a_filtered_table_counts_surviving_records(doc_and_t
     # A loader-level select is the default for every variable of the loader —
     # which is what keeps a truncated table aligned.
     doc["data_sources"]["EGU_Emis"]["select"] = {"axes": [{"range": {"start": 0, "stop": 2}}]}
-    assert _sample(doc, tmp_path, "EGU_Emis.annual") == [100.0, 7.0], (
+    assert _sample(doc, tmp_path, "Ingest.annual") == [100.0, 7.0], (
         "[0:2] is the first two SURVIVING records (100, 7) — never the first two "
         "raw rows (100, 50) of which one is dropped"
     )
-    assert _sample(doc, tmp_path, "EGU_Emis.pollutant") == [36.0, 36.0]
-    assert _sample(doc, tmp_path, "EGU_Emis.lon") == [-90.0, -92.0]
+    assert _sample(doc, tmp_path, "Ingest.pollutant") == [36.0, 36.0]
+    assert _sample(doc, tmp_path, "Ingest.lon") == [-90.0, -92.0]
 
 
 def test_a_truncated_table_re_discovers_its_own_smaller_extent(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
+    _requires_zarr_store()
     doc["data_sources"]["EGU_Emis"]["select"] = {"axes": [{"range": {"start": 0, "stop": 2}}]}
     prep = prepare(doc, providers=_providers(doc, tmp_path), pushdown_rewrite=True)
     assert float(_field(prep, "E_NOx")) == 107.0
@@ -361,6 +404,7 @@ def test_a_truncated_table_re_discovers_its_own_smaller_extent(doc_and_tmp):
 
 def test_the_selected_prefix_reaches_the_model_as_its_own_axis(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
+    _requires_zarr_store()
     prep = prepare(doc, providers=_providers(doc, tmp_path), pushdown_rewrite=True)
     w = _field(prep, "src_width")
     assert w.shape == (4,), (
@@ -371,7 +415,7 @@ def test_the_selected_prefix_reaches_the_model_as_its_own_axis(doc_and_tmp):
 
 def test_an_unrecognised_axis_selector_is_refused_at_construction(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
-    doc["data_sources"]["Grid"]["variables"]["src_W"]["select"] = {"axes": [{"prefix": 4}]}
+    _binding(doc, "Ingest.src_W")["select"] = {"axes": [{"prefix": 4}]}
     with pytest.raises(Exception) as e:
         _providers(doc, tmp_path)
     assert "unrecognised axis selector keys" in str(e.value)
@@ -379,9 +423,7 @@ def test_an_unrecognised_axis_selector_is_refused_at_construction(doc_and_tmp):
 
 def test_a_range_bound_naming_an_unknown_metaparameter_is_refused(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
-    doc["data_sources"]["Grid"]["variables"]["src_W"]["select"]["axes"][0]["range"]["stop"] = (
-        "N_NOPE"
-    )
+    _binding(doc, "Ingest.src_W")["select"]["axes"][0]["range"]["stop"] = "N_NOPE"
     with pytest.raises(ValueError) as e:
         _providers(doc, tmp_path)
     assert "N_NOPE" in str(e.value)

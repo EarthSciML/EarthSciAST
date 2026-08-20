@@ -1229,17 +1229,59 @@ def _pd_analyze(esm: dict, model_name: str | None):
 
 
 def _pushdown_coupling_pairs(doc: dict) -> list[tuple[str, str]]:
-    """The coupling ``variable_map`` (from, to) pairs of a raw document."""
+    """The (from, to) name routings of a raw document, for array aliasing.
+
+    Two sources, in this order:
+
+    1. A parameter bound to a data source by its own ``update`` (1.0.0):
+       ``("<Source>.<file_variable>", "<ModelPath>.<param>")``. A provider is
+       keyed by the consuming parameter -- the `to` side -- so this is what lets
+       an array supplied under the SOURCE's spelling still reach its consumer.
+    2. A ``variable_map`` coupling edge, still admissible between two ordinary
+       components (it is data SOURCES that stopped being coupling endpoints).
+
+    Deriving (1) from the document is the point: scanning for `variable_map`
+    alone returns [] on every 1.0.0 document, which silently left the aliasing
+    to a bare-tail fallback -- a name coincidence rather than a declaration.
+    """
     out: list[tuple[str, str]] = []
+
+    def visit(model: Any, prefix: str) -> None:
+        if not isinstance(model, dict):
+            return
+        for vname in sorted((model.get("variables") or {}).keys()):
+            vdef = (model.get("variables") or {})[vname]
+            if not isinstance(vdef, dict):
+                continue
+            update = vdef.get("update")
+            rules = update if isinstance(update, list) else [update]
+            for rule in rules:
+                if not isinstance(rule, dict) or rule.get("kind") != "data":
+                    continue
+                source = rule.get("source")
+                binding = rule.get("from")
+                if not isinstance(source, str) or not isinstance(binding, dict):
+                    continue
+                fv = binding.get("file_variable")
+                if not isinstance(fv, str):
+                    continue
+                key = f"{prefix}.{vname}" if prefix else str(vname)
+                out.append((f"{source}.{fv}", key))
+        for sname in sorted((model.get("subsystems") or {}).keys()):
+            sub = (model.get("subsystems") or {})[sname]
+            visit(sub, f"{prefix}.{sname}" if prefix else str(sname))
+
+    for mname in sorted((doc.get("models") or {}).keys()):
+        visit((doc.get("models") or {})[mname], str(mname))
+
     cp = doc.get("coupling")
-    if not isinstance(cp, list):
-        return out
-    for c in cp:
-        if not (isinstance(c, dict) and c.get("type") == "variable_map"):
-            continue
-        frm, to = str(c.get("from", "")), str(c.get("to", ""))
-        if frm and to:
-            out.append((frm, to))
+    if isinstance(cp, list):
+        for c in cp:
+            if not (isinstance(c, dict) and c.get("type") == "variable_map"):
+                continue
+            frm, to = str(c.get("from", "")), str(c.get("to", ""))
+            if frm and to:
+                out.append((frm, to))
     return out
 
 
@@ -1315,14 +1357,17 @@ def _pushdown_gate_axes(
 
 
 def _pushdown_data_fed_parameters(doc: dict):
-    """``(data_sources key, parameter name, file_variable)`` for every parameter
-    in the document whose ``update`` reads a source (esm-spec §8.5). Sorted, so
-    the derived gate map is identical across bindings and hash seeds."""
+    """``(data_sources key, flattened parameter name, local name, file_variable)``
+    for every parameter in the document whose ``update`` reads a source
+    (esm-spec §8.5). The flattened name is the parameter's namespaced path --
+    what keys its provider. Sorted, so the derived gate map is identical across
+    bindings and hash seeds."""
     out = []
-    for _mname, m in (doc.get("models") or {}).items():
-        if not isinstance(m, dict):
-            continue
-        for vname, vdef in (m.get("variables") or {}).items():
+
+    def visit(model, prefix: str) -> None:
+        if not isinstance(model, dict):
+            return
+        for vname, vdef in (model.get("variables") or {}).items():
             if not isinstance(vdef, dict) or vdef.get("type") != "parameter":
                 continue
             update = vdef.get("update")
@@ -1334,9 +1379,20 @@ def _pushdown_data_fed_parameters(doc: dict):
                 binding = rule.get("from")
                 if not isinstance(source, str) or not isinstance(binding, dict):
                     continue
+                key = f"{prefix}.{vname}" if prefix else str(vname)
                 out.append(
-                    (source, str(vname), str(binding.get("file_variable", vname)))
+                    (
+                        source,
+                        key,
+                        str(vname),
+                        str(binding.get("file_variable", vname)),
+                    )
                 )
+        for sname, sub_model in (model.get("subsystems") or {}).items():
+            visit(sub_model, f"{prefix}.{sname}" if prefix else str(sname))
+
+    for mname, m in (doc.get("models") or {}).items():
+        visit(m, str(mname))
     return sorted(set(out))
 
 
@@ -1381,29 +1437,32 @@ def _pushdown_provider_gates(doc: dict, providers: Any) -> dict[str, dict]:
     # name was the loader variable's and the alias walk found the model array by
     # tail; from 1.0.0 the parameter IS the loaded field, so it is named
     # directly.
-    fed: dict[str, str] = {}
-    for source_key, param, _file_variable in _pushdown_data_fed_parameters(doc):
+    # provider key -> (data_sources key, the gated model array's LOCAL name).
+    # The SOURCE is carried explicitly: a provider is keyed by the consuming
+    # parameter, whose prefix names its MODEL, so it can no longer be recovered
+    # by splitting the key.
+    fed: dict[str, tuple[str, str]] = {}
+    for source_key, key, param, _file_variable in _pushdown_data_fed_parameters(doc):
         if param in applies:
-            fed[f"{source_key}.{param}"] = param
+            fed[key] = (source_key, param)
     for frm, to in _pushdown_coupling_pairs(doc):
         if "." not in frm:
             continue
-        if to.rsplit(".", 1)[-1] in applies:
-            fed[frm] = to.rsplit(".", 1)[-1]
+        tail = to.rsplit(".", 1)[-1]
+        if tail in applies:
+            fed.setdefault(frm, (frm.split(".", 1)[0], tail))
     if not fed:
         return gates
 
     mrank = _pushdown_gated_rank(doc, applies)
     for k0 in providers:
         k = str(k0)
-        if k in fed:  # "<Source>.<parameter>" provider
-            loader = k.split(".", 1)[0]
-            lvars = [fed[k]]
-        else:  # whole-source provider?
+        if k in fed:  # a provider for ONE data-fed parameter
+            loader, param = fed[k]
+            lvars = [param]
+        else:  # a provider for a WHOLE source, serving several of its columns
             loader = k
-            lvars = sorted(
-                v for f, v in fed.items() if f.split(".", 1)[0] == k
-            )
+            lvars = sorted({p for src, p in fed.values() if src == k})
             if not lvars:
                 continue
         axes = _pushdown_gate_axes(doc, loader, gset, gaxis, mrank)
