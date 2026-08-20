@@ -594,27 +594,15 @@ function processModel(b: ExprGraphBuilder, model: Model, systemId: string): void
     b.addNode(varName, kinds.get(varName) ?? 'parameter', variable.units, systemId)
   })
 
-  // An observed unknown's definition is the RHS of its bare-LHS equation. Each
-  // free name in it is a dependency of the observed variable.
-  for (const [varName, expression] of observedDefs) {
-    const observedVar = b.addNode(
-      varName,
-      'observed',
-      model.variables?.[varName]?.units,
-      systemId,
-    )
-    for (const freeVar of freeVariables(expression)) {
-      const sourceVar = b.addNode(freeVar, kinds.get(freeVar) ?? 'parameter', undefined, systemId)
-      b.addDependency(
-        sourceVar,
-        observedVar,
-        EDGE_PROVENANCE.definition,
-        NON_EQUATION_INDEX,
-        expression,
-      )
-    }
-  }
-
+  // The observed-definition edges are NOT added here. An observed unknown's
+  // definition IS one of the equations below from 1.0.0, so `processEquation`
+  // already draws every edge from its RHS's free names to it — adding them
+  // again from `observedDefinitions` would put two edges on every such pair
+  // (the same double-count `collectModelExpressions` avoids by not gathering
+  // variable expressions). What changed with the relocation is the edge's
+  // PROVENANCE: these used to be `definition` at NON_EQUATION_INDEX, because
+  // the definition lived outside the equation list, and are now ordinary
+  // `equation` edges carrying that equation's index.
   forEachEquation(model, (equation, index) => processEquation(b, equation, index, systemId))
 }
 

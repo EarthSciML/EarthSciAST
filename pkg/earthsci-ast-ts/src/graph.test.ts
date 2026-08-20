@@ -16,14 +16,7 @@ import {
   toMermaid,
   toJsonGraph,
 } from './graph.js'
-import type {
-  EsmFile,
-  Model,
-  ReactionSystem,
-  Equation,
-  Reaction,
-  CouplingEntry,
-} from './types.js'
+import type { EsmFile, Model, ReactionSystem, Equation, Reaction, CouplingEntry } from './types.js'
 
 describe('componentGraph function', () => {
   const mockEsmFile: EsmFile = {
@@ -472,15 +465,26 @@ describe('expressionGraph function', () => {
 
     expect(graph.edges.length).toBeGreaterThan(0)
 
-    // Check for edge from observed variable dependency (u, v -> w)
+    // Edges into the observed unknown `w` from its definition (u, v -> w).
+    //
+    // These carry EQUATION provenance now, not `definition`. An observed
+    // unknown's definition IS an equation from 1.0.0, so it is drawn by the
+    // ordinary equation walk and carries that equation's real index -- where
+    // 0.x drew it from the `expression` sidecar as `'multiplicative'` at the
+    // NON_EQUATION_INDEX sentinel. (The provenance VALUES are historical labels
+    // and describe the site, not the arithmetic: `w ~ u + v` is 'additive'
+    // because it came from an equation, not because of the `+`.)
     const uToWEdge = graph.edges.find((e) => e.source === 'u' && e.target === 'w')
     expect(uToWEdge).toBeDefined()
-    expect(uToWEdge?.data.relationship).toBe('multiplicative')
-    expect(uToWEdge?.data.equation_index).toBe(-1) // observed variable
+    expect(uToWEdge?.data.relationship).toBe('additive')
+    expect(uToWEdge?.data.equation_index).toBe(1)
 
     const vToWEdge = graph.edges.find((e) => e.source === 'v' && e.target === 'w')
     expect(vToWEdge).toBeDefined()
-    expect(vToWEdge?.data.relationship).toBe('multiplicative')
+    expect(vToWEdge?.data.relationship).toBe('additive')
+
+    // Exactly ONE edge per (source, target): the definition is walked once.
+    expect(graph.edges.filter((e) => e.source === 'u' && e.target === 'w')).toHaveLength(1)
 
     // Check for edge from equation 0, `D(u) ~ k1 * u`. The equation's LHS
     // TARGET is `u` itself (the derivative wrapper is unwrapped), so the RHS

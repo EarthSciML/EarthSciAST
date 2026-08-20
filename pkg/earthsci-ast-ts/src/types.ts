@@ -87,19 +87,30 @@ export {
  */
 import type {
   ESMFormat,
+  ESMFormat1,
+  ESMFormat2,
   ExpressionNode,
   Model as GeneratedModel,
   SubsystemRef as GeneratedSubsystemRef,
 } from './generated.js'
-export type EsmFile = ESMFormat & {
-  /**
-   * Narrowed so that a model reached from the document root is the 1.0.0
-   * {@link Model} — closed variables, no data-source subsystem — rather than the
-   * generated shape. Without this the strictness stops at the root and
-   * `file.models[m].variables[v].expression` reads as `unknown` again.
-   */
-  models?: { [k: string]: Model | GeneratedSubsystemRef }
-}
+export type EsmFile = ESMFormat1 &
+  Omit<ESMFormat2, 'models'> & {
+    /**
+     * Narrowed so that a model reached from the document root is the 1.0.0
+     * {@link Model} — closed variables, no data-source subsystem — rather than
+     * the generated shape. Without this the strictness stops at the root and
+     * `file.models[m].variables[v].expression` reads as `unknown` again.
+     *
+     * This REPLACES the generated `models` (via `Omit`) rather than
+     * intersecting with it. Intersecting produced
+     * `(GeneratedModel | SubsystemRef) & (Model | SubsystemRef)`, which
+     * TypeScript does not simplify — so assigning a `Model`-typed VARIABLE
+     * (as opposed to a fresh object literal, which gets an implicit index
+     * signature) demanded it also satisfy `SubsystemRef`, and failed with
+     * "Property 'ref' is missing".
+     */
+    models?: { [k: string]: Model | GeneratedSubsystemRef }
+  }
 
 /** @deprecated Prefer {@link EsmFile}. Identical to the generated `ESMFormat`. */
 export type EsmFormat = ESMFormat

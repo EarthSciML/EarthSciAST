@@ -127,23 +127,12 @@ export function buildDependencyGraph(
       addNode(varName, kind, systemId, variable.units, observedDefs.get(varName))
     })
 
-    // An observed unknown depends on the free variables of its DEFINING
-    // EQUATION's RHS. That definition used to live on the variable; from 1.0.0
-    // it is the bare-variable-LHS equation naming it.
-    if (includeObserved) {
-      for (const [varName, expression] of observedDefs) {
-        for (const depVar of freeVariables(expression)) {
-          // Referenced-but-undeclared variables default to 'parameter'.
-          addNode(depVar, kinds.get(depVar) ?? 'parameter', systemId)
-          addDependency(
-            scopedName(depVar, systemId),
-            scopedName(varName, systemId),
-            'definition_dependency',
-            expression,
-          )
-        }
-      }
-    }
+    // No separate definition-dependency pass. An observed unknown's definition
+    // IS one of the equations `processEquation` walks below from 1.0.0, so the
+    // edges from its RHS's free names to it are already drawn there; drawing
+    // them again here would put both a `definition_dependency` and a `direct`
+    // edge on every such pair. The definition is still attached to the NODE
+    // above (`observedDefs.get(varName)`), which is what consumers read it from.
 
     forEachEquation(model, (equation) => processEquation(equation, systemId))
 

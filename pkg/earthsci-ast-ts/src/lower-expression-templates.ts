@@ -2097,8 +2097,35 @@ export function buildEmittedDocument(
   }
 
   delete root.expression_template_imports
-  if (bump) root.esm = '0.9.0'
+  if (bump) root.esm = atLeastEmitVersion(root.esm)
   return root
+}
+
+/**
+ * The `esm` marker for an emitted document carrying surviving template
+ * references or a materialized registry.
+ *
+ * esm-spec §9.6.4 states a FLOOR — such a document "declares `esm: 0.9.0` or
+ * later" — so this raises the marker to 0.9.0 and never lowers it. Assigning
+ * `'0.9.0'` outright, as this did, stamped a 1.0.0 document back down to a
+ * version the 1.0.0 loader rejects outright as an unsupported major, making
+ * `emitDocument` produce a document that could not be loaded again.
+ */
+function atLeastEmitVersion(current: unknown): string {
+  const EMIT_FLOOR = '0.9.0'
+  if (typeof current !== 'string') return EMIT_FLOOR
+  const parse = (v: string): [number, number, number] | null => {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v)
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+  }
+  const a = parse(current)
+  const b = parse(EMIT_FLOOR)!
+  if (!a) return EMIT_FLOOR
+  for (let i = 0; i < 3; i++) {
+    if (a[i] > b[i]) return current
+    if (a[i] < b[i]) return EMIT_FLOOR
+  }
+  return current
 }
 
 // --- Canonical byte writer (2-space indent, keys sorted except the ordered
