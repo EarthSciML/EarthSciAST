@@ -1,6 +1,6 @@
 name = "EarthSciAST"
 uuid = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
-version = "0.9.1"
+version = "1.0.0"
 authors = ["EarthSciML Authors and Contributors"]
 
 [deps]
