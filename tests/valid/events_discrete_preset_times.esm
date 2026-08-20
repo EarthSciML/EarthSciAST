@@ -38,7 +38,41 @@
           "type": "parameter",
           "units": "dimensionless",
           "default": 0,
-          "description": "Number of observations recorded"
+          "description": "Number of observations recorded",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              1.0,
+              2.0,
+              4.0,
+              8.0,
+              13.0,
+              18.0,
+              25.0,
+              30.0,
+              37.0,
+              42.0,
+              49.0,
+              54.0,
+              61.0,
+              66.0,
+              73.0,
+              78.0
+            ],
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "observation_count"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "elimination_rate": {
           "units": "1/h",
@@ -168,7 +202,6 @@
               }
             }
           ],
-          "discrete_parameters": [],
           "reinitialize": false,
           "description": "Initial loading dose at study start"
         },
@@ -208,53 +241,8 @@
               }
             }
           ],
-          "discrete_parameters": [],
           "reinitialize": false,
           "description": "Scheduled maintenance doses"
-        },
-        {
-          "name": "observation_timepoints",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              1.0,
-              2.0,
-              4.0,
-              8.0,
-              13.0,
-              18.0,
-              25.0,
-              30.0,
-              37.0,
-              42.0,
-              49.0,
-              54.0,
-              61.0,
-              66.0,
-              73.0,
-              78.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "observation_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "observation_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [],
-          "reinitialize": false,
-          "description": "Protocol-specified observation times for PK/PD sampling"
         }
       ]
     },
@@ -297,7 +285,28 @@
           "units": "1/min",
           "default": 0.02,
           "description": "Base reaction rate",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              5.0,
+              25.0,
+              45.0
+            ],
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "reaction_rate"
+                  ]
+                },
+                1.2
+              ]
+            }
+          }
         },
         "target_temp_1": {
           "units": "°C",
@@ -333,13 +342,71 @@
           "units": "°C",
           "default": 25.0,
           "description": "Ambient temperature",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              10.0,
+              30.0,
+              50.0
+            ],
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "t",
+                    30.0
+                  ]
+                },
+                "target_temp_1",
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<",
+                      "args": [
+                        "t",
+                        50.0
+                      ]
+                    },
+                    "target_temp_2",
+                    "target_temp_3"
+                  ]
+                }
+              ]
+            }
+          }
         },
         "buffer_pH": {
           "units": "dimensionless",
           "default": 7.0,
           "description": "Buffer pH",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              15.0,
+              40.0
+            ],
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "t",
+                    40.0
+                  ]
+                },
+                "pH_adjustment_1",
+                "pH_adjustment_2"
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -457,123 +524,7 @@
           }
         }
       ],
-      "discrete_events": [
-        {
-          "name": "temperature_program",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              10.0,
-              30.0,
-              50.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "ambient_temp",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  {
-                    "op": "<",
-                    "args": [
-                      "t",
-                      30.0
-                    ]
-                  },
-                  "target_temp_1",
-                  {
-                    "op": "ifelse",
-                    "args": [
-                      {
-                        "op": "<",
-                        "args": [
-                          "t",
-                          50.0
-                        ]
-                      },
-                      "target_temp_2",
-                      "target_temp_3"
-                    ]
-                  }
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "ambient_temp"
-          ],
-          "reinitialize": true,
-          "description": "Programmed temperature changes"
-        },
-        {
-          "name": "pH_adjustments",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              15.0,
-              40.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "buffer_pH",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  {
-                    "op": "<",
-                    "args": [
-                      "t",
-                      40.0
-                    ]
-                  },
-                  "pH_adjustment_1",
-                  "pH_adjustment_2"
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "buffer_pH"
-          ],
-          "reinitialize": true,
-          "description": "Scheduled pH buffer adjustments"
-        },
-        {
-          "name": "catalyst_additions",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              5.0,
-              25.0,
-              45.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "reaction_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "reaction_rate"
-                    ]
-                  },
-                  1.2
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "reaction_rate"
-          ],
-          "reinitialize": true,
-          "description": "Catalyst additions to enhance reaction rate"
-        }
-      ]
+      "discrete_events": []
     },
     "ControlSystemTesting": {
       "reference": {
@@ -596,13 +547,100 @@
           "type": "parameter",
           "units": "dimensionless",
           "default": 0,
-          "description": "Current test phase"
+          "description": "Current test phase",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              0.0,
+              20.0,
+              40.0,
+              60.0,
+              80.0
+            ],
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "test_phase"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "setpoint": {
           "units": "V",
           "default": 1.0,
           "description": "Control setpoint",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              0.0,
+              20.0,
+              40.0,
+              60.0,
+              80.0
+            ],
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "t",
+                    20.0
+                  ]
+                },
+                1.0,
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<",
+                      "args": [
+                        "t",
+                        40.0
+                      ]
+                    },
+                    2.0,
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        {
+                          "op": "<",
+                          "args": [
+                            "t",
+                            60.0
+                          ]
+                        },
+                        0.5,
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            {
+                              "op": "<",
+                              "args": [
+                                "t",
+                                80.0
+                              ]
+                            },
+                            1.5,
+                            0.0
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
         },
         "system_gain": {
           "units": "dimensionless",
@@ -620,19 +658,99 @@
           "units": "dimensionless",
           "default": 1.0,
           "description": "Proportional gain",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              35.0,
+              65.0
+            ],
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "t",
+                    65.0
+                  ]
+                },
+                1.5,
+                0.8
+              ]
+            }
+          }
         },
         "controller_ki": {
           "units": "1/s",
           "default": 0.2,
           "description": "Integral gain",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              35.0,
+              65.0
+            ],
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "t",
+                    65.0
+                  ]
+                },
+                0.3,
+                0.15
+              ]
+            }
+          }
         },
         "disturbance_amplitude": {
           "units": "V",
           "default": 0.0,
           "description": "Current disturbance level",
-          "type": "parameter"
+          "type": "parameter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              30.0,
+              50.0,
+              70.0
+            ],
+            "expression": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "t",
+                    50.0
+                  ]
+                },
+                0.3,
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<",
+                      "args": [
+                        "t",
+                        70.0
+                      ]
+                    },
+                    -0.2,
+                    0.1
+                  ]
+                }
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -706,199 +824,7 @@
           }
         }
       ],
-      "discrete_events": [
-        {
-          "name": "test_sequence_setpoints",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              0.0,
-              20.0,
-              40.0,
-              60.0,
-              80.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "setpoint",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  {
-                    "op": "<",
-                    "args": [
-                      "t",
-                      20.0
-                    ]
-                  },
-                  1.0,
-                  {
-                    "op": "ifelse",
-                    "args": [
-                      {
-                        "op": "<",
-                        "args": [
-                          "t",
-                          40.0
-                        ]
-                      },
-                      2.0,
-                      {
-                        "op": "ifelse",
-                        "args": [
-                          {
-                            "op": "<",
-                            "args": [
-                              "t",
-                              60.0
-                            ]
-                          },
-                          0.5,
-                          {
-                            "op": "ifelse",
-                            "args": [
-                              {
-                                "op": "<",
-                                "args": [
-                                  "t",
-                                  80.0
-                                ]
-                              },
-                              1.5,
-                              0.0
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "lhs": "test_phase",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "test_phase"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "setpoint"
-          ],
-          "reinitialize": true,
-          "description": "Scheduled setpoint changes for system testing"
-        },
-        {
-          "name": "disturbance_injection",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              30.0,
-              50.0,
-              70.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "disturbance_amplitude",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  {
-                    "op": "<",
-                    "args": [
-                      "t",
-                      50.0
-                    ]
-                  },
-                  0.3,
-                  {
-                    "op": "ifelse",
-                    "args": [
-                      {
-                        "op": "<",
-                        "args": [
-                          "t",
-                          70.0
-                        ]
-                      },
-                      -0.2,
-                      0.1
-                    ]
-                  }
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "disturbance_amplitude"
-          ],
-          "reinitialize": true,
-          "description": "Scheduled disturbance injections for robustness testing"
-        },
-        {
-          "name": "controller_tuning_changes",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              35.0,
-              65.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "controller_kp",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  {
-                    "op": "<",
-                    "args": [
-                      "t",
-                      65.0
-                    ]
-                  },
-                  1.5,
-                  0.8
-                ]
-              }
-            },
-            {
-              "lhs": "controller_ki",
-              "rhs": {
-                "op": "ifelse",
-                "args": [
-                  {
-                    "op": "<",
-                    "args": [
-                      "t",
-                      65.0
-                    ]
-                  },
-                  0.3,
-                  0.15
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "controller_kp",
-            "controller_ki"
-          ],
-          "reinitialize": true,
-          "description": "Scheduled controller parameter changes for comparative testing"
-        }
-      ]
+      "discrete_events": []
     }
   },
   "domain": {

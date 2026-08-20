@@ -134,7 +134,29 @@
           "type": "parameter",
           "units": "mol/m^3/atm",
           "default": 0.034,
-          "description": "Henry's law constant for CO2"
+          "description": "Henry's law constant for CO2",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                7.8,
+                "pH"
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "CO2_solubility"
+                  ]
+                },
+                1.1
+              ]
+            }
+          }
         },
         "O2_solubility": {
           "type": "parameter",
@@ -346,7 +368,29 @@
           "type": "parameter",
           "units": "1/day",
           "default": 1.5,
-          "description": "Maximum phytoplankton growth rate"
+          "description": "Maximum phytoplankton growth rate",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "phytoplankton",
+                5.0
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "max_growth_rate"
+                  ]
+                },
+                1.5
+              ]
+            }
+          }
         },
         "half_saturation_light": {
           "type": "parameter",
@@ -1096,76 +1140,6 @@
     },
     {
       "type": "event",
-      "event_type": "continuous",
-      "name": "phytoplankton_bloom_trigger",
-      "conditions": [
-        {
-          "op": "-",
-          "args": [
-            "MarineEcosystem.phytoplankton",
-            5.0
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "MarineEcosystem.max_growth_rate",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "MarineEcosystem.max_growth_rate"
-                ]
-              },
-              1.5
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "MarineEcosystem.max_growth_rate"
-      ],
-      "description": "Enhance growth rate during phytoplankton blooms"
-    },
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "name": "ocean_acidification_threshold",
-      "conditions": [
-        {
-          "op": "-",
-          "args": [
-            7.8,
-            "OceanCarbon.pH"
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "OceanCarbon.CO2_solubility",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "OceanCarbon.CO2_solubility"
-                ]
-              },
-              1.1
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "OceanCarbon.CO2_solubility"
-      ],
-      "description": "Increase CO2 solubility when pH drops below 7.8 (acidification response)"
-    },
-    {
-      "type": "event",
       "event_type": "discrete",
       "name": "seasonal_nutrient_upwelling",
       "trigger": {
@@ -1189,9 +1163,6 @@
             ]
           }
         }
-      ],
-      "discrete_parameters": [
-        "MarineEcosystem.nutrients"
       ],
       "description": "Seasonal nutrient injection every 90 days (upwelling)"
     }

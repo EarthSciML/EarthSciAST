@@ -38,13 +38,57 @@
           "type": "parameter",
           "units": "cm^3/molec/s",
           "default": 1.8e-12,
-          "description": "Rate constant"
+          "description": "Rate constant",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": ">",
+              "args": [
+                "temperature",
+                310.0
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                0.8,
+                {
+                  "op": "Pre",
+                  "args": [
+                    "k_rate"
+                  ]
+                }
+              ]
+            }
+          }
         },
         "temperature": {
           "type": "parameter",
           "units": "K",
           "default": 298.15,
-          "description": "Temperature"
+          "description": "Temperature",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": ">",
+              "args": [
+                "Transport.diffusivity",
+                50.0
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "temperature"
+                  ]
+                },
+                2.0
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -146,38 +190,7 @@
           "rhs": 1e-09
         }
       ],
-      "continuous_events": [
-        {
-          "name": "temperature_adjustment",
-          "conditions": [
-            {
-              "op": ">",
-              "args": [
-                "temperature",
-                310.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "k_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  0.8,
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "k_rate"
-                    ]
-                  }
-                ]
-              }
-            }
-          ],
-          "description": "High temperature reduces reaction rate"
-        }
-      ],
+      "continuous_events": [],
       "subsystems": {
         "Photochemistry": {
           "variables": {
@@ -379,38 +392,6 @@
         "SimpleChemistry.NO2": "Transport._var"
       },
       "description": "Add transport to chemistry - demonstrates scoped vs bare reference contexts"
-    },
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "name": "cross_system_coupling",
-      "conditions": [
-        {
-          "op": ">",
-          "args": [
-            "Transport.diffusivity",
-            50.0
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "SimpleChemistry.temperature",
-          "rhs": {
-            "op": "+",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "SimpleChemistry.temperature"
-                ]
-              },
-              2.0
-            ]
-          }
-        }
-      ],
-      "description": "Cross-system event showing required scoped references in coupling context"
     }
   ],
   "domain": {

@@ -39,19 +39,92 @@
           "type": "parameter",
           "units": "m/s^2",
           "default": 9.81,
-          "description": "Gravity"
+          "description": "Gravity",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 1.0,
+            "handler": {
+              "handler_id": "PIDController",
+              "read_vars": [
+                "x",
+                "v",
+                "total_energy"
+              ],
+              "read_params": [
+                "bounce_count",
+                "friction_active"
+              ],
+              "config": {
+                "setpoint": 0.5,
+                "kp": 0.1,
+                "ki": 0.01,
+                "kd": 0.05
+              }
+            }
+          }
         },
         "bounce_count": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Number of bounces"
+          "description": "Number of bounces",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "and",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "x",
+                    0.01
+                  ]
+                },
+                {
+                  "op": "<",
+                  "args": [
+                    "v",
+                    0
+                  ]
+                }
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "bounce_count"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "friction_active": {
           "type": "parameter",
           "units": "1",
           "default": 1,
-          "description": "Friction flag"
+          "description": "Friction flag",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "abs",
+                  "args": [
+                    "v"
+                  ]
+                },
+                0.1
+              ]
+            },
+            "expression": 0
+          }
         },
         "total_energy": {
           "type": "unknown",
@@ -256,79 +329,9 @@
             }
           ],
           "description": "Elastic collision with walls at y = ±1.5"
-        },
-        {
-          "name": "friction_threshold",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                {
-                  "op": "abs",
-                  "args": [
-                    "v"
-                  ]
-                },
-                0.1
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "friction_active",
-              "rhs": 0
-            }
-          ],
-          "description": "Disable friction when velocity drops below threshold"
         }
       ],
       "discrete_events": [
-        {
-          "name": "bounce_counter",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "and",
-              "args": [
-                {
-                  "op": "<",
-                  "args": [
-                    "x",
-                    0.01
-                  ]
-                },
-                {
-                  "op": "<",
-                  "args": [
-                    "v",
-                    0
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "bounce_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "bounce_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "bounce_count"
-          ],
-          "description": "Count bounces when ball hits ground"
-        },
         {
           "name": "periodic_damping",
           "trigger": {
@@ -383,39 +386,6 @@
           },
           "affects": [],
           "description": "Mark measurement times (no state change)"
-        },
-        {
-          "name": "complex_controller",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0
-          },
-          "functional_affect": {
-            "handler_id": "PIDController",
-            "read_vars": [
-              "x",
-              "v",
-              "total_energy"
-            ],
-            "read_params": [
-              "bounce_count",
-              "friction_active"
-            ],
-            "modified_params": [
-              "g"
-            ],
-            "config": {
-              "setpoint": 0.5,
-              "kp": 0.1,
-              "ki": 0.01,
-              "kd": 0.05
-            }
-          },
-          "discrete_parameters": [
-            "g"
-          ],
-          "reinitialize": true,
-          "description": "PID controller adjusts gravity to maintain target height"
         }
       ]
     },
@@ -425,7 +395,29 @@
           "type": "parameter",
           "units": "kg/s",
           "default": 1.0,
-          "description": "Emission rate"
+          "description": "Emission rate",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "BouncingBall.total_energy",
+                10.0
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "emission_rate"
+                  ]
+                },
+                0.5
+              ]
+            }
+          }
         },
         "temperature": {
           "type": "unknown",
@@ -470,42 +462,7 @@
       "discrete_events": []
     }
   },
-  "coupling": [
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "conditions": [
-        {
-          "op": "-",
-          "args": [
-            "BouncingBall.total_energy",
-            10.0
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "EmissionController.emission_rate",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "EmissionController.emission_rate"
-                ]
-              },
-              0.5
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "EmissionController.emission_rate"
-      ],
-      "description": "Reduce emissions when ball energy exceeds threshold (cross-system event)"
-    }
-  ],
+  "coupling": [],
   "domain": {
     "temporal": {
       "start": "2024-01-01T00:00:00Z",

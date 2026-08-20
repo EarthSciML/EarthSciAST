@@ -130,13 +130,51 @@
           "type": "parameter",
           "units": "m^2/s",
           "default": 100.0,
-          "description": "Horizontal diffusion"
+          "description": "Horizontal diffusion",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "handler": {
+              "handler_id": "hourly_diffusion_update",
+              "read_vars": [
+                "_var"
+              ],
+              "read_params": [
+                "K_h"
+              ],
+              "config": {
+                "factor": 1.1
+              }
+            }
+          }
         },
         "K_v": {
           "type": "parameter",
           "units": "m^2/s",
           "default": 10.0,
-          "description": "Vertical diffusion"
+          "description": "Vertical diffusion",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              86400,
+              172800,
+              259200
+            ],
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "K_v"
+                  ]
+                },
+                0.9
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -273,64 +311,7 @@
           "root_find": "all"
         }
       ],
-      "discrete_events": [
-        {
-          "name": "hourly_reset",
-          "trigger": {
-            "type": "periodic",
-            "interval": 3600.0
-          },
-          "discrete_parameters": [
-            "K_h"
-          ],
-          "functional_affect": {
-            "handler_id": "hourly_diffusion_update",
-            "read_vars": [
-              "_var"
-            ],
-            "read_params": [
-              "K_h"
-            ],
-            "modified_params": [
-              "K_h"
-            ],
-            "config": {
-              "factor": 1.1
-            }
-          }
-        },
-        {
-          "name": "preset_events",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              86400,
-              172800,
-              259200
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "K_v",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "K_v"
-                    ]
-                  },
-                  0.9
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "K_v"
-          ]
-        }
-      ]
+      "discrete_events": []
     }
   },
   "data_loaders": {

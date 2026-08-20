@@ -21,13 +21,71 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event trigger counter"
+          "description": "Event trigger counter",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "times": [
+                1.000001,
+                1.000002,
+                1.000003,
+                1.000004,
+                1.000005
+              ],
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "trigger_count"
+                    ]
+                  },
+                  100
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "fast_state",
+                  0.5
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "trigger_count"
+                    ]
+                  },
+                  1
+                ]
+              }
+            }
+          ]
         },
         "last_event_time": {
           "type": "parameter",
           "units": "s",
           "default": 0.0,
-          "description": "Time of last event"
+          "description": "Time of last event",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "fast_state",
+                0.5
+              ]
+            },
+            "expression": "t"
+          }
         }
       },
       "equations": [
@@ -58,41 +116,6 @@
         }
       ],
       "continuous_events": [
-        {
-          "name": "rapid_oscillation_detector",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "fast_state",
-                0.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "trigger_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "trigger_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            },
-            {
-              "lhs": "last_event_time",
-              "rhs": "t"
-            }
-          ],
-          "root_find": "all",
-          "description": "Detects rapid oscillations in fast-changing system"
-        },
         {
           "name": "chattering_prevention",
           "conditions": [
@@ -139,40 +162,6 @@
             }
           ],
           "description": "Very high frequency periodic perturbation"
-        },
-        {
-          "name": "microsecond_precision_times",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              1.000001,
-              1.000002,
-              1.000003,
-              1.000004,
-              1.000005
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "trigger_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "trigger_count"
-                    ]
-                  },
-                  100
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "trigger_count"
-          ],
-          "description": "Events at microsecond-precision times to test timing accuracy"
         }
       ]
     },
@@ -206,7 +195,108 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Number of phase lock events"
+          "description": "Number of phase lock events",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "sin",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "osc1_phase",
+                          "osc2_phase"
+                        ]
+                      }
+                    ]
+                  },
+                  0.01
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "phase_lock_count"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "sin",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "osc2_phase",
+                          "osc3_phase"
+                        ]
+                      }
+                    ]
+                  },
+                  0.01
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "phase_lock_count"
+                    ]
+                  },
+                  10
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "sin",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "osc1_phase",
+                          "osc3_phase"
+                        ]
+                      }
+                    ]
+                  },
+                  0.01
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "phase_lock_count"
+                    ]
+                  },
+                  100
+                ]
+              }
+            }
+          ]
         }
       },
       "equations": [
@@ -337,131 +427,7 @@
           "rhs": 0.0
         }
       ],
-      "continuous_events": [
-        {
-          "name": "phase_synchronization_12",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                {
-                  "op": "sin",
-                  "args": [
-                    {
-                      "op": "-",
-                      "args": [
-                        "osc1_phase",
-                        "osc2_phase"
-                      ]
-                    }
-                  ]
-                },
-                0.01
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "phase_lock_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "phase_lock_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "description": "Detect phase synchronization between oscillators 1 and 2"
-        },
-        {
-          "name": "phase_synchronization_23",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                {
-                  "op": "sin",
-                  "args": [
-                    {
-                      "op": "-",
-                      "args": [
-                        "osc2_phase",
-                        "osc3_phase"
-                      ]
-                    }
-                  ]
-                },
-                0.01
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "phase_lock_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "phase_lock_count"
-                    ]
-                  },
-                  10
-                ]
-              }
-            }
-          ],
-          "description": "Detect phase synchronization between oscillators 2 and 3"
-        },
-        {
-          "name": "phase_synchronization_13",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                {
-                  "op": "sin",
-                  "args": [
-                    {
-                      "op": "-",
-                      "args": [
-                        "osc1_phase",
-                        "osc3_phase"
-                      ]
-                    }
-                  ]
-                },
-                0.01
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "phase_lock_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "phase_lock_count"
-                    ]
-                  },
-                  100
-                ]
-              }
-            }
-          ],
-          "description": "Detect phase synchronization between oscillators 1 and 3"
-        }
-      ]
+      "continuous_events": []
     },
     "RaceConditionSystem": {
       "variables": {
@@ -475,19 +441,87 @@
           "type": "parameter",
           "units": "1",
           "default": 1,
-          "description": "Consumer 1 active flag"
+          "description": "Consumer 1 active flag",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "shared_resource",
+                1.0
+              ]
+            },
+            "expression": 0
+          }
         },
         "consumer2_active": {
           "type": "parameter",
           "units": "1",
           "default": 1,
-          "description": "Consumer 2 active flag"
+          "description": "Consumer 2 active flag",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                "shared_resource",
+                1.0
+              ]
+            },
+            "expression": 0
+          }
         },
         "access_counter": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Resource access counter"
+          "description": "Resource access counter",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "shared_resource",
+                  8.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "access_counter"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "shared_resource",
+                  8.001
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "access_counter"
+                    ]
+                  },
+                  10
+                ]
+              }
+            }
+          ]
         }
       },
       "equations": [
@@ -550,21 +584,6 @@
                   0.8
                 ]
               }
-            },
-            {
-              "lhs": "access_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "access_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
             }
           ],
           "description": "Consumer 1 accesses shared resource"
@@ -595,47 +614,9 @@
                   0.75
                 ]
               }
-            },
-            {
-              "lhs": "access_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "access_counter"
-                    ]
-                  },
-                  10
-                ]
-              }
             }
           ],
           "description": "Consumer 2 accesses shared resource (very close condition to consumer 1)"
-        },
-        {
-          "name": "resource_depletion_protection",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "shared_resource",
-                1.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "consumer1_active",
-              "rhs": 0
-            },
-            {
-              "lhs": "consumer2_active",
-              "rhs": 0
-            }
-          ],
-          "description": "Disable consumers when resource is depleted"
         }
       ],
       "discrete_events": [

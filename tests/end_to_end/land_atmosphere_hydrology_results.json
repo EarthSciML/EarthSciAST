@@ -62,11 +62,13 @@
       ]
     },
     "event": {
-      "count": 3,
+      "count": 1,
       "eco_hydrological_events": [
-        "drought_stress_response: Photosynthetic capacity reduction",
-        "soil_moisture_saturation_runoff: Prevent oversaturation",
-        "seasonal_leaf_senescence: Autumn senescence trigger"
+        "soil_moisture_saturation_runoff: Prevent oversaturation"
+      ],
+      "moved_to_parameter_updates": [
+        "drought_stress_response: now VegetationDynamics.max_photosynthesis_rate update {kind: crossing}",
+        "seasonal_leaf_senescence: now VegetationDynamics.leaf_turnover_rate update {kind: condition}"
       ]
     }
   },

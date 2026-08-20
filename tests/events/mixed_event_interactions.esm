@@ -27,25 +27,228 @@
           "type": "parameter",
           "units": "1",
           "default": 5.0,
-          "description": "Control setpoint"
+          "description": "Control setpoint",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "times": [
+                5.0,
+                15.0,
+                25.0
+              ],
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "setpoint"
+                    ]
+                  },
+                  -1
+                ]
+              }
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  "EventLoggingSystem.event_count_total",
+                  20
+                ]
+              },
+              "expression": 0.0
+            }
+          ]
         },
         "control_gain": {
           "type": "parameter",
           "units": "1",
           "default": 2.0,
-          "description": "Control gain"
+          "description": "Control gain",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 8.0,
+              "expression": 2.0
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  {
+                    "op": "abs",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "plant_output",
+                          "setpoint"
+                        ]
+                      }
+                    ]
+                  },
+                  1.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "control_gain"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "sign",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              "setpoint",
+                              "plant_output"
+                            ]
+                          }
+                        ]
+                      },
+                      0.1
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "setpoint",
+                      0.5
+                    ]
+                  },
+                  "plant_output"
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "control_gain"
+                    ]
+                  },
+                  1.5
+                ]
+              }
+            }
+          ]
         },
         "discrete_mode": {
           "type": "parameter",
           "units": "1",
           "default": 1,
-          "description": "Discrete control mode (0=off, 1=PI, 2=bang-bang)"
+          "description": "Discrete control mode (0=off, 1=PI, 2=bang-bang)",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 8.0,
+              "expression": 1
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "plant_output",
+                  {
+                    "op": "*",
+                    "args": [
+                      "setpoint",
+                      1.2
+                    ]
+                  }
+                ]
+              },
+              "expression": 2
+            }
+          ]
         },
         "event_log": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event occurrence log"
+          "description": "Event occurrence log",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "plant_output",
+                  {
+                    "op": "*",
+                    "args": [
+                      "setpoint",
+                      1.2
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_log"
+                    ]
+                  },
+                  1000
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "setpoint",
+                      0.5
+                    ]
+                  },
+                  "plant_output"
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_log"
+                    ]
+                  },
+                  100
+                ]
+              }
+            }
+          ]
         }
       },
       "equations": [
@@ -123,222 +326,8 @@
           "rhs": 0.0
         }
       ],
-      "continuous_events": [
-        {
-          "name": "overshoot_detection",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "plant_output",
-                {
-                  "op": "*",
-                  "args": [
-                    "setpoint",
-                    1.2
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "discrete_mode",
-              "rhs": 2
-            },
-            {
-              "lhs": "event_log",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_log"
-                    ]
-                  },
-                  1000
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Switch to bang-bang mode on overshoot"
-        },
-        {
-          "name": "undershoot_detection",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                {
-                  "op": "*",
-                  "args": [
-                    "setpoint",
-                    0.5
-                  ]
-                },
-                "plant_output"
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "control_gain",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "control_gain"
-                    ]
-                  },
-                  1.5
-                ]
-              }
-            },
-            {
-              "lhs": "event_log",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_log"
-                    ]
-                  },
-                  100
-                ]
-              }
-            }
-          ],
-          "reinitialize": true,
-          "description": "Increase gain on severe undershoot"
-        }
-      ],
-      "discrete_events": [
-        {
-          "name": "mode_reset_periodic",
-          "trigger": {
-            "type": "periodic",
-            "interval": 8.0
-          },
-          "affects": [
-            {
-              "lhs": "discrete_mode",
-              "rhs": 1
-            },
-            {
-              "lhs": "control_gain",
-              "rhs": 2.0
-            }
-          ],
-          "discrete_parameters": [
-            "discrete_mode",
-            "control_gain"
-          ],
-          "reinitialize": true,
-          "description": "Periodic reset to normal PI mode"
-        },
-        {
-          "name": "setpoint_step_changes",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              5.0,
-              15.0,
-              25.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "setpoint",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "setpoint"
-                    ]
-                  },
-                  -1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "setpoint"
-          ],
-          "reinitialize": true,
-          "description": "Step changes in setpoint"
-        },
-        {
-          "name": "adaptive_tuning",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": ">",
-              "args": [
-                {
-                  "op": "abs",
-                  "args": [
-                    {
-                      "op": "-",
-                      "args": [
-                        "plant_output",
-                        "setpoint"
-                      ]
-                    }
-                  ]
-                },
-                1.0
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "control_gain",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "control_gain"
-                    ]
-                  },
-                  {
-                    "op": "*",
-                    "args": [
-                      {
-                        "op": "sign",
-                        "args": [
-                          {
-                            "op": "-",
-                            "args": [
-                              "setpoint",
-                              "plant_output"
-                            ]
-                          }
-                        ]
-                      },
-                      0.1
-                    ]
-                  }
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "control_gain"
-          ],
-          "reinitialize": true,
-          "description": "Adaptive gain adjustment based on error magnitude"
-        }
-      ]
+      "continuous_events": [],
+      "discrete_events": []
     },
     "EventSynchronizationSystem": {
       "variables": {
@@ -352,19 +341,131 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Discrete event trigger flag"
+          "description": "Discrete event trigger flag",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 3.0,
+              "expression": 1
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": "==",
+                    "args": [
+                      "continuous_trigger",
+                      1
+                    ]
+                  },
+                  {
+                    "op": "==",
+                    "args": [
+                      "discrete_trigger",
+                      1
+                    ]
+                  }
+                ]
+              },
+              "expression": 0
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": ">",
+                "args": [
+                  "HybridControlSystem.plant_output",
+                  8.0
+                ]
+              },
+              "expression": 1
+            }
+          ]
         },
         "continuous_trigger": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Continuous event trigger flag"
+          "description": "Continuous event trigger flag",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "sync_state",
+                  1.5
+                ]
+              },
+              "expression": 1
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": "==",
+                    "args": [
+                      "continuous_trigger",
+                      1
+                    ]
+                  },
+                  {
+                    "op": "==",
+                    "args": [
+                      "discrete_trigger",
+                      1
+                    ]
+                  }
+                ]
+              },
+              "expression": 0
+            }
+          ]
         },
         "sync_counter": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Synchronization event counter"
+          "description": "Synchronization event counter",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "and",
+              "args": [
+                {
+                  "op": "==",
+                  "args": [
+                    "continuous_trigger",
+                    1
+                  ]
+                },
+                {
+                  "op": "==",
+                  "args": [
+                    "discrete_trigger",
+                    1
+                  ]
+                }
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "sync_counter"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -417,96 +518,8 @@
           "rhs": 0.0
         }
       ],
-      "continuous_events": [
-        {
-          "name": "continuous_sync_trigger",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "sync_state",
-                1.5
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "continuous_trigger",
-              "rhs": 1
-            }
-          ],
-          "description": "Set continuous trigger flag"
-        },
-        {
-          "name": "synchronized_reset",
-          "conditions": [
-            {
-              "op": "and",
-              "args": [
-                {
-                  "op": "==",
-                  "args": [
-                    "continuous_trigger",
-                    1
-                  ]
-                },
-                {
-                  "op": "==",
-                  "args": [
-                    "discrete_trigger",
-                    1
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "sync_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "sync_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
-            },
-            {
-              "lhs": "continuous_trigger",
-              "rhs": 0
-            },
-            {
-              "lhs": "discrete_trigger",
-              "rhs": 0
-            }
-          ],
-          "description": "Reset when both triggers are active"
-        }
-      ],
-      "discrete_events": [
-        {
-          "name": "discrete_sync_trigger",
-          "trigger": {
-            "type": "periodic",
-            "interval": 3.0
-          },
-          "affects": [
-            {
-              "lhs": "discrete_trigger",
-              "rhs": 1
-            }
-          ],
-          "discrete_parameters": [
-            "discrete_trigger"
-          ],
-          "description": "Set discrete trigger flag periodically"
-        }
-      ]
+      "continuous_events": [],
+      "discrete_events": []
     },
     "EventLoggingSystem": {
       "variables": {
@@ -520,19 +533,142 @@
           "type": "parameter",
           "units": "s",
           "default": 0.0,
-          "description": "Last event timestamp"
+          "description": "Last event timestamp",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 5.0,
+              "expression": "t"
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "monitored_variable",
+                  0.6
+                ]
+              },
+              "expression": "t"
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  -0.6,
+                  "monitored_variable"
+                ]
+              },
+              "expression": "t"
+            }
+          ]
         },
         "event_type_log": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event type identifier log"
+          "description": "Event type identifier log",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 5.0,
+              "expression": 100
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "monitored_variable",
+                  0.6
+                ]
+              },
+              "expression": 1
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  -0.6,
+                  "monitored_variable"
+                ]
+              },
+              "expression": -1
+            }
+          ]
         },
         "event_count_total": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Total event count"
+          "description": "Total event count",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 5.0,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_count_total"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "monitored_variable",
+                  0.6
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_count_total"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  -0.6,
+                  "monitored_variable"
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_count_total"
+                    ]
+                  },
+                  1
+                ]
+              }
+            }
+          ]
         }
       },
       "equations": [
@@ -596,175 +732,11 @@
           "rhs": 0.0
         }
       ],
-      "continuous_events": [
-        {
-          "name": "positive_peak_logger",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "monitored_variable",
-                0.6
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_timestamp",
-              "rhs": "t"
-            },
-            {
-              "lhs": "event_type_log",
-              "rhs": 1
-            },
-            {
-              "lhs": "event_count_total",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_count_total"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "description": "Log positive peaks"
-        },
-        {
-          "name": "negative_peak_logger",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                -0.6,
-                "monitored_variable"
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_timestamp",
-              "rhs": "t"
-            },
-            {
-              "lhs": "event_type_log",
-              "rhs": -1
-            },
-            {
-              "lhs": "event_count_total",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_count_total"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "description": "Log negative peaks"
-        }
-      ],
-      "discrete_events": [
-        {
-          "name": "periodic_status_logger",
-          "trigger": {
-            "type": "periodic",
-            "interval": 5.0
-          },
-          "affects": [
-            {
-              "lhs": "event_timestamp",
-              "rhs": "t"
-            },
-            {
-              "lhs": "event_type_log",
-              "rhs": 100
-            },
-            {
-              "lhs": "event_count_total",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_count_total"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "event_timestamp",
-            "event_type_log",
-            "event_count_total"
-          ],
-          "description": "Periodic status logging"
-        }
-      ]
+      "continuous_events": [],
+      "discrete_events": []
     }
   },
-  "coupling": [
-    {
-      "type": "event",
-      "event_type": "continuous",
-      "conditions": [
-        {
-          "op": ">",
-          "args": [
-            "HybridControlSystem.plant_output",
-            8.0
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "EventSynchronizationSystem.discrete_trigger",
-          "rhs": 1
-        }
-      ],
-      "discrete_parameters": [
-        "EventSynchronizationSystem.discrete_trigger"
-      ],
-      "description": "Cross-system event coupling: high plant output triggers sync system"
-    },
-    {
-      "type": "event",
-      "event_type": "discrete",
-      "trigger": {
-        "type": "condition",
-        "expression": {
-          "op": ">",
-          "args": [
-            "EventLoggingSystem.event_count_total",
-            20
-          ]
-        }
-      },
-      "affects": [
-        {
-          "lhs": "HybridControlSystem.setpoint",
-          "rhs": 0.0
-        }
-      ],
-      "discrete_parameters": [
-        "HybridControlSystem.setpoint"
-      ],
-      "description": "Shutdown control when too many events occur"
-    }
-  ],
+  "coupling": [],
   "domain": {
     "temporal": {
       "start": "2024-01-01T00:00:00Z",

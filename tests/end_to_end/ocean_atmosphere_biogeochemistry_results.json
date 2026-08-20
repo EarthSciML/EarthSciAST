@@ -51,11 +51,13 @@
       ]
     },
     "event": {
-      "count": 3,
+      "count": 1,
       "ecosystem_events": [
-        "phytoplankton_bloom_trigger: Enhanced growth during blooms",
-        "ocean_acidification_threshold: Chemical response to low pH",
         "seasonal_nutrient_upwelling: Quarterly nutrient injection"
+      ],
+      "moved_to_parameter_updates": [
+        "phytoplankton_bloom_trigger: now MarineEcosystem.max_growth_rate update {kind: crossing}",
+        "ocean_acidification_threshold: now OceanCarbon.CO2_solubility update {kind: crossing}"
       ]
     }
   },

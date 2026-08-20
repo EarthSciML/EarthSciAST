@@ -790,7 +790,29 @@
           "type": "parameter",
           "units": "umol/m^2/s",
           "default": 25.0,
-          "description": "Maximum photosynthetic rate at light saturation"
+          "description": "Maximum photosynthetic rate at light saturation",
+          "update": {
+            "kind": "crossing",
+            "when": {
+              "op": "-",
+              "args": [
+                0.2,
+                "SoilHydrologyThermal.water_stress_factor"
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "max_photosynthesis_rate"
+                  ]
+                },
+                0.7
+              ]
+            }
+          }
         },
         "light_saturation_point": {
           "type": "parameter",
@@ -826,7 +848,64 @@
           "type": "parameter",
           "units": "1/s",
           "default": 6e-08,
-          "description": "Leaf turnover rate"
+          "description": "Leaf turnover rate",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "and",
+              "args": [
+                {
+                  "op": "<",
+                  "args": [
+                    "AtmosphericBoundaryLayer.air_temperature",
+                    278.15
+                  ]
+                },
+                {
+                  "op": ">",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "t",
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "floor",
+                              "args": [
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    "t",
+                                    31536000
+                                  ]
+                                }
+                              ]
+                            },
+                            31536000
+                          ]
+                        }
+                      ]
+                    },
+                    24192000
+                  ]
+                }
+              ]
+            },
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "leaf_turnover_rate"
+                  ]
+                },
+                5.0
+              ]
+            }
+          }
         },
         "root_turnover_rate": {
           "type": "parameter",
@@ -1670,41 +1749,6 @@
     {
       "type": "event",
       "event_type": "continuous",
-      "name": "drought_stress_response",
-      "conditions": [
-        {
-          "op": "-",
-          "args": [
-            0.2,
-            "SoilHydrologyThermal.water_stress_factor"
-          ]
-        }
-      ],
-      "affects": [
-        {
-          "lhs": "VegetationDynamics.max_photosynthesis_rate",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "VegetationDynamics.max_photosynthesis_rate"
-                ]
-              },
-              0.7
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "VegetationDynamics.max_photosynthesis_rate"
-      ],
-      "description": "Reduce photosynthetic capacity under severe drought stress"
-    },
-    {
-      "type": "event",
-      "event_type": "continuous",
       "name": "soil_moisture_saturation_runoff",
       "conditions": [
         {
@@ -1733,81 +1777,7 @@
           }
         }
       ],
-      "discrete_parameters": [
-        "SoilHydrologyThermal.soil_moisture_layer1"
-      ],
       "description": "Prevent soil moisture from exceeding 95% of porosity (saturation excess runoff)"
-    },
-    {
-      "type": "event",
-      "event_type": "discrete",
-      "name": "seasonal_leaf_senescence",
-      "trigger": {
-        "type": "condition",
-        "expression": {
-          "op": "and",
-          "args": [
-            {
-              "op": "<",
-              "args": [
-                "AtmosphericBoundaryLayer.air_temperature",
-                278.15
-              ]
-            },
-            {
-              "op": ">",
-              "args": [
-                {
-                  "op": "-",
-                  "args": [
-                    "t",
-                    {
-                      "op": "*",
-                      "args": [
-                        {
-                          "op": "floor",
-                          "args": [
-                            {
-                              "op": "/",
-                              "args": [
-                                "t",
-                                31536000
-                              ]
-                            }
-                          ]
-                        },
-                        31536000
-                      ]
-                    }
-                  ]
-                },
-                24192000
-              ]
-            }
-          ]
-        }
-      },
-      "affects": [
-        {
-          "lhs": "VegetationDynamics.leaf_turnover_rate",
-          "rhs": {
-            "op": "*",
-            "args": [
-              {
-                "op": "Pre",
-                "args": [
-                  "VegetationDynamics.leaf_turnover_rate"
-                ]
-              },
-              5.0
-            ]
-          }
-        }
-      ],
-      "discrete_parameters": [
-        "VegetationDynamics.leaf_turnover_rate"
-      ],
-      "description": "Accelerate leaf senescence in autumn when temperature drops below 5°C"
     }
   ],
   "domain": {

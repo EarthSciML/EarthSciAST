@@ -33,19 +33,347 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event counter 1"
+          "description": "Event counter 1",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_1",
+                  0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_1"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_1",
+                  5.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_1"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_1",
+                  -5.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_1"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "oscillator_1",
+                      2.0
+                    ]
+                  },
+                  {
+                    "op": "<",
+                    "args": [
+                      "oscillator_2",
+                      -1.0
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_1"
+                    ]
+                  },
+                  10
+                ]
+              }
+            }
+          ]
         },
         "event_counter_2": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event counter 2"
+          "description": "Event counter 2",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_2",
+                  0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_2"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_2",
+                  3.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_2"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_2",
+                  -3.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_2"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "or",
+                "args": [
+                  {
+                    "op": "<",
+                    "args": [
+                      "oscillator_1",
+                      -3.0
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      "oscillator_3",
+                      1.5
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_2"
+                    ]
+                  },
+                  10
+                ]
+              }
+            }
+          ]
         },
         "event_counter_3": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Event counter 3"
+          "description": "Event counter 3",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_3",
+                  0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_3"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_3",
+                  2.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_3"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "oscillator_3",
+                  -2.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_3"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      {
+                        "op": "abs",
+                        "args": [
+                          "oscillator_1"
+                        ]
+                      },
+                      4.0
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      {
+                        "op": "abs",
+                        "args": [
+                          "oscillator_2"
+                        ]
+                      },
+                      2.5
+                    ]
+                  },
+                  {
+                    "op": ">",
+                    "args": [
+                      {
+                        "op": "abs",
+                        "args": [
+                          "oscillator_3"
+                        ]
+                      },
+                      1.8
+                    ]
+                  }
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "event_counter_3"
+                    ]
+                  },
+                  100
+                ]
+              }
+            }
+          ]
         },
         "total_events": {
           "type": "unknown",
@@ -174,435 +502,7 @@
           }
         }
       ],
-      "continuous_events": [
-        {
-          "name": "rapid_zero_crossing_1a",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_1",
-                0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_1",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_1"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Zero crossings of oscillator 1"
-        },
-        {
-          "name": "rapid_zero_crossing_1b",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_1",
-                5.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_1",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_1"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Threshold crossings of oscillator 1 at +5"
-        },
-        {
-          "name": "rapid_zero_crossing_1c",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_1",
-                -5.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_1",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_1"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Threshold crossings of oscillator 1 at -5"
-        },
-        {
-          "name": "rapid_zero_crossing_2a",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_2",
-                0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_2",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_2"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Zero crossings of oscillator 2"
-        },
-        {
-          "name": "rapid_zero_crossing_2b",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_2",
-                3.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_2",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_2"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Threshold crossings of oscillator 2 at +3"
-        },
-        {
-          "name": "rapid_zero_crossing_2c",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_2",
-                -3.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_2",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_2"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Threshold crossings of oscillator 2 at -3"
-        },
-        {
-          "name": "rapid_zero_crossing_3a",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_3",
-                0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_3",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_3"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Zero crossings of oscillator 3"
-        },
-        {
-          "name": "rapid_zero_crossing_3b",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_3",
-                2.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_3",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_3"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Threshold crossings of oscillator 3 at +2"
-        },
-        {
-          "name": "rapid_zero_crossing_3c",
-          "conditions": [
-            {
-              "op": "-",
-              "args": [
-                "oscillator_3",
-                -2.0
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_3",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_3"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "root_find": "all",
-          "description": "Threshold crossings of oscillator 3 at -2"
-        },
-        {
-          "name": "compound_event_1",
-          "conditions": [
-            {
-              "op": "and",
-              "args": [
-                {
-                  "op": ">",
-                  "args": [
-                    "oscillator_1",
-                    2.0
-                  ]
-                },
-                {
-                  "op": "<",
-                  "args": [
-                    "oscillator_2",
-                    -1.0
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_1",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_1"
-                    ]
-                  },
-                  10
-                ]
-              }
-            }
-          ],
-          "description": "Compound condition event 1"
-        },
-        {
-          "name": "compound_event_2",
-          "conditions": [
-            {
-              "op": "or",
-              "args": [
-                {
-                  "op": "<",
-                  "args": [
-                    "oscillator_1",
-                    -3.0
-                  ]
-                },
-                {
-                  "op": ">",
-                  "args": [
-                    "oscillator_3",
-                    1.5
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_2",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_2"
-                    ]
-                  },
-                  10
-                ]
-              }
-            }
-          ],
-          "description": "Compound condition event 2"
-        },
-        {
-          "name": "triple_compound_event",
-          "conditions": [
-            {
-              "op": "and",
-              "args": [
-                {
-                  "op": ">",
-                  "args": [
-                    {
-                      "op": "abs",
-                      "args": [
-                        "oscillator_1"
-                      ]
-                    },
-                    4.0
-                  ]
-                },
-                {
-                  "op": ">",
-                  "args": [
-                    {
-                      "op": "abs",
-                      "args": [
-                        "oscillator_2"
-                      ]
-                    },
-                    2.5
-                  ]
-                },
-                {
-                  "op": ">",
-                  "args": [
-                    {
-                      "op": "abs",
-                      "args": [
-                        "oscillator_3"
-                      ]
-                    },
-                    1.8
-                  ]
-                }
-              ]
-            }
-          ],
-          "affects": [
-            {
-              "lhs": "event_counter_3",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "event_counter_3"
-                    ]
-                  },
-                  100
-                ]
-              }
-            }
-          ],
-          "description": "Triple compound condition event"
-        }
-      ]
+      "continuous_events": []
     },
     "MassiveDiscreteEventSystem": {
       "variables": {
@@ -616,345 +516,197 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Fast event counter"
+          "description": "Fast event counter",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 0.1,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_fast"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "interval": 0.11,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_fast"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "interval": 0.12,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_fast"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "interval": 0.13,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_fast"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "interval": 0.14,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_fast"
+                    ]
+                  },
+                  1
+                ]
+              }
+            }
+          ]
         },
         "counter_medium": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Medium event counter"
+          "description": "Medium event counter",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 1.0,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_medium"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "interval": 1.1,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_medium"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "interval": 1.2,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_medium"
+                    ]
+                  },
+                  1
+                ]
+              }
+            }
+          ]
         },
         "counter_slow": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Slow event counter"
+          "description": "Slow event counter",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 10.0,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_slow"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "interval": 11.0,
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "counter_slow"
+                    ]
+                  },
+                  1
+                ]
+              }
+            }
+          ]
         },
         "counter_preset": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Preset time event counter"
-        },
-        "stress_parameter": {
-          "type": "parameter",
-          "units": "1",
-          "default": 1.0,
-          "description": "Parameter modified by many events"
-        }
-      },
-      "equations": [
-        {
-          "lhs": {
-            "op": "D",
-            "args": [
-              "accumulator"
-            ],
-            "wrt": "t"
-          },
-          "rhs": {
-            "op": "*",
-            "args": [
-              "stress_parameter",
-              0.1
-            ]
-          }
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
-              "accumulator"
-            ]
-          },
-          "rhs": 0.0
-        }
-      ],
-      "discrete_events": [
-        {
-          "name": "fast_periodic_1",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.1
-          },
-          "affects": [
-            {
-              "lhs": "counter_fast",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_fast"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_fast"
-          ],
-          "description": "Fast periodic event 1"
-        },
-        {
-          "name": "fast_periodic_2",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.11
-          },
-          "affects": [
-            {
-              "lhs": "counter_fast",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_fast"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_fast"
-          ],
-          "description": "Fast periodic event 2"
-        },
-        {
-          "name": "fast_periodic_3",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.12
-          },
-          "affects": [
-            {
-              "lhs": "counter_fast",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_fast"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_fast"
-          ],
-          "description": "Fast periodic event 3"
-        },
-        {
-          "name": "fast_periodic_4",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.13
-          },
-          "affects": [
-            {
-              "lhs": "counter_fast",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_fast"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_fast"
-          ],
-          "description": "Fast periodic event 4"
-        },
-        {
-          "name": "fast_periodic_5",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.14
-          },
-          "affects": [
-            {
-              "lhs": "counter_fast",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_fast"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_fast"
-          ],
-          "description": "Fast periodic event 5"
-        },
-        {
-          "name": "medium_periodic_1",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0
-          },
-          "affects": [
-            {
-              "lhs": "counter_medium",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_medium"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_medium"
-          ],
-          "description": "Medium periodic event 1"
-        },
-        {
-          "name": "medium_periodic_2",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.1
-          },
-          "affects": [
-            {
-              "lhs": "counter_medium",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_medium"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_medium"
-          ],
-          "description": "Medium periodic event 2"
-        },
-        {
-          "name": "medium_periodic_3",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.2
-          },
-          "affects": [
-            {
-              "lhs": "counter_medium",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_medium"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_medium"
-          ],
-          "description": "Medium periodic event 3"
-        },
-        {
-          "name": "slow_periodic_1",
-          "trigger": {
-            "type": "periodic",
-            "interval": 10.0
-          },
-          "affects": [
-            {
-              "lhs": "counter_slow",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_slow"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_slow"
-          ],
-          "description": "Slow periodic event 1"
-        },
-        {
-          "name": "slow_periodic_2",
-          "trigger": {
-            "type": "periodic",
-            "interval": 11.0
-          },
-          "affects": [
-            {
-              "lhs": "counter_slow",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_slow"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "counter_slow"
-          ],
-          "description": "Slow periodic event 2"
-        },
-        {
-          "name": "massive_preset_times",
-          "trigger": {
-            "type": "preset_times",
+          "description": "Preset time event counter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
             "times": [
               0.5,
               0.7,
@@ -1005,40 +757,32 @@
               19.2,
               19.6,
               20.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "counter_preset",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "counter_preset"
-                    ]
-                  },
-                  1
-                ]
-              }
+            ],
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "counter_preset"
+                  ]
+                },
+                1
+              ]
             }
-          ],
-          "discrete_parameters": [
-            "counter_preset"
-          ],
-          "description": "Many preset time events"
+          }
         },
-        {
-          "name": "stress_parameter_modifier_1",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.25
-          },
-          "affects": [
+        "stress_parameter": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Parameter modified by many events",
+          "shape": [],
+          "update": [
             {
-              "lhs": "stress_parameter",
-              "rhs": {
+              "kind": "schedule",
+              "interval": 0.25,
+              "expression": {
                 "op": "*",
                 "args": [
                   {
@@ -1050,23 +794,11 @@
                   1.01
                 ]
               }
-            }
-          ],
-          "discrete_parameters": [
-            "stress_parameter"
-          ],
-          "description": "Frequent parameter modification 1"
-        },
-        {
-          "name": "stress_parameter_modifier_2",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.33
-          },
-          "affects": [
+            },
             {
-              "lhs": "stress_parameter",
-              "rhs": {
+              "kind": "schedule",
+              "interval": 0.33,
+              "expression": {
                 "op": "*",
                 "args": [
                   {
@@ -1078,64 +810,52 @@
                   0.99
                 ]
               }
-            }
-          ],
-          "discrete_parameters": [
-            "stress_parameter"
-          ],
-          "description": "Frequent parameter modification 2"
-        },
-        {
-          "name": "conditional_complex_1",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "and",
-              "args": [
-                {
-                  "op": ">",
-                  "args": [
-                    "accumulator",
-                    1.0
-                  ]
-                },
-                {
-                  "op": "<",
-                  "args": [
-                    {
-                      "op": "-",
-                      "args": [
-                        "counter_fast",
-                        {
-                          "op": "*",
-                          "args": [
-                            {
-                              "op": "floor",
-                              "args": [
-                                {
-                                  "op": "/",
-                                  "args": [
-                                    "counter_fast",
-                                    10
-                                  ]
-                                }
-                              ]
-                            },
-                            10
-                          ]
-                        }
-                      ]
-                    },
-                    3
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
+            },
             {
-              "lhs": "stress_parameter",
-              "rhs": {
+              "kind": "condition",
+              "when": {
+                "op": "and",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "accumulator",
+                      1.0
+                    ]
+                  },
+                  {
+                    "op": "<",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "counter_fast",
+                          {
+                            "op": "*",
+                            "args": [
+                              {
+                                "op": "floor",
+                                "args": [
+                                  {
+                                    "op": "/",
+                                    "args": [
+                                      "counter_fast",
+                                      10
+                                    ]
+                                  }
+                                ]
+                              },
+                              10
+                            ]
+                          }
+                        ]
+                      },
+                      3
+                    ]
+                  }
+                ]
+              },
+              "expression": {
                 "op": "+",
                 "args": [
                   {
@@ -1147,53 +867,41 @@
                   0.1
                 ]
               }
-            }
-          ],
-          "discrete_parameters": [
-            "stress_parameter"
-          ],
-          "description": "Complex conditional event 1"
-        },
-        {
-          "name": "conditional_complex_2",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "or",
-              "args": [
-                {
-                  "op": ">",
-                  "args": [
-                    "counter_medium",
-                    5
-                  ]
-                },
-                {
-                  "op": "and",
-                  "args": [
-                    {
-                      "op": ">",
-                      "args": [
-                        "counter_slow",
-                        1
-                      ]
-                    },
-                    {
-                      "op": "<",
-                      "args": [
-                        "stress_parameter",
-                        0.8
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
+            },
             {
-              "lhs": "stress_parameter",
-              "rhs": {
+              "kind": "condition",
+              "when": {
+                "op": "or",
+                "args": [
+                  {
+                    "op": ">",
+                    "args": [
+                      "counter_medium",
+                      5
+                    ]
+                  },
+                  {
+                    "op": "and",
+                    "args": [
+                      {
+                        "op": ">",
+                        "args": [
+                          "counter_slow",
+                          1
+                        ]
+                      },
+                      {
+                        "op": "<",
+                        "args": [
+                          "stress_parameter",
+                          0.8
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "expression": {
                 "op": "+",
                 "args": [
                   {
@@ -1206,13 +914,37 @@
                 ]
               }
             }
-          ],
-          "discrete_parameters": [
-            "stress_parameter"
-          ],
-          "description": "Complex conditional event 2"
+          ]
         }
-      ]
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "accumulator"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "stress_parameter",
+              0.1
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "accumulator"
+            ]
+          },
+          "rhs": 0.0
+        }
+      ],
+      "discrete_events": []
     },
     "EventErrorHandlingSystem": {
       "variables": {
@@ -1232,13 +964,92 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Count of error conditions"
+          "description": "Count of error conditions",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  "error_count",
+                  5
+                ]
+              },
+              "expression": 0
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "<",
+                "args": [
+                  "error_prone_state",
+                  0.001
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "error_count"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": ">",
+                "args": [
+                  "normal_state",
+                  1000.0
+                ]
+              },
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "error_count"
+                    ]
+                  },
+                  10
+                ]
+              }
+            }
+          ]
         },
         "recovery_attempts": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Recovery attempt counter"
+          "description": "Recovery attempt counter",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": ">",
+              "args": [
+                "error_count",
+                5
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "recovery_attempts"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -1321,21 +1132,6 @@
             {
               "lhs": "error_prone_state",
               "rhs": 0.001
-            },
-            {
-              "lhs": "error_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "error_count"
-                    ]
-                  },
-                  1
-                ]
-              }
             }
           ],
           "reinitialize": true,
@@ -1356,21 +1152,6 @@
             {
               "lhs": "normal_state",
               "rhs": 1000.0
-            },
-            {
-              "lhs": "error_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "error_count"
-                    ]
-                  },
-                  10
-                ]
-              }
             }
           ],
           "reinitialize": true,
@@ -1392,25 +1173,6 @@
           },
           "affects": [
             {
-              "lhs": "recovery_attempts",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "recovery_attempts"
-                    ]
-                  },
-                  1
-                ]
-              }
-            },
-            {
-              "lhs": "error_count",
-              "rhs": 0
-            },
-            {
               "lhs": "normal_state",
               "rhs": 1.0
             },
@@ -1418,10 +1180,6 @@
               "lhs": "error_prone_state",
               "rhs": 0.1
             }
-          ],
-          "discrete_parameters": [
-            "recovery_attempts",
-            "error_count"
           ],
           "reinitialize": true,
           "description": "Attempt system recovery after multiple errors"

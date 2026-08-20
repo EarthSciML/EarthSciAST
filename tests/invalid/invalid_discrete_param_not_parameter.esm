@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "InvalidDiscreteParamNotParameter",
-    "description": "Discrete parameter refers to a state variable instead of parameter"
+    "description": "A periodic discrete event writes the parameter 'k'. esm 1.0.0 events may affect unknowns only — a rate that decays over the run declares update: {kind: \"schedule\", interval: 60.0, …} on itself (esm-spec §5.4) — so this is `event_affects_parameter`."
   },
   "models": {
     "TestModel": {
@@ -28,8 +28,7 @@
               "lhs": "k",
               "rhs": { "op": "*", "args": [1.1, "k"] }
             }
-          ],
-          "discrete_parameters": ["x"]
+          ]
         }
       ]
     }

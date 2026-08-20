@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "InvalidDiscreteParamTest",
-    "description": "Test case: discrete event references undeclared parameter",
+    "description": "Test case: a discrete event writes a PARAMETER. esm 1.0.0 events may affect unknowns only — a parameter that changes during a run carries its own `update` block (esm-spec §5.4) — so this is `event_affects_parameter`.",
     "authors": [
       "Test Suite"
     ]
@@ -54,14 +54,11 @@
           },
           "affects": [
             {
-              "lhs": "undefined_param",
+              "lhs": "valid_param",
               "rhs": 0.1
             }
           ],
-          "discrete_parameters": [
-            "undefined_param"
-          ],
-          "description": "This should fail - undefined_param not declared"
+          "description": "This should fail - 'valid_param' is a parameter, and an event may affect unknowns only"
         }
       ]
     }

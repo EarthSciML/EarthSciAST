@@ -21,25 +21,105 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Fast periodic counter"
+          "description": "Fast periodic counter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 0.5,
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "fast_counter"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "slow_counter": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Slow periodic counter"
+          "description": "Slow periodic counter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 3.0,
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "slow_counter"
+                  ]
+                },
+                10
+              ]
+            }
+          }
         },
         "offset_counter": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Offset periodic counter"
+          "description": "Offset periodic counter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 2.0,
+            "initial_offset": 1.5,
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "offset_counter"
+                  ]
+                },
+                100
+              ]
+            }
+          }
         },
         "phase_shift": {
           "type": "parameter",
           "units": "1",
           "default": 0.0,
-          "description": "Phase shift accumulator"
+          "description": "Phase shift accumulator",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 1.0,
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "phase_shift"
+                  ]
+                },
+                {
+                  "op": "sin",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "t",
+                        0.5
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -63,132 +143,7 @@
           "rhs": 0.0
         }
       ],
-      "discrete_events": [
-        {
-          "name": "fast_periodic",
-          "trigger": {
-            "type": "periodic",
-            "interval": 0.5
-          },
-          "affects": [
-            {
-              "lhs": "fast_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "fast_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "fast_counter"
-          ],
-          "description": "Fast periodic event every 0.5 time units"
-        },
-        {
-          "name": "slow_periodic",
-          "trigger": {
-            "type": "periodic",
-            "interval": 3.0
-          },
-          "affects": [
-            {
-              "lhs": "slow_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "slow_counter"
-                    ]
-                  },
-                  10
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "slow_counter"
-          ],
-          "description": "Slow periodic event every 3.0 time units"
-        },
-        {
-          "name": "offset_periodic",
-          "trigger": {
-            "type": "periodic",
-            "interval": 2.0,
-            "initial_offset": 1.5
-          },
-          "affects": [
-            {
-              "lhs": "offset_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "offset_counter"
-                    ]
-                  },
-                  100
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "offset_counter"
-          ],
-          "description": "Periodic event with 1.5 time unit initial offset"
-        },
-        {
-          "name": "phase_accumulator",
-          "trigger": {
-            "type": "periodic",
-            "interval": 1.0
-          },
-          "affects": [
-            {
-              "lhs": "phase_shift",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "phase_shift"
-                    ]
-                  },
-                  {
-                    "op": "sin",
-                    "args": [
-                      {
-                        "op": "*",
-                        "args": [
-                          "t",
-                          0.5
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "phase_shift"
-          ],
-          "description": "Phase shift accumulation based on current time"
-        }
-      ]
+      "discrete_events": []
     },
     "PresetTimeSystem": {
       "variables": {
@@ -202,19 +157,120 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Number of samples taken"
+          "description": "Number of samples taken",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "times": [
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+                5.0,
+                6.0,
+                7.0,
+                8.0,
+                9.0,
+                10.0
+              ],
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "sample_count"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "schedule",
+              "times": [
+                15.0,
+                25.0,
+                40.0,
+                60.0,
+                85.0
+              ],
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "sample_count"
+                    ]
+                  },
+                  100
+                ]
+              }
+            }
+          ]
         },
         "irregular_flag": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Irregular schedule flag"
+          "description": "Irregular schedule flag",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              0.3,
+              1.7,
+              2.2,
+              4.8,
+              6.1,
+              7.9,
+              9.4
+            ],
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "irregular_flag"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "burst_counter": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Burst measurement counter"
+          "description": "Burst measurement counter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "times": [
+              5.0,
+              5.1,
+              5.2,
+              5.3,
+              5.4,
+              5.5
+            ],
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "burst_counter"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -266,152 +322,7 @@
           "rhs": 0.0
         }
       ],
-      "discrete_events": [
-        {
-          "name": "regular_sampling",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              1.0,
-              2.0,
-              3.0,
-              4.0,
-              5.0,
-              6.0,
-              7.0,
-              8.0,
-              9.0,
-              10.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "sample_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "sample_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "sample_count"
-          ],
-          "description": "Regular sampling at integer time points"
-        },
-        {
-          "name": "irregular_schedule",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              0.3,
-              1.7,
-              2.2,
-              4.8,
-              6.1,
-              7.9,
-              9.4
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "irregular_flag",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "irregular_flag"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "irregular_flag"
-          ],
-          "description": "Irregular measurement schedule"
-        },
-        {
-          "name": "burst_measurements",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              5.0,
-              5.1,
-              5.2,
-              5.3,
-              5.4,
-              5.5
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "burst_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "burst_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "burst_counter"
-          ],
-          "description": "Burst of rapid measurements at t=5"
-        },
-        {
-          "name": "sparse_long_term",
-          "trigger": {
-            "type": "preset_times",
-            "times": [
-              15.0,
-              25.0,
-              40.0,
-              60.0,
-              85.0
-            ]
-          },
-          "affects": [
-            {
-              "lhs": "sample_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "sample_count"
-                    ]
-                  },
-                  100
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "sample_count"
-          ],
-          "description": "Sparse long-term measurement schedule"
-        }
-      ]
+      "discrete_events": []
     },
     "ConditionalEventSystem": {
       "variables": {
@@ -431,19 +342,148 @@
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Alarm activation state"
+          "description": "Alarm activation state",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  "sensor_value",
+                  "threshold_parameter"
+                ]
+              },
+              "expression": 1
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "<",
+                "args": [
+                  "sensor_value",
+                  {
+                    "op": "*",
+                    "args": [
+                      "threshold_parameter",
+                      0.8
+                    ]
+                  }
+                ]
+              },
+              "expression": 0
+            }
+          ]
         },
         "hysteresis_counter": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Hysteresis activation counter"
+          "description": "Hysteresis activation counter",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "and",
+              "args": [
+                {
+                  "op": ">",
+                  "args": [
+                    "sensor_value",
+                    3.0
+                  ]
+                },
+                {
+                  "op": "<",
+                  "args": [
+                    "sensor_value",
+                    4.0
+                  ]
+                },
+                {
+                  "op": "==",
+                  "args": [
+                    "alarm_state",
+                    0
+                  ]
+                }
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "hysteresis_counter"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         },
         "logic_gate_output": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Logic gate result"
+          "description": "Logic gate result",
+          "update": {
+            "kind": "condition",
+            "when": {
+              "op": "or",
+              "args": [
+                {
+                  "op": "and",
+                  "args": [
+                    {
+                      "op": ">",
+                      "args": [
+                        "sensor_value",
+                        1.0
+                      ]
+                    },
+                    {
+                      "op": "==",
+                      "args": [
+                        "alarm_state",
+                        1
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "and",
+                  "args": [
+                    {
+                      "op": "<",
+                      "args": [
+                        "sensor_value",
+                        -1.0
+                      ]
+                    },
+                    {
+                      "op": ">",
+                      "args": [
+                        "hysteresis_counter",
+                        5
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "logic_gate_output"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -507,183 +547,7 @@
           "rhs": 0.0
         }
       ],
-      "discrete_events": [
-        {
-          "name": "threshold_alarm",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": ">",
-              "args": [
-                "sensor_value",
-                "threshold_parameter"
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "alarm_state",
-              "rhs": 1
-            }
-          ],
-          "discrete_parameters": [
-            "alarm_state"
-          ],
-          "description": "Activate alarm when sensor exceeds threshold"
-        },
-        {
-          "name": "alarm_reset",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "<",
-              "args": [
-                "sensor_value",
-                {
-                  "op": "*",
-                  "args": [
-                    "threshold_parameter",
-                    0.8
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "alarm_state",
-              "rhs": 0
-            }
-          ],
-          "discrete_parameters": [
-            "alarm_state"
-          ],
-          "description": "Reset alarm with hysteresis (20% lower than activation)"
-        },
-        {
-          "name": "hysteresis_counter_increment",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "and",
-              "args": [
-                {
-                  "op": ">",
-                  "args": [
-                    "sensor_value",
-                    3.0
-                  ]
-                },
-                {
-                  "op": "<",
-                  "args": [
-                    "sensor_value",
-                    4.0
-                  ]
-                },
-                {
-                  "op": "==",
-                  "args": [
-                    "alarm_state",
-                    0
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "hysteresis_counter",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "hysteresis_counter"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "hysteresis_counter"
-          ],
-          "description": "Count times in hysteresis zone while alarm is off"
-        },
-        {
-          "name": "complex_logic_gate",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "or",
-              "args": [
-                {
-                  "op": "and",
-                  "args": [
-                    {
-                      "op": ">",
-                      "args": [
-                        "sensor_value",
-                        1.0
-                      ]
-                    },
-                    {
-                      "op": "==",
-                      "args": [
-                        "alarm_state",
-                        1
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "op": "and",
-                  "args": [
-                    {
-                      "op": "<",
-                      "args": [
-                        "sensor_value",
-                        -1.0
-                      ]
-                    },
-                    {
-                      "op": ">",
-                      "args": [
-                        "hysteresis_counter",
-                        5
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "logic_gate_output",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "logic_gate_output"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "logic_gate_output"
-          ],
-          "description": "Complex boolean logic with AND/OR combinations"
-        }
-      ]
+      "discrete_events": []
     },
     "ParameterModificationSystem": {
       "variables": {
@@ -697,19 +561,101 @@
           "type": "parameter",
           "units": "1/s",
           "default": 0.1,
-          "description": "Growth rate parameter"
+          "description": "Growth rate parameter",
+          "shape": [],
+          "update": [
+            {
+              "kind": "schedule",
+              "interval": 2.5,
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "growth_rate"
+                    ]
+                  },
+                  0.9
+                ]
+              }
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "<",
+                "args": [
+                  "dynamic_state",
+                  0.1
+                ]
+              },
+              "expression": 0.2
+            }
+          ]
         },
         "damping_coefficient": {
           "type": "parameter",
           "units": "1",
           "default": 0.05,
-          "description": "Damping parameter"
+          "description": "Damping parameter",
+          "update": [
+            {
+              "kind": "condition",
+              "when": {
+                "op": ">",
+                "args": [
+                  "dynamic_state",
+                  10.0
+                ]
+              },
+              "expression": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "damping_coefficient"
+                    ]
+                  },
+                  1.5
+                ]
+              }
+            },
+            {
+              "kind": "condition",
+              "when": {
+                "op": "<",
+                "args": [
+                  "dynamic_state",
+                  0.1
+                ]
+              },
+              "expression": 0.01
+            }
+          ]
         },
         "modification_count": {
           "type": "parameter",
           "units": "1",
           "default": 0,
-          "description": "Parameter change counter"
+          "description": "Parameter change counter",
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 2.5,
+            "expression": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "Pre",
+                  "args": [
+                    "modification_count"
+                  ]
+                },
+                1
+              ]
+            }
+          }
         }
       },
       "equations": [
@@ -757,117 +703,7 @@
           "rhs": 0.0
         }
       ],
-      "discrete_events": [
-        {
-          "name": "growth_rate_adjustment",
-          "trigger": {
-            "type": "periodic",
-            "interval": 2.5
-          },
-          "affects": [
-            {
-              "lhs": "growth_rate",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "growth_rate"
-                    ]
-                  },
-                  0.9
-                ]
-              }
-            },
-            {
-              "lhs": "modification_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "modification_count"
-                    ]
-                  },
-                  1
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "growth_rate",
-            "modification_count"
-          ],
-          "reinitialize": true,
-          "description": "Gradually reduce growth rate"
-        },
-        {
-          "name": "adaptive_damping",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": ">",
-              "args": [
-                "dynamic_state",
-                10.0
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "damping_coefficient",
-              "rhs": {
-                "op": "*",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "damping_coefficient"
-                    ]
-                  },
-                  1.5
-                ]
-              }
-            }
-          ],
-          "discrete_parameters": [
-            "damping_coefficient"
-          ],
-          "reinitialize": true,
-          "description": "Increase damping when state becomes large"
-        },
-        {
-          "name": "parameter_reset",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "<",
-              "args": [
-                "dynamic_state",
-                0.1
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "growth_rate",
-              "rhs": 0.2
-            },
-            {
-              "lhs": "damping_coefficient",
-              "rhs": 0.01
-            }
-          ],
-          "discrete_parameters": [
-            "growth_rate",
-            "damping_coefficient"
-          ],
-          "reinitialize": true,
-          "description": "Reset parameters when state becomes very small"
-        }
-      ]
+      "discrete_events": []
     }
   },
   "domain": {

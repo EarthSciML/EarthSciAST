@@ -28,6 +28,27 @@
           "units": "1",
           "default": 1.0,
           "description": "Valid parameter"
+        },
+        "handler_output": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "schedule",
+            "interval": 1.0,
+            "handler": {
+              "handler_id": "NonexistentHandler",
+              "read_vars": [
+                "x",
+                "undefined_variable"
+              ],
+              "read_params": [
+                "valid_param"
+              ]
+            }
+          },
+          "description": "ERROR: the handler's read_vars includes the undefined variable 'undefined_variable' (the 0.x event functional_affect, relocated onto the parameter it writes)"
         }
       },
       "equations": [
@@ -132,7 +153,7 @@
           "description": "ERROR: Pre() operator used in condition (only allowed in affects)"
         },
         {
-          "name": "parameter_not_declared_discrete",
+          "name": "continuous_event_writes_parameter",
           "conditions": [
             {
               "op": "-",
@@ -148,12 +169,12 @@
               "rhs": 10.0
             }
           ],
-          "description": "ERROR: Modifies parameter 'valid_param' but not declared in discrete_parameters"
+          "description": "ERROR: Affects the parameter 'valid_param'; esm 1.0.0 events may affect unknowns only, and a parameter that changes on a zero crossing declares update: {kind: \"crossing\", …} on itself"
         }
       ],
       "discrete_events": [
         {
-          "name": "conflicting_discrete_parameters",
+          "name": "discrete_event_writes_parameter",
           "trigger": {
             "type": "condition",
             "expression": {
@@ -170,11 +191,7 @@
               "rhs": 1.0
             }
           ],
-          "discrete_parameters": [
-            "valid_param",
-            "nonexistent_param"
-          ],
-          "description": "ERROR: discrete_parameters includes undeclared 'nonexistent_param'"
+          "description": "ERROR: Affects the parameter 'valid_param'; esm 1.0.0 events may affect unknowns only"
         },
         {
           "name": "invalid_trigger_type",
@@ -224,53 +241,12 @@
           "description": "ERROR: Empty times array in preset_times trigger"
         },
         {
-          "name": "functional_affect_errors",
+          "name": "missing_affects",
           "trigger": {
             "type": "periodic",
             "interval": 1.0
           },
-          "functional_affect": {
-            "handler_id": "NonexistentHandler",
-            "read_vars": [
-              "x",
-              "undefined_variable"
-            ],
-            "read_params": [
-              "valid_param"
-            ],
-            "modified_params": [
-              "another_undefined_param"
-            ]
-          },
-          "description": "ERROR: Multiple issues - undefined variables in read_vars and modified_params"
-        },
-        {
-          "name": "both_affects_and_functional",
-          "trigger": {
-            "type": "condition",
-            "expression": {
-              "op": "<",
-              "args": [
-                "x",
-                0.1
-              ]
-            }
-          },
-          "affects": [
-            {
-              "lhs": "y",
-              "rhs": 1.0
-            }
-          ],
-          "functional_affect": {
-            "handler_id": "SomeHandler",
-            "read_vars": [
-              "x"
-            ],
-            "read_params": [],
-            "modified_params": []
-          },
-          "description": "ERROR: Event has both 'affects' and 'functional_affect' (should be mutually exclusive)"
+          "description": "ERROR: `affects` is required on a discrete event in esm 1.0.0 (the `functional_affect` alternative is gone — a handler lives on the parameter it writes)"
         }
       ]
     }
@@ -315,7 +291,7 @@
           "rhs": 5.0
         }
       ],
-      "description": "ERROR: Cross-system event modifies parameter but missing discrete_parameters declaration"
+      "description": "ERROR: Cross-system event affects a parameter; esm-spec §5.6 narrows coupling-level events to unknowns the same way"
     }
   ],
   "domain": {

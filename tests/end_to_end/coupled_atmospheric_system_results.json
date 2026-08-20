@@ -52,11 +52,16 @@
       "verification": "Callbacks registered for parameter updates"
     },
     "event": {
-      "count": 3,
-      "continuous_events": 2,
-      "discrete_events": 1,
-      "cross_system_events": 3,
-      "verification": "Events affect variables across multiple systems"
+      "count": 0,
+      "continuous_events": 0,
+      "discrete_events": 0,
+      "cross_system_events": 0,
+      "moved_to_parameter_updates": [
+        "high_ozone_emission_control: now EmissionSources.NOx_emission_rate update {kind: crossing}",
+        "weekend_emission_reduction: now EmissionSources.weekday_factor update {kind: condition}",
+        "boundary_layer_collapse_mixing_reduction: now AtmosphericTransport.K_z update {kind: crossing}"
+      ],
+      "verification": "esm 1.0.0: every cross-system event here wrote a PARAMETER, so each became that parameter's own `update` block (esm-spec 5.4)"
     }
   },
 

@@ -302,7 +302,55 @@
           "type": "parameter",
           "units": "dimensionless",
           "default": 0,
-          "description": "Number of interventions applied"
+          "description": "Number of interventions applied",
+          "update": [
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "P",
+                  "critical_threshold"
+                ]
+              },
+              "direction": "up",
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "intervention_count"
+                    ]
+                  },
+                  1
+                ]
+              }
+            },
+            {
+              "kind": "crossing",
+              "when": {
+                "op": "-",
+                "args": [
+                  "P",
+                  "critical_threshold"
+                ]
+              },
+              "direction": "down",
+              "expression": {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "Pre",
+                    "args": [
+                      "intervention_count"
+                    ]
+                  },
+                  1
+                ]
+              }
+            }
+          ]
         },
         "r": {
           "units": "1/s",
@@ -393,21 +441,6 @@
                   "control_factor"
                 ]
               }
-            },
-            {
-              "lhs": "intervention_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "intervention_count"
-                    ]
-                  },
-                  1
-                ]
-              }
             }
           ],
           "affect_neg": [
@@ -423,21 +456,6 @@
                     ]
                   },
                   "boost_factor"
-                ]
-              }
-            },
-            {
-              "lhs": "intervention_count",
-              "rhs": {
-                "op": "+",
-                "args": [
-                  {
-                    "op": "Pre",
-                    "args": [
-                      "intervention_count"
-                    ]
-                  },
-                  1
                 ]
               }
             }

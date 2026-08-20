@@ -29,6 +29,12 @@
           "type": "unknown",
           "units": "kg",
           "description": "Observed variable missing expression"
+        },
+        "bad_rate_param": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 1.0,
+          "description": "Parameter that a discrete event illegally writes"
         }
       },
       "equations": [
@@ -50,12 +56,13 @@
         {
           "name": "bad_discrete_event",
           "trigger": "t > 5.0",
-          "discrete_parameters": [
-            "undefined_discrete_param"
-          ],
           "affects": [
             {
               "lhs": "x",
+              "rhs": "1.0"
+            },
+            {
+              "lhs": "bad_rate_param",
               "rhs": "1.0"
             }
           ]
