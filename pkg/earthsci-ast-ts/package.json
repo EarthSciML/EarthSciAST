@@ -29,7 +29,7 @@
     "format:check": "prettier --check src *.json *.js *.ts",
     "generate-schema": "node scripts/generate-embedded-schema.mjs",
     "generate-validator": "node scripts/generate-standalone-validator.mjs",
-    "generate-types": "json2ts -i ../../esm-schema.json -o src/generated.ts",
+    "generate-types": "json2ts -i ../../esm-schema.json -o src/generated.ts && node scripts/fix-generated-expression.mjs",
     "prepublishOnly": "npm run build",
     "publish:dry-run": "npm publish --dry-run",
     "publish:beta": "npm publish --tag beta",

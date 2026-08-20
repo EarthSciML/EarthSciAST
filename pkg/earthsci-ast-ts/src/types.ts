@@ -63,58 +63,6 @@ export interface ExprNodeOf {
 
 export type Expr = GeneratedExpression | NumericLiteral | ExprNodeOf
 
-/**
- * An operator node in the expression AST.
- *
- * Overrides the generated shape in ONE respect: every sub-expression-bearing
- * field is typed `Expression`. json2ts renders these as
- * `number | string | ExpressionNode1`, where `ExpressionNode1` is the bare
- * index signature `{ [k: string]: unknown }` — a SUPERTYPE of a real node, so
- * `node.expr` could not be handed to anything expecting an `Expression` without
- * a cast. `args` is already correct in the generated type and is left alone.
- */
-export type ExpressionNode = GeneratedExpressionNode & {
-  expr?: GeneratedExpression
-  filter?: GeneratedExpression
-  lower?: GeneratedExpression
-  upper?: GeneratedExpression
-  key?: GeneratedExpression
-  values?: GeneratedExpression[]
-  axes?: { [k: string]: GeneratedExpression }
-  bindings?: { [k: string]: GeneratedExpression }
-}
-
-// The same `number | string | ExpressionNode1` artifact, at every other
-// Expression-valued field json2ts renders that way. Each is an `Expression` in
-// the schema; naming them here keeps the walkers and checkers from needing a
-// cast at every use.
-
-/** An affect equation in an event: `lhs` is the target UNKNOWN, `rhs` an expression. */
-export type AffectEquation = GeneratedAffectEquation & { rhs: GeneratedExpression }
-
-/** A reaction, whose `rate` is an Expression. */
-export type Reaction = GeneratedReaction & { rate: GeneratedExpression }
-
-/** A connector equation, whose `expression` is an Expression. */
-export type ConnectorEquation = GeneratedConnectorEquation & { expression?: GeneratedExpression }
-
-/** An in-file rewrite rule / Expression-AST template (esm-spec §9.6). */
-export type ExpressionTemplate = GeneratedExpressionTemplate & {
-  match?: GeneratedExpression
-  body: GeneratedExpression
-}
-
-/** A coupling variable mapping: a named transform, or an Expression node. */
-export type CouplingVariableMap = GeneratedCouplingVariableMap & {
-  transform:
-    | 'param_to_var'
-    | 'identity'
-    | 'additive'
-    | 'multiplicative'
-    | 'conversion_factor'
-    | ExpressionNode
-}
-
 // Re-export the tagged-literal API for consumers that need canonical
 // int/float handling.
 export type { NumericLiteral } from './numeric-literal.js'
@@ -139,14 +87,9 @@ export {
  */
 import type {
   ESMFormat,
-  ExpressionNode as GeneratedExpressionNode,
+  ExpressionNode,
   Model as GeneratedModel,
   SubsystemRef as GeneratedSubsystemRef,
-  AffectEquation as GeneratedAffectEquation,
-  Reaction as GeneratedReaction,
-  ConnectorEquation as GeneratedConnectorEquation,
-  ExpressionTemplate as GeneratedExpressionTemplate,
-  CouplingVariableMap as GeneratedCouplingVariableMap,
 } from './generated.js'
 export type EsmFile = ESMFormat
 
@@ -393,6 +336,7 @@ export type {
   // Model components
   ReactionSystem,
   Species,
+  Reaction,
 
   // Events
   ContinuousEvent,
@@ -401,6 +345,7 @@ export type {
   // Expressions and equations
   Expression,
   Equation,
+  AffectEquation,
 
   // Data handling — a data SOURCE is ingest configuration, not a component.
   // `DataLoader` / `DataLoaderVariable` / `FunctionalAffect` are gone in 1.0.0.

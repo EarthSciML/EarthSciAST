@@ -18,6 +18,7 @@ import { numericValue } from './numeric-literal.js'
 import { expandCouplingImports, type CouplingImportOptions } from './coupling-imports.js'
 import { forEachComponent, forEachModelVariable } from './traverse.js'
 import { OPS } from './op-registry.js'
+import { brownianParameters, observedDefinitions } from './classification.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
 export type FlattenOptions = CouplingImportOptions
@@ -175,29 +176,44 @@ function flattenModel(acc: FlattenAccumulator, prefix: string, model: Model): vo
   // Collect the set of variable names in this model for namespacing expressions
   const localNames = new Set<string>(Object.keys(model.variables || {}))
 
-  // Process variables
+  // Partition this model's variables using the §6.3.1 classification API. The
+  // 0.x code switched on the DECLARED type here; 1.0.0 declares only `unknown`
+  // and `parameter`, so every bucket below is derived instead:
+  //
+  //   stateVariables    the unknowns the solver carries — ODE states plus
+  //                     algebraic unknowns. Both were `type: "state"` in 0.x
+  //                     (`nonlinear_isorropia_shape.esm` declares its two
+  //                     implicitly-constrained unknowns that way), so this
+  //                     bucket's membership is unchanged.
+  //   brownianVariables the wiener-updated parameters — 0.x `type: "brownian"`.
+  //   parameters        every other parameter. Brownian ones are excluded, as
+  //                     they were when `brownian` was its own declared type.
+  //   variables         the observed unknowns, mapped to their defining
+  //                     expression, which now comes from the model's equations
+  //                     rather than from a field on the variable.
+  const observedDefs = observedDefinitions(model)
+  const brownian = new Set(brownianParameters(model))
+  const observed = new Set(observedDefs.keys())
+
   forEachModelVariable(model, (variable, varName) => {
     const namespacedName = `${prefix}.${varName}`
 
-    switch (variable.type) {
-      case 'state':
-        acc.stateVariables.push(namespacedName)
-        break
-      case 'parameter':
-        acc.parameters.push(namespacedName)
-        break
-      case 'brownian':
-        acc.brownianVariables.push(namespacedName)
-        break
-      case 'observed':
-        if (variable.expression !== undefined) {
-          acc.variables[namespacedName] = namespaceExpression(
-            variable.expression,
-            prefix,
-            localNames,
-          )
-        }
-        break
+    if (variable.type === 'parameter') {
+      if (brownian.has(varName)) acc.brownianVariables.push(namespacedName)
+      else acc.parameters.push(namespacedName)
+      return
+    }
+
+    // An unknown. Observed ones are eliminable and carry their definition;
+    // everything else is solved for.
+    if (observed.has(varName)) {
+      acc.variables[namespacedName] = namespaceExpression(
+        observedDefs.get(varName)!,
+        prefix,
+        localNames,
+      )
+    } else {
+      acc.stateVariables.push(namespacedName)
     }
   })
 

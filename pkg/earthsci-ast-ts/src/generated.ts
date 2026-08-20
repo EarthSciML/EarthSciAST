@@ -127,11 +127,11 @@ export type ExpressionNode = ExpressionNode1 & {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  lower?: number | string | ExpressionNode1;
+  lower?: Expression;
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  upper?: number | string | ExpressionNode1;
+  upper?: Expression;
   /**
    * For aggregate: the result's index signature. Each entry is either a string (a symbolic index variable like "i", "j") or the integer 1 (a literal singleton dimension for reshape/broadcast). Mirrors SymbolicUtils.ArrayOp.output_idx.
    */
@@ -139,7 +139,7 @@ export type ExpressionNode = ExpressionNode1 & {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  expr?: number | string | ExpressionNode1;
+  expr?: Expression;
   /**
    * For aggregate: the reduction operator applied to any index symbol that appears in expr but not in output_idx. Default is "+". This names only the ⊕ operator; it is a shorthand retained for files that omit "semiring" (⊕ = reduce, ⊗ = "*"). When "semiring" is present it supersedes "reduce".
    */
@@ -180,7 +180,7 @@ export type ExpressionNode = ExpressionNode1 & {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  filter?: number | string | ExpressionNode1;
+  filter?: Expression;
   /**
    * For aggregate: when true, the node has set semantics (dedup) and is index-set-producing — it materializes a data-derived index set rather than an array (RFC semiring-faq-unified-ir §5.5). Only meaningful under the `bool_and_or` semiring (the relational specialization, §5.1); combined with `key`, it enumerates the unique Skolem terms (e.g. the unique edges discovered from a face→vertex relation) and exposes the result as a `kind:"derived"` index set (§5.2) that a downstream geometric aggregate consumes. The output order is fixed by the normative determinism rules (§5.7): sort by the total tuple order, then drop adjacent duplicates — never first-seen / insertion order. Absent ⇒ false (ordinary array-producing reduction), exactly as today.
    */
@@ -188,7 +188,7 @@ export type ExpressionNode = ExpressionNode1 & {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  key?: number | string | ExpressionNode1;
+  key?: Expression;
   /**
    * Optional documentary relation tag for a skolem node (e.g. "edge", "bin", "pair"). Does NOT affect the emitted key; the key components are the node's args.
    */
@@ -532,7 +532,7 @@ export type CouplingVariableMap = CouplingVariableMap1 & {
   /**
    * How the mapping is applied: one of the named transforms, or an Expression evaluated on the source value(s) in the flattened coupled system's scope (spec §8.6/§10.4/§10.5 — the regridding form; the expression must reference the entry's `from` variable via a fully-scoped reference and may reference any other in-scope variable, e.g. build-once overlap weights in the receiving component; `apply_expression_template` invocations are legal and resolve at load per §9.6.4 — eager references expand, the rest survive and denote their expansion). The Expression form is an operator node: the degenerate bare-reference and literal Expression spellings are not admissible here (the named string transforms already cover bare replacement, and the string space is reserved for them).
    */
-  transform: ("param_to_var" | "identity" | "additive" | "multiplicative" | "conversion_factor") | ExpressionNode1;
+  transform: ("param_to_var" | "identity" | "additive" | "multiplicative" | "conversion_factor") | ExpressionNode;
   /**
    * Scaling coefficient applied by a scaling transform (additive, multiplicative, conversion_factor). Not permitted with param_to_var, identity, or an Expression transform, which replace/assign/compute without a separate scaling slot.
    */
@@ -542,7 +542,7 @@ export type CouplingVariableMap = CouplingVariableMap1 & {
    */
   lifting?: "pointwise" | "broadcast" | "mean" | "integral";
   /**
-   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise; the `variable_map` reference fields are `from`/`to`); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
    */
   expression_template_imports?: {
     [k: string]: TemplateImport[];
@@ -605,7 +605,7 @@ export type CouplingEvent = CouplingEvent1 & {
   root_find?: "left" | "right" | "all";
   reinitialize?: boolean;
   /**
-   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
    */
   expression_template_imports?: {
     [k: string]: TemplateImport[];
@@ -863,7 +863,7 @@ export interface Model {
     [k: string]: Expression;
   };
   /**
-   * Discriminates the MTK system type this model maps to. Defaults to 'ode' (time-stepping). 'nonlinear' for algebraic-only systems (no time derivative; e.g. aerosol equilibrium, Mogi). 'sde' when any parameter carries a `wiener` update. 'pde' for models with a spatial domain plus differential operators (often implied by the domain field; set explicitly to disambiguate). From 1.0.0 this field is a DECLARATION of something the equations and parameter updates already determine: bindings expose a `system_kind` classifier that derives it, use the derivation when this field is absent, and report `system_kind_mismatch` when a present field contradicts it.
+   * Discriminates the MTK system type this model maps to. Defaults to 'ode' (time-stepping). 'nonlinear' for algebraic-only systems (no time derivative; e.g. aerosol equilibrium, Mogi). 'sde' when any parameter carries a `wiener` update. 'pde' for models whose equations contain a SPATIAL DERIVATIVE -- a `D` whose `wrt` is present and is not 't', or one of the `grad`/`div`/`laplacian` sugar ops. Note this is a property of the EQUATIONS, not of the `domain` block: v0.8.0 removed `Domain.spatial`, so `domain` carries nothing spatial and the older 'spatial domain plus differential operators' wording named a test no binding could perform. From 1.0.0 this field is a DECLARATION of something the equations and parameter updates already determine: bindings expose a `system_kind` classifier that derives it, use the derivation when this field is absent, and report `system_kind_mismatch` when a present field contradicts it. Derivation order is sde, then pde, then nonlinear, then ode (esm-spec 6.3.1): a steady-state PDE has no time derivative and must not fall through to 'nonlinear', while a model that is both stochastic and spatial assembles as an SDE because there is no SPDESystem constructor.
    */
   system_kind?: "ode" | "nonlinear" | "sde" | "pde";
   discrete_events?: DiscreteEvent[];
@@ -932,7 +932,7 @@ export interface AffectEquation {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  rhs: number | string | ExpressionNode1;
+  rhs: Expression;
 }
 /**
  * Fires when a condition expression crosses zero (root-finding). Maps to MTK SymbolicContinuousCallback. An event may affect UNKNOWNS ONLY; a parameter that changes on a zero crossing declares `update: {kind: "crossing", …}` on itself instead.
@@ -1356,7 +1356,7 @@ export interface ExpressionTemplate {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  match?: number | string | ExpressionNode1;
+  match?: Expression;
   /**
    * Optional static match-scoping constraints for an auto-applied (`match`) rule (esm-spec §9.6.1; docs/rfcs/match-pattern-scoping-constraints.md). Keys are declared `params`; each value is a constraint object — the v1 vocabulary is exactly one kind, `shape`: an ordered list of index-set names as spelled in the CONSUMING document's merged index_sets registry (esm-spec §9.7.5, composing with import-edge index-set renaming). After the pattern structurally matches, the rule is eligible only if every constrained parameter bound to a BARE variable reference whose declaration in the enclosing component carries exactly that `shape` (same names, same order); a compound sub-AST, literal, scoped reference, undeclared name, or scalar fails the constraint. Evaluation is fully static — declared shapes at lowering time, never runtime values — and is part of match ELIGIBILITY: it filters BEFORE the §9.6.3 priority/declaration-order selection, so a constraint-excluded rule is simply a non-matching rule at that node. A constraint naming an index set absent from the consuming document's registry is rejected at rule registration with 'template_constraint_unknown_index_set'; a constrained rule that never fires is NOT an error (an un-lowered rewrite-target op is caught by the ordinary 'unlowered_operator' gate). Admissible only alongside `match` (else 'apply_expression_template_invalid_declaration').
    */
@@ -1375,7 +1375,7 @@ export interface ExpressionTemplate {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  body: number | string | ExpressionNode1;
+  body: Expression;
   description?: string;
 }
 /**
@@ -1469,7 +1469,7 @@ export interface Reaction {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  rate: number | string | ExpressionNode1;
+  rate: Expression;
   reference?: Reference;
 }
 /**
@@ -1521,7 +1521,7 @@ export interface CouplingOperatorCompose {
    */
   lifting?: "pointwise" | "broadcast" | "mean" | "integral";
   /**
-   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
    */
   expression_template_imports?: {
     [k: string]: TemplateImport[];
@@ -1549,7 +1549,7 @@ export interface CouplingCouple {
    */
   lifting?: "pointwise" | "broadcast" | "mean" | "integral";
   /**
-   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
    */
   expression_template_imports?: {
     [k: string]: TemplateImport[];
@@ -1575,7 +1575,7 @@ export interface ConnectorEquation {
   /**
    * Mathematical expression: a number literal, a variable/parameter reference string, or an operator node.
    */
-  expression?: number | string | ExpressionNode1;
+  expression?: Expression;
 }
 /**
  * Register a callback for simulation events.
@@ -1590,7 +1590,7 @@ export interface CouplingCallback {
     [k: string]: unknown;
   };
   /**
-   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a data-loader key is template_inject_target_is_loader, and a key resolving to neither is template_inject_target_not_component. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
+   * Map from a target system referenced by this coupling entry to the template-library imports registered into THAT component's template scope (esm-spec §9.7.10) — assembler-chosen discretization for a PDE component as it is wired into the assembly. Each key MUST name a model/reaction-system this entry references (template_inject_target_unknown otherwise); a key resolving to neither a model nor a reaction system is template_inject_target_not_component -- which from 1.0.0 is also how a key naming a `data_sources` entry is reported, since a data source is not a component and the separate template_inject_target_is_loader code is retired. Values use the §9.7.2 entry shape. Load-time only; consumed by the §9.6.3 fixpoint; does not survive parse→emit.
    */
   expression_template_imports?: {
     [k: string]: TemplateImport[];
