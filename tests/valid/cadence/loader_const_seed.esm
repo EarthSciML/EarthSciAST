@@ -2,14 +2,14 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "loader_const_seed",
-    "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir §6.1 + RFC pure-io-data-loaders §4.6; CONFORMANCE_SPEC.md §5.7.2; bead ess-v9a.5): the LOADER-SEEDED-CONST path. The matched-pair sibling of loader_temporal_seed.esm — the SAME boundary-condition relaxation RHS D(c[i])/dt = bc[i] - c[i] and the SAME `discrete` + `data_ingest` declaration of `bc`, but the top-level loader `bc_loader` declares NO `temporal` block. A loader without `temporal` describes non-time-varying data (RFC pure-io-data-loaders §4.6: `temporal` is optional; absence ⇒ non-time-varying), so the partition REFINES the declared DISCRETE seed down to CONST: the field is loaded once and folds at bind (external-resource provenance), never refreshing. The const bc[i] gather feeds the CONTINUOUS subtraction, so it materializes at the CONST->CONTINUOUS threshold — and because nothing is DISCRETE, the per-event handler is EMPTY (unlike the temporal sibling). This is the whole point of the bead: toggling the loader's `temporal` block — and nothing else — flips the same loader-output variable between DISCRETE and CONST, exactly matching §6.1. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator (the top-level `data_loaders` block is attached to the model at load so the pass can see the loader has no `temporal`); the golden class summary + materialization set live in tests/conformance/cadence/manifest.json.",
+    "description": "M3 cadence-partition fixture (RFC semiring-faq-unified-ir 6.1; CONFORMANCE_SPEC.md 5.7.2; bead ess-v9a.5): the SOURCE-SEEDED-CONST path. The matched-pair sibling of loader_temporal_seed.esm -- the SAME boundary-condition relaxation RHS D(c[i])/dt = bc[i] - c[i] and the SAME `update: {kind: data, source: bc_loader}` declaration of the parameter `bc`, but the top-level data source `bc_loader` declares NO `temporal` block. A source without `temporal` describes non-time-varying data (`temporal` is optional; absence implies non-time-varying), so the partition REFINES the declared DISCRETE seed down to CONST: the field is loaded once and folds at bind (external-resource provenance), never refreshing. The const bc[i] gather feeds the CONTINUOUS subtraction, so it materializes at the CONST->CONTINUOUS threshold -- and because nothing is DISCRETE, the per-event handler is EMPTY (unlike the temporal sibling). This is the whole point of the bead: toggling the source's `temporal` block -- and nothing else -- flips the same source-fed parameter between DISCRETE and CONST, exactly matching 6.1. Every node carries an `expect_cadence` assertion the partition pass checks against its derived class. Validates against the schema with no evaluator; the golden class summary + materialization set live in tests/conformance/cadence/manifest.json.",
     "authors": [
       "EarthSciAST/polecats/gastown.nux"
     ],
     "tags": [
       "cadence-partition",
-      "loader-seeded",
-      "data-loader",
+      "source-seeded",
+      "data-source",
       "non-temporal",
       "discrete-variable",
       "refresh-trigger",
@@ -27,18 +27,11 @@
       "size": 4
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "bc_loader": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/bc/o3_climatology.nc"
-      },
-      "variables": {
-        "bc": {
-          "file_variable": "boundary_o3",
-          "units": "mol/mol",
-          "description": "Non-time-varying boundary-condition field (a fixed climatology): the loader declares NO `temporal` block, so this output is loaded once and folds at bind — CONST, not DISCRETE (RFC pure-io-data-loaders §4.6)."
-        }
       }
     }
   },
@@ -53,15 +46,19 @@
           "description": "Integrated tracer concentration — CONTINUOUS cadence (changes every step)."
         },
         "bc": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "cells"
           ],
-          "refresh": {
-            "kind": "data_ingest",
-            "source": "bc_loader"
+          "description": "Boundary-condition field read from the `bc_loader` data source. The loader declares NO `temporal` block, so the partition refines this loader output down to CONST: loaded once and folded at bind (external-resource provenance), never refreshing. Declared `discrete`+`data_ingest` identically to the temporal sibling — the source's missing `temporal` is what makes the difference.",
+          "update": {
+            "kind": "data",
+            "source": "bc_loader",
+            "from": {
+              "file_variable": "boundary_o3"
+            }
           },
-          "description": "Boundary-condition field read from the `bc_loader` DataLoader. The loader declares NO `temporal` block, so the partition refines this loader output down to CONST: loaded once and folded at bind (external-resource provenance), never refreshing. Declared `discrete`+`data_ingest` identically to the temporal sibling — the loader's missing `temporal` is what makes the difference."
+          "units": "mol/mol"
         }
       },
       "equations": [

@@ -2,14 +2,14 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "coupled_refresh_regrid",
-    "description": "Shared offline fixture for the cross-language REFRESH-PATH conformance (CONFORMANCE_SPEC.md §5.10). A discretized, COUPLED, non-PDE model whose forcing is read from data loaders at a discrete cadence and REGRIDDED from the loader's coarse 6-cell native grid onto the 3-cell simulation grid — IN-MODEL, as a coupling expression, not through a regrid seam. The 2:1 area-weighted coarsening is a const weight matrix `W[i,j]` (an in-file `const` observed): `F_tgt[j] = sum_i W[i,j]*F_src[i]`, `scale_tgt[j] = sum_i W[i,j]*scale_src[i]`. `F_src` is DISCRETE — its loader `emis` declares a `temporal` block, so it refreshes at the hourly cadence anchors and the regridded `F_tgt` is a DISCRETE-materialized field (state-free but forcing-tainted). `scale_src` is CONST — its loader `factors` has no `temporal`, so it materializes once and the regridded `scale_tgt` is CONST-cadence. The coupled states integrate the regridded forcing: `D(c[j]) = scale_tgt[j]*F_tgt[j]` (the forced tracer) and `D(d[j]) = c[j]` (a dependent variable integrating the tracer across the cadence). The forcing is piecewise-constant across the cadence segments, so the regridded arrays and the integrated trajectory are closed-form and checkable to solver tolerance — the analytic golden lives in golden/coupled_refresh_regrid.json. TWO-VIEW contract (RFC pure-io-data-loaders §4.6): the loader-fed `F_src`/`scale_src` are declared `discrete`+`data_ingest` here so the cadence classifier resolves them CONST/DISCRETE, but the typed array-simulate compiler has no Discrete VariableType — a consumer STRIPS the loader-fed discrete declarations before compiling the RHS, where `F_src`/`scale_src` then resolve through the forcing buffer refreshed at each cadence anchor. There is NO regrid seam / RegridApplier (removed as obsolete in v0.8.0): regridding is an ordinary in-model coupling contraction over the native forcing.",
+    "description": "Shared offline fixture for the cross-language REFRESH-PATH conformance (CONFORMANCE_SPEC.md 5.10). A discretized, COUPLED, non-PDE model whose forcing is read from data sources at a discrete cadence and REGRIDDED from the source's coarse 6-cell native grid onto the 3-cell simulation grid -- IN-MODEL, as a coupling expression, not through a regrid seam. The 2:1 area-weighted coarsening is a const weight matrix `W[i,j]` (an in-file `const` observed): `F_tgt[j] = sum_i W[i,j]*F_src[i]`, `scale_tgt[j] = sum_i W[i,j]*scale_src[i]`. From 1.0.0 a data source is a registry entry, not a component: `F_src` and `scale_src` are PARAMETERS of M, each with `update: {kind: data, source: ...}` binding one of its file variables (esm-spec 8.5). `F_src` is DISCRETE -- its source `emis` declares a `temporal` block, so it refreshes at the hourly cadence anchors and the regridded `F_tgt` is a DISCRETE-materialized field (state-free but forcing-tainted). `scale_src` is CONST -- its source `factors` has no `temporal`, so it materializes once and the regridded `scale_tgt` is CONST-cadence. The coupled states integrate the regridded forcing: `D(c[j]) = scale_tgt[j]*F_tgt[j]` (the forced tracer) and `D(d[j]) = c[j]` (a dependent variable integrating the tracer across the cadence). The forcing is piecewise-constant across the cadence segments, so the regridded arrays and the integrated trajectory are closed-form and checkable to solver tolerance -- the analytic golden lives in golden/coupled_refresh_regrid.json. TWO-VIEW contract: the source-fed `F_src`/`scale_src` let the cadence classifier resolve them CONST/DISCRETE, while the typed array-simulate compiler resolves them through the forcing buffer refreshed at each cadence anchor. There is NO regrid seam / RegridApplier (removed as obsolete in v0.8.0): regridding is an ordinary in-model coupling contraction over the native forcing.",
     "authors": [
       "EarthSciAST/polecats/gastown.furiosa"
     ],
     "tags": [
       "refresh-path",
-      "loader-seeded",
-      "data-loader",
+      "source-seeded",
+      "data-source",
       "temporal",
       "discrete-variable",
       "regrid",
@@ -20,7 +20,7 @@
       "conformance"
     ]
   },
-  "data_loaders": {
+  "data_sources": {
     "emis": {
       "kind": "grid",
       "source": {
@@ -30,26 +30,12 @@
         "frequency": "PT1H",
         "file_period": "P1D",
         "records_per_file": 24
-      },
-      "variables": {
-        "F_src": {
-          "file_variable": "surface_source",
-          "units": "kg/s",
-          "description": "Time-varying loader-fed source field on the coarse 6-cell native grid, refreshed every hour as the loader advances to the next record. Its `temporal` block makes the loader output DISCRETE (RFC pure-io-data-loaders §4.6). Regridded in-model onto the 3-cell sim grid by the `W` contraction (`F_tgt`)."
-        }
       }
     },
     "factors": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/factors/scale.nc"
-      },
-      "variables": {
-        "scale_src": {
-          "file_variable": "scale_factor",
-          "units": "1",
-          "description": "Static per-cell scale factor on the coarse 6-cell native grid. Its loader has NO `temporal` block, so the partition seeds it CONST (materialized once). Regridded in-model onto the 3-cell sim grid by the `W` contraction (`scale_tgt`)."
-        }
       }
     }
   },
@@ -66,26 +52,34 @@
           "description": "Const conservative-regrid weight matrix W[i,j] (i=1..6 native source cells, j=1..3 sim target cells): the 2:1 area-weighted coarsening. Each target cell j averages its two source cells (W=0.5), so W is the in-model realization of the native->sim regrid. A build-once const observed."
         },
         "F_src": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "src_cells"
           ],
-          "refresh": {
-            "kind": "data_ingest",
-            "source": "emis"
+          "description": "Source-fed source read from the `emis` data source (WITH temporal): DISCRETE cadence, refreshed at each hourly anchor on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the source-fed discrete strip.",
+          "update": {
+            "kind": "data",
+            "source": "emis",
+            "from": {
+              "file_variable": "surface_source"
+            }
           },
-          "description": "Loader-fed source read from the `emis` DataLoader (WITH temporal): DISCRETE cadence, refreshed at each hourly anchor on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
+          "units": "kg/s"
         },
         "scale_src": {
-          "type": "discrete",
+          "type": "parameter",
           "shape": [
             "src_cells"
           ],
-          "refresh": {
-            "kind": "data_ingest",
-            "source": "factors"
+          "description": "Source-fed scale factor read from the `factors` data source (NO temporal): CONST cadence, materialized once on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the source-fed discrete strip.",
+          "update": {
+            "kind": "data",
+            "source": "factors",
+            "from": {
+              "file_variable": "scale_factor"
+            }
           },
-          "description": "Loader-fed scale factor read from the `factors` DataLoader (NO temporal): CONST cadence, materialized once on the 6-cell native grid. Resolves through the forcing buffer in the typed RHS after the loader-discrete strip."
+          "units": "1"
         },
         "F_tgt": {
           "type": "unknown",

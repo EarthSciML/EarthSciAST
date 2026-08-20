@@ -64,19 +64,43 @@
           "type": "parameter",
           "units": "K",
           "default": 298.15,
-          "description": "Air temperature"
+          "description": "Air temperature",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalFields",
+            "from": {
+              "file_variable": "temperature"
+            }
+          },
+          "shape": []
         },
         "pressure": {
           "type": "parameter",
           "units": "Pa",
           "default": 101325.0,
-          "description": "Air pressure"
+          "description": "Air pressure",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalFields",
+            "from": {
+              "file_variable": "pressure"
+            }
+          },
+          "shape": []
         },
         "humidity": {
           "type": "parameter",
           "units": "mol/mol",
           "default": 0.01,
-          "description": "Water vapor mixing ratio"
+          "description": "Water vapor mixing ratio",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalFields",
+            "from": {
+              "file_variable": "humidity"
+            }
+          },
+          "shape": []
         },
         "k_NO_O3": {
           "type": "parameter",
@@ -455,13 +479,29 @@
           "type": "parameter",
           "units": "m/s",
           "default": 8.0,
-          "description": "Eastward wind velocity"
+          "description": "Eastward wind velocity",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalFields",
+            "from": {
+              "file_variable": "u_wind"
+            }
+          },
+          "shape": []
         },
         "v_wind": {
           "type": "parameter",
           "units": "m/s",
           "default": 3.0,
-          "description": "Northward wind velocity"
+          "description": "Northward wind velocity",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalFields",
+            "from": {
+              "file_variable": "v_wind"
+            }
+          },
+          "shape": []
         },
         "w_wind": {
           "type": "parameter",
@@ -613,7 +653,15 @@
           "type": "parameter",
           "units": "m",
           "default": 800.0,
-          "description": "Mixed layer height"
+          "description": "Mixed layer height",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalFields",
+            "from": {
+              "file_variable": "boundary_layer_height"
+            }
+          },
+          "shape": []
         },
         "land_use_type": {
           "type": "parameter",
@@ -678,13 +726,29 @@
           "type": "parameter",
           "units": "mol/mol/s",
           "default": 2e-11,
-          "description": "Base NOx emission rate"
+          "description": "Base NOx emission rate",
+          "update": {
+            "kind": "data",
+            "source": "EmissionInventories",
+            "from": {
+              "file_variable": "NOx_emission_rate"
+            }
+          },
+          "shape": []
         },
         "VOC_emission_rate": {
           "type": "parameter",
           "units": "mol/mol/s",
           "default": 5e-12,
-          "description": "Base VOC emission rate (as HCHO)"
+          "description": "Base VOC emission rate (as HCHO)",
+          "update": {
+            "kind": "data",
+            "source": "EmissionInventories",
+            "from": {
+              "file_variable": "VOC_emission_rate"
+            }
+          },
+          "shape": []
         },
         "diurnal_factor": {
           "type": "parameter",
@@ -798,7 +862,7 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteorologicalFields": {
       "kind": "grid",
       "source": {
@@ -808,38 +872,6 @@
         "frequency": "PT1H",
         "file_period": "PT1H",
         "records_per_file": 1
-      },
-      "variables": {
-        "temperature": {
-          "file_variable": "temperature",
-          "units": "K",
-          "description": "2m air temperature"
-        },
-        "pressure": {
-          "file_variable": "pressure",
-          "units": "Pa",
-          "description": "Surface pressure"
-        },
-        "u_wind": {
-          "file_variable": "u_wind",
-          "units": "m/s",
-          "description": "10m eastward wind"
-        },
-        "v_wind": {
-          "file_variable": "v_wind",
-          "units": "m/s",
-          "description": "10m northward wind"
-        },
-        "boundary_layer_height": {
-          "file_variable": "boundary_layer_height",
-          "units": "m",
-          "description": "PBL height"
-        },
-        "humidity": {
-          "file_variable": "humidity",
-          "units": "kg/kg",
-          "description": "2m specific humidity"
-        }
       },
       "reference": {
         "citation": "Weather Research and Forecasting (WRF) Model v4.3",
@@ -856,18 +888,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/NEI_2017/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "NOx_emission_rate": {
-          "file_variable": "NOx_emission_rate",
-          "units": "mol/mol/s",
-          "description": "NOx emission rate"
-        },
-        "VOC_emission_rate": {
-          "file_variable": "VOC_emission_rate",
-          "units": "mol/mol/s",
-          "description": "VOC emission rate"
-        }
       },
       "reference": {
         "citation": "US EPA National Emissions Inventory 2017",
@@ -949,62 +969,6 @@
         ]
       },
       "description": "Couple dry deposition to atmospheric chemistry"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalFields.temperature",
-      "to": "AtmosphericChemistry.temperature",
-      "transform": "param_to_var",
-      "description": "Use WRF temperature field"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalFields.pressure",
-      "to": "AtmosphericChemistry.pressure",
-      "transform": "param_to_var",
-      "description": "Use WRF surface pressure"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalFields.humidity",
-      "to": "AtmosphericChemistry.humidity",
-      "transform": "param_to_var",
-      "description": "Use WRF humidity field"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalFields.u_wind",
-      "to": "AtmosphericTransport.u_wind",
-      "transform": "param_to_var",
-      "description": "Use WRF eastward wind"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalFields.v_wind",
-      "to": "AtmosphericTransport.v_wind",
-      "transform": "param_to_var",
-      "description": "Use WRF northward wind"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalFields.boundary_layer_height",
-      "to": "SurfaceExchange.boundary_layer_height",
-      "transform": "param_to_var",
-      "description": "Use WRF PBL height"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmissionInventories.NOx_emission_rate",
-      "to": "EmissionSources.NOx_emission_rate",
-      "transform": "param_to_var",
-      "description": "Use NEI NOx emissions"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmissionInventories.VOC_emission_rate",
-      "to": "EmissionSources.VOC_emission_rate",
-      "transform": "param_to_var",
-      "description": "Use NEI VOC emissions"
     },
     {
       "type": "callback",

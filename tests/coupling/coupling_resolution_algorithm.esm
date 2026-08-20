@@ -21,7 +21,15 @@
           "type": "parameter",
           "units": "K",
           "default": 298.15,
-          "description": "Surface temperature"
+          "description": "Surface temperature",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "temperature"
+            }
+          },
+          "shape": []
         }
       },
       "subsystems": {
@@ -241,33 +249,11 @@
       "equations": []
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteorologicalData": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/WRF/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "temperature": {
-          "file_variable": "temperature",
-          "units": "K",
-          "description": "Air temperature"
-        },
-        "pressure": {
-          "file_variable": "pressure",
-          "units": "Pa",
-          "description": "Surface pressure"
-        },
-        "wind_u": {
-          "file_variable": "wind_u",
-          "units": "m/s",
-          "description": "Eastward wind component"
-        },
-        "wind_v": {
-          "file_variable": "wind_v",
-          "units": "m/s",
-          "description": "Northward wind component"
-        }
       },
       "metadata": {
         "tags": [
@@ -285,13 +271,6 @@
         "AtmosphereModel.Transport"
       ],
       "description": "TEST CASE 1: Two-level scoped references - AtmosphereModel.Chemistry should resolve to Chemistry subsystem of AtmosphereModel"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.temperature",
-      "to": "AtmosphereModel.temperature",
-      "transform": "param_to_var",
-      "description": "TEST CASE 2: Simple two-part scoped reference resolution - MeteorologicalData.temperature"
     },
     {
       "type": "variable_map",
@@ -314,13 +293,6 @@
       "transform": "conversion_factor",
       "factor": 1.0,
       "description": "TEST CASE 5: Four-level resolution in different subsystem branch - AtmosphereModel.Transport.Advection.u_wind"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.QualityControl.data_quality_flag",
-      "to": "SurfaceModel.VegetationLayer.leaf_area_index",
-      "transform": "multiplicative",
-      "description": "TEST CASE 6: Data loader subsystem resolution - MeteorologicalData.QualityControl.data_quality_flag. Tests resolution in data_loaders section."
     },
     {
       "type": "couple",

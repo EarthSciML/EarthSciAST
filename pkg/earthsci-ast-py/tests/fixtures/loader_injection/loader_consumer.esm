@@ -2,35 +2,45 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "loader_consumer_injection",
-    "description": "Two-component loader->consumer fixture (RFC pure-io-data-loaders). Model 'Met' mounts two data loaders as subsystems: 'pl' (temporal grid -> discrete cadence) exposing wind 'u', and 'sfc' (static -> const cadence) exposing roughness 'z0'. They flatten to observed arrays Met.pl.u and Met.sfc.z0. Model 'Plume' consumes element 2 of each via coupling edges, integrating D(c) = u[2] + z0[2] - c. Run through simulate() with a deterministic loader_provider so the trajectory is analytic and network-free; the discrete loader refreshes via terminal-event segmentation, the static loader is read once."
+    "description": "Data-source -> consumer fixture (esm-spec §8.5). Two document-scoped data sources: 'pl' (temporal grid -> discrete cadence) supplying wind 'U', and 'sfc' (static -> const cadence) supplying roughness 'Z0'. From 1.0.0 a data source is a registry entry, not a component, so there is no loader model and no coupling edge: model 'Plume' declares the parameters 'wind' and 'rough' directly, each with an `update` naming its source, and integrates D(c) = wind[2] + rough[2] - c. Run through simulate() with a deterministic loader_provider so the trajectory is analytic and network-free; the discrete source refreshes via terminal-event segmentation, the static source is read once."
+  },
+  "index_sets": {
+    "met_cells": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "data_sources": {
+    "pl": {
+      "kind": "grid",
+      "source": {"url_template": "file:///met/{date:%Y%m%d}.nc"},
+      "temporal": {"frequency": "PT1S", "start": "2018-01-01"}
+    },
+    "sfc": {
+      "kind": "static",
+      "source": {"url_template": "file:///met/z0.nc"}
+    }
   },
   "models": {
-    "Met": {
-      "variables": {},
-      "equations": [],
-      "subsystems": {
-        "pl": {
-          "kind": "grid",
-          "source": {"url_template": "file:///met/{date:%Y%m%d}.nc"},
-          "temporal": {"frequency": "PT1S", "start": "2018-01-01"},
-          "variables": {
-            "u": {"file_variable": "U", "units": "m/s", "description": "eastward wind"}
-          }
-        },
-        "sfc": {
-          "kind": "static",
-          "source": {"url_template": "file:///met/z0.nc"},
-          "variables": {
-            "z0": {"file_variable": "Z0", "units": "m", "description": "surface roughness length"}
-          }
-        }
-      }
-    },
     "Plume": {
       "variables": {
         "c": {"type": "unknown", "default": 0.0, "description": "tracer concentration"},
-        "wind": {"type": "parameter", "default": 0.0, "description": "wind forcing (coupled from Met.pl.u)"},
-        "rough": {"type": "parameter", "default": 0.0, "description": "roughness forcing (coupled from Met.sfc.z0)"}
+        "wind": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": ["met_cells"],
+          "update": {"kind": "data", "source": "pl", "from": {"file_variable": "U"}},
+          "description": "eastward wind forcing, read from the 'pl' data source"
+        },
+        "rough": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "shape": ["met_cells"],
+          "update": {"kind": "data", "source": "sfc", "from": {"file_variable": "Z0"}},
+          "description": "surface roughness length, read from the 'sfc' data source"
+        }
       },
       "equations": [
         {
@@ -51,9 +61,5 @@
         }
       ]
     }
-  },
-  "coupling": [
-    {"type": "variable_map", "from": "Met.pl.u", "to": "Plume.wind", "transform": "param_to_var"},
-    {"type": "variable_map", "from": "Met.sfc.z0", "to": "Plume.rough", "transform": "param_to_var"}
-  ]
+  }
 }

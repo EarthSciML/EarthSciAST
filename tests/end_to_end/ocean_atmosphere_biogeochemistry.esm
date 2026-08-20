@@ -50,13 +50,29 @@
           "type": "parameter",
           "units": "Pa",
           "default": 101325.0,
-          "description": "Atmospheric pressure"
+          "description": "Atmospheric pressure",
+          "update": {
+            "kind": "data",
+            "source": "ClimateForcing",
+            "from": {
+              "file_variable": "pressure"
+            }
+          },
+          "shape": []
         },
         "wind_speed": {
           "type": "parameter",
           "units": "m/s",
           "default": 7.0,
-          "description": "Surface wind speed for gas exchange"
+          "description": "Surface wind speed for gas exchange",
+          "update": {
+            "kind": "data",
+            "source": "ClimateForcing",
+            "from": {
+              "file_variable": "wind_speed"
+            }
+          },
+          "shape": []
         },
         "total_carbon": {
           "type": "unknown",
@@ -116,7 +132,15 @@
           "type": "parameter",
           "units": "K",
           "default": 285.15,
-          "description": "Sea surface temperature"
+          "description": "Sea surface temperature",
+          "update": {
+            "kind": "data",
+            "source": "ClimateForcing",
+            "from": {
+              "file_variable": "temperature_ocean"
+            }
+          },
+          "shape": []
         },
         "salinity": {
           "type": "parameter",
@@ -340,7 +364,15 @@
           "type": "parameter",
           "units": "W/m^2",
           "default": 200.0,
-          "description": "Surface irradiance"
+          "description": "Surface irradiance",
+          "update": {
+            "kind": "data",
+            "source": "ClimateForcing",
+            "from": {
+              "file_variable": "light"
+            }
+          },
+          "shape": []
         },
         "max_growth_rate": {
           "type": "parameter",
@@ -739,33 +771,11 @@
       "equations": []
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "ClimateForcing": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/CESM2_Output/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "temperature_ocean": {
-          "file_variable": "temperature_ocean",
-          "units": "K",
-          "description": "Sea surface temperature"
-        },
-        "wind_speed": {
-          "file_variable": "wind_speed",
-          "units": "m/s",
-          "description": "Surface wind speed"
-        },
-        "pressure": {
-          "file_variable": "pressure",
-          "units": "Pa",
-          "description": "Sea level pressure"
-        },
-        "light": {
-          "file_variable": "light",
-          "units": "W/m^2",
-          "description": "Net surface solar radiation"
-        }
       },
       "metadata": {
         "tags": [
@@ -778,13 +788,6 @@
       "kind": "points",
       "source": {
         "url_template": "file:///data/SOCAT_pCO2/{date:%Y%m%d}.csv"
-      },
-      "variables": {
-        "pCO2_observed": {
-          "file_variable": "pCO2_observed",
-          "units": "uatm",
-          "description": "Observed ocean pCO2"
-        }
       },
       "metadata": {
         "tags": [
@@ -1040,34 +1043,6 @@
         ]
       },
       "description": "Couple marine ecosystem carbon and oxygen fluxes"
-    },
-    {
-      "type": "variable_map",
-      "from": "ClimateForcing.temperature_ocean",
-      "to": "OceanCarbon.temperature_ocean",
-      "transform": "param_to_var",
-      "description": "Use CESM2 sea surface temperature"
-    },
-    {
-      "type": "variable_map",
-      "from": "ClimateForcing.wind_speed",
-      "to": "AtmosphericCarbon.wind_speed",
-      "transform": "param_to_var",
-      "description": "Use CESM2 surface wind speed"
-    },
-    {
-      "type": "variable_map",
-      "from": "ClimateForcing.pressure",
-      "to": "AtmosphericCarbon.pressure",
-      "transform": "param_to_var",
-      "description": "Use CESM2 sea level pressure"
-    },
-    {
-      "type": "variable_map",
-      "from": "ClimateForcing.light",
-      "to": "MarineEcosystem.light",
-      "transform": "param_to_var",
-      "description": "Use CESM2 surface solar radiation"
     },
     {
       "type": "callback",

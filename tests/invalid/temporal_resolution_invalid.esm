@@ -2,33 +2,48 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "TemporalRecordsPerFileInvalid",
-    "description": "Test case: data loader temporal.records_per_file must be a positive integer or the string \"auto\"",
-    "authors": ["Test Suite"]
+    "description": "Test case: data source temporal.records_per_file must be a positive integer or the string \"auto\".",
+    "authors": [
+      "Test Suite"
+    ]
   },
-
-  "data_loaders": {
+  "data_sources": {
     "BadTemporal": {
       "kind": "points",
-      "source": { "url_template": "file:///data/{date:%Y%m%d}.csv" },
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.csv"
+      },
       "temporal": {
         "frequency": "PT1H",
         "records_per_file": "not_auto"
-      },
-      "variables": {
-        "T": { "file_variable": "T", "units": "K" }
       }
     }
   },
-
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "unknown", "units": "1", "default": 1.0 }
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [-0.1, "x"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
         }
       ]
     }

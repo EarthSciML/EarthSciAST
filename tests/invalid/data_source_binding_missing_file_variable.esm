@@ -1,0 +1,61 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceBindingMissingFileVariable",
+    "description": "Test case: a parameter's `update.from` binding is missing its required 'file_variable'. DataSourceBinding requires it -- it is what names the variable in the source file supplying the parameter's values (esm-spec 8.5). This is the 1.0.0 home of the 0.x 'loader variable missing file_variable' negative, relocated onto the consumer with the binding.",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "data_sources": {
+    "BadProvides": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.nc"
+      }
+    }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "BadProvides",
+            "from": {
+              "unit_conversion": 1.0
+            }
+          },
+          "description": "The binding declares a conversion but no `file_variable` -- the defect."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

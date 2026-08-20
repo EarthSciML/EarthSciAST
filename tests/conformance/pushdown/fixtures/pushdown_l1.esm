@@ -1,135 +1,9 @@
 {
-  "coupling": [
-    {
-      "from": "MockSR.SOA",
-      "to": "ISRM.SR_SOA",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockSR.pNO3",
-      "to": "ISRM.SR_pNO3",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockSR.pNH4",
-      "to": "ISRM.SR_pNH4",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockSR.pSO4",
-      "to": "ISRM.SR_pSO4",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockSR.PrimaryPM25",
-      "to": "ISRM.SR_PrimaryPM25",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockSR.TotalPop",
-      "to": "ISRM.TotalPop",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockSR.MortalityRate",
-      "to": "ISRM.MortalityRate",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.lon",
-      "to": "ISRM.emis_lon",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.lat",
-      "to": "ISRM.emis_lat",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.annual",
-      "to": "ISRM.emis_annual",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.vVOC",
-      "to": "ISRM.is_VOC",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.vNOx",
-      "to": "ISRM.is_NOx",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.vNH3",
-      "to": "ISRM.is_NH3",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.vSOx",
-      "to": "ISRM.is_SOx",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "MockPts.vPM25",
-      "to": "ISRM.is_PM25",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    }
-  ],
-  "data_loaders": {
+  "data_sources": {
     "MockPts": {
       "kind": "points",
       "source": {
         "url_template": "mock://pts"
-      },
-      "variables": {
-        "annual": {
-          "file_variable": "annual",
-          "units": "1"
-        },
-        "lat": {
-          "file_variable": "lat",
-          "units": "1"
-        },
-        "lon": {
-          "file_variable": "lon",
-          "units": "1"
-        },
-        "vNH3": {
-          "file_variable": "vNH3",
-          "units": "1"
-        },
-        "vNOx": {
-          "file_variable": "vNOx",
-          "units": "1"
-        },
-        "vPM25": {
-          "file_variable": "vPM25",
-          "units": "1"
-        },
-        "vSOx": {
-          "file_variable": "vSOx",
-          "units": "1"
-        },
-        "vVOC": {
-          "file_variable": "vVOC",
-          "units": "1"
-        }
       }
     },
     "MockSR": {
@@ -160,36 +34,6 @@
       },
       "source": {
         "url_template": "mock://sr"
-      },
-      "variables": {
-        "MortalityRate": {
-          "file_variable": "MortalityRate",
-          "units": "1"
-        },
-        "PrimaryPM25": {
-          "file_variable": "PrimaryPM25",
-          "units": "1"
-        },
-        "SOA": {
-          "file_variable": "SOA",
-          "units": "1"
-        },
-        "TotalPop": {
-          "file_variable": "TotalPop",
-          "units": "1"
-        },
-        "pNH4": {
-          "file_variable": "pNH4",
-          "units": "1"
-        },
-        "pNO3": {
-          "file_variable": "pNO3",
-          "units": "1"
-        },
-        "pSO4": {
-          "file_variable": "pSO4",
-          "units": "1"
-        }
       }
     }
   },
@@ -1616,7 +1460,15 @@
           "shape": [
             "rcv_cells"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockSR",
+            "from": {
+              "file_variable": "MortalityRate"
+            }
+          },
+          "units": "1"
         },
         "SR_PrimaryPM25": {
           "default": 0.0,
@@ -1624,7 +1476,15 @@
             "src_cells",
             "rcv_cells"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockSR",
+            "from": {
+              "file_variable": "PrimaryPM25"
+            }
+          },
+          "units": "1"
         },
         "SR_SOA": {
           "default": 0.0,
@@ -1632,7 +1492,15 @@
             "src_cells",
             "rcv_cells"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockSR",
+            "from": {
+              "file_variable": "SOA"
+            }
+          },
+          "units": "1"
         },
         "SR_pNH4": {
           "default": 0.0,
@@ -1640,7 +1508,15 @@
             "src_cells",
             "rcv_cells"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockSR",
+            "from": {
+              "file_variable": "pNH4"
+            }
+          },
+          "units": "1"
         },
         "SR_pNO3": {
           "default": 0.0,
@@ -1648,7 +1524,15 @@
             "src_cells",
             "rcv_cells"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockSR",
+            "from": {
+              "file_variable": "pNO3"
+            }
+          },
+          "units": "1"
         },
         "SR_pSO4": {
           "default": 0.0,
@@ -1656,7 +1540,15 @@
             "src_cells",
             "rcv_cells"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockSR",
+            "from": {
+              "file_variable": "pSO4"
+            }
+          },
+          "units": "1"
         },
         "TotalPM25": {
           "shape": [
@@ -1669,7 +1561,15 @@
           "shape": [
             "rcv_cells"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockSR",
+            "from": {
+              "file_variable": "TotalPop"
+            }
+          },
+          "units": "1"
         },
         "X": {
           "shape": [
@@ -1730,21 +1630,45 @@
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "annual"
+            }
+          },
+          "units": "1"
         },
         "emis_lat": {
           "default": 0.0,
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "lat"
+            }
+          },
+          "units": "1"
         },
         "emis_lon": {
           "default": 0.0,
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "lon"
+            }
+          },
+          "units": "1"
         },
         "fact": {
           "default": 28766.639,
@@ -1755,35 +1679,75 @@
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "vNH3"
+            }
+          },
+          "units": "1"
         },
         "is_NOx": {
           "default": 0.0,
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "vNOx"
+            }
+          },
+          "units": "1"
         },
         "is_PM25": {
           "default": 0.0,
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "vPM25"
+            }
+          },
+          "units": "1"
         },
         "is_SOx": {
           "default": 0.0,
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "vSOx"
+            }
+          },
+          "units": "1"
         },
         "is_VOC": {
           "default": 0.0,
           "shape": [
             "emis_records"
           ],
-          "type": "parameter"
+          "type": "parameter",
+          "update": {
+            "kind": "data",
+            "source": "MockPts",
+            "from": {
+              "file_variable": "vVOC"
+            }
+          },
+          "units": "1"
         },
         "lcc_d2r": {
           "default": 0.017453292519943295,

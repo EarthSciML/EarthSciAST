@@ -96,22 +96,50 @@
         "jO3": {
           "units": "1/s",
           "default": 1e-05,
-          "description": "O3 photolysis rate"
+          "description": "O3 photolysis rate",
+          "update": {
+            "kind": "data",
+            "source": "PhotolysisRates",
+            "from": {
+              "file_variable": "jO3"
+            }
+          }
         },
         "jNO2": {
           "units": "1/s",
           "default": 0.005,
-          "description": "NO2 photolysis rate"
+          "description": "NO2 photolysis rate",
+          "update": {
+            "kind": "data",
+            "source": "PhotolysisRates",
+            "from": {
+              "file_variable": "jNO2"
+            }
+          }
         },
         "jNO3": {
           "units": "1/s",
           "default": 0.002,
-          "description": "NO3 photolysis rate"
+          "description": "NO3 photolysis rate",
+          "update": {
+            "kind": "data",
+            "source": "PhotolysisRates",
+            "from": {
+              "file_variable": "jNO3"
+            }
+          }
         },
         "jH2O2": {
           "units": "1/s",
           "default": 1e-06,
-          "description": "H2O2 photolysis rate"
+          "description": "H2O2 photolysis rate",
+          "update": {
+            "kind": "data",
+            "source": "PhotolysisRates",
+            "from": {
+              "file_variable": "jH2O2"
+            }
+          }
         }
       },
       "reactions": [
@@ -459,33 +487,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "PhotolysisRates": {
       "kind": "static",
       "source": {
         "url_template": "file:///data/TUV_rates.nc"
-      },
-      "variables": {
-        "jO3": {
-          "file_variable": "jO3",
-          "units": "1/s",
-          "description": "O3 photolysis rate"
-        },
-        "jNO2": {
-          "file_variable": "jNO2",
-          "units": "1/s",
-          "description": "NO2 photolysis rate"
-        },
-        "jNO3": {
-          "file_variable": "jNO3",
-          "units": "1/s",
-          "description": "NO3 photolysis rate"
-        },
-        "jH2O2": {
-          "file_variable": "jH2O2",
-          "units": "1/s",
-          "description": "H2O2 photolysis rate"
-        }
       },
       "metadata": {
         "tags": [
@@ -494,32 +500,6 @@
       }
     }
   },
-  "coupling": [
-    {
-      "type": "variable_map",
-      "from": "PhotolysisRates.jO3",
-      "to": "PureChemistry.jO3",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "PhotolysisRates.jNO2",
-      "to": "PureChemistry.jNO2",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "PhotolysisRates.jNO3",
-      "to": "PureChemistry.jNO3",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "PhotolysisRates.jH2O2",
-      "to": "PureChemistry.jH2O2",
-      "transform": "param_to_var"
-    }
-  ],
   "domain": {
     "temporal": {
       "start": "2024-06-21T12:00:00Z",

@@ -52,7 +52,14 @@
         "T": {
           "units": "K",
           "default": 298.15,
-          "description": "Temperature"
+          "description": "Temperature",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "T"
+            }
+          }
         },
         "jNO2": {
           "units": "1/s",
@@ -135,13 +142,29 @@
           "type": "parameter",
           "units": "m/s",
           "default": 5.0,
-          "description": "Eastward wind velocity"
+          "description": "Eastward wind velocity",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "u"
+            }
+          },
+          "shape": []
         },
         "v_wind": {
           "type": "parameter",
           "units": "m/s",
           "default": 2.0,
-          "description": "Northward wind velocity"
+          "description": "Northward wind velocity",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "v"
+            }
+          },
+          "shape": []
         }
       },
       "equations": [
@@ -198,28 +221,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteorologicalData": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/ECMWF_ERA5/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "T": {
-          "file_variable": "T",
-          "units": "K",
-          "description": "Temperature from ERA5"
-        },
-        "u": {
-          "file_variable": "u",
-          "units": "m/s",
-          "description": "Eastward wind from ERA5"
-        },
-        "v": {
-          "file_variable": "v",
-          "units": "m/s",
-          "description": "Northward wind from ERA5"
-        }
       },
       "reference": {
         "doi": "10.24381/cds.adbb2d47",
@@ -241,24 +247,6 @@
         "AtmosphericChemistry",
         "AdvectionTransport"
       ]
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.T",
-      "to": "AtmosphericChemistry.T",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.u",
-      "to": "AdvectionTransport.u_wind",
-      "transform": "param_to_var"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.v",
-      "to": "AdvectionTransport.v_wind",
-      "transform": "param_to_var"
     }
   ],
   "domain": {

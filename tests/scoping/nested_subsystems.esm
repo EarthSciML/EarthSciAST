@@ -105,6 +105,20 @@
                   "units": "cm^3/s",
                   "default": 1.8e-12,
                   "description": "Rate constant"
+                },
+                "NO_flux": {
+                  "type": "parameter",
+                  "units": "mol/m^2/s",
+                  "default": 0.0,
+                  "shape": [],
+                  "update": {
+                    "kind": "data",
+                    "source": "Emissions",
+                    "from": {
+                      "file_variable": "NO_flux"
+                    }
+                  },
+                  "description": "NO emission flux"
                 }
               },
               "equations": [
@@ -190,6 +204,20 @@
                   "units": "cm^3/s",
                   "default": 6.4e-15,
                   "description": "CH4+OH rate"
+                },
+                "CH4_flux": {
+                  "type": "parameter",
+                  "units": "mol/m^2/s",
+                  "default": 0.0,
+                  "shape": [],
+                  "update": {
+                    "kind": "data",
+                    "source": "Emissions",
+                    "from": {
+                      "file_variable": "CH4_flux"
+                    }
+                  },
+                  "description": "CH4 emission flux"
                 }
               },
               "equations": [
@@ -333,23 +361,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "Emissions": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "NO_flux": {
-          "file_variable": "NO_flux",
-          "units": "mol/m^2/s",
-          "description": "NO emission flux"
-        },
-        "CH4_flux": {
-          "file_variable": "CH4_flux",
-          "units": "mol/m^2/s",
-          "description": "CH4 emission flux"
-        }
       },
       "metadata": {
         "tags": [
@@ -375,20 +391,6 @@
         "Atmosphere.Physics.Turbulence"
       ],
       "description": "Add turbulent mixing to slow chemistry"
-    },
-    {
-      "type": "variable_map",
-      "from": "Emissions.NO_flux",
-      "to": "Atmosphere.Chemistry.FastChem.NO",
-      "transform": "additive",
-      "description": "Add NO emissions to fast chemistry"
-    },
-    {
-      "type": "variable_map",
-      "from": "Emissions.CH4_flux",
-      "to": "Atmosphere.Chemistry.SlowChem.CH4",
-      "transform": "additive",
-      "description": "Add CH4 emissions to slow chemistry"
     },
     {
       "type": "variable_map",

@@ -1,0 +1,53 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "LegacyVariablesBlockRejected",
+    "description": "Test case: a data source still carrying the removed 'variables' map. From 1.0.0 a data source exposes NO variables (RFC unified-variable-model D2): a model consumes one by declaring a parameter whose `update` names the source and binds a `file_variable`. DataSource.additionalProperties:false rejects the stale 'variables' block. This fixture replaces the 0.x 'data loader missing its required variables map' negative, whose diagnostic no longer exists. Parallel to data_source_legacy_spatial.esm and interpolation_method_invalid.esm.",
+    "authors": [
+      "Test Suite"
+    ]
+  },
+  "data_sources": {
+    "BadLoader": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.nc"
+      },
+      "variables": {
+        "T": {
+          "file_variable": "T",
+          "units": "K"
+        }
+      }
+    }
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

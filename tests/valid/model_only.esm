@@ -98,6 +98,48 @@
           "units": "W/m^3",
           "default": 0.0,
           "description": "Heat source term"
+        },
+        "wind_u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "WindField",
+            "from": {
+              "file_variable": "wind_u"
+            }
+          },
+          "description": "10m eastward wind"
+        },
+        "wind_v": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "WindField",
+            "from": {
+              "file_variable": "wind_v"
+            }
+          },
+          "description": "10m northward wind"
+        },
+        "temperature_2m": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "WindField",
+            "from": {
+              "file_variable": "temperature_2m"
+            }
+          },
+          "description": "2m temperature"
         }
       },
       "equations": [
@@ -698,28 +740,11 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "WindField": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/ERA5_reanalysis/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "wind_u": {
-          "file_variable": "wind_u",
-          "units": "m/s",
-          "description": "10m eastward wind"
-        },
-        "wind_v": {
-          "file_variable": "wind_v",
-          "units": "m/s",
-          "description": "10m northward wind"
-        },
-        "temperature_2m": {
-          "file_variable": "temperature_2m",
-          "units": "K",
-          "description": "2m temperature"
-        }
       },
       "metadata": {
         "tags": [
@@ -732,23 +757,6 @@
       "kind": "static",
       "source": {
         "url_template": "file:///data/analytical_fields.nc"
-      },
-      "variables": {
-        "initial_phi": {
-          "file_variable": "initial_phi",
-          "units": "m",
-          "description": "Initial wave displacement"
-        },
-        "initial_prey": {
-          "file_variable": "initial_prey",
-          "units": "individuals/km^2",
-          "description": "Initial prey density"
-        },
-        "initial_predator": {
-          "file_variable": "initial_predator",
-          "units": "individuals/km^2",
-          "description": "Initial predator density"
-        }
       },
       "metadata": {
         "tags": [
@@ -764,24 +772,6 @@
         "FluidDynamics",
         "WaveEquation"
       ]
-    },
-    {
-      "type": "variable_map",
-      "from": "WindField.wind_u",
-      "to": "FluidDynamics.f_x",
-      "transform": "multiplicative"
-    },
-    {
-      "type": "variable_map",
-      "from": "WindField.wind_v",
-      "to": "FluidDynamics.f_y",
-      "transform": "multiplicative"
-    },
-    {
-      "type": "variable_map",
-      "from": "WindField.temperature_2m",
-      "to": "FluidDynamics.T",
-      "transform": "param_to_var"
     }
   ],
   "domain": {

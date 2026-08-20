@@ -42,13 +42,29 @@
           "type": "parameter",
           "units": "K",
           "default": 298.15,
-          "description": "Air temperature"
+          "description": "Air temperature",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "temperature"
+            }
+          },
+          "shape": []
         },
         "pressure": {
           "type": "parameter",
           "units": "Pa",
           "default": 101325.0,
-          "description": "Air pressure"
+          "description": "Air pressure",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "pressure"
+            }
+          },
+          "shape": []
         },
         "k_NO_O3": {
           "type": "parameter",
@@ -210,13 +226,29 @@
           "type": "parameter",
           "units": "m/s",
           "default": 10.0,
-          "description": "Eastward wind component"
+          "description": "Eastward wind component",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "u_wind"
+            }
+          },
+          "shape": []
         },
         "v_wind": {
           "type": "parameter",
           "units": "m/s",
           "default": 5.0,
-          "description": "Northward wind component"
+          "description": "Northward wind component",
+          "update": {
+            "kind": "data",
+            "source": "MeteorologicalData",
+            "from": {
+              "file_variable": "v_wind"
+            }
+          },
+          "shape": []
         }
       },
       "equations": [
@@ -338,7 +370,15 @@
           "type": "parameter",
           "units": "mol/mol/s",
           "default": 1e-11,
-          "description": "NOx emission rate"
+          "description": "NOx emission rate",
+          "update": {
+            "kind": "data",
+            "source": "EmissionInventory",
+            "from": {
+              "file_variable": "NOx_emission_rate"
+            }
+          },
+          "shape": []
         },
         "diurnal_factor": {
           "type": "parameter",
@@ -423,7 +463,7 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteorologicalData": {
       "kind": "grid",
       "source": {
@@ -433,28 +473,6 @@
         "frequency": "PT3H",
         "file_period": "PT3H",
         "records_per_file": 1
-      },
-      "variables": {
-        "temperature": {
-          "file_variable": "temperature",
-          "units": "K",
-          "description": "Air temperature"
-        },
-        "pressure": {
-          "file_variable": "pressure",
-          "units": "Pa",
-          "description": "Surface pressure"
-        },
-        "u_wind": {
-          "file_variable": "u_wind",
-          "units": "m/s",
-          "description": "Eastward wind"
-        },
-        "v_wind": {
-          "file_variable": "v_wind",
-          "units": "m/s",
-          "description": "Northward wind"
-        }
       },
       "reference": {
         "citation": "NASA GEOS Forward Processing meteorological data"
@@ -470,13 +488,6 @@
       "kind": "grid",
       "source": {
         "url_template": "file:///data/EDGAR_v6/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "NOx_emission_rate": {
-          "file_variable": "NOx_emission_rate",
-          "units": "mol/mol/s",
-          "description": "Nitrogen oxides emission rate"
-        }
       },
       "metadata": {
         "tags": [
@@ -530,41 +541,6 @@
         ]
       },
       "description": "Couple surface deposition to atmospheric chemistry"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.temperature",
-      "to": "AtmosphericChemistry.temperature",
-      "transform": "param_to_var",
-      "description": "Use meteorological temperature instead of constant"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.pressure",
-      "to": "AtmosphericChemistry.pressure",
-      "transform": "param_to_var",
-      "description": "Use meteorological pressure"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.u_wind",
-      "to": "AdvectionTransport.u_wind",
-      "transform": "param_to_var",
-      "description": "Use meteorological eastward wind"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalData.v_wind",
-      "to": "AdvectionTransport.v_wind",
-      "transform": "param_to_var",
-      "description": "Use meteorological northward wind"
-    },
-    {
-      "type": "variable_map",
-      "from": "EmissionInventory.NOx_emission_rate",
-      "to": "EmissionSources.NOx_emission_rate",
-      "transform": "param_to_var",
-      "description": "Use inventory emission rates"
     },
     {
       "type": "callback",

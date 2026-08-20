@@ -2,30 +2,47 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "LegacyRegriddingBlockRejected",
-    "description": "Test case: a data loader still carrying the legacy 'regridding' block. Regridding was removed from DataLoader in RFC pure-io-data-loaders §4.1 (it is now a per-variable model concern); DataLoader.additionalProperties:false rejects the stale block.",
-    "authors": ["Test Suite"]
+    "description": "Test case: a data source still carrying the legacy 'regridding' block. Regridding was removed from the source in RFC pure-io-data-loaders 4.1 (it is an ordinary coupling expression, esm-spec 8.6); DataSource.additionalProperties:false rejects the stale block.",
+    "authors": [
+      "Test Suite"
+    ]
   },
-
-  "data_loaders": {
+  "data_sources": {
     "BadInterpolation": {
       "kind": "grid",
-      "source": { "url_template": "file:///data/{date:%Y%m%d}.nc" },
-      "variables": {
-        "T": { "file_variable": "T", "units": "K" }
+      "source": {
+        "url_template": "file:///data/{date:%Y%m%d}.nc"
       },
-      "regridding": { "extrapolation": "invalid_extrapolation_method" }
+      "regridding": {
+        "extrapolation": "invalid_extrapolation_method"
+      }
     }
   },
-
   "models": {
     "TestModel": {
       "variables": {
-        "x": { "type": "unknown", "units": "1", "default": 1.0 }
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        }
       },
       "equations": [
         {
-          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [-0.1, "x"] }
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -0.1,
+              "x"
+            ]
+          }
         }
       ]
     }

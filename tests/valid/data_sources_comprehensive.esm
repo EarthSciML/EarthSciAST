@@ -1,0 +1,358 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataLoadersComprehensive",
+    "description": "Comprehensive test fixtures for data loader types, validation, and configuration",
+    "authors": [
+      "ESM Test Suite"
+    ],
+    "created": "2026-02-14T00:00:00Z",
+    "tags": [
+      "data-sources",
+      "validation",
+      "comprehensive"
+    ]
+  },
+  "data_sources": {
+    "GEOSFP_MeteoData": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/GEOSFP/{date:%Y%m%d_%H%M}.nc"
+      },
+      "temporal": {
+        "frequency": "PT3H",
+        "file_period": "PT3H",
+        "records_per_file": 1
+      },
+      "reference": {
+        "citation": "Global Modeling and Assimilation Office (GMAO), NASA GSFC",
+        "url": "https://gmao.gsfc.nasa.gov/GEOS_systems/",
+        "doi": "10.5067/8D5L8QSF2Y6L"
+      },
+      "metadata": {
+        "tags": [
+          "meteorology",
+          "reanalysis"
+        ]
+      }
+    },
+    "NEI_Emissions": {
+      "kind": "grid",
+      "source": {
+        "url_template": "file:///data/NEI2016/{date:%Y%m%d_%H%M}.nc"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "PT1H",
+        "records_per_file": 1
+      },
+      "reference": {
+        "citation": "US EPA, 2016 National Emissions Inventory",
+        "url": "https://www.epa.gov/air-emissions-inventories/2016-national-emissions-inventory-nei-data",
+        "notes": "Gridded annual emissions with temporal and spatial allocation"
+      },
+      "metadata": {
+        "tags": [
+          "emissions",
+          "anthropogenic"
+        ]
+      }
+    },
+    "ObservationalData": {
+      "kind": "points",
+      "source": {
+        "url_template": "file:///data/EPA_AQS/{date:%Y%m%d}.csv"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "PT1H",
+        "records_per_file": 1
+      },
+      "reference": {
+        "citation": "US EPA Air Quality System (AQS)",
+        "url": "https://www.epa.gov/aqs"
+      },
+      "metadata": {
+        "tags": [
+          "observation",
+          "point-data"
+        ]
+      }
+    },
+    "StaticFields": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/LandUseCover.nc"
+      },
+      "reference": {
+        "citation": "Friedl, M., Sulla-Menashe, D. MODIS Collection 6 Land Cover (MCD12Q1)",
+        "doi": "10.5067/MODIS/MCD12Q1.006"
+      },
+      "metadata": {
+        "tags": [
+          "static"
+        ]
+      }
+    },
+    "CallbackData": {
+      "kind": "grid",
+      "source": {
+        "url_template": "callback://UserDefinedCallback"
+      },
+      "temporal": {
+        "frequency": "PT30M",
+        "file_period": "PT30M",
+        "records_per_file": 1
+      },
+      "metadata": {
+        "tags": [
+          "runtime-callback"
+        ]
+      }
+    }
+  },
+  "models": {
+    "SimpleChemistry": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 5e-08,
+          "description": "Ozone concentration"
+        },
+        "NO": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1e-08,
+          "description": "NO concentration"
+        },
+        "wind_u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "Eastward wind speed — the field read from the GEOSFP_MeteoData data source; from 1.0.0 the parameter IS the loaded field, declared with an `update` rather than wired in by a coupling entry (esm-spec §8.5)",
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_MeteoData",
+            "from": {
+              "file_variable": "u"
+            }
+          },
+          "shape": []
+        },
+        "v": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_MeteoData",
+            "from": {
+              "file_variable": "v"
+            }
+          },
+          "description": "Northward wind component"
+        },
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_MeteoData",
+            "from": {
+              "file_variable": "T"
+            }
+          },
+          "description": "Air temperature"
+        },
+        "PBLH": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_MeteoData",
+            "from": {
+              "file_variable": "PBLH"
+            }
+          },
+          "description": "Planetary boundary layer height"
+        },
+        "P": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP_MeteoData",
+            "from": {
+              "file_variable": "P"
+            }
+          },
+          "description": "Air pressure"
+        },
+        "emission_rate_NO": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "NEI_Emissions",
+            "from": {
+              "file_variable": "emission_rate_NO"
+            }
+          },
+          "description": "NO emission rate"
+        },
+        "emission_rate_CO": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "NEI_Emissions",
+            "from": {
+              "file_variable": "emission_rate_CO"
+            }
+          },
+          "description": "CO emission rate"
+        },
+        "emission_rate_SO2": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "NEI_Emissions",
+            "from": {
+              "file_variable": "emission_rate_SO2"
+            }
+          },
+          "description": "SO2 emission rate"
+        },
+        "observed_O3": {
+          "type": "parameter",
+          "units": "ppb",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "ObservationalData",
+            "from": {
+              "file_variable": "observed_O3"
+            }
+          },
+          "description": "Surface ozone concentration"
+        },
+        "observed_SO2": {
+          "type": "parameter",
+          "units": "ppb",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "ObservationalData",
+            "from": {
+              "file_variable": "observed_SO2"
+            }
+          },
+          "description": "Surface SO2 concentration"
+        },
+        "land_use_type": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "StaticFields",
+            "from": {
+              "file_variable": "land_use_type"
+            }
+          },
+          "description": "IGBP land use classification (1-17)"
+        },
+        "leaf_area_index": {
+          "type": "parameter",
+          "units": "m^2/m^2",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "StaticFields",
+            "from": {
+              "file_variable": "leaf_area_index"
+            }
+          },
+          "description": "Leaf area index"
+        },
+        "custom_u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "CallbackData",
+            "from": {
+              "file_variable": "custom_u"
+            }
+          },
+          "description": "Custom scaled eastward wind"
+        },
+        "custom_T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "CallbackData",
+            "from": {
+              "file_variable": "custom_T"
+            }
+          },
+          "description": "Custom adjusted temperature"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  -1e-05,
+                  "O3"
+                ]
+              },
+              "wind_u"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "domain": {
+    "temporal": {
+      "start": "2024-07-01T00:00:00Z",
+      "end": "2024-07-01T12:00:00Z"
+    }
+  }
+}

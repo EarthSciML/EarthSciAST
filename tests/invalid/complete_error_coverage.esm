@@ -98,7 +98,7 @@
       ]
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "TestDataLoader": {
       "kind": "static",
       "source": {
@@ -132,13 +132,6 @@
           "n_lat": {
             "description": "lat cell count, resolved from the source dataset at load time"
           }
-        }
-      },
-      "variables": {
-        "temperature": {
-          "file_variable": "temperature",
-          "units": "K",
-          "description": "Temperature data"
         }
       },
       "metadata": {

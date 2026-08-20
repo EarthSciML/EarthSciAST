@@ -83,7 +83,15 @@
                   "type": "parameter",
                   "units": "cm^3/molec/s",
                   "default": 1.8e-12,
-                  "description": "Temperature-dependent rate constant"
+                  "description": "Temperature-dependent rate constant",
+                  "update": {
+                    "kind": "data",
+                    "source": "MeteorologicalFields",
+                    "from": {
+                      "file_variable": "temperature_3d"
+                    }
+                  },
+                  "shape": []
                 }
               },
               "equations": [
@@ -303,28 +311,11 @@
       }
     }
   },
-  "data_loaders": {
+  "data_sources": {
     "MeteorologicalFields": {
       "kind": "grid",
       "source": {
         "url_template": "file:///data/ECMWF_ERA5/{date:%Y%m%d_%H%M}.nc"
-      },
-      "variables": {
-        "temperature_3d": {
-          "file_variable": "temperature_3d",
-          "units": "K",
-          "description": "3D temperature field"
-        },
-        "wind_u": {
-          "file_variable": "wind_u",
-          "units": "m/s",
-          "description": "Eastward wind component"
-        },
-        "wind_v": {
-          "file_variable": "wind_v",
-          "units": "m/s",
-          "description": "Northward wind component"
-        }
       },
       "metadata": {
         "tags": [
@@ -347,13 +338,6 @@
         "AtmosphereModel.TroposphereLayer.ChemicalMechanism.NO2": "AtmosphereModel.TroposphereLayer.TransportProcess._var"
       },
       "description": "Add transport to tropospheric chemistry using scoped references"
-    },
-    {
-      "type": "variable_map",
-      "from": "MeteorologicalFields.temperature_3d",
-      "to": "AtmosphereModel.TroposphereLayer.ChemicalMechanism.rate_constant",
-      "transform": "param_to_var",
-      "description": "Map 3D temperature to affect reaction rate in nested chemistry"
     },
     {
       "type": "variable_map",

@@ -1,0 +1,146 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "GEOSFP_Fixture",
+    "description": "EarthSciData.jl GEOSFP loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/geosfp.jl — struct GEOSFPFileSet (lines 47-89) with relpath (lines 97-110) and the {domain, filetype, starttime, endtime} constructor footprint. Archive on AWS S3, one file per day per filetype, frequency read from file attributes at runtime (typically PT1H or PT3H depending on filetype).",
+    "authors": [
+      "ESM Rust binding acceptance suite"
+    ],
+    "tags": [
+      "fixture",
+      "earthscidata",
+      "gt-0c7"
+    ]
+  },
+  "data_sources": {
+    "GEOSFP": {
+      "kind": "grid",
+      "source": {
+        "url_template": "https://geos-chem.s3-us-west-2.amazonaws.com/GEOS_{domain}/GEOS_FP/{date:%Y}/{date:%m}/GEOSFP.{date:%Y%m%d}.{filetype}.{domain}.nc"
+      },
+      "temporal": {
+        "start": "2014-01-01T00:00:00Z",
+        "file_period": "P1D",
+        "records_per_file": "auto",
+        "time_variable": "time"
+      },
+      "reference": {
+        "citation": "Global Modeling and Assimilation Office (GMAO), NASA GSFC, GEOS-FP as archived for GEOS-Chem classic",
+        "url": "http://geoschemdata.wustl.edu/ExtData/"
+      },
+      "metadata": {
+        "tags": [
+          "meteorology",
+          "reanalysis"
+        ],
+        "earthscidata_source": "src/geosfp.jl",
+        "earthscidata_struct": "GEOSFPFileSet",
+        "earthscidata_params": {
+          "domain_example": "0.25x0.3125_NA",
+          "filetype_example": "A1",
+          "filetypes": [
+            "A1",
+            "A3cld",
+            "A3dyn",
+            "A3mstC",
+            "A3mstE",
+            "I3"
+          ]
+        }
+      }
+    }
+  },
+  "models": {
+    "fixture_stub": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "U": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "U"
+            }
+          },
+          "description": "Eastward wind component"
+        },
+        "V": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "V"
+            }
+          },
+          "description": "Northward wind component"
+        },
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "T"
+            }
+          },
+          "description": "Air temperature"
+        },
+        "PS": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "PS"
+            }
+          },
+          "description": "Surface pressure"
+        },
+        "PBLH": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "shape": [],
+          "update": {
+            "kind": "data",
+            "source": "GEOSFP",
+            "from": {
+              "file_variable": "PBLH"
+            }
+          },
+          "description": "Planetary boundary layer height"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": 0.0
+        }
+      ]
+    }
+  }
+}

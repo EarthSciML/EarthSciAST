@@ -1,121 +1,5 @@
 {
-  "coupling": [
-    {
-      "from": "ISRM_SR.SOA",
-      "to": "ISRM.SR_SOA",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.pNO3",
-      "to": "ISRM.SR_pNO3",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.pNH4",
-      "to": "ISRM.SR_pNH4",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.pSO4",
-      "to": "ISRM.SR_pSO4",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.PrimaryPM25",
-      "to": "ISRM.SR_PrimaryPM25",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.W",
-      "to": "ISRM.W",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.S",
-      "to": "ISRM.S",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.E",
-      "to": "ISRM.E",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.N",
-      "to": "ISRM.N",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.TotalPop",
-      "to": "ISRM.TotalPop",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "ISRM_SR.MortalityRate",
-      "to": "ISRM.MortalityRate",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.lon",
-      "to": "ISRM.emis_lon",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.lat",
-      "to": "ISRM.emis_lat",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.annual",
-      "to": "ISRM.emis_annual",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.pollutant",
-      "to": "ISRM.pollutant",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.stkhgt",
-      "to": "ISRM.stkhgt",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.stkdiam",
-      "to": "ISRM.stkdiam",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.stktemp",
-      "to": "ISRM.stktemp",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    },
-    {
-      "from": "EGU_Emis.stkvel",
-      "to": "ISRM.stkvel",
-      "transform": "param_to_var",
-      "type": "variable_map"
-    }
-  ],
-  "data_loaders": {
+  "data_sources": {
     "EGU_Emis": {
       "kind": "points",
       "metadata": {
@@ -213,88 +97,6 @@
       },
       "source": {
         "url_template": "https://gaftp.epa.gov/air/emismod/2016/alpha/2016fd/emissions/2016fd_inputs_point.zip"
-      },
-      "variables": {
-        "annual": {
-          "description": "Annual emissions (col 13).",
-          "file_variable": "ann_value",
-          "units": "kg/yr"
-        },
-        "lat": {
-          "description": "Latitude (col 24), EPSG:4269 treated as +proj=longlat.",
-          "file_variable": "lat",
-          "units": "degree"
-        },
-        "lon": {
-          "description": "Longitude (col 23), EPSG:4269 treated as +proj=longlat.",
-          "file_variable": "lon",
-          "units": "degree"
-        },
-        "pollutant": {
-          "description": "FF10 pollutant code (col 12), delivered as the `pollutant` enum integer (see x_esd).",
-          "file_variable": "poll",
-          "units": "1"
-        },
-        "stkdiam": {
-          "description": "Stack diameter (col 18), ft->m. Fidelity only; unused downstream.",
-          "file_variable": "stkdiam",
-          "unit_conversion": {
-            "args": [
-              "stkdiam",
-              0.3048
-            ],
-            "op": "*"
-          },
-          "units": "m"
-        },
-        "stkhgt": {
-          "description": "Stack height (col 17), ft->m. Collected for fidelity; NOT consumed (emisLayer hard-coded to 0).",
-          "file_variable": "stkhgt",
-          "unit_conversion": {
-            "args": [
-              "stkhgt",
-              0.3048
-            ],
-            "op": "*"
-          },
-          "units": "m"
-        },
-        "stktemp": {
-          "description": "Stack temperature (col 19), degF->K (F-32)*5/9+273.15. Fidelity only; unused downstream.",
-          "file_variable": "stktemp",
-          "unit_conversion": {
-            "args": [
-              {
-                "args": [
-                  {
-                    "args": [
-                      "stktemp",
-                      32
-                    ],
-                    "op": "-"
-                  },
-                  0.5555555555555556
-                ],
-                "op": "*"
-              },
-              273.15
-            ],
-            "op": "+"
-          },
-          "units": "K"
-        },
-        "stkvel": {
-          "description": "Stack velocity (col 21), ft/s->m/s. Fidelity only; unused downstream.",
-          "file_variable": "stkvel",
-          "unit_conversion": {
-            "args": [
-              "stkvel",
-              0.3048
-            ],
-            "op": "*"
-          },
-          "units": "m/s"
-        }
       }
     },
     "ISRM_SR": {
@@ -471,63 +273,6 @@
       },
       "source": {
         "url_template": "s3://inmap-model/isrm_v1.2.1.zarr/"
-      },
-      "variables": {
-        "E": {
-          "description": "Cell east edge (LCC metres); length 596444, first 52411 used.",
-          "file_variable": "E",
-          "units": "m"
-        },
-        "MortalityRate": {
-          "description": "Baseline all-cause mortality per 100,000; length 596444, prefix [0:52411] used.",
-          "file_variable": "MortalityRate",
-          "units": "1"
-        },
-        "N": {
-          "description": "Cell north edge (LCC metres); length 596444, first 52411 used.",
-          "file_variable": "N",
-          "units": "m"
-        },
-        "PrimaryPM25": {
-          "description": "SR primary PM2.5 response (contracted with PM2_5 emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
-          "file_variable": "PrimaryPM25",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "S": {
-          "description": "Cell south edge (LCC metres); length 596444, first 52411 used.",
-          "file_variable": "S",
-          "units": "m"
-        },
-        "SOA": {
-          "description": "SR secondary organic aerosol response (contracted with VOC emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
-          "file_variable": "SOA",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "TotalPop": {
-          "description": "Population per cell; length 596444, prefix [0:52411] used in the deaths formula.",
-          "file_variable": "TotalPop",
-          "units": "1"
-        },
-        "W": {
-          "description": "Cell west edge (LCC metres); length 596444, first 52411 build the cell rectangles.",
-          "file_variable": "W",
-          "units": "m"
-        },
-        "pNH4": {
-          "description": "SR particulate ammonium response (contracted with NH3 emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
-          "file_variable": "pNH4",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "pNO3": {
-          "description": "SR particulate nitrate response (contracted with NOx emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
-          "file_variable": "pNO3",
-          "units": "ug/m^3/(kg/yr)"
-        },
-        "pSO4": {
-          "description": "SR particulate sulfate response (contracted with SOx emissions). SR response; native dims [emis_layer, src_cells, rcv_cells] (dtype <f4, chunks [1,100,52411]). Runner delivers only the lazy orthogonal slice ([0], ppl, :) => the compact [emis_src_cells, rcv_cells] slab (G2).",
-          "file_variable": "pSO4",
-          "units": "ug/m^3/(kg/yr)"
-        }
       }
     }
   },
@@ -595,7 +340,7 @@
       "zarr",
       "lambert_conformal",
       "reprojection",
-      "data_loader",
+      "data_source",
       "variable_map",
       "referenced-component"
     ]
@@ -4420,7 +4165,14 @@
             "pop_cells"
           ],
           "type": "parameter",
-          "units": "m"
+          "units": "m",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "E"
+            }
+          }
         },
         "E_NH3": {
           "shape": [
@@ -4459,7 +4211,14 @@
             "pop_cells"
           ],
           "type": "parameter",
-          "units": "1"
+          "units": "1",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "MortalityRate"
+            }
+          }
         },
         "N": {
           "default": 0.0,
@@ -4468,7 +4227,14 @@
             "pop_cells"
           ],
           "type": "parameter",
-          "units": "m"
+          "units": "m",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "N"
+            }
+          }
         },
         "S": {
           "default": 0.0,
@@ -4477,7 +4243,14 @@
             "pop_cells"
           ],
           "type": "parameter",
-          "units": "m"
+          "units": "m",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "S"
+            }
+          }
         },
         "SR_PrimaryPM25": {
           "default": 0.0,
@@ -4487,7 +4260,14 @@
             "rcv_cells"
           ],
           "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
+          "units": "ug/m^3/(kg/yr)",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "PrimaryPM25"
+            }
+          }
         },
         "SR_SOA": {
           "default": 0.0,
@@ -4497,7 +4277,14 @@
             "rcv_cells"
           ],
           "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
+          "units": "ug/m^3/(kg/yr)",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "SOA"
+            }
+          }
         },
         "SR_pNH4": {
           "default": 0.0,
@@ -4507,7 +4294,14 @@
             "rcv_cells"
           ],
           "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
+          "units": "ug/m^3/(kg/yr)",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "pNH4"
+            }
+          }
         },
         "SR_pNO3": {
           "default": 0.0,
@@ -4517,7 +4311,14 @@
             "rcv_cells"
           ],
           "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
+          "units": "ug/m^3/(kg/yr)",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "pNO3"
+            }
+          }
         },
         "SR_pSO4": {
           "default": 0.0,
@@ -4527,7 +4328,14 @@
             "rcv_cells"
           ],
           "type": "parameter",
-          "units": "ug/m^3/(kg/yr)"
+          "units": "ug/m^3/(kg/yr)",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "pSO4"
+            }
+          }
         },
         "TotalPM25": {
           "description": "Total PM2.5 concentration at each receptor: fact*(conc_SOA+conc_pNO3+conc_pNH4+conc_pSO4+conc_PrimaryPM25).",
@@ -4544,7 +4352,14 @@
             "pop_cells"
           ],
           "type": "parameter",
-          "units": "1"
+          "units": "1",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "TotalPop"
+            }
+          }
         },
         "W": {
           "default": 0.0,
@@ -4553,7 +4368,14 @@
             "pop_cells"
           ],
           "type": "parameter",
-          "units": "m"
+          "units": "m",
+          "update": {
+            "kind": "data",
+            "source": "ISRM_SR",
+            "from": {
+              "file_variable": "W"
+            }
+          }
         },
         "X": {
           "description": "Lambert-conformal-conic forward-x of the raw emission coordinate (== lambert_conformal_forward_x expanded to trig). Projected at BUILD time by the general-eval coordinate path (Phase 5 Part A) — the caller supplies only raw emis_lon/emis_lat.",
@@ -4632,7 +4454,14 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "kg/yr"
+          "units": "kg/yr",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "ann_value"
+            }
+          }
         },
         "emis_lat": {
           "default": 0.0,
@@ -4641,7 +4470,14 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "degree"
+          "units": "degree",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "lat"
+            }
+          }
         },
         "emis_lon": {
           "default": 0.0,
@@ -4650,7 +4486,14 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "degree"
+          "units": "degree",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "lon"
+            }
+          }
         },
         "fact": {
           "default": 28766.639,
@@ -4791,7 +4634,14 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "1"
+          "units": "1",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "poll"
+            }
+          }
         },
         "pop_scale": {
           "default": 1.0465819687408728,
@@ -4862,7 +4712,21 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "m"
+          "units": "m",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "stkdiam",
+              "unit_conversion": {
+                "args": [
+                  "stkdiam",
+                  0.3048
+                ],
+                "op": "*"
+              }
+            }
+          }
         },
         "stkhgt": {
           "default": 0.0,
@@ -4871,7 +4735,21 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "m"
+          "units": "m",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "stkhgt",
+              "unit_conversion": {
+                "args": [
+                  "stkhgt",
+                  0.3048
+                ],
+                "op": "*"
+              }
+            }
+          }
         },
         "stktemp": {
           "default": 0.0,
@@ -4880,7 +4758,33 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "K"
+          "units": "K",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "stktemp",
+              "unit_conversion": {
+                "args": [
+                  {
+                    "args": [
+                      {
+                        "args": [
+                          "stktemp",
+                          32
+                        ],
+                        "op": "-"
+                      },
+                      0.5555555555555556
+                    ],
+                    "op": "*"
+                  },
+                  273.15
+                ],
+                "op": "+"
+              }
+            }
+          }
         },
         "stkvel": {
           "default": 0.0,
@@ -4889,7 +4793,21 @@
             "emis_records"
           ],
           "type": "parameter",
-          "units": "m/s"
+          "units": "m/s",
+          "update": {
+            "kind": "data",
+            "source": "EGU_Emis",
+            "from": {
+              "file_variable": "stkvel",
+              "unit_conversion": {
+                "args": [
+                  "stkvel",
+                  0.3048
+                ],
+                "op": "*"
+              }
+            }
+          }
         }
       }
     }
