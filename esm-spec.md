@@ -1623,9 +1623,39 @@ Python, Rust, and Go; `odeStates` in TypeScript).
 | `constant_parameters(model)` | neither — plain constants |
 
 **System kind.** `system_kind(model)` derives what the `system_kind` field
-declares: any Brownian parameter ⇒ `"sde"`; no time-derivative equation at all ⇒
-`"nonlinear"`; a spatial domain plus differential operators ⇒ `"pde"`; otherwise
-`"ode"`. A binding uses the derivation when the field is absent, and reports
+declares, testing four conditions **in this order** and taking the first that
+holds:
+
+| # | Condition | Result |
+|---|---|---|
+| 1 | any parameter in `brownian_parameters` | `"sde"` |
+| 2 | any equation contains a **spatial derivative** | `"pde"` |
+| 3 | no time-derivative equation at all | `"nonlinear"` |
+| 4 | otherwise | `"ode"` |
+
+A **spatial derivative** is a `D` node whose `wrt` is present and is not `"t"`,
+or one of the `grad` / `div` / `laplacian` sugar ops (§4.2). It is detected
+anywhere in an equation's LHS or RHS, and the walk descends every Expression
+child, not just `args` (§4.9.5).
+
+Two points about this rule are load-bearing, because both were previously left
+to each binding to guess:
+
+- **It is stated in terms of the equations, not a domain block.** Earlier drafts
+  said "a spatial domain plus differential operators", but v0.8.0 removed
+  `Domain.spatial`, and since then `domain` has carried only
+  `independent_variable`, `temporal`, `element_type`, and `array_type` — nothing
+  spatial. There is no spatial domain to test, so a binding written to that
+  wording could not implement the `"pde"` branch at all. The differential
+  operators in the equations are the whole signal.
+- **The order puts `"pde"` before `"nonlinear"`.** A steady-state PDE
+  (`laplacian(u) ~ f`, no ∂/∂t) has no time-derivative equation and would
+  otherwise fall through to `"nonlinear"`. It is a PDE, and MTK's `PDESystem`
+  is what it maps to. `"sde"` still wins over `"pde"`: there is no
+  `SPDESystem` constructor to select, so a model that is both is assembled as
+  an SDE.
+
+A binding uses the derivation when the field is absent, and reports
 `system_kind_mismatch` when a present field contradicts it.
 
 These functions are the *only* sanctioned way to ask these questions. A site

@@ -1,0 +1,206 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClassificationSystemKindPde",
+    "description": "The `pde` branch of system_kind (esm-spec §6.3.1), which system_kind_variants.esm does not reach. Four models share one document-level `domain`, which is exactly the point: since v0.8.0 removed `Domain.spatial`, `domain` carries only independent_variable / temporal / element_type / array_type and says NOTHING about space. A binding that derives `pde` from the presence of a domain block classifies all four models the same and fails three of them. The signal is the SPATIAL DERIVATIVE in the equations. `Transient` uses a spatial `D` (wrt an axis, not `t`) and is `pde`. `SugarOps` uses the `grad`/`laplacian` sugar instead, and is equally `pde` — a binding that recognizes only the `D` spelling misses it. `SteadyState` is the ordering case: it has NO time-derivative equation, so a binding testing `nonlinear` before `pde` calls it nonlinear; it is a steady-state PDE and maps to PDESystem. `StochasticSpatial` carries BOTH a wiener parameter and a spatial derivative, and must be `sde` — not because it is not spatial, but because there is no SPDESystem constructor to select, so `sde` wins.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-08-19T00:00:00Z",
+    "tags": [
+      "classification",
+      "system_kind",
+      "pde",
+      "esm-1.0.0"
+    ]
+  },
+  "domain": {
+    "independent_variable": "t",
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-02T00:00:00Z"
+    }
+  },
+  "models": {
+    "Transient": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Advected scalar."
+        },
+        "c": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1.0,
+          "description": "Advection speed."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(u)/dt = -c * D(u)/dx -- the spatial D on the RHS is the pde signal.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "c"
+                ]
+              },
+              {
+                "op": "D",
+                "args": [
+                  "u"
+                ],
+                "wrt": "x"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "SugarOps": {
+      "variables": {
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "default": 300.0,
+          "description": "Temperature."
+        },
+        "kappa": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 1.0,
+          "description": "Diffusivity."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(T)/dt = kappa * laplacian(T). Sugar op rather than a spatial D.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "T"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "kappa",
+              {
+                "op": "laplacian",
+                "args": [
+                  "T"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "SteadyState": {
+      "variables": {
+        "phi": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0,
+          "description": "Potential."
+        },
+        "f": {
+          "type": "parameter",
+          "units": "1/m^2",
+          "default": 0.0,
+          "description": "Source term."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "laplacian(phi) ~ f. No time derivative at all, so ORDER decides: pde is tested before nonlinear.",
+          "lhs": {
+            "op": "laplacian",
+            "args": [
+              "phi"
+            ]
+          },
+          "rhs": "f"
+        }
+      ]
+    },
+    "StochasticSpatial": {
+      "variables": {
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0,
+          "description": "Spatially diffusing quantity, stochastically forced."
+        },
+        "kappa": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 1.0,
+          "description": "Diffusivity."
+        },
+        "xi": {
+          "type": "parameter",
+          "units": "1/s^0.5",
+          "distribution": {
+            "kind": "normal",
+            "mean": 0.0,
+            "std": 1.0
+          },
+          "update": {
+            "kind": "wiener"
+          },
+          "description": "Driving noise. Its presence makes this sde DESPITE the spatial derivative."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(v)/dt = kappa * grad(v, dim=x) + xi * v. Both signals present; sde wins.",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "v"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "kappa",
+                  {
+                    "op": "grad",
+                    "args": [
+                      "v"
+                    ],
+                    "dim": "x"
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "xi",
+                  "v"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

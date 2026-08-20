@@ -1,0 +1,62 @@
+{
+  "models": {
+    "SteadyState": {
+      "ode_states": [],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [
+        "phi"
+      ],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": [
+        "f"
+      ],
+      "system_kind": "pde"
+    },
+    "StochasticSpatial": {
+      "ode_states": [
+        "v"
+      ],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [
+        "xi"
+      ],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": [
+        "kappa"
+      ],
+      "system_kind": "sde"
+    },
+    "SugarOps": {
+      "ode_states": [
+        "T"
+      ],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": [
+        "kappa"
+      ],
+      "system_kind": "pde"
+    },
+    "Transient": {
+      "ode_states": [
+        "u"
+      ],
+      "observed_unknowns": [],
+      "algebraic_unknowns": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "sampled_parameters": [],
+      "constant_parameters": [
+        "c"
+      ],
+      "system_kind": "pde"
+    }
+  }
+}

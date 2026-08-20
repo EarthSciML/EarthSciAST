@@ -3,7 +3,13 @@
   "version": "1.0",
   "description": "Cross-language conformance for the esm 1.0.0 classification API (esm-spec §6.3.1). The format declares two variable types, `unknown` and `parameter`; everything a solver needs beyond that is DERIVED. Five bindings deriving it independently is five chances to disagree, so these fixtures pin one answer. Each golden lists, per model node, the three unknown sets (which partition the unknowns), the four parameter sets (which partition the parameters), and the derived system_kind. Every list is sorted lexicographically by UTF-8 code point so the comparison is order-independent across languages.",
   "reference_binding": "authored",
-  "bindings_required": ["julia", "typescript", "python", "rust", "go"],
+  "bindings_required": [
+    "julia",
+    "typescript",
+    "python",
+    "rust",
+    "go"
+  ],
   "bindings_optional": [],
   "contract": {
     "functions": [
@@ -15,7 +21,7 @@
       "discrete_parameters(model) - any OTHER update block",
       "sampled_parameters(model)  - a distribution and no update",
       "constant_parameters(model) - neither a distribution nor an update",
-      "system_kind(model)         - derived: sde | nonlinear | pde | ode"
+      "system_kind(model)         - derived, FIRST match wins, in this order: sde (any brownian parameter) | pde (any equation contains a spatial derivative: a D whose wrt is present and is not 't', or a grad/div/laplacian sugar op) | nonlinear (no time-derivative equation at all) | ode"
     ],
     "partitions": [
       "ode_states + observed_unknowns + algebraic_unknowns == the model's unknowns, disjointly",
@@ -23,7 +29,8 @@
     ],
     "naming": "Each binding spells these in its own idiom: snake_case in Julia, Python, Rust and Go; camelCase (odeStates, isOdeState, ...) in TypeScript.",
     "model_keys": "A golden's model keys are dot-paths from the document root, so a subsystem is 'Parent.Child'. Names inside each list are LOCAL to that model and are NOT namespaced.",
-    "declared_system_kind": "The model's explicit `system_kind` field, or null when absent. A binding MUST report system_kind from the DERIVATION, and MUST raise `system_kind_mismatch` when a non-null declared_system_kind disagrees with it."
+    "declared_system_kind": "The model's explicit `system_kind` field, or null when absent. A binding MUST report system_kind from the DERIVATION, and MUST raise `system_kind_mismatch` when a non-null declared_system_kind disagrees with it.",
+    "system_kind_order": "The ORDER is normative, and two orderings that look equivalent are not. `pde` is tested BEFORE `nonlinear`, so a steady-state PDE (laplacian(phi) ~ f, no time derivative) is `pde` rather than `nonlinear`. `sde` is tested BEFORE `pde`, so a model carrying both a wiener parameter and a spatial derivative is `sde` -- not because it is not spatial, but because there is no SPDESystem constructor to select. Detection is a property of the EQUATIONS and never of the `domain` block: v0.8.0 removed Domain.spatial, so `domain` carries nothing spatial."
   },
   "fixtures": [
     {
@@ -55,6 +62,12 @@
       "fixture": "fixtures/subsystem_scope.esm",
       "golden": "golden/subsystem_scope.json",
       "pins": "Classification is per MODEL NODE. A binding that flattens the document first and classifies once returns a single merged answer here instead of two scoped ones."
+    },
+    {
+      "id": "system_kind_pde",
+      "fixture": "fixtures/system_kind_pde.esm",
+      "golden": "golden/system_kind_pde.json",
+      "pins": "The `pde` branch, which system_kind_variants.esm does not reach at all -- before this fixture, one of the four system_kind values was unpinned across all five bindings. Four models share ONE document-level `domain`, so a binding deriving `pde` from the presence of a domain block gets three of the four wrong. `Transient` uses a spatial `D`; `SugarOps` uses `laplacian` instead, catching a binding that recognizes only the `D` spelling; `SteadyState` has no time derivative and catches a binding testing `nonlinear` before `pde`; `StochasticSpatial` carries both a wiener parameter and a spatial derivative and must come out `sde`."
     }
   ]
 }
