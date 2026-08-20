@@ -160,10 +160,17 @@ provider_extent_metaparameter(::Any) = nothing
     providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict()) -> Dict{String,Any}
 
 Construct the data providers a document DECLARES: one CONST provider per
-`data_sources.<name>` entry carrying a `metadata.esio_format`
-("zarr", "ff10", …), keyed `"<Loader>.<var>"` — exactly the `providers` keys
-[`prepare`](@ref) consumes (and, with `pushdown_rewrite=true`, gates from the
-rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or a path.
+data-fed PARAMETER, drawn from a `data_sources.<name>` entry carrying a
+`metadata.esio_format` ("zarr", "ff10", …).
+
+Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
+`"<Loader>.<var>"`. esm 1.0.0 moved the binding from the source to the consumer:
+a source declares no variables of its own, so there is no loader-side name left
+to key on; a model reads a field by declaring a parameter whose `update` names
+the source and binds a `file_variable` (esm-spec §8.5). These are exactly the
+`providers` keys [`prepare`](@ref) consumes (and, with `pushdown_rewrite=true`,
+gates from the rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or
+a path.
 
 Keywords:
   * `cache_root` — filesystem root for the download cache (per-loader subdir).
