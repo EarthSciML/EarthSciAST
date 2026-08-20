@@ -309,9 +309,12 @@ func normalizeModelLiterals(m *Model) {
 		return
 	}
 	for name, v := range m.Variables {
-		if v.Expression != nil {
-			v.Expression = normalizeExpression(v.Expression)
-		}
+		// The update's own Expression positions are literal-bearing too: a
+		// `when` comparison against 10 and a `unit_conversion` factor of 1 must
+		// keep their int shape exactly as an equation's literals do.
+		_ = v.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
+			return normalizeExpression(expr), nil
+		})
 		if v.Default != nil {
 			v.Default = normalizeExpression(v.Default)
 		}
@@ -463,10 +466,11 @@ func rejectCallOps(file *ESMFile) error {
 
 	for _, m := range file.Models {
 		for _, v := range m.Variables {
-			if v.Expression != nil {
-				if err := visit(v.Expression); err != nil {
-					return err
-				}
+			err := v.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
+				return expr, visit(expr)
+			})
+			if err != nil {
+				return err
 			}
 		}
 		if err := visitEquations(m.Equations); err != nil {

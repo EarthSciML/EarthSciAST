@@ -55,29 +55,15 @@ func resolveScopedReference(scopedRef string, file *ESMFile, currentSystem strin
 		return resolveScopedInReactionSystem(remainingPath, &system)
 	}
 
-	// A DATA LOADER is a scopable namespace too: `GEOSFP_MeteoData.u` names the
-	// variable `u` the loader exposes. Loaders were absent from this resolver, so
-	// every loader-scoped reference — the whole point of a data loader — came back
-	// unresolved (audit G7).
-	if loader, exists := file.DataLoaders[systemName]; exists {
-		return resolveScopedInDataLoader(remainingPath, &loader)
-	}
+	// A DATA SOURCE is deliberately NOT a scopable namespace. In 0.x a loader was
+	// a component and `GEOSFP_MeteoData.u` named a variable it exposed; from
+	// 1.0.0 a source is a document-scoped ingest registry that exposes no
+	// variables at all, and esm-spec 8 states it cannot be a coupling endpoint, a
+	// subsystem, or the path root of a scoped reference. The loaded field is an
+	// ordinary parameter of the consuming model, named without a prefix, so a
+	// source-rooted path resolves to nothing and must report as such.
 
 	return scopedRef, false
-}
-
-// resolveScopedInDataLoader resolves a reference into a data loader's exposed
-// variable set. A loader has no subsystems, so the path must be exactly one
-// segment: the variable name.
-func resolveScopedInDataLoader(path []string, loader *DataLoader) (string, bool) {
-	if len(path) != 1 {
-		return strings.Join(path, "."), false
-	}
-	varName := path[0]
-	if _, exists := loader.Variables[varName]; exists {
-		return varName, true
-	}
-	return varName, false
 }
 
 // subsystemPathExists reports whether a dotted name addresses a subsystem that

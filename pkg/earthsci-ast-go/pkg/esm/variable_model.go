@@ -444,3 +444,57 @@ func (u *ParameterUpdateSpec) RequiresShape() bool {
 	}
 	return false
 }
+
+// UpdateExpressionPositions names the three Expression-valued positions a
+// parameter's `update` can carry, for a diagnostic path or an error message.
+const (
+	UpdatePosWhen           = "when"
+	UpdatePosExpression     = "expression"
+	UpdatePosUnitConversion = "from/unit_conversion"
+)
+
+// MapUpdateExpressions applies f to every Expression a variable's `update`
+// carries, rewriting each in place, and stops at the first error.
+//
+// The positions are a `condition`/`crossing` rule's `when`, any rule's
+// `expression` value form, and a `from` binding's `unit_conversion`. `pos` is
+// one of the UpdatePos* constants and `rule` the rule's index within the spec,
+// so a caller can build a JSON Pointer without re-deriving the traversal.
+//
+// This exists because esm 1.0.0 moved Expression positions from
+// `variables[v].expression` — which every pass already knew about — onto the
+// parameter's update. A pass that walked the old field and was not repointed
+// here would silently stop visiting them: reference integrity would miss an
+// undefined name (§4.9.5 lists all three positions), enum lowering would leave
+// an `enum` node unlowered, and literal normalization would leave an int
+// looking like a float.
+func (v *ModelVariable) MapUpdateExpressions(f func(expr Expression, rule int, pos string) (Expression, error)) error {
+	if v == nil || v.Update == nil {
+		return nil
+	}
+	for i := range v.Update.Rules {
+		r := &v.Update.Rules[i]
+		if r.When != nil {
+			out, err := f(r.When, i, UpdatePosWhen)
+			if err != nil {
+				return err
+			}
+			r.When = out
+		}
+		if r.Expression != nil {
+			out, err := f(r.Expression, i, UpdatePosExpression)
+			if err != nil {
+				return err
+			}
+			r.Expression = out
+		}
+		if r.From != nil && r.From.UnitConversion != nil {
+			out, err := f(r.From.UnitConversion, i, UpdatePosUnitConversion)
+			if err != nil {
+				return err
+			}
+			r.From.UnitConversion = out
+		}
+	}
+	return nil
+}

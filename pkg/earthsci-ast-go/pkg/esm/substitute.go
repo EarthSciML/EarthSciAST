@@ -271,12 +271,24 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 	}
 	newModel.Equations = newEquations
 
-	// Substitute in observed variable expressions
+	// Substitute in each parameter's update expressions.
+	//
+	// This used to substitute into `variables[v].expression`, an observed's
+	// definition. 1.0.0 moved every definition into `equations` -- already
+	// covered above -- and left the variable carrying a different set of
+	// Expression positions: an update's `when`, its `expression` value form, and
+	// a `from` binding's `unit_conversion`. Those are what need substituting now,
+	// and dropping the loop entirely would silently stop rewriting them.
 	newVariables := make(map[string]ModelVariable)
 	for name, variable := range model.Variables {
 		newVar := variable
-		if variable.Expression != nil {
-			newVar.Expression = sub(variable.Expression)
+		if newVar.Update != nil {
+			rules := make([]ParameterUpdate, len(newVar.Update.Rules))
+			copy(rules, newVar.Update.Rules)
+			newVar.Update = &ParameterUpdateSpec{Rules: rules, IsArray: newVar.Update.IsArray}
+			_ = newVar.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
+				return sub(expr), nil
+			})
 		}
 		newVariables[name] = newVar
 	}

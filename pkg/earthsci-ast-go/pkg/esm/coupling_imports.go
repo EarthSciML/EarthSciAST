@@ -29,7 +29,10 @@ import (
 var couplingLibraryForbiddenKeys = []string{
 	"models",
 	"reaction_systems",
-	"data_loaders",
+	// `data_sources` is a document-scoped ingest registry, not a component
+	// namespace, but it is still a top-level document key a coupling library
+	// file may not carry.
+	"data_sources",
 	"domain",
 	"index_sets",
 	"metaparameters",
@@ -435,7 +438,7 @@ func rawEdgeToCouplingEntry(edge map[string]any) (CouplingEntry, error) {
 
 // resolvesToComponent resolves a `bind` value as a component path (esm-spec
 // §10.10.1) — a system or loader node, walking models/reaction_systems/
-// data_loaders then nested `subsystems`, never terminating on a variable.
+// models/reaction_systems then nested `subsystems`, never terminating on a variable.
 func resolvesToComponent(file *ESMFile, value string) bool {
 	if file == nil {
 		return false
@@ -451,10 +454,10 @@ func resolvesToComponent(file *ESMFile, value string) bool {
 	} else if rs, ok := file.ReactionSystems[top]; ok {
 		found = true
 		subs = rs.Subsystems
-	} else if _, ok := file.DataLoaders[top]; ok {
-		found = true
-		subs = nil // data loaders are leaves (no subsystems)
 	}
+	// A data source is NOT a component from 1.0.0 (esm-spec 8): it can be neither
+	// a subsystem nor a scoped-name path root, so it is not consulted here. A
+	// path rooted at one resolves to nothing, which is the intended answer.
 	if !found {
 		return false
 	}

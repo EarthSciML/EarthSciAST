@@ -1497,14 +1497,21 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 // Findings are reported at `/models/<M>/variables/<v>`, the pointer
 // tests/invalid/expected_errors.json pins (and the one TypeScript emits).
 func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath string, result *StructuralValidationResult) {
-	for _, name := range sortedKeys(model.Variables) {
+	// An observed unknown is one recovered by ObservedUnknowns, and its defining
+	// expression is the RHS of its bare-variable-LHS equation -- not a
+	// `variables[v].expression` field, which 1.0.0 removed. The FINDING is still
+	// reported against the variable, because that is the pointer
+	// tests/invalid/expected_errors.json pins and the units being contradicted
+	// are the variable's own.
+	for _, name := range ObservedUnknowns(model) {
 		v := model.Variables[name]
-		if v.Type != VarTypeObserved || v.Expression == nil {
+		def, ok := ObservedDefinition(model, name)
+		if !ok {
 			continue
 		}
 		path := fmt.Sprintf("%s/variables/%s", basePath, name)
 
-		got, err := propagateDimension(v.Expression, env)
+		got, err := propagateDimension(def, env)
 		if err != nil {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:     path,
@@ -1659,12 +1666,17 @@ func checkPhysicalConstantUnits(modelName string, model *Model, result *Structur
 		if declaredU.Dim.Equal(canonicalU.Dim) {
 			continue
 		}
+		// Attribute the finding to the observed unknown that READS this constant,
+		// when one does: that is where an author sees the contradiction. The
+		// candidates are enumerated in sorted order so the attribution is stable
+		// when several observeds read the same constant.
 		usageName := ""
-		for otherName, otherDef := range model.Variables {
-			if otherDef.Type != VarTypeObserved || otherDef.Expression == nil {
+		for _, otherName := range ObservedUnknowns(model) {
+			otherDef, ok := ObservedDefinition(model, otherName)
+			if !ok {
 				continue
 			}
-			if exprReferencesName(otherDef.Expression, vname) {
+			if exprReferencesName(otherDef, vname) {
 				usageName = otherName
 				break
 			}
@@ -1731,8 +1743,10 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 			varUnits[name] = *v.Units
 		}
 	}
-	for vname, vdef := range model.Variables {
-		if vdef.Type != VarTypeObserved || vdef.Expression == nil {
+	for _, vname := range ObservedUnknowns(model) {
+		vdef := model.Variables[vname]
+		def, ok := ObservedDefinition(model, vname)
+		if !ok {
 			continue
 		}
 		lhsUnits := ""
@@ -1742,7 +1756,7 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 		if lhsUnits == "" {
 			continue
 		}
-		node, ok := asExprNode(vdef.Expression)
+		node, ok := asExprNode(def)
 		if !ok || node.Op != "*" || len(node.Args) != 2 {
 			continue
 		}

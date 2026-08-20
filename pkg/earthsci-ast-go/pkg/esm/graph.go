@@ -19,7 +19,7 @@ type GraphEdge[N any, E any] struct {
 // ComponentNode represents a node in the component graph
 type ComponentNode struct {
 	ID            string         `json:"id"`
-	Type          string         `json:"type"` // "model", "reaction_system", "data_loader", "operator"
+	Type          string         `json:"type"` // "model", "reaction_system", "data_source", "operator"
 	Name          string         `json:"name"`
 	VariableCount *int           `json:"variable_count,omitempty"`
 	EquationCount *int           `json:"equation_count,omitempty"`
@@ -49,7 +49,7 @@ type CouplingEdge struct {
 // VariableNode represents a node in the expression graph
 type VariableNode struct {
 	Name   string  `json:"name"`
-	Kind   string  `json:"kind"` // "state", "parameter", "observed", "brownian", "species"
+	Kind   string  `json:"kind"` // a classification.go Class* value, or "species"
 	Units  *string `json:"units,omitempty"`
 	System string  `json:"system"`
 }
@@ -127,15 +127,18 @@ func ComponentGraphFromFile(file *ESMFile) *ComponentGraph {
 		nodeMap[id] = node
 	}
 
-	// Add nodes for data loaders
-	for id, loader := range file.DataLoaders {
+	// Add nodes for data sources. A source is not a component and has no coupling
+	// edges (esm-spec 8), but it stays a NODE so a reader can see what the
+	// document ingests; the edge to it is now implicit in the consuming
+	// parameter's `update.source` rather than in a coupling entry.
+	for id, source := range file.DataSources {
 		node := ComponentNode{
 			ID:   id,
-			Type: "data_loader",
+			Type: "data_source",
 			Name: id,
 			Metadata: map[string]any{
-				"kind":      loader.Kind,
-				"variables": len(loader.Variables),
+				"kind":     source.Kind,
+				"temporal": source.HasTemporal(),
 			},
 		}
 
