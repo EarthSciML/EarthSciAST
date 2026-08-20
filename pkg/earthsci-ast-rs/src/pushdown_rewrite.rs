@@ -1088,6 +1088,50 @@ fn pd_assert_rects_rebound(
     )))
 }
 
+/// Put a rewritten model's `equations` into the §5.5.7 canonical order:
+///
+/// 1. every equation whose LHS is **not** a bare variable — the derivative
+///    equations and the generated `distinct` producer — each keeping its
+///    relative input order;
+/// 2. every **definition** (bare-variable LHS), sorted by the defined name,
+///    lexicographically by UTF-8 code point.
+///
+/// This is NORMATIVE, not cosmetic, and it applies even though Rust's own
+/// emission order is deterministic. The rewrite generates the member buffers
+/// and the per-rect cell gathers while walking the model's variable collection,
+/// which is a hash map in this binding and a `Dict` in the Julia reference —
+/// so without canonicalizing, the emitted document varies with the hash seed
+/// from run to run, and the `tests/conformance/pushdown/` goldens could not be
+/// compared as ordered arrays at all. Appending in a fixed order would be
+/// deterministic HERE while still disagreeing with the other bindings, which is
+/// why the spec asks for the ordering rather than for stable iteration.
+///
+/// Sorting only the definitions is what keeps this safe for an authored
+/// document: a definition is identified by the name it defines, so reordering
+/// two of them cannot change the system (the evaluator dependency-orders
+/// observeds itself), while a derivative equation's position among its peers is
+/// left exactly as the author wrote it.
+fn pd_canonicalize_equations(model: &mut Value) {
+    let Some(eqs) = model.get_mut("equations").and_then(Value::as_array_mut) else {
+        return;
+    };
+    // A stable partition, so group (1) keeps its relative input order.
+    let (mut structural, mut definitions): (Vec<Value>, Vec<Value>) = std::mem::take(eqs)
+        .into_iter()
+        .partition(|eq| !eq.get("lhs").is_some_and(Value::is_string));
+    definitions.sort_by(|a, b| {
+        let key = |e: &Value| {
+            e.get("lhs")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        key(a).cmp(&key(b))
+    });
+    structural.append(&mut definitions);
+    *eqs = structural;
+}
+
 fn pd_apply(
     esm: &Value,
     mname: &str,
@@ -1354,6 +1398,9 @@ fn pd_apply(
             *eqs = Value::Array(vec![producer]);
         }
     }
+
+    // --- canonical equation order (CONFORMANCE_SPEC.md §5.5.7) ---------------
+    pd_canonicalize_equations(model);
 
     // --- inspectable pushdown provenance / gated_select record ---
     let md = root

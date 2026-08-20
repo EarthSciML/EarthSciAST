@@ -34,24 +34,6 @@ fn read_json(path: &Path) -> Value {
 /// Deep equality with numbers compared BY VALUE (`0 == 0.0`), per the corpus
 /// comparison contract. On mismatch, returns the JSON-pointer-ish path of the
 /// first difference for the assertion message.
-/// One equation's order-independent identity: its canonical JSON with object
-/// keys recursively sorted, so two spellings of the same equation compare
-/// equal.
-fn canonical_key(v: &Value) -> String {
-    fn canon(v: &Value) -> Value {
-        match v {
-            Value::Object(o) => {
-                let mut keys: Vec<&String> = o.keys().collect();
-                keys.sort();
-                Value::Object(keys.into_iter().map(|k| (k.clone(), canon(&o[k]))).collect())
-            }
-            Value::Array(a) => Value::Array(a.iter().map(canon).collect()),
-            other => other.clone(),
-        }
-    }
-    canon(v).to_string()
-}
-
 fn deep_equal(a: &Value, b: &Value, path: &str) -> Result<(), String> {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => {
@@ -79,32 +61,6 @@ fn deep_equal(a: &Value, b: &Value, path: &str) -> Result<(), String> {
         (Value::Array(x), Value::Array(y)) => {
             if x.len() != y.len() {
                 return Err(format!("{path}: array length {} != {}", x.len(), y.len()));
-            }
-            // An `equations` array is compared as a MULTISET.
-            //
-            // The rewrite adds equations (the `distinct` producer and the
-            // per-rect cell gathers) and never reorders the ones already there,
-            // so their order is the input document's. These four goldens list
-            // theirs differently: the producer first, then every bare-LHS
-            // equation sorted by name — the shape the esm 1.0.0 fixture port
-            // produced when it moved each observed definition out of
-            // `variables[..].expression`, not something the rewrite computes.
-            // Reproducing it would mean sorting an author's equations, which is
-            // a worse bug than the ordering it fixes. Content stays pinned
-            // byte for byte; see the SHARED FILE CHANGES NEEDED note in the
-            // port report, where these goldens want the same repair the four
-            // expansion goldens already had.
-            if path.ends_with("/equations") {
-                let mut xs: Vec<String> = x.iter().map(canonical_key).collect();
-                let mut ys: Vec<String> = y.iter().map(canonical_key).collect();
-                xs.sort();
-                ys.sort();
-                for (i, (xk, yk)) in xs.iter().zip(&ys).enumerate() {
-                    if xk != yk {
-                        return Err(format!("{path}: equation multiset differs at {i}: {xk}"));
-                    }
-                }
-                return Ok(());
             }
             for (i, (xv, yv)) in x.iter().zip(y).enumerate() {
                 deep_equal(xv, yv, &format!("{path}/{i}"))?;
@@ -182,4 +138,54 @@ fn pushdown_goldens_match_and_rewrite_is_idempotent_and_pure() {
         // 5: input purity — byte-level: the rewrite never mutates its input.
         assert_eq!(input, input_snapshot, "{id}: input document was mutated");
     }
+}
+
+/// The §5.5.7 canonical equation order is INDEPENDENT of the input's order.
+///
+/// The ordered golden comparison above would also pass if the rewrite merely
+/// appended in a lucky order, because the corpus fixtures happen to list their
+/// definitions sorted already. This drives the same fixture with its equations
+/// REVERSED: the output must be identical either way, which is the property the
+/// rule exists for — the rewrite generates member buffers and cell gathers
+/// while walking a hash map, so an un-canonicalized emission varies with the
+/// hash seed and could not be compared as an ordered array at all.
+#[test]
+fn equation_order_is_canonical_not_input_order() {
+    let dir = corpus_dir();
+    let path = dir.join("fixtures/pushdown_l1.esm");
+    let input = read_json(&path);
+
+    let mut reversed = input.clone();
+    reversed["models"]["ISRM"]["equations"]
+        .as_array_mut()
+        .expect("equations array")
+        .reverse();
+
+    let from_input = desugar_pushdown(&input, Some("ISRM")).expect("rewrite fires");
+    let from_reversed = desugar_pushdown(&reversed, Some("ISRM")).expect("rewrite fires");
+    assert_eq!(
+        from_input["models"]["ISRM"]["equations"],
+        from_reversed["models"]["ISRM"]["equations"],
+        "reversing the input's equations changed the rewritten order"
+    );
+
+    // ...and that order is the two-part rule, not just *some* stable order.
+    let eqs = from_input["models"]["ISRM"]["equations"]
+        .as_array()
+        .expect("equations array");
+    let first_definition = eqs
+        .iter()
+        .position(|e| e["lhs"].is_string())
+        .expect("the rewrite emits definitions");
+    assert!(
+        eqs[..first_definition].iter().all(|e| !e["lhs"].is_string()),
+        "every non-bare-LHS equation must precede every definition"
+    );
+    let names: Vec<&str> = eqs[first_definition..]
+        .iter()
+        .map(|e| e["lhs"].as_str().expect("definitions are contiguous"))
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "definitions must be sorted by the defined name");
 }
