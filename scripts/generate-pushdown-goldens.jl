@@ -31,6 +31,32 @@ const REPO = normpath(joinpath(@__DIR__, ".."))
 const OUTDIR = joinpath(REPO, "tests", "conformance", "pushdown")
 
 # ---------------------------------------------------------------------------
+# esm 1.0.0: observed variables are DEFINED BY EQUATIONS.
+#
+# Builders declare an observed as `Dict("type"=>"unknown", "shape"=>…, _DEFKEY=>rhs)`
+# and `_split_observeds!` moves each `_DEFKEY` into a bare-variable-LHS equation.
+# The order matters and is not incidental: `equations` is an ordered array, and
+# the committed fixtures list these in the order their builder declares them, so
+# the lift walks a SORTED name list to stay deterministic across Julia's Dict
+# iteration order. (Hand-conversion of the shared corpus alphabetized several
+# goldens against fixtures that had not been, which is exactly the class of
+# mismatch this avoids.)
+# ---------------------------------------------------------------------------
+const _DEFKEY = "__defining_rhs__"
+
+function _split_observeds!(model::AbstractDict)
+    vars = model["variables"]
+    eqs = model["equations"]
+    for name in sort!(collect(String.(keys(vars))))
+        v = vars[name]
+        v isa AbstractDict || continue
+        haskey(v, _DEFKEY) || continue
+        push!(eqs, Dict{String,Any}("lhs" => name, "rhs" => pop!(v, _DEFKEY)))
+    end
+    return model
+end
+
+# ---------------------------------------------------------------------------
 # Canonical JSON writer: sorted keys, 2-space indent, JSON3 scalars.
 # ---------------------------------------------------------------------------
 function canon(io::IO, x, level::Int)
@@ -137,7 +163,11 @@ function build_l1_doc()
         args=["TotalPM25","TotalPop","MortalityRate"])
 
     param(shape) = Dict("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-    obs(shape, expr) = Dict("type"=>"observed", "shape"=>shape, "expression"=>expr)
+    # esm 1.0.0: an observed quantity is an `unknown` DECLARED here and DEFINED
+    # by a bare-variable-LHS equation; the variable carries no `expression`.
+    # `obs` stashes the defining RHS under a private key that `_split_observeds!`
+    # lifts into the model's `equations` in declaration order.
+    obs(shape, expr) = Dict("type"=>"unknown", "shape"=>shape, _DEFKEY=>expr)
     scal(v) = Dict("type"=>"parameter", "default"=>v)
 
     variables = Dict{String,Any}(
@@ -179,13 +209,15 @@ function build_l1_doc()
         "fact"=>scal(FACT), "pop_scale"=>scal(POP_SCALE), "mort_scale"=>scal(MORT_SCALE),
         "rr_K"=>scal(RR_K), "rr_L"=>scal(RR_L))
 
-    loader_var(fv) = Dict{String,Any}("file_variable" => fv, "units" => "1")
-    data_loaders = Dict{String,Any}(
+    # esm 1.0.0: a data source is a document-scoped INGEST REGISTRY, not a
+    # component. It no longer declares the fields it provides, it is not a
+    # coupling endpoint, and the 15 variable_map entries that used to wire its
+    # fields into the model are gone. The CONSUMING PARAMETER carries the
+    # binding instead, and owns the units.
+    data_sources = Dict{String,Any}(
         "MockSR" => Dict{String,Any}(
             "kind" => "static",
             "source" => Dict{String,Any}("url_template" => "mock://sr"),
-            "variables" => Dict{String,Any}(
-                fv => loader_var(fv) for fv in vcat(LVARS, ["TotalPop", "MortalityRate"])),
             "metadata" => Dict{String,Any}("x_esd" => Dict{String,Any}(
                 "gated_select" => Dict{String,Any}(
                     "axes" => Any[Dict("fixed"=>[0]),
@@ -193,36 +225,42 @@ function build_l1_doc()
                     "applies_to" => Any[LVARS...])))),
         "MockPts" => Dict{String,Any}(
             "kind" => "points",
-            "source" => Dict{String,Any}("url_template" => "mock://pts"),
-            "variables" => Dict{String,Any}(
-                fv => loader_var(fv) for fv in
-                    ["lon", "lat", "annual", "vVOC", "vNOx", "vNH3", "vSOx", "vPM25"])))
-    coupling = Any[]
-    for (frm, to) in vcat(
-        [("MockSR.$v", "ISRM.SR_$v") for v in LVARS],
-        [("MockSR.TotalPop", "ISRM.TotalPop"),
-         ("MockSR.MortalityRate", "ISRM.MortalityRate"),
-         ("MockPts.lon", "ISRM.emis_lon"), ("MockPts.lat", "ISRM.emis_lat"),
-         ("MockPts.annual", "ISRM.emis_annual"),
-         ("MockPts.vVOC", "ISRM.is_VOC"), ("MockPts.vNOx", "ISRM.is_NOx"),
-         ("MockPts.vNH3", "ISRM.is_NH3"), ("MockPts.vSOx", "ISRM.is_SOx"),
-         ("MockPts.vPM25", "ISRM.is_PM25")])
-        push!(coupling, Dict{String,Any}("type" => "variable_map",
-                                         "from" => frm, "to" => to,
-                                         "transform" => "param_to_var"))
+            "source" => Dict{String,Any}("url_template" => "mock://pts")))
+
+    # `update` binds the model parameter to the file variable the loader used to
+    # publish. `shape` is already declared by `param`, which a `data` update
+    # requires.
+    function _fed!(vname, src, file_variable)
+        v = variables[vname]
+        v["units"] = "1"
+        v["update"] = Dict{String,Any}(
+            "kind" => "data", "source" => src,
+            "from" => Dict{String,Any}("file_variable" => file_variable))
+        return v
+    end
+    for lv in LVARS; _fed!("SR_$lv", "MockSR", lv); end
+    _fed!("TotalPop", "MockSR", "TotalPop")
+    _fed!("MortalityRate", "MockSR", "MortalityRate")
+    _fed!("emis_lon", "MockPts", "lon")
+    _fed!("emis_lat", "MockPts", "lat")
+    _fed!("emis_annual", "MockPts", "annual")
+    for (vn, fv) in (("is_VOC", "vVOC"), ("is_NOx", "vNOx"), ("is_NH3", "vNH3"),
+                     ("is_SOx", "vSOx"), ("is_PM25", "vPM25"))
+        _fed!(vn, "MockPts", fv)
     end
 
-    return Dict{String,Any}(
-        "esm" => "0.9.0",
+    doc = Dict{String,Any}(
+        "esm" => "1.0.0",
         "metadata" => Dict{String,Any}("name" => "prepare_pushdown_L1"),
         "index_sets" => Dict{String,Any}(
             "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),
             "rcv_cells"    => Dict("kind"=>"interval", "size"=>N_RCV),
             "emis_records" => Dict("kind"=>"interval", "size"=>N_REC)),
-        "data_loaders" => data_loaders,
-        "coupling" => coupling,
+        "data_sources" => data_sources,
         "models" => Dict{String,Any}("ISRM" =>
             Dict{String,Any}("variables"=>variables, "equations"=>Any[])))
+    _split_observeds!(doc["models"]["ISRM"])
+    return doc
 end
 
 # ---------------------------------------------------------------------------
@@ -241,7 +279,7 @@ _pd_contain() = _op("and",
     _op("<=", _ix("src_S", "c"), _ix("py", "r")), _op("<", _ix("py", "r"), _ix("src_N", "c")))
 
 _pd_param(shape) = Dict{String,Any}("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-_pd_obs(shape, expr) = Dict{String,Any}("type"=>"observed", "shape"=>shape, "expression"=>expr)
+_pd_obs(shape, expr) = Dict{String,Any}("type"=>"unknown", "shape"=>shape, _DEFKEY=>expr)
 
 # The 4 cell-rect factors + the 2 record point coordinates, shared by both docs.
 function _pd_geometry_vars()
@@ -263,8 +301,8 @@ function build_gated_dense_doc()
         Dict("s"=>Dict("from"=>"src_cells"), "rcv"=>Dict("from"=>"rcv_cells")),
         _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s"));
         reduce="+", args=["SR_PM25", "E_PM25"]))
-    return Dict{String,Any}(
-        "esm" => "0.9.0",
+    doc = Dict{String,Any}(
+        "esm" => "1.0.0",
         "metadata" => Dict{String,Any}("name" => "pushdown_gated_dense"),
         "index_sets" => Dict{String,Any}(
             "src_cells"    => Dict("kind"=>"interval", "size"=>NC),
@@ -272,6 +310,8 @@ function build_gated_dense_doc()
             "emis_records" => Dict("kind"=>"interval", "size"=>NR)),
         "models" => Dict{String,Any}("Binned" =>
             Dict{String,Any}("variables"=>variables, "equations"=>Any[])))
+    _split_observeds!(doc["models"]["Binned"])
+    return doc
 end
 
 # ---------------------------------------------------------------------------
