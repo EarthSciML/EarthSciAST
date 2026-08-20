@@ -93,4 +93,4 @@ Contributions are welcome! Please see the [contributing guide](../../CONTRIBUTIN
 
 ## License
 
-This package is part of the EarthSciAST project and is licensed under the MIT License.
+This package is part of the EarthSciAST project and is licensed under the GNU Affero General Public License v3.0.

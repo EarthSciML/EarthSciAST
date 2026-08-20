@@ -1,7 +1,7 @@
 # EarthSciAST
 
 [![Cross-Language Conformance Testing](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml/badge.svg)](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 **EarthSciML Serialization Format** — A language-agnostic JSON-based format for earth science model components, their composition, and runtime configuration.
 
@@ -156,7 +156,7 @@ See individual package directories for language-specific development guides.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 
 ## Citation
 

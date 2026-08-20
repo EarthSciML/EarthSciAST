@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "earthsci-ast"
-version = "0.1.0"
+version = "0.1.1"
 description = "Earth System Model Serialization Format"
 authors = [
     {name = "EarthSciML Authors and Contributors"}
@@ -14,7 +14,7 @@ keywords = ["earth-science", "modeling", "serialization", "atmospheric-chemistry
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
