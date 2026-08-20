@@ -51,7 +51,19 @@ function _split_observeds!(model::AbstractDict)
         v = vars[name]
         v isa AbstractDict || continue
         haskey(v, _DEFKEY) || continue
-        push!(eqs, Dict{String,Any}("lhs" => name, "rhs" => pop!(v, _DEFKEY)))
+        rhs = pop!(v, _DEFKEY)
+        # A builder that derives from another (the template-factored and
+        # unreadable-join fixtures both start from `build_gated_dense_doc`) may
+        # REDECLARE a name whose definition has already been lifted. Rewrite that
+        # equation in place: appending a second one for the same LHS would leave
+        # the fixture with two definitions, of which classification reads the
+        # first — the redeclaration would be silently inert.
+        i = findfirst(e -> e isa AbstractDict && get(e, "lhs", nothing) == name, eqs)
+        if i === nothing
+            push!(eqs, Dict{String,Any}("lhs" => name, "rhs" => rhs))
+        else
+            eqs[i] = Dict{String,Any}("lhs" => name, "rhs" => rhs)
+        end
     end
     return model
 end
@@ -406,6 +418,9 @@ function build_template_body_doc()
                              "xmax"=>"src_E", "ymax"=>"src_N",
                              "ptx"=>"px", "pty"=>"py", "wgt"=>"emis_annual"));
         reduce="+", args=["src_W","src_S","src_E","src_N","px","py","emis_annual"]))
+    # `E_PM25` is REDECLARED here, after `build_gated_dense_doc` lifted its own
+    # definition — so its defining equation is rewritten, not duplicated.
+    _split_observeds!(m)
     return d
 end
 
@@ -437,6 +452,9 @@ function build_unreadable_join_doc()
             1.0, 0.0), _ix("emis_annual", "r"));
         reduce="+", args=["src_W","src_S","src_E","src_N","src_B","src_T",
                           "px","py","pz","emis_annual"]))
+    # As in `build_template_body_doc`: `E_PM25` is redeclared over an already
+    # lifted definition, so this rewrites that equation in place.
+    _split_observeds!(d["models"]["Binned"])
     return d
 end
 

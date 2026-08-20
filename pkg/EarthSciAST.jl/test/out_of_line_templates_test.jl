@@ -441,31 +441,29 @@ end
         end
     end
     # -----------------------------------------------------------------------
-    # `expand_flattened_refs` covers EVERY expression-bearing variable, not
-    # just the observeds. `_collect_model!` (namespacing.jl) namespaces
-    # `v.expression` for EVERY variable type BEFORE partitioning it into the
-    # flattened buckets — states to `state_variables`, parameters AND discrete
-    # variables to `parameters`, observeds to `observed_variables` — and the
-    # schema only REQUIRES an `expression` on an observed, it does not forbid
-    # one elsewhere. So any of the three buckets can legally carry a surviving
-    # `apply_expression_template`, and a consumer promised the Option-A image
-    # (RFC §7.7 "Expand at your boundary") must not find an Option-B node in
-    # one. Also pins memo-on ≡ memo-off, the sharing invariant item (2) rests
-    # on: the expansion is a pure function of (template, bindings, registry),
-    # so reusing one site's result at another is a DAG, never a different tree.
+    # `expand_flattened_refs` covers EVERY expression-bearing POSITION, not just
+    # the equations. From esm 1.0.0 an observed unknown's body IS an equation, so
+    # the position that remains on a variable is a parameter update's `when`
+    # trigger and its `expression` value form (esm-spec §5.4) — and the flattener
+    # namespaces those before partitioning the variable into a bucket, so a
+    # consumer promised the Option-A image (RFC §7.7 "Expand at your boundary")
+    # must not find an Option-B node in one. Also pins memo-on ≡ memo-off, the
+    # sharing invariant item (2) rests on: the expansion is a pure function of
+    # (template, bindings, registry), so reusing one site's result at another is
+    # a DAG, never a different tree.
     # -----------------------------------------------------------------------
-    @testset "expand_flattened_refs: every variable bucket, memo on ≡ off" begin
+    @testset "expand_flattened_refs: equations and parameter updates, memo on ≡ off" begin
         OD = EarthSciAST.OrderedDict
         # A real FlattenedSystem to inherit the un-exercised fields from; its
         # own registry is empty, so everything under test is injected below.
         base = mktempdir() do d
             path = joinpath(d, "trivial.esm")
             open(io -> JSON3.write(io, Dict{String,Any}(
-                "esm" => "0.8.0",
+                "esm" => "1.0.0",
                 "metadata" => Dict{String,Any}("name" => "trivial"),
                 "models" => Dict{String,Any}("m" => Dict{String,Any}(
                     "variables" => Dict{String,Any}(
-                        "c" => Dict{String,Any}("type" => "state", "units" => "1",
+                        "c" => Dict{String,Any}("type" => "unknown", "units" => "1",
                                                 "default" => 1.0)),
                     "equations" => Any[Dict{String,Any}(
                         "lhs" => Dict{String,Any}("op" => "D", "args" => Any["c"],
@@ -482,19 +480,21 @@ end
         _apply(v) = EarthSciAST.OpExpr("apply_expression_template",
             EarthSciAST.ASTExpr[]; name = "scale",
             bindings = Dict{String,EarthSciAST.ASTExpr}("a" => EarthSciAST.VarExpr(v)))
-        _var(t, e; kw...) = EarthSciAST.ModelVariable(t; expression = e, kw...)
+        # A parameter whose update carries the reference in its VALUE form, and
+        # one that carries it in the `when` TRIGGER: both are Expression
+        # positions and both must be expanded.
+        _pvar(u; kw...) = EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
+                                                    update = u, kw...)
+        upd_expr = EarthSciAST.ParameterUpdate("condition";
+            when = EarthSciAST.VarExpr("m.c"), expression = _apply("m.c"))
+        upd_when = EarthSciAST.ParameterUpdate("condition";
+            when = _apply("m.c"), expression = EarthSciAST.VarExpr("m.c"))
 
         flat = EarthSciAST.FlattenedSystem(base;
             template_registry = reg,
-            state_variables = OD{String,EarthSciAST.ModelVariable}(
-                "m.c" => base.state_variables["m.c"],
-                "m.s" => _var(EarthSciAST.StateVariable, _apply("m.c"))),
             parameters = OD{String,EarthSciAST.ModelVariable}(
-                "m.p" => _var(EarthSciAST.ParameterVariable, _apply("m.c")),
-                "m.d" => _var(EarthSciAST.DiscreteVariable, _apply("m.c");
-                              shape = Any["x"])),
-            observed_variables = OD{String,EarthSciAST.ModelVariable}(
-                "m.o" => _var(EarthSciAST.ObservedVariable, _apply("m.c"))),
+                "m.p" => _pvar(upd_expr),
+                "m.d" => _pvar(upd_when; shape = Any["x"])),
             equations = EarthSciAST.Equation[
                 EarthSciAST.Equation(base.equations[1].lhs, _apply("m.c"))])
 
@@ -504,31 +504,36 @@ end
                                               x.op == "apply_expression_template"), e)
             hit
         end
-        # Precondition: the reference really is in every bucket before expansion.
-        @test _hasapply(flat.state_variables["m.s"].expression)
-        @test _hasapply(flat.parameters["m.p"].expression)
-        @test _hasapply(flat.parameters["m.d"].expression)
-        @test _hasapply(flat.observed_variables["m.o"].expression)
+        _updapply(v) = v.update === nothing ? false :
+            any(r -> _hasapply(r.when) || _hasapply(r.expression), v.update)
+
+        # Precondition: the reference really is in both update positions and in
+        # the equation before expansion.
+        @test _updapply(flat.parameters["m.p"])
+        @test _updapply(flat.parameters["m.d"])
         @test _hasapply(flat.equations[1].rhs)
 
         _buckets(f) = (f.state_variables, f.parameters, f.observed_variables)
         for memo in (nothing, Dict{Tuple{String,String},EarthSciAST.OpExpr}())
             ex = EarthSciAST.expand_flattened_refs(flat; memo = memo)
             for b in _buckets(ex), (_, v) in b
-                @test !_hasapply(v.expression)
+                @test !_updapply(v)
             end
             @test !_hasapply(ex.equations[1].rhs)
-            # …and the expansion is the template body with `a := m.c`.
-            @test EarthSciAST.serialize_expression(ex.parameters["m.p"].expression) ==
-                  EarthSciAST.serialize_expression(ex.observed_variables["m.o"].expression)
+            # …and each expansion is the template body with `a := m.c`.
+            @test EarthSciAST.serialize_expression(ex.parameters["m.p"].update[1].expression) ==
+                  EarthSciAST.serialize_expression(ex.parameters["m.d"].update[1].when)
             # Non-expression fields survive the rebuild.
-            @test ex.parameters["m.d"].type == EarthSciAST.DiscreteVariable
+            @test ex.parameters["m.d"].type == EarthSciAST.ParameterVariable
             @test ex.parameters["m.d"].shape == Any["x"]
+            @test ex.parameters["m.d"].update[1].kind == "condition"
+            # A variable with nothing to expand is passed through BY IDENTITY.
             @test ex.state_variables["m.c"] === base.state_variables["m.c"]
         end
-        _ser(f) = JSON3.write(Any[
-            Any[[k, EarthSciAST.serialize_expression(v.expression)] for (k, v) in b
-                if v.expression !== nothing] for b in _buckets(f)],
+        _serupd(v) = Any[[EarthSciAST.serialize_expression(r.when),
+                          EarthSciAST.serialize_expression(r.expression)]
+                         for r in (v.update === nothing ? [] : v.update)]
+        _ser(f) = JSON3.write(Any[Any[[k, _serupd(v)] for (k, v) in b] for b in _buckets(f)]
             ) * "~" * JSON3.write(Any[EarthSciAST.serialize_expression(eq.rhs)
                                       for eq in f.equations])
         @test _ser(EarthSciAST.expand_flattened_refs(flat; memo = nothing)) ==

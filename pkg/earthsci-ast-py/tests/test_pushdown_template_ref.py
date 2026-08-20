@@ -56,8 +56,43 @@ def _param(shape):
     return {"type": "parameter", "default": 0.0, "shape": list(shape)}
 
 
-def _obs(shape, expr):
-    return {"type": "observed", "shape": list(shape), "expression": expr}
+def _obs(shape):
+    """The DECLARATION of an observed unknown. From esm 1.0.0 the body is NOT
+    here — it is the variable's defining equation; see :func:`_define`."""
+    return {"type": "unknown", "shape": list(shape)}
+
+
+def _define(model, name, shape, expr):
+    """Declare ``name`` an observed unknown of ``model`` and DEFINE it by the
+    bare-variable-LHS equation whose LHS is ``name``, replacing any definition
+    already there (these tests redeclare ``E_PM25`` over ``base_doc``'s)."""
+    model["variables"][name] = _obs(shape)
+    for eq in model["equations"]:
+        if eq.get("lhs") == name:
+            eq["rhs"] = expr
+            return
+    model["equations"].append({"lhs": name, "rhs": expr})
+
+
+def _definition(model, name):
+    """``name``'s defining right-hand side — where 0.x kept ``expression``."""
+    for eq in model["equations"]:
+        if eq.get("lhs") == name:
+            return eq["rhs"]
+    raise KeyError(f"{name} has no defining equation")
+
+
+def _defs(doc):
+    """The model's definitions as ``{name: rhs}``, dropping the structural
+    equations (the generated ``distinct`` producer has no bare-variable LHS)."""
+    eqs = doc["models"]["Binned"]["equations"]
+    return {e["lhs"]: e["rhs"] for e in eqs if isinstance(e.get("lhs"), str)}
+
+
+def _structural(doc):
+    """The equations that are NOT definitions, in order."""
+    eqs = doc["models"]["Binned"]["equations"]
+    return [e for e in eqs if not isinstance(e.get("lhs"), str)]
 
 
 def _contain():
@@ -84,16 +119,8 @@ def base_doc():
     for n in ("px", "py", "emis_annual"):
         v[n] = _param(["emis_records"])
     v["SR_PM25"] = _param(["src_cells", "rcv_cells"])
-    v["E_PM25"] = _obs(["src_cells"], _agg(
-        ["c"], _eranges(),
-        _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("emis_annual", "r")),
-        reduce="+", args=_EARGS))
-    v["conc_PM25"] = _obs(["rcv_cells"], _agg(
-        ["rcv"], {"s": {"from": "src_cells"}, "rcv": {"from": "rcv_cells"}},
-        _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")),
-        reduce="+", args=["SR_PM25", "E_PM25"]))
-    return {
-        "esm": "0.9.0",
+    doc = {
+        "esm": "1.0.0",
         "metadata": {"name": "pd_tmpl"},
         "index_sets": {
             "src_cells": {"kind": "interval", "size": 4},
@@ -102,6 +129,16 @@ def base_doc():
         },
         "models": {"Binned": {"variables": v, "equations": []}},
     }
+    m = doc["models"]["Binned"]
+    _define(m, "E_PM25", ["src_cells"], _agg(
+        ["c"], _eranges(),
+        _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("emis_annual", "r")),
+        reduce="+", args=_EARGS))
+    _define(m, "conc_PM25", ["rcv_cells"], _agg(
+        ["rcv"], {"s": {"from": "src_cells"}, "rcv": {"from": "rcv_cells"}},
+        _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")),
+        reduce="+", args=["SR_PM25", "E_PM25"]))
+    return doc
 
 
 def test_bare_factor_name_bindings_are_repointed():
@@ -122,7 +159,7 @@ def test_bare_factor_name_bindings_are_repointed():
     m["expression_templates"] = {"bin_into_cell": {
         "params": ["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
         "body": _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r"))}}
-    m["variables"]["E_PM25"] = _obs(["src_cells"], _agg(
+    _define(m, "E_PM25", ["src_cells"], _agg(
         ["c"], _eranges(),
         _apply("bin_into_cell", {"xmin": "src_W", "ymin": "src_S",
                                  "xmax": "src_E", "ymax": "src_N",
@@ -132,15 +169,23 @@ def test_bare_factor_name_bindings_are_repointed():
 
     r = desugar_pushdown(d, model_name="Binned")
     assert r is not d
-    # everything but E_PM25 (and the template block) matches the longhand rewrite
+    # everything but E_PM25's BODY (and the template block) matches the longhand
+    # rewrite. The declarations now match exactly: the two forms differ in how the
+    # binning body is written, which in 1.0.0 lives in the defining equation, so
+    # even `E_PM25`'s declaration (re-pointed onto the derived axis either way) is
+    # identical between them.
     rv, lv = r["models"]["Binned"]["variables"], lr["models"]["Binned"]["variables"]
-    assert set(rv) == set(lv)
-    assert [k for k in rv if rv[k] != lv[k]] == ["E_PM25"]
+    assert rv == lv
     assert r["metadata"]["x_esd"] == lr["metadata"]["x_esd"]
     assert r["index_sets"] == lr["index_sets"]
-    assert r["models"]["Binned"]["equations"] == lr["models"]["Binned"]["equations"]
+    # The generated `distinct` producer is identical…
+    assert _structural(r) == _structural(lr)
+    # …and among the DEFINITIONS only E_PM25's body differs.
+    rdef, ldef = _defs(r), _defs(lr)
+    assert set(rdef) == set(ldef)
+    assert [k for k in sorted(rdef) if rdef[k] != ldef[k]] == ["E_PM25"]
     # the CALL SITE moved; the shared body did not (Option B survives)
-    b = rv["E_PM25"]["expression"]["expr"]["bindings"]
+    b = _definition(r["models"]["Binned"], "E_PM25")["expr"]["bindings"]
     assert b["xmin"] == "pd_cell__src_cells__src_W"
     assert b["ymax"] == "pd_cell__src_cells__src_N"
     assert b["ptx"] == "px"
@@ -161,7 +206,7 @@ def test_subscripted_bindings_are_repointed():
                                            _op("<", "x", "hi_x"),
                                            _op("<=", "lo_y", "y"),
                                            _op("<", "y", "hi_y")), 1.0, 0.0), "wgt")}}
-    m["variables"]["E_PM25"] = _obs(["src_cells"], _agg(
+    _define(m, "E_PM25", ["src_cells"], _agg(
         ["c"], _eranges(),
         _apply("bin2", {"lo_x": _ix("src_W", "c"), "lo_y": _ix("src_S", "c"),
                         "hi_x": _ix("src_E", "c"), "hi_y": _ix("src_N", "c"),
@@ -174,8 +219,9 @@ def test_subscripted_bindings_are_repointed():
     assert r is not d
     rv = r["models"]["Binned"]["variables"]
     assert rv["E_PM25"]["shape"] == ["pd_support__src_cells"]
-    assert rv["E_PM25"]["expression"]["ranges"]["c"]["from"] == "pd_support__src_cells"
-    b = rv["E_PM25"]["expression"]["expr"]["bindings"]
+    edef = _definition(r["models"]["Binned"], "E_PM25")
+    assert edef["ranges"]["c"]["from"] == "pd_support__src_cells"
+    b = edef["expr"]["bindings"]
     assert b["lo_x"]["args"][0] == "pd_cell__src_cells__src_W"
     assert b["hi_y"]["args"][0] == "pd_cell__src_cells__src_N"
     assert b["x"]["args"][0] == "px"          # records untouched
@@ -193,7 +239,7 @@ def test_free_rect_in_template_body_is_rejected():
     m["expression_templates"] = {"bin3": {
         "params": ["wgt"],
         "body": _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("wgt", "r"))}}
-    m["variables"]["E_PM25"] = _obs(["src_cells"], _agg(
+    _define(m, "E_PM25", ["src_cells"], _agg(
         ["c"], _eranges(), _apply("bin3", {"wgt": "emis_annual"}),
         reduce="+", args=_EARGS))
     with pytest.raises(ExpressionTemplateError) as ei:
@@ -208,7 +254,7 @@ def test_dense_reduction_is_silent():
     """"Not a join" is not a defect: an aggregate with no containment predicate
     is a legitimately dense factor and MUST NOT be reported."""
     d = base_doc()
-    d["models"]["Binned"]["variables"]["E_PM25"] = _obs(["src_cells"], _agg(
+    _define(d["models"]["Binned"], "E_PM25", ["src_cells"], _agg(
         ["c"], _eranges(), _op("*", _ix("emis_annual", "r"), 1.0),
         reduce="+", args=["emis_annual"]))
     assert pushdown_diagnostics(d, model_name="Binned") == []
@@ -220,7 +266,7 @@ def test_unexpandable_reference_in_the_join_position_is_reported():
     the registry is gone. The document IS join-shaped, so this is reported,
     naming the template, and the document comes back untouched."""
     d = base_doc()
-    d["models"]["Binned"]["variables"]["E_PM25"] = _obs(["src_cells"], _agg(
+    _define(d["models"]["Binned"], "E_PM25", ["src_cells"], _agg(
         ["c"], _eranges(), _apply("gone", {"wgt": "emis_annual"}),
         reduce="+", args=_EARGS))
     dg = pushdown_diagnostics(d, model_name="Binned")

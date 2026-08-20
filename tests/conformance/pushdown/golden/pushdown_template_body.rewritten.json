@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -182,6 +182,230 @@
             },
             "semiring": "bool_and_or"
           }
+        },
+        {
+          "lhs": "E_PM25",
+          "rhs": {
+            "args": [
+              "pd_cell__src_cells__src_W",
+              "pd_cell__src_cells__src_S",
+              "pd_cell__src_cells__src_E",
+              "pd_cell__src_cells__src_N",
+              "px",
+              "py",
+              "emis_annual"
+            ],
+            "expr": {
+              "args": [],
+              "bindings": {
+                "ptx": "px",
+                "pty": "py",
+                "wgt": "emis_annual",
+                "xmax": "pd_cell__src_cells__src_E",
+                "xmin": "pd_cell__src_cells__src_W",
+                "ymax": "pd_cell__src_cells__src_N",
+                "ymin": "pd_cell__src_cells__src_S"
+              },
+              "name": "bin_into_cell",
+              "op": "apply_expression_template"
+            },
+            "join": [
+              {
+                "overlap": {
+                  "eps": 0.0,
+                  "src_env": [
+                    "px",
+                    "py"
+                  ],
+                  "tgt_env": [
+                    "pd_cell__src_cells__src_W",
+                    "pd_cell__src_cells__src_S",
+                    "pd_cell__src_cells__src_E",
+                    "pd_cell__src_cells__src_N"
+                  ]
+                }
+              }
+            ],
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": "conc_PM25",
+          "rhs": {
+            "args": [
+              "SR_PM25",
+              "E_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_PM25",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_PM25",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "pd_support__src_cells"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": "pd_cell__src_cells__src_E",
+          "rhs": {
+            "args": [
+              "src_E",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_E",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          }
+        },
+        {
+          "lhs": "pd_cell__src_cells__src_N",
+          "rhs": {
+            "args": [
+              "src_N",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_N",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          }
+        },
+        {
+          "lhs": "pd_cell__src_cells__src_S",
+          "rhs": {
+            "args": [
+              "src_S",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_S",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          }
+        },
+        {
+          "lhs": "pd_cell__src_cells__src_W",
+          "rhs": {
+            "args": [
+              "src_W",
+              "pd_member_factor__src_cells"
+            ],
+            "expr": {
+              "args": [
+                "src_W",
+                {
+                  "args": [
+                    "pd_member_factor__src_cells",
+                    "c"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "index"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "pd_support__src_cells"
+              }
+            }
+          }
         }
       ],
       "expression_templates": {
@@ -299,65 +523,10 @@
       },
       "variables": {
         "E_PM25": {
-          "expression": {
-            "args": [
-              "pd_cell__src_cells__src_W",
-              "pd_cell__src_cells__src_S",
-              "pd_cell__src_cells__src_E",
-              "pd_cell__src_cells__src_N",
-              "px",
-              "py",
-              "emis_annual"
-            ],
-            "expr": {
-              "args": [],
-              "bindings": {
-                "ptx": "px",
-                "pty": "py",
-                "wgt": "emis_annual",
-                "xmax": "pd_cell__src_cells__src_E",
-                "xmin": "pd_cell__src_cells__src_W",
-                "ymax": "pd_cell__src_cells__src_N",
-                "ymin": "pd_cell__src_cells__src_S"
-              },
-              "name": "bin_into_cell",
-              "op": "apply_expression_template"
-            },
-            "join": [
-              {
-                "overlap": {
-                  "eps": 0.0,
-                  "src_env": [
-                    "px",
-                    "py"
-                  ],
-                  "tgt_env": [
-                    "pd_cell__src_cells__src_W",
-                    "pd_cell__src_cells__src_S",
-                    "pd_cell__src_cells__src_E",
-                    "pd_cell__src_cells__src_N"
-                  ]
-                }
-              }
-            ],
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "pd_support__src_cells"
-              },
-              "r": {
-                "from": "emis_records"
-              }
-            },
-            "reduce": "+"
-          },
           "shape": [
             "pd_support__src_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "SR_PM25": {
           "default": 0.0,
@@ -368,49 +537,10 @@
           "type": "parameter"
         },
         "conc_PM25": {
-          "expression": {
-            "args": [
-              "SR_PM25",
-              "E_PM25"
-            ],
-            "expr": {
-              "args": [
-                {
-                  "args": [
-                    "SR_PM25",
-                    "s",
-                    "rcv"
-                  ],
-                  "op": "index"
-                },
-                {
-                  "args": [
-                    "E_PM25",
-                    "s"
-                  ],
-                  "op": "index"
-                }
-              ],
-              "op": "*"
-            },
-            "op": "aggregate",
-            "output_idx": [
-              "rcv"
-            ],
-            "ranges": {
-              "rcv": {
-                "from": "rcv_cells"
-              },
-              "s": {
-                "from": "pd_support__src_cells"
-              }
-            },
-            "reduce": "+"
-          },
           "shape": [
             "rcv_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "emis_annual": {
           "default": 0.0,
@@ -420,140 +550,28 @@
           "type": "parameter"
         },
         "pd_cell__src_cells__src_E": {
-          "expression": {
-            "args": [
-              "src_E",
-              "pd_member_factor__src_cells"
-            ],
-            "expr": {
-              "args": [
-                "src_E",
-                {
-                  "args": [
-                    "pd_member_factor__src_cells",
-                    "c"
-                  ],
-                  "op": "index"
-                }
-              ],
-              "op": "index"
-            },
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "pd_support__src_cells"
-              }
-            }
-          },
           "shape": [
             "pd_support__src_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "pd_cell__src_cells__src_N": {
-          "expression": {
-            "args": [
-              "src_N",
-              "pd_member_factor__src_cells"
-            ],
-            "expr": {
-              "args": [
-                "src_N",
-                {
-                  "args": [
-                    "pd_member_factor__src_cells",
-                    "c"
-                  ],
-                  "op": "index"
-                }
-              ],
-              "op": "index"
-            },
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "pd_support__src_cells"
-              }
-            }
-          },
           "shape": [
             "pd_support__src_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "pd_cell__src_cells__src_S": {
-          "expression": {
-            "args": [
-              "src_S",
-              "pd_member_factor__src_cells"
-            ],
-            "expr": {
-              "args": [
-                "src_S",
-                {
-                  "args": [
-                    "pd_member_factor__src_cells",
-                    "c"
-                  ],
-                  "op": "index"
-                }
-              ],
-              "op": "index"
-            },
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "pd_support__src_cells"
-              }
-            }
-          },
           "shape": [
             "pd_support__src_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "pd_cell__src_cells__src_W": {
-          "expression": {
-            "args": [
-              "src_W",
-              "pd_member_factor__src_cells"
-            ],
-            "expr": {
-              "args": [
-                "src_W",
-                {
-                  "args": [
-                    "pd_member_factor__src_cells",
-                    "c"
-                  ],
-                  "op": "index"
-                }
-              ],
-              "op": "index"
-            },
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "pd_support__src_cells"
-              }
-            }
-          },
           "shape": [
             "pd_support__src_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "pd_member_factor__src_cells": {
           "default": 0.0,
@@ -566,7 +584,7 @@
           "shape": [
             "pd_support__src_cells"
           ],
-          "type": "state"
+          "type": "unknown"
         },
         "px": {
           "default": 0.0,

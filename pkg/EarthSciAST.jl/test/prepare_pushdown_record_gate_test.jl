@@ -36,6 +36,15 @@ const EA = EarthSciAST
 # ---- small JSON AST builders (shared spelling with the sibling tests) -------
 _ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
 _op(o, args...) = Dict("op" => o, "args" => Any[args...])
+
+# The defining right-hand side of the observed unknown `name` — where esm 1.0.0
+# keeps what 0.x wrote in `variables[name]["expression"]` (esm-spec §6.3.1).
+function _defrhs(model, name)
+    for eq in model["equations"]
+        get(eq, "lhs", nothing) == name && return eq["rhs"]
+    end
+    error("$(name) has no defining equation")
+end
 function _agg(output_idx, ranges, expr; reduce=nothing, args=String[], extra...)
     d = Dict{String,Any}("op" => "aggregate", "output_idx" => collect(output_idx),
                          "ranges" => ranges, "args" => collect(args), "expr" => expr)
@@ -359,7 +368,7 @@ end
         for (Ename, isp) in (("E_VOC", "is_VOC"), ("E_NOx", "is_NOx"),
                              ("E_NH3", "is_NH3"), ("E_SOx", "is_SOx"),
                              ("E_PM25", "is_PM25"))
-            tm["variables"][Ename]["expression"]["expr"] = Dict{String,Any}(
+            _defrhs(tm, Ename)["expr"] = Dict{String,Any}(
                 "op" => "apply_expression_template", "args" => Any[],
                 "name" => "bin_emissions",
                 "bindings" => Dict{String,Any}(
@@ -377,16 +386,21 @@ end
         @test trd["models"]["ISRM"]["expression_templates"] == tpl_before
         # the CALL SITES are: each E now gathers the compact per-support rects
         for Ename in ("E_VOC", "E_NOx", "E_NH3", "E_SOx", "E_PM25")
-            b = trd["models"]["ISRM"]["variables"][Ename]["expression"]["expr"]["bindings"]
+            b = _defrhs(trd["models"]["ISRM"], Ename)["expr"]["bindings"]
             @test b["xmin"] == "pd_cell__src_cells__src_W"
             @test b["ymax"] == "pd_cell__src_cells__src_N"
             @test b["ptx"] == "X"                              # record side untouched
         end
 
+        # Same provider KEYS as the run above — the consuming parameter's
+        # flattened name. Keying these on the SOURCE ("MockSR.$v") would leave
+        # the gated `ISRM.SR_$v` mocks in place and add a second, ungated
+        # provider beside them, so the assertions below would read a wholesale
+        # fetch that the rewrite never asked for.
         gmocks2 = Dict(v => MockGatedP1(fullSR[v], Any[]) for v in LVARS)
         providers2 = Dict{String,Any}(k => v for (k, v) in providers)
         for v in LVARS
-            providers2["MockSR.$v"] = gmocks2[v]
+            providers2["ISRM.SR_$v"] = gmocks2[v]
         end
         insp2 = EA.BuildInspection()
         prep2 = EA.prepare(tdoc; providers=providers2,

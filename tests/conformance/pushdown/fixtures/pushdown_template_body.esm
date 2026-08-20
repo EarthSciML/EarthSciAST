@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -19,7 +19,91 @@
   },
   "models": {
     "Binned": {
-      "equations": [],
+      "equations": [
+        {
+          "lhs": "E_PM25",
+          "rhs": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "px",
+              "py",
+              "emis_annual"
+            ],
+            "expr": {
+              "args": [],
+              "bindings": {
+                "ptx": "px",
+                "pty": "py",
+                "wgt": "emis_annual",
+                "xmax": "src_E",
+                "xmin": "src_W",
+                "ymax": "src_N",
+                "ymin": "src_S"
+              },
+              "name": "bin_into_cell",
+              "op": "apply_expression_template"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": "conc_PM25",
+          "rhs": {
+            "args": [
+              "SR_PM25",
+              "E_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_PM25",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_PM25",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          }
+        }
+      ],
       "expression_templates": {
         "bin_into_cell": {
           "body": {
@@ -135,48 +219,10 @@
       },
       "variables": {
         "E_PM25": {
-          "expression": {
-            "args": [
-              "src_W",
-              "src_S",
-              "src_E",
-              "src_N",
-              "px",
-              "py",
-              "emis_annual"
-            ],
-            "expr": {
-              "args": [],
-              "bindings": {
-                "ptx": "px",
-                "pty": "py",
-                "wgt": "emis_annual",
-                "xmax": "src_E",
-                "xmin": "src_W",
-                "ymax": "src_N",
-                "ymin": "src_S"
-              },
-              "name": "bin_into_cell",
-              "op": "apply_expression_template"
-            },
-            "op": "aggregate",
-            "output_idx": [
-              "c"
-            ],
-            "ranges": {
-              "c": {
-                "from": "src_cells"
-              },
-              "r": {
-                "from": "emis_records"
-              }
-            },
-            "reduce": "+"
-          },
           "shape": [
             "src_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "SR_PM25": {
           "default": 0.0,
@@ -187,49 +233,10 @@
           "type": "parameter"
         },
         "conc_PM25": {
-          "expression": {
-            "args": [
-              "SR_PM25",
-              "E_PM25"
-            ],
-            "expr": {
-              "args": [
-                {
-                  "args": [
-                    "SR_PM25",
-                    "s",
-                    "rcv"
-                  ],
-                  "op": "index"
-                },
-                {
-                  "args": [
-                    "E_PM25",
-                    "s"
-                  ],
-                  "op": "index"
-                }
-              ],
-              "op": "*"
-            },
-            "op": "aggregate",
-            "output_idx": [
-              "rcv"
-            ],
-            "ranges": {
-              "rcv": {
-                "from": "rcv_cells"
-              },
-              "s": {
-                "from": "src_cells"
-              }
-            },
-            "reduce": "+"
-          },
           "shape": [
             "rcv_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "emis_annual": {
           "default": 0.0,

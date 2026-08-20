@@ -93,19 +93,34 @@ def test_same_binding_is_identity_for_arrays_and_equality_otherwise():
 # --------------------------------------------------------------------------- #
 # End to end: the isrm.esm shape, through the public `prepare` surface.
 # --------------------------------------------------------------------------- #
-def _mirror_observed(fixture_doc: dict) -> dict:
-    """A MIRRORED per-record binning aggregate built from the fixture's own
+def _definition(model: dict, name: str) -> dict:
+    """The right-hand side of ``name``'s defining equation — where esm 1.0.0
+    keeps what 0.x wrote in ``variables[name]["expression"]`` (esm-spec §6.3.1)."""
+    for eq in model["equations"]:
+        if eq.get("lhs") == name:
+            return eq["rhs"]
+    raise KeyError(f"{name} has no defining equation")
+
+
+def _add_mirror_observed(doc: dict, name: str = "rec_cell_W") -> None:
+    """Give ``doc`` a MIRRORED per-record binning aggregate built from its own
     forward binner: same containment predicate, same two ranges, but reduced
     over the CELL axis with the RECORD axis as output. Its value factor is
     cell-indexed (``src_W[c]``), so it is the "which cell am I in" read that
     isrm.esm's ``stack_layer`` performs — and, being a mirror, it keeps the
     document's own full-grid rect factors as its gate envelopes."""
-    agg = copy.deepcopy(fixture_doc["models"]["ISRM"]["variables"]["E_VOC"]["expression"])
+    model = doc["models"]["ISRM"]
+    agg = copy.deepcopy(_definition(model, "E_VOC"))
     agg["output_idx"] = ["r"]
     pred = agg["expr"]["args"][0]  # the ifelse carrying the containment
     agg["expr"] = {"op": "*", "args": [pred, {"op": "index", "args": ["src_W", "c"]}]}
     agg["args"] = ["src_W", "src_S", "src_E", "src_N", "X", "Y"]
-    return {"type": "observed", "units": "m", "shape": ["emis_records"], "expression": agg}
+    model["variables"][name] = {
+        "type": "unknown",
+        "units": "m",
+        "shape": ["emis_records"],
+    }
+    model["equations"].append({"lhs": name, "rhs": agg})
 
 
 @pytest.mark.parametrize("rect_keys", [("ISRM.{}",), ("MockGrid.{}", "ISRM.{}")])
@@ -120,7 +135,7 @@ def test_mirror_arm_resolves_its_envelope_factors(oracle, rect_keys):  # noqa: F
     dropped the mirror plus every observed downstream of it.
     """
     doc = json.loads(_FIXTURE.read_text())
-    doc["models"]["ISRM"]["variables"]["rec_cell_W"] = _mirror_observed(doc)
+    _add_mirror_observed(doc)
 
     rects = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
     ca: dict[str, np.ndarray] = {}

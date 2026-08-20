@@ -1,5 +1,5 @@
 {
-  "esm": "0.9.0",
+  "esm": "1.0.0",
   "index_sets": {
     "emis_records": {
       "kind": "interval",
@@ -19,10 +19,10 @@
   },
   "models": {
     "Binned": {
-      "equations": [],
-      "variables": {
-        "E_PM25": {
-          "expression": {
+      "equations": [
+        {
+          "lhs": "E_PM25",
+          "rhs": {
             "args": [
               "src_W",
               "src_S",
@@ -186,22 +186,11 @@
               }
             },
             "reduce": "+"
-          },
-          "shape": [
-            "src_cells"
-          ],
-          "type": "observed"
+          }
         },
-        "SR_PM25": {
-          "default": 0.0,
-          "shape": [
-            "src_cells",
-            "rcv_cells"
-          ],
-          "type": "parameter"
-        },
-        "conc_PM25": {
-          "expression": {
+        {
+          "lhs": "conc_PM25",
+          "rhs": {
             "args": [
               "SR_PM25",
               "E_PM25"
@@ -239,11 +228,29 @@
               }
             },
             "reduce": "+"
-          },
+          }
+        }
+      ],
+      "variables": {
+        "E_PM25": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "SR_PM25": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "conc_PM25": {
           "shape": [
             "rcv_cells"
           ],
-          "type": "observed"
+          "type": "unknown"
         },
         "emis_annual": {
           "default": 0.0,
