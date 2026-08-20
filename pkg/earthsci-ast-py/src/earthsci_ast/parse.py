@@ -145,12 +145,23 @@ AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref"
 
 
 def _count_top_level_systems(parsed) -> int:
-    """How many top-level components a referenced document declares."""
-    return (
-        len(parsed.models or {})
-        + len(parsed.reaction_systems or {})
-        + len(parsed.data_sources or {})
-    )
+    """How many top-level COMPONENTS a referenced document declares.
+
+    `data_sources` is not among them. From 1.0.0 a data source is not a
+    component (esm-spec §8; the schema says so twice, on `$defs/DataSource` and
+    on `Model.subsystems`): it cannot be a coupling endpoint, a subsystem, or a
+    scoped-name path root, and a model reaches it only through a parameter
+    whose `update` names it. Counting one made a file holding a model plus the
+    sources that model consumes `ambiguous_subsystem_ref` — but there is no
+    ambiguity for the mount to resolve, since a source can never be the thing
+    the mount selects.
+
+    That mattered: 0.x forced the `X.esm` / `X_loader.esm` split precisely
+    BECAUSE a loader was a component. 1.0.0 removes that reason, so the natural
+    shape is one file carrying a model and its sources — and that was the one
+    shape a `{"ref"}` could not mount.
+    """
+    return len(parsed.models or {}) + len(parsed.reaction_systems or {})
 
 
 # The FORMAT version this binding reads and writes -- the `esm` banner and the

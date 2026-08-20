@@ -767,7 +767,13 @@ fn extract_single_system(value: Value, source: &Path) -> Result<Value, Diagnosti
     // for a subsystem and got a completely different object, with no diagnostic.
     // That is precisely tests/invalid/subsystem_ref_ambiguous.esm (2 models +
     // 1 loader), and it is a worse failure than the error it was avoiding.
-    let systems: Vec<&Value> = ["models", "reaction_systems", "data_sources"]
+    // `data_sources` is NOT a top-level system. From 1.0.0 a data source is not
+    // a component (esm-spec §8) — it cannot be a coupling endpoint, a subsystem
+    // or a scoped-name path root — so a file holding a model plus the sources
+    // that model consumes still declares exactly one mountable system. Counting
+    // sources made that shape, which is the natural 1.0.0 one now that a loader
+    // is no longer a component, the one shape a `ref` could not mount.
+    let systems: Vec<&Value> = ["models", "reaction_systems"]
         .iter()
         .filter_map(|key| obj.get(*key).and_then(|v| v.as_object()))
         .flat_map(|m| m.values())
@@ -850,45 +856,32 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_local_data_loader_ref() {
-        // A subsystem ref to a LOADER-ONLY file (top-level `data_sources` with
-        // exactly one entry, no `models`) must resolve to the loader object.
+    fn test_reject_data_source_only_ref() {
+        // A subsystem ref to a SOURCE-ONLY file must be REJECTED. From 1.0.0 a
+        // data source is not a component: `$defs/DataSource` says it "cannot be
+        // a coupling endpoint, a subsystem, or a scoped-name path root", and a
+        // model reaches one only through a parameter whose `update` names it.
+        //
+        // This test asserted the opposite until 2026-08-20 — that the ref
+        // resolved TO the loader object, complete with the `grid` and
+        // `variables` blocks that 0.8.0 and 1.0.0 respectively removed. It was
+        // a 0.x test relabelled `esm: 1.0.0` without its premise re-examined.
         let dir = TempDir::new().unwrap();
-        let loader = json!({
+        let source_only = json!({
             "esm": "1.0.0",
-            "metadata": { "name": "loader-only" },
+            "metadata": { "name": "source-only" },
             "data_sources": {
                 "MetData": {
                     "kind": "grid",
                     "source": {
                         "url_template": "https://example.org/data/{date:%Y%m%d}.nc"
-                    },
-                    "grid": {
-                        "family": "cartesian",
-                        "crs": { "projection": "longlat", "datum": "WGS84" },
-                        "dimensions": ["lon", "lat"],
-                        "extents": {
-                            "lon": { "n": "n_lon", "spacing": "uniform" },
-                            "lat": { "n": "n_lat", "spacing": "uniform" }
-                        },
-                        "parameters": {
-                            "n_lon": { "description": "lon cell count" },
-                            "n_lat": { "description": "lat cell count" }
-                        }
-                    },
-                    "variables": {
-                        "T": {
-                            "file_variable": "temperature",
-                            "units": "K",
-                            "description": "Air temperature"
-                        }
                     }
                 }
             }
         });
         std::fs::write(
-            dir.path().join("loader.esm"),
-            serde_json::to_string(&loader).unwrap(),
+            dir.path().join("source.esm"),
+            serde_json::to_string(&source_only).unwrap(),
         )
         .unwrap();
 
@@ -900,7 +893,66 @@ mod tests {
                     "variables": {},
                     "equations": [],
                     "subsystems": {
-                        "Met": { "ref": "loader.esm" }
+                        "Met": { "ref": "source.esm" }
+                    }
+                }
+            }
+        });
+
+        let err = resolve_subsystem_refs(&mut value, dir.path())
+            .expect_err("a source-only file declares no mountable system");
+        assert!(err.to_string().contains("multiple top-level systems"));
+    }
+
+    #[test]
+    fn test_resolve_model_plus_its_data_sources_ref() {
+        // The shape 1.0.0 makes natural, and the one the old count forbade: ONE
+        // model plus the sources that model consumes, in one file. The 0.x
+        // `X.esm` / `X_loader.esm` split existed only because a loader was a
+        // component; with sources uncounted this mounts like any other model.
+        let dir = TempDir::new().unwrap();
+        let leaf = json!({
+            "esm": "1.0.0",
+            "metadata": { "name": "leaf" },
+            "data_sources": {
+                "MetData": {
+                    "kind": "grid",
+                    "source": { "url_template": "https://example.org/{var}.nc" }
+                }
+            },
+            "models": {
+                "Leaf": {
+                    "variables": {
+                        "T": {
+                            "type": "parameter",
+                            "units": "K",
+                            "shape": [],
+                            "update": {
+                                "kind": "data",
+                                "source": "MetData",
+                                "from": { "file_variable": "temperature" }
+                            }
+                        }
+                    },
+                    "equations": []
+                }
+            }
+        });
+        std::fs::write(
+            dir.path().join("leaf.esm"),
+            serde_json::to_string(&leaf).unwrap(),
+        )
+        .unwrap();
+
+        let mut value = json!({
+            "esm": "1.0.0",
+            "metadata": { "name": "main" },
+            "models": {
+                "Outer": {
+                    "variables": {},
+                    "equations": [],
+                    "subsystems": {
+                        "Met": { "ref": "leaf.esm" }
                     }
                 }
             }
@@ -908,17 +960,11 @@ mod tests {
 
         resolve_subsystem_refs(&mut value, dir.path()).unwrap();
 
+        // The ref is replaced by the single MODEL — the sources rode along in
+        // the document but were never candidates for the mount.
         let resolved = &value["models"]["Outer"]["subsystems"]["Met"];
-        // The ref is replaced by the single top-level data loader object.
         assert!(resolved.get("ref").is_none());
-        assert_eq!(resolved["kind"], "grid");
-        assert!(resolved.get("source").is_some());
-        assert_eq!(
-            resolved["source"]["url_template"],
-            "https://example.org/data/{date:%Y%m%d}.nc"
-        );
-        assert!(resolved.get("variables").is_some());
-        assert_eq!(resolved["variables"]["T"]["file_variable"], "temperature");
+        assert_eq!(resolved["variables"]["T"]["update"]["source"], "MetData");
     }
 
     #[test]
