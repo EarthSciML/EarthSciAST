@@ -10,10 +10,12 @@ import { isNumericLiteral, numericValue, type NumericLiteral } from './numeric-l
 import { evaluateExpression } from './codegen.js'
 
 /**
- * Type alias for better readability. Widened to accept `NumericLiteral`
- * leaves (per discretization RFC §5.4.1) alongside plain JS numbers.
+ * The in-memory expression types. Defined once in the type barrel (`types.ts`)
+ * and re-exported here, because this module and `types.ts` had grown SEPARATE
+ * `Expr` declarations that silently disagreed once one of them was widened.
  */
-export type Expr = Expression | NumericLiteral
+import type { Expr, ExprNodeOf } from './types.js'
+export type { Expr, ExprNodeOf }
 
 /**
  * Type guard for operator nodes in the expression AST.

@@ -37,7 +37,83 @@ export * from './generated.js'
  */
 import type { Expression as GeneratedExpression } from './generated.js'
 import type { NumericLiteral } from './numeric-literal.js'
-export type Expr = GeneratedExpression | NumericLiteral
+
+/**
+ * An expression node whose OPERANDS are in-memory {@link Expr} values.
+ *
+ * The wire `ExpressionNode` has `args: Expression[]`, which cannot hold a
+ * tagged `NumericLiteral`. Every rewriting pass (differentiation, substitution,
+ * simplification, CSE) builds nodes out of operands it was handed, so those
+ * operands are `Expr` and the node it builds is this. `ExpressionNode` is
+ * assignable to it — `Expression` is a subset of `Expr` and `args` is covariant
+ * — so a wire node flows into a rewriting pass unchanged.
+ *
+ * Before esm 1.0.0 this widening was ACCIDENTAL: json2ts resolved the generated
+ * `Expression` to `number | string | { [k: string]: unknown }`, whose open
+ * object branch swallowed anything at all. The 1.0.0 schema restructure made it
+ * resolve to the real `ExpressionNode` — strictly more faithful — which exposed
+ * every site that had been relying on that looseness. This states the widening
+ * deliberately instead of inheriting it from a generator artifact.
+ */
+export interface ExprNodeOf {
+  op: string
+  args: Expr[]
+  [k: string]: unknown
+}
+
+export type Expr = GeneratedExpression | NumericLiteral | ExprNodeOf
+
+/**
+ * An operator node in the expression AST.
+ *
+ * Overrides the generated shape in ONE respect: every sub-expression-bearing
+ * field is typed `Expression`. json2ts renders these as
+ * `number | string | ExpressionNode1`, where `ExpressionNode1` is the bare
+ * index signature `{ [k: string]: unknown }` — a SUPERTYPE of a real node, so
+ * `node.expr` could not be handed to anything expecting an `Expression` without
+ * a cast. `args` is already correct in the generated type and is left alone.
+ */
+export type ExpressionNode = GeneratedExpressionNode & {
+  expr?: GeneratedExpression
+  filter?: GeneratedExpression
+  lower?: GeneratedExpression
+  upper?: GeneratedExpression
+  key?: GeneratedExpression
+  values?: GeneratedExpression[]
+  axes?: { [k: string]: GeneratedExpression }
+  bindings?: { [k: string]: GeneratedExpression }
+}
+
+// The same `number | string | ExpressionNode1` artifact, at every other
+// Expression-valued field json2ts renders that way. Each is an `Expression` in
+// the schema; naming them here keeps the walkers and checkers from needing a
+// cast at every use.
+
+/** An affect equation in an event: `lhs` is the target UNKNOWN, `rhs` an expression. */
+export type AffectEquation = GeneratedAffectEquation & { rhs: GeneratedExpression }
+
+/** A reaction, whose `rate` is an Expression. */
+export type Reaction = GeneratedReaction & { rate: GeneratedExpression }
+
+/** A connector equation, whose `expression` is an Expression. */
+export type ConnectorEquation = GeneratedConnectorEquation & { expression?: GeneratedExpression }
+
+/** An in-file rewrite rule / Expression-AST template (esm-spec §9.6). */
+export type ExpressionTemplate = GeneratedExpressionTemplate & {
+  match?: GeneratedExpression
+  body: GeneratedExpression
+}
+
+/** A coupling variable mapping: a named transform, or an Expression node. */
+export type CouplingVariableMap = GeneratedCouplingVariableMap & {
+  transform:
+    | 'param_to_var'
+    | 'identity'
+    | 'additive'
+    | 'multiplicative'
+    | 'conversion_factor'
+    | ExpressionNode
+}
 
 // Re-export the tagged-literal API for consumers that need canonical
 // int/float handling.
@@ -63,9 +139,14 @@ export {
  */
 import type {
   ESMFormat,
-  ExpressionNode,
+  ExpressionNode as GeneratedExpressionNode,
   Model as GeneratedModel,
   SubsystemRef as GeneratedSubsystemRef,
+  AffectEquation as GeneratedAffectEquation,
+  Reaction as GeneratedReaction,
+  ConnectorEquation as GeneratedConnectorEquation,
+  ExpressionTemplate as GeneratedExpressionTemplate,
+  CouplingVariableMap as GeneratedCouplingVariableMap,
 } from './generated.js'
 export type EsmFile = ESMFormat
 
@@ -312,7 +393,6 @@ export type {
   // Model components
   ReactionSystem,
   Species,
-  Reaction,
 
   // Events
   ContinuousEvent,
@@ -321,7 +401,6 @@ export type {
   // Expressions and equations
   Expression,
   Equation,
-  AffectEquation,
 
   // Data handling — a data SOURCE is ingest configuration, not a component.
   // `DataLoader` / `DataLoaderVariable` / `FunctionalAffect` are gone in 1.0.0.
