@@ -155,14 +155,27 @@ func ConstantParameters(model *Model) []string {
 
 // --- system kind ------------------------------------------------------------
 
-// SystemKind derives what the `system_kind` field declares (esm-spec §6.3.1):
-// any Brownian parameter ⇒ "sde"; no time-derivative equation at all ⇒
-// "nonlinear"; a spatial domain plus differential operators ⇒ "pde"; otherwise
-// "ode". A binding uses the derivation when the field is absent, and reports
-// `system_kind_mismatch` when a present field contradicts it.
+// SystemKind derives what the `system_kind` field declares (esm-spec §6.3.1),
+// testing four conditions IN ORDER and taking the first that holds:
 //
-// `domain` is the document's, so it is passed explicitly rather than read off
-// the model; pass nil when the document declares none.
+//  1. any Brownian parameter                   => "sde"
+//  2. any equation holds a spatial derivative  => "pde"
+//  3. no time-derivative equation at all       => "nonlinear"
+//  4. otherwise                                => "ode"
+//
+// The order is normative and two orderings that look interchangeable are not.
+// "pde" is tested BEFORE "nonlinear" so a steady-state PDE (laplacian(phi) ~ f,
+// which has no time derivative) does not fall through to "nonlinear"; "sde" is
+// tested BEFORE "pde" because there is no SPDESystem constructor to select for
+// a model that is both.
+//
+// Detection is a property of the EQUATIONS, never of the `domain` block: v0.8.0
+// removed Domain.spatial, so `domain` carries nothing spatial and the earlier
+// "spatial domain plus differential operators" rule named a test no binding
+// could perform.
+//
+// `domain` is still accepted so callers need not change, and is used only for
+// the independent-variable name.
 func SystemKind(model *Model, domain *Domain) string {
 	if model == nil {
 		return SystemKindODE
@@ -170,11 +183,11 @@ func SystemKind(model *Model, domain *Domain) string {
 	if len(BrownianParameters(model)) > 0 {
 		return SystemKindSDE
 	}
+	if hasDifferentialOperator(model) {
+		return SystemKindPDE
+	}
 	if !hasTimeDerivative(model) {
 		return SystemKindNonlinear
-	}
-	if isSpatialDomain(domain) && hasDifferentialOperator(model) {
-		return SystemKindPDE
 	}
 	return SystemKindODE
 }
@@ -317,8 +330,12 @@ func hasDifferentialOperator(model *Model) bool {
 	return false
 }
 
+// spatialOperatorOps is exactly the three sugar ops esm-spec 6.3.1 names. The
+// open rewrite-target tier is unbounded, so the rule cannot be "any op that
+// looks differential" and still agree across five bindings; anything else
+// spatial is written as a `D` with a non-`t` `wrt`, handled just below.
 var spatialOperatorOps = map[string]struct{}{
-	"grad": {}, "div": {}, "curl": {}, "laplacian": {}, "advection": {},
+	"grad": {}, "div": {}, "laplacian": {},
 }
 
 func exprHasSpatialOperator(expr Expression) bool {

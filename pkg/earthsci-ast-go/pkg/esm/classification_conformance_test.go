@@ -335,8 +335,13 @@ func TestODEStatesIgnoreSpatialDerivatives(t *testing.T) {
 	if got := ODEStates(model); len(got) != 0 {
 		t.Errorf("ODEStates = %v, want none (a spatial D is not a time derivative)", got)
 	}
-	if got := SystemKind(model, nil); got != SystemKindNonlinear {
-		t.Errorf("system_kind = %q, want %q (no time-derivative equation at all)", got, SystemKindNonlinear)
+	// It is a STEADY-STATE PDE, not a nonlinear system. esm-spec 6.3.1 tests
+	// "pde" BEFORE "nonlinear" precisely so a model with a spatial derivative
+	// and no time derivative does not fall through: it maps to PDESystem, and
+	// the earlier order silently called it nonlinear. Pinned across the
+	// bindings by tests/conformance/classification/system_kind_pde.
+	if got := SystemKind(model, nil); got != SystemKindPDE {
+		t.Errorf("system_kind = %q, want %q (a spatial derivative and no time derivative is a steady-state PDE)", got, SystemKindPDE)
 	}
 }
 

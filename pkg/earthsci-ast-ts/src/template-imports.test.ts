@@ -328,11 +328,15 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       expect(got, fname).toBe(want)
       seenCodes.add(want)
     }
-    // The fixture set exercises the full §9.6.6 §9.7 code table (the 12th,
-    // template_import_unresolved, is exercised below — a missing file is
-    // not representable as a fixture).
+    // The fixture set exercises the §9.6.6 §9.7 code table, less two codes no
+    // fixture can reach: template_import_unresolved (exercised below — a
+    // missing file cannot be committed) and template_import_version_too_old,
+    // which esm 1.0.0 makes unreachable THROUGH load(). That gate rejects a
+    // document declaring below 0.8.0, but a 1.x library rejects every 0.x
+    // document on its major version at parse, before the resolver runs, and
+    // every document it accepts declares >= 1.0.0 > 0.8.0. The gate helper
+    // itself is still live and is unit-tested directly further down.
     for (const code of [
-      'template_import_version_too_old',
       'template_import_not_library',
       'subsystem_ref_is_template_library',
       'template_import_cycle',
@@ -757,7 +761,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     ]) {
       const doc = JSON.parse(`
       {"esm": "0.7.0", "metadata": {"name": "old"},${snippet}
-       "models": {"M": {"variables": {"x": {"type": "state", "default": 0.5}},
+       "models": {"M": {"variables": {"x": {"type": "unknown", "default": 0.5}},
                         "equations": []}}}`)
       expect(errCode(() => rejectTemplateImportsPreV08(doc))).toBe(
         'template_import_version_too_old',

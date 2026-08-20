@@ -2297,14 +2297,6 @@
     "resolver_error_code": "metaparameter_name_conflict",
     "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. Metaparameter x collides with the model state variable x; a metaparameter name must not collide with any visible variable/parameter/species/index-set name — there is no shadowing (esm-spec §9.7.6)."
   },
-  "import_version_too_old.esm": {
-    "schema_errors": [],
-    "structural_errors": [],
-    "is_valid": true,
-    "resolver_only": true,
-    "resolver_error_code": "template_import_version_too_old",
-    "notes": "Resolver-level invalid (esm-spec §9.7, RFC template-library-imports). The document is SCHEMA-VALID — the §9.7 constructs are legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The file declares esm 0.7.0 but carries expression_template_imports; the §9.7 constructs arrive at esm 0.8.0 (esm-spec §9.6.5). The gate fires before the import ref is ever resolved."
-  },
   "rename_unknown_name.esm": {
     "schema_errors": [],
     "structural_errors": [],

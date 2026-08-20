@@ -561,11 +561,17 @@ func TestTemplateImports_InvalidFixtures(t *testing.T) {
 		})
 	}
 
-	// The fixture set exercises the full §9.6.6 §9.7 code table (the 12th,
-	// template_import_unresolved, is exercised by the unit tests below — a
-	// missing file is not representable as a fixture).
+	// The fixture set exercises the §9.6.6 §9.7 code table, less two codes no
+	// fixture can reach: template_import_unresolved (exercised by the unit
+	// tests below — a missing file is not representable as a fixture) and
+	// template_import_version_too_old, which esm 1.0.0 makes unreachable
+	// through the load path. That gate rejects a document declaring below
+	// 0.8.0, but a 1.x library rejects every 0.x document on its MAJOR version
+	// at parse, before the resolver runs, and every document it accepts
+	// declares >= 1.0.0 > 0.8.0 — so the gate is permanently satisfied. The
+	// gate function itself is still live and unit-tested directly.
 	for _, code := range []string{
-		"template_import_version_too_old", "template_import_not_library",
+		"template_import_not_library",
 		"subsystem_ref_is_template_library", "template_import_cycle",
 		"template_import_name_conflict", "template_import_unknown_name",
 		"template_import_index_set_conflict",

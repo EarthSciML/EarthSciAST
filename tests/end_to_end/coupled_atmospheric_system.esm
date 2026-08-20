@@ -735,6 +735,16 @@
         "notes": "Time-varying anthropogenic and biogenic emissions with diurnal and seasonal cycles"
       },
       "variables": {
+        "NO_emission_flux": {
+          "type": "unknown",
+          "units": "mol/mol/s",
+          "description": "Emission tendency of NO. An observed unknown: its defining equation is below, and the couple connector adds it to AtmosphericChemistry.NO."
+        },
+        "HCHO_emission_flux": {
+          "type": "unknown",
+          "units": "mol/mol/s",
+          "description": "Emission tendency of HCHO. An observed unknown: its defining equation is below, and the couple connector adds it to AtmosphericChemistry.HCHO."
+        },
         "NOx_emission_rate": {
           "type": "parameter",
           "units": "mol/mol/s",
@@ -906,13 +916,8 @@
       },
       "equations": [
         {
-          "lhs": {
-            "op": "D",
-            "args": [
-              "NO"
-            ],
-            "wrt": "t"
-          },
+          "_comment": "Emission tendency for NO, delivered as a FLUX the coupling adds to the chemistry state. It was `D(NO)/dt` on a species this model never declared, which only validated because being a coupling endpoint exempted the model from reference integrity.",
+          "lhs": "NO_emission_flux",
           "rhs": {
             "op": "*",
             "args": [
@@ -923,13 +928,8 @@
           }
         },
         {
-          "lhs": {
-            "op": "D",
-            "args": [
-              "HCHO"
-            ],
-            "wrt": "t"
-          },
+          "_comment": "Emission tendency for HCHO, delivered as a FLUX the coupling adds to the chemistry state. It was `D(HCHO)/dt` on a species this model never declared, which only validated because being a coupling endpoint exempted the model from reference integrity.",
+          "lhs": "HCHO_emission_flux",
           "rhs": {
             "op": "*",
             "args": [
@@ -1050,6 +1050,30 @@
         ]
       },
       "description": "Couple dry deposition to atmospheric chemistry"
+    },
+    {
+      "type": "couple",
+      "systems": [
+        "AtmosphericChemistry",
+        "EmissionSources"
+      ],
+      "connector": {
+        "equations": [
+          {
+            "from": "EmissionSources.NO_emission_flux",
+            "to": "AtmosphericChemistry.NO",
+            "transform": "additive",
+            "expression": "EmissionSources.NO_emission_flux"
+          },
+          {
+            "from": "EmissionSources.HCHO_emission_flux",
+            "to": "AtmosphericChemistry.HCHO",
+            "transform": "additive",
+            "expression": "EmissionSources.HCHO_emission_flux"
+          }
+        ]
+      },
+      "description": "Add the emission fluxes to the chemistry tendencies. Before 1.0.0 the emissions reached the chemistry only implicitly: EmissionSources wrote D(NO)/dt and D(HCHO)/dt for species it never declared, and the document was accepted only because variable_map entries pointing at a data loader made it a coupling endpoint, which exempted it from the equation balance AND from reference integrity. Removing those entries -- a data source is no longer an endpoint -- exposed both defects."
     },
     {
       "type": "callback",
