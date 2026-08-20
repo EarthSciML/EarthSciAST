@@ -14,7 +14,15 @@ func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
 					"T": {Type: VarTypeUnknown},
 					"k": {Type: VarTypeParameter},
 				},
-				Equations: []Equation{},
+				// The equation is REQUIRED for T to be an ODE state: in esm 1.0.0
+				// state-ness is derived from the equations, so an unknown with no
+				// equation at all is algebraic (and separately an unbalanced
+				// system). The 0.x version of this fixture could leave `equations`
+				// empty because `"type": "state"` asserted the category directly.
+				Equations: []Equation{{
+					LHS: ExprNode{Op: OpDerivative, Args: []any{"T"}, Wrt: strPtr("t")},
+					RHS: ExprNode{Op: "*", Args: []any{"k", "T"}},
+				}},
 			},
 		},
 	}

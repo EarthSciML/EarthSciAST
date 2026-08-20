@@ -186,13 +186,12 @@ func TestParameterUpdateArrayRestrictionsRejected(t *testing.T) {
 		"parameter_update_wiener_in_array.esm",
 	} {
 		t.Run(name, func(t *testing.T) {
-			file, content := loadInvalidFixture(t, name)
-			result := ValidateFile(file, content)
-			if result.IsValid {
-				t.Errorf("fixture is pinned invalid, got valid")
-			}
-			if len(result.SchemaErrors) == 0 {
-				t.Errorf("want a schema-layer rejection, got %+v", result)
+			// loadInvalidFixture is not usable here: these two are rejected at the
+			// SCHEMA layer, so LoadString returns an error rather than a document,
+			// and that error IS the assertion.
+			_, _, err := loadInvalidFixtureByPath(t, name)
+			if err == nil {
+				t.Fatalf("fixture is pinned schema-invalid, but loaded cleanly")
 			}
 		})
 	}

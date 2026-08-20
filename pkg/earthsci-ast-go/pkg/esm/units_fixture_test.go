@@ -150,23 +150,34 @@ func evalFixtureExpr(expr any, bindings map[string]float64) (float64, bool) {
 	}
 }
 
-func resolveUnitsFixtureObserved(variables map[string]any, bindings map[string]float64) {
-	n := len(variables) + 1
+// resolveUnitsFixtureObserved evaluates a model's observed unknowns into the
+// binding set, iterating to a fixpoint so a chain (an observed reading another
+// observed) resolves whatever order it is written in.
+//
+// The definitions come from the model's `equations`, not from a
+// `variables[v].expression` field: esm 1.0.0 removed that field, so an observed
+// unknown is the bare-variable LHS of an equation. This function used to look up
+// the removed field and, after the fixture conversion, silently bound nothing --
+// every assertion then failed with "observed did not resolve".
+func resolveUnitsFixtureObserved(model map[string]any, bindings map[string]float64) {
+	// Index the candidate definitions once: LHS name -> RHS expression.
+	defs := map[string]any{}
+	eqs, _ := model["equations"].([]any)
+	for _, raw := range eqs {
+		eq, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if lhs, ok := eq["lhs"].(string); ok {
+			defs[lhs] = eq["rhs"]
+		}
+	}
+
+	n := len(defs) + 1
 	for i := 0; i < n; i++ {
 		progress := false
-		for vname, vraw := range variables {
-			v, ok := vraw.(map[string]any)
-			if !ok {
-				continue
-			}
-			if v["type"] != "observed" {
-				continue
-			}
+		for vname, expr := range defs {
 			if _, already := bindings[vname]; already {
-				continue
-			}
-			expr, has := v["expression"]
-			if !has {
 				continue
 			}
 			val, ok := evalFixtureExpr(expr, bindings)
@@ -287,7 +298,7 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 					ic := mapOr(tc, "initial_conditions")
 					po := mapOr(tc, "parameter_overrides")
 					bindings := buildUnitsFixtureBindings(variables, ic, po)
-					resolveUnitsFixtureObserved(variables, bindings)
+					resolveUnitsFixtureObserved(model, bindings)
 
 					assertionsRaw, _ := tc["assertions"].([]any)
 					testTol := tc["tolerance"]

@@ -101,7 +101,12 @@ func TestValidationPathsAreJSONPointer(t *testing.T) {
 	}
 }
 
-func TestValidateObservedVariableWithoutExpression(t *testing.T) {
+// An unknown that NO equation defines used to be `missing_observed_expr`, a
+// malformed declaration. In esm 1.0.0 an observed unknown is defined by an
+// equation, so the same defect is an UNBALANCED SYSTEM and surfaces as
+// equation_count_mismatch, whose `missing_equations_for` detail names exactly
+// the unknown the retired code used to name (esm-spec §4.9.4).
+func TestValidateUnknownWithoutEquation(t *testing.T) {
 	esmFile := &ESMFile{
 		ESM: "0.1.0",
 		Metadata: Metadata{
@@ -112,7 +117,7 @@ func TestValidateObservedVariableWithoutExpression(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeUnknown}, // Missing expression
+					"y": {Type: VarTypeUnknown}, // no equation defines it
 				},
 				Equations: []Equation{
 					{
@@ -127,7 +132,22 @@ func TestValidateObservedVariableWithoutExpression(t *testing.T) {
 	result := Validate(esmFile)
 	assert.False(t, result.Valid)
 	assert.Len(t, result.Messages, 1)
-	assert.Contains(t, result.Messages[0].Message, "Observed variable must have an expression")
+	assert.Contains(t, result.Messages[0].Message,
+		"Number of equations (1) does not match number of unknowns (2)")
+
+	// And the structured surface names the offending unknown, which is the
+	// discriminating power the retired code carried.
+	structured := ValidateStructuralWithCodes(esmFile)
+	var found bool
+	for _, se := range structured.StructuralErrors {
+		if se.Code != ErrorEquationCountMismatch {
+			continue
+		}
+		found = true
+		missing, _ := se.Details["missing_equations_for"].([]string)
+		assert.Equal(t, []string{"y"}, missing)
+	}
+	assert.True(t, found, "want an equation_count_mismatch finding")
 }
 
 func TestValidateReactionSystem(t *testing.T) {
@@ -394,7 +414,11 @@ func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 	result := Validate(esmFile)
 	assert.False(t, result.Valid)
 
-	// Expect errors for missing kind, url_template, and variables.
+	// Expect errors for the missing kind and url_template -- the only two
+	// structural obligations a data source still has. There is no third: the
+	// `variables` map whose absence used to be the third error was removed by
+	// esm 1.0.0, and a source that declares fields is now rejected by the SCHEMA
+	// for having them (tests/invalid/data_source_legacy_variables.esm).
 	errorCount := 0
 	for _, msg := range result.Messages {
 		if msg.Level == "error" {
@@ -402,7 +426,7 @@ func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 		}
 	}
 
-	assert.GreaterOrEqual(t, errorCount, 3)
+	assert.GreaterOrEqual(t, errorCount, 2)
 }
 
 // Test equation-unknown balance validation

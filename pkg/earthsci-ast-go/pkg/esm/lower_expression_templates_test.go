@@ -314,9 +314,26 @@ func scalarFieldParamDoc(templates, bindings, name string) string {
     }`
 }
 
+// scalarFieldAreaExpr returns the lowered definition of the `area` unknown.
+//
+// It reads the DEFINING EQUATION rather than a `variables/area/expression`
+// field: 1.0.0 removed that field, so a template application that used to sit on
+// the variable is now the RHS of the equation whose LHS is `area`.
 func scalarFieldAreaExpr(t *testing.T, v map[string]any) map[string]any {
 	t.Helper()
-	return v["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["area"].(map[string]any)["expression"].(map[string]any)
+	model := v["models"].(map[string]any)["M"].(map[string]any)
+	for _, raw := range model["equations"].([]any) {
+		eq := raw.(map[string]any)
+		if lhs, ok := eq["lhs"].(string); ok && lhs == "area" {
+			expr, ok := eq["rhs"].(map[string]any)
+			if !ok {
+				t.Fatalf("area RHS is %T; want an operator node", eq["rhs"])
+			}
+			return expr
+		}
+	}
+	t.Fatal("no defining equation for area")
+	return nil
 }
 
 // A parameter name appearing as the string value of a scalar Expression-node
@@ -445,9 +462,17 @@ func TestExpressionTemplates_ScalarFieldParamConformanceFixture(t *testing.T) {
 	if got != want {
 		t.Errorf("models diverge from expanded.esm:\n got=%s\nwant=%s", got, want)
 	}
-	vars := v["models"].(map[string]any)["Overlap"].(map[string]any)["variables"].(map[string]any)
-	planar := vars["area_planar"].(map[string]any)["expression"].(map[string]any)
-	spherical := vars["area_spherical"].(map[string]any)["expression"].(map[string]any)
+	// Each area's lowered node is the RHS of its defining equation; 1.0.0 has no
+	// `variables/<v>/expression` for a template application to sit in.
+	rhsFor := modelEquationRHS(t, v["models"].(map[string]any)["Overlap"].(map[string]any))
+	planar, ok := rhsFor["area_planar"].(map[string]any)
+	if !ok {
+		t.Fatalf("area_planar definition is %T; want an operator node", rhsFor["area_planar"])
+	}
+	spherical, ok := rhsFor["area_spherical"].(map[string]any)
+	if !ok {
+		t.Fatalf("area_spherical definition is %T; want an operator node", rhsFor["area_spherical"])
+	}
 	if planar["manifold"] != "planar" || spherical["manifold"] != "spherical" {
 		t.Errorf("manifolds = %v / %v; want planar / spherical", planar["manifold"], spherical["manifold"])
 	}

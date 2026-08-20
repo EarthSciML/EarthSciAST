@@ -351,22 +351,36 @@ func TestAuditG6_UnloweredOperatorCode(t *testing.T) {
 	}
 }
 
-// --- G7: data loaders are a scopable namespace and a coupling endpoint -------
+// --- G7: a data SOURCE is neither a scopable namespace nor an endpoint -------
+//
+// This pin is INVERTED by esm 1.0.0. The 0.x audit finding was that Go rejected
+// documents wiring a loader's variables into a model, because loaders were
+// missing from the scoped-reference resolver and the couplable-system set. From
+// 1.0.0 a data source is not a component at all (esm-spec 8): it exposes no
+// variables, and it cannot be a coupling endpoint, a subsystem, or the path root
+// of a scoped reference. The wiring the audit was defending is now spelled as a
+// PARAMETER declaration, so what these tests pin is that the old spelling is
+// rejected and the new one accepted.
 
-func TestAuditG7_LoaderScopedReferencesResolve(t *testing.T) {
+// The 1.0.0 spelling: the loaded field IS a parameter of the consuming model,
+// named without a prefix, and reaching its source through `update.source`.
+func TestAuditG7_DataFedParameterResolves(t *testing.T) {
 	src := `{
-	  "esm":"0.2.0",
-	  "metadata":{"name":"g7"},
+	  "esm":"1.0.0",
+	  "metadata":{"name":"g7","authors":["Test"]},
+	  "index_sets":{"cells":{"kind":"interval","size":4}},
 	  "models":{"Transport":{
-	    "variables":{"c":{"type": "unknown","default":0.0},"u":{"type":"parameter","default":0.0}},
+	    "variables":{
+	      "c":{"type":"unknown","units":"1","default":0.0},
+	      "u":{"type":"parameter","units":"1/s","shape":["cells"],
+	           "update":{"kind":"data","source":"GEOSFP_MeteoData",
+	                     "from":{"file_variable":"u"}}}},
 	    "equations":[{"lhs":{"op":"D","args":["c"],"wrt":"t"},
-	                  "rhs":{"op":"*","args":["GEOSFP_MeteoData.u","c"]}}]}},
-	  "data_loaders":{"GEOSFP_MeteoData":{
+	                  "rhs":{"op":"*","args":["u","c"]}}]}},
+	  "data_sources":{"GEOSFP_MeteoData":{
 	    "kind":"grid",
 	    "source":{"url_template":"file:///data/GEOSFP/{date:%Y%m%d}.nc"},
-	    "variables":{"u":{"file_variable":"u","units":"m/s"}}}},
-	  "coupling":[{"type":"variable_map","from":"GEOSFP_MeteoData.u","to":"Transport.u",
-	               "transform":"param_to_var"}]}`
+	    "temporal":{"file_period":"P1D","frequency":"PT3H"}}}}`
 
 	file, err := LoadString(src)
 	if err != nil {
@@ -377,11 +391,58 @@ func TestAuditG7_LoaderScopedReferencesResolve(t *testing.T) {
 		if se.Level == "warning" {
 			continue
 		}
-		switch se.Code {
-		case ErrorUnresolvedScopedRef, ErrorUndefinedSystem:
-			t.Errorf("a data loader is a legal scoped namespace and coupling endpoint, but got [%s] %s @%s",
-				se.Code, se.Message, se.Path)
-		}
+		t.Errorf("the 1.0.0 data-fed parameter spelling must validate, got [%s] %s @%s",
+			se.Code, se.Message, se.Path)
+	}
+
+	// And the parameter classifies as DISCRETE -- it is refreshed when the source
+	// advances a record, not resampled every step and not constant.
+	model := file.Models["Transport"]
+	if got := DiscreteParameters(&model); len(got) != 1 || got[0] != "u" {
+		t.Errorf("DiscreteParameters = %v, want [u]", got)
+	}
+}
+
+// The 0.x spelling is now a defect: a source named as a coupling endpoint is an
+// undefined system, because it is not in the couplable namespace at all.
+func TestAuditG7_DataSourceIsNotACouplingEndpoint(t *testing.T) {
+	src := `{
+	  "esm":"1.0.0",
+	  "metadata":{"name":"g7neg","authors":["Test"]},
+	  "models":{"Transport":{
+	    "variables":{
+	      "c":{"type":"unknown","units":"1","default":0.0},
+	      "u":{"type":"parameter","units":"m/s","default":0.0}},
+	    "equations":[{"lhs":{"op":"D","args":["c"],"wrt":"t"},
+	                  "rhs":{"op":"*","args":["u","c"]}}]}},
+	  "data_sources":{"GEOSFP_MeteoData":{
+	    "kind":"grid",
+	    "source":{"url_template":"file:///data/GEOSFP/{date:%Y%m%d}.nc"}}},
+	  "coupling":[{"type":"variable_map","from":"GEOSFP_MeteoData.u","to":"Transport.u",
+	               "transform":"param_to_var"}]}`
+
+	file, err := LoadString(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := ValidateFile(file, src)
+	if !hasCode(res, ErrorUndefinedSystem) {
+		t.Errorf("a data source is not a coupling endpoint; want undefined_system, got %+v",
+			res.StructuralErrors)
+	}
+}
+
+// A parameter update naming a source the document does not declare is
+// `data_source_undefined` -- the only route by which a source can now be
+// misnamed, since it is no longer reachable through coupling.
+func TestAuditG7_DataSourceUndefined(t *testing.T) {
+	file, content := loadInvalidFixture(t, "data_source_undefined_reference.esm")
+	res := ValidateFile(file, content)
+	if !hasCode(res, ErrorDataSourceUndefined) {
+		t.Errorf("want data_source_undefined: %+v", res.StructuralErrors)
+	}
+	if res.IsValid {
+		t.Error("fixture is pinned invalid")
 	}
 }
 

@@ -211,8 +211,14 @@ func TestScopeInjection_FormB_CouplingEntry(t *testing.T) {
 	if _, err := Load(filepath.Join(dir, "neg_target_unknown.esm")); tiErrCode(t, err) != "template_inject_target_unknown" {
 		t.Errorf("neg_target_unknown code = %s; want template_inject_target_unknown", tiErrCode(t, err))
 	}
-	if _, err := Load(filepath.Join(dir, "neg_target_is_loader.esm")); tiErrCode(t, err) != "template_inject_target_is_loader" {
-		t.Errorf("neg_target_is_loader code = %s; want template_inject_target_is_loader", tiErrCode(t, err))
+	// `template_inject_target_is_loader` is RETIRED. It existed because a data
+	// loader was a COMPONENT that an injection key could name but not legally
+	// target. From esm 1.0.0 a data source is not a component at all, so a key
+	// naming one is just a key resolving to something that is neither a model nor
+	// a reaction system -- `template_inject_target_not_component` (esm-spec
+	// §9.7.10), the general case that already covered every other non-component.
+	if _, err := Load(filepath.Join(dir, "neg_target_is_loader.esm")); tiErrCode(t, err) != "template_inject_target_not_component" {
+		t.Errorf("neg_target_is_loader code = %s; want template_inject_target_not_component", tiErrCode(t, err))
 	}
 }
 

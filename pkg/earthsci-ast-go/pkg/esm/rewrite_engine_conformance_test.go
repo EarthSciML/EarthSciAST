@@ -35,7 +35,14 @@ func lowerConfFixture(t *testing.T, name string) map[string]any {
 	return v
 }
 
-func modelMVariables(t *testing.T, v map[string]any) map[string]any {
+// modelMDefinitions indexes models.m's `equations` by the bare-variable LHS each
+// one defines, returning the RHS.
+//
+// It replaces modelMVariables: every one of these rewrite-engine tests inspects
+// the LOWERED FORM of an observed unknown, which lived in
+// `variables[v].expression` in 0.x and is the RHS of the defining equation in
+// esm 1.0.0.
+func modelMDefinitions(t *testing.T, v map[string]any) map[string]any {
 	t.Helper()
 	models, ok := v["models"].(map[string]any)
 	if !ok {
@@ -45,11 +52,18 @@ func modelMVariables(t *testing.T, v map[string]any) map[string]any {
 	if !ok {
 		t.Fatalf("models.m missing")
 	}
-	vars, ok := m["variables"].(map[string]any)
-	if !ok {
-		t.Fatalf("models.m.variables missing")
+	out := map[string]any{}
+	eqs, _ := m["equations"].([]any)
+	for _, raw := range eqs {
+		eq, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if lhs, ok := eq["lhs"].(string); ok {
+			out[lhs] = eq["rhs"]
+		}
 	}
-	return vars
+	return out
 }
 
 // TestRewriteEngine_GodunovBeatsInnerDerivative is the anti-regression for the
@@ -62,8 +76,8 @@ func TestRewriteEngine_GodunovBeatsInnerDerivative(t *testing.T) {
 	got := lowerConfFixture(t, "godunov_beats_inner_deriv")
 	want := decodeFixture(t, string(confFixtureBytes(t, "godunov_beats_inner_deriv", "expanded.esm")))
 
-	gotVars := mustJSON(t, modelMVariables(t, got))
-	wantVars := mustJSON(t, modelMVariables(t, want))
+	gotVars := mustJSON(t, modelMDefinitions(t, got))
+	wantVars := mustJSON(t, modelMDefinitions(t, want))
 	if gotVars != wantVars {
 		t.Errorf("variables diverge from expanded.esm:\n got=%s\nwant=%s", gotVars, wantVars)
 	}
@@ -71,8 +85,7 @@ func TestRewriteEngine_GodunovBeatsInnerDerivative(t *testing.T) {
 	// Guard the rewritten EXPRESSION subtree (the variables dict still declares an
 	// `inv_dx` parameter): the compound rule's product appears; the per-derivative
 	// rule's `inv_dx` product does not.
-	gradMag := modelMVariables(t, got)["grad_mag"].(map[string]any)
-	exprJSON := mustJSON(t, gradMag["expression"])
+	exprJSON := mustJSON(t, modelMDefinitions(t, got)["grad_mag"])
 	if strings.Contains(exprJSON, "inv_dx") {
 		t.Errorf("expanded grad_mag still contains inv_dx (per-derivative rule fired): %s", exprJSON)
 	}
@@ -88,13 +101,13 @@ func TestRewriteEngine_NestedDerivativeFixpoint(t *testing.T) {
 	got := lowerConfFixture(t, "fixpoint_nested_deriv")
 	want := decodeFixture(t, string(confFixtureBytes(t, "fixpoint_nested_deriv", "expanded.esm")))
 
-	gotVars := mustJSON(t, modelMVariables(t, got))
-	wantVars := mustJSON(t, modelMVariables(t, want))
+	gotVars := mustJSON(t, modelMDefinitions(t, got))
+	wantVars := mustJSON(t, modelMDefinitions(t, want))
 	if gotVars != wantVars {
 		t.Errorf("variables diverge from expanded.esm:\n got=%s\nwant=%s", gotVars, wantVars)
 	}
 
-	lap := modelMVariables(t, got)["lap"].(map[string]any)
+	lap := modelMDefinitions(t, got)["lap"].(map[string]any)
 	exprJSON := mustJSON(t, lap["expression"])
 	if strings.Contains(exprJSON, "laplacian") {
 		t.Errorf("expanded lap still contains laplacian: %s", exprJSON)
@@ -203,8 +216,7 @@ func TestRewriteEngine_AttrsBindAsScalarMetavariables(t *testing.T) {
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("lowering failed: %v", err)
 	}
-	y := modelMVariables(t, v)["y"].(map[string]any)
-	got := mustJSON(t, y["expression"])
+	got := mustJSON(t, modelMDefinitions(t, v)["y"])
 	// Go marshals map keys in sorted order: "args" before "op"; the bound
 	// gamma literal (1.4) substitutes into the first arg.
 	const want = `{"args":[1.4,"u"],"op":"*"}`
