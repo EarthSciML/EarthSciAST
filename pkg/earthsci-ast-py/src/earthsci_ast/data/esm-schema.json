@@ -1911,9 +1911,6 @@
                 "$ref": "#/$defs/Model"
               },
               {
-                "$ref": "#/$defs/DataSource"
-              },
-              {
                 "$ref": "#/$defs/SubsystemRef"
               }
             ]

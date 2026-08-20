@@ -45,6 +45,18 @@
           }
         },
         {
+          "lhs": "meshA_count",
+          "rhs": {
+            "args": [],
+            "op": "const",
+            "value": [
+              2,
+              1,
+              2
+            ]
+          }
+        },
+        {
           "lhs": "meshA_cols",
           "rhs": {
             "args": [],
@@ -62,18 +74,6 @@
                 3,
                 4
               ]
-            ]
-          }
-        },
-        {
-          "lhs": "meshA_count",
-          "rhs": {
-            "args": [],
-            "op": "const",
-            "value": [
-              2,
-              1,
-              2
             ]
           }
         },

@@ -1,25 +1,49 @@
 {
-  "esm": "1.0.0",
+  "esm": "0.1.0",
   "metadata": {
     "name": "Version_0_1_0_Baseline",
     "description": "Baseline test for version 0.1.0 compatibility",
-    "authors": ["ESM Format Team"],
+    "authors": [
+      "ESM Format Team"
+    ],
     "created": "2024-01-01T00:00:00Z"
   },
   "reaction_systems": {
     "SimpleChemistry": {
       "species": {
-        "A": { "units": "mol/mol", "default": 1e-6, "description": "Chemical species A" },
-        "B": { "units": "mol/mol", "default": 2e-6, "description": "Chemical species B" }
+        "A": {
+          "units": "mol/mol",
+          "default": 1e-06,
+          "description": "Chemical species A"
+        },
+        "B": {
+          "units": "mol/mol",
+          "default": 2e-06,
+          "description": "Chemical species B"
+        }
       },
       "parameters": {
-        "k1": { "units": "1/s", "default": 0.01, "description": "Rate constant" }
+        "k1": {
+          "units": "1/s",
+          "default": 0.01,
+          "description": "Rate constant"
+        }
       },
       "reactions": [
         {
           "id": "R1",
-          "substrates": [{ "species": "A", "stoichiometry": 1 }],
-          "products": [{ "species": "B", "stoichiometry": 1 }],
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "B",
+              "stoichiometry": 1
+            }
+          ],
           "rate": "k1"
         }
       ]

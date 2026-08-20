@@ -1928,9 +1928,6 @@ export const schema: AnySchemaObject = {
                 "$ref": "#/$defs/Model"
               },
               {
-                "$ref": "#/$defs/DataSource"
-              },
-              {
                 "$ref": "#/$defs/SubsystemRef"
               }
             ]

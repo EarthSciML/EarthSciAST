@@ -133,3 +133,35 @@ Libraries should use consistent error codes for version-related issues:
 - `INVALID_VERSION_FORMAT` - Version string doesn't match semver pattern
 - `MISSING_VERSION_FIELD` - Required 'esm' field is missing
 - `SCHEMA_VALIDATION_ERROR` - File doesn't conform to JSON Schema
+
+## OPEN: this category still assumes a 0.x library (recorded 2026-08-19)
+
+The fixtures below again carry the versions `compatibility_matrix.json` pins for
+them — a blanket bump to `"1.0.0"` during the esm 1.0.0 conversion had flattened
+all 13, which made every one of them vacuous: `version_2_5_1_major_rejection.esm`
+is meant to be REJECTED for its major version and was instead declaring the
+library's own current version, so it loaded clean and the assertion passed for
+the wrong reason. Restoring the strings makes the fixtures test something again,
+and two of them now test what they always claimed to:
+`invalid_version_string.esm` had `not-a-version` where the matrix says
+`not.a.version`, and `version_with_prerelease.esm` declared a plain `0.1.0` —
+schema-VALID — while its whole purpose is to carry a prerelease identifier the
+semver pattern rejects. Both were vacuous before the conversion, not because of
+it.
+
+**What is still wrong is the matrix's expectations, not the fixtures.**
+`library_version` reads `0.3.0`, `validation_rules.major_version_compatibility`
+says "Libraries must reject files with different major versions", and
+`version_2_5_1_major_rejection.esm`'s expected error still reads "This library
+supports major version 0 only." At esm 1.0.0 — a clean break with no deprecation
+path — a 1.0.0 library rejects every 0.x document, which inverts
+`expected_behavior` for eight fixtures that currently expect `load_success`.
+
+Re-basing the category is deliberately NOT done here, because it is a design
+decision rather than a mechanical fix: collapsing every 0.x fixture to "rejected,
+wrong major" would preserve correctness but destroy the minor/patch/forward-
+compatibility gradation this category exists to cover. Doing it properly means
+new 1.x fixtures (`1.0.1` patch, `1.1.0` minor, `1.2.0` forward-compatible)
+alongside one or two retained 0.x files as the wrong-major negatives, plus the
+matrix rewrite and the binding assertions that name these files. Until that
+lands, treat the `load_success` rows here as describing the OLD contract.

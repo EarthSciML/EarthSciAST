@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "0.1.100",
   "metadata": {
     "name": "Version_0_1_100_LargePatch",
     "description": "Test with large patch number to ensure proper version comparison",

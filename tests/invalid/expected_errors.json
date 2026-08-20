@@ -660,11 +660,6 @@
   "multiple_errors_combined.esm": {
     "schema_errors": [
       {
-        "path": "/models/BadModel/variables/observed_without_expr",
-        "message": "must have required property 'expression'",
-        "keyword": "required"
-      },
-      {
         "path": "/models/BadModel/continuous_events/0",
         "message": "must have required property 'conditions'",
         "keyword": "required"
@@ -1019,7 +1014,16 @@
       {
         "path": "/models/TestModel",
         "code": "equation_count_mismatch",
-        "message": "Model declares state variable 'x' but has no defining equation for it"
+        "message": "Number of equations (0) does not match number of unknowns (1)",
+        "details": {
+          "unknowns": [
+            "x"
+          ],
+          "equations": 0,
+          "missing_equations_for": [
+            "x"
+          ]
+        }
       }
     ],
     "is_valid": false,
@@ -2353,7 +2357,7 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/variables/z/expression",
+        "path": "/models/TestModel/equations/1/rhs",
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in observed variable expression but not declared",
         "details": {
@@ -2361,7 +2365,8 @@
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": " Pointer repointed for 1.0.0: `z`/`clip` used to be defined by a `variables[v].expression` field, so the defect sat there; the definition is now an EQUATION, and CONFORMANCE_SPEC 7.1.2 requires the pointer to name where the defect actually is."
   },
   "undefined_variable_in_guesses.esm": {
     "schema_errors": [],
@@ -2720,24 +2725,26 @@
   "intersect_polygon_missing_manifold.esm": {
     "schema_errors": [
       {
-        "path": "/models/MissingManifold/variables/clip/expression",
+        "path": "/models/MissingManifold/equations/1/rhs",
         "message": "must have required property 'manifold'",
         "keyword": "required"
       }
     ],
     "structural_errors": [],
-    "is_valid": false
+    "is_valid": false,
+    "notes": " Pointer repointed for 1.0.0: `z`/`clip` used to be defined by a `variables[v].expression` field, so the defect sat there; the definition is now an EQUATION, and CONFORMANCE_SPEC 7.1.2 requires the pointer to name where the defect actually is."
   },
   "intersect_polygon_wrong_arity.esm": {
     "schema_errors": [
       {
-        "path": "/models/WrongArity/variables/clip/expression/args",
+        "path": "/models/WrongArity/equations/1/rhs/args",
         "message": "must NOT have more than 2 items",
         "keyword": "maxItems"
       }
     ],
     "structural_errors": [],
-    "is_valid": false
+    "is_valid": false,
+    "notes": " Pointer repointed for 1.0.0: `z`/`clip` used to be defined by a `variables[v].expression` field, so the defect sat there; the definition is now an EQUATION, and CONFORMANCE_SPEC 7.1.2 requires the pointer to name where the defect actually is."
   },
   "intersect_polygon_bad_manifold.esm": {
     "schema_errors": [],

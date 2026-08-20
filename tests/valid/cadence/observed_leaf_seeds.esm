@@ -33,23 +33,23 @@
         },
         "dx": {
           "type": "parameter",
-          "units": "m",
+          "units": "1",
           "default": 100.0,
-          "description": "Plain constant parameter — CONST."
+          "description": "Plain constant parameter - CONST. Dimensionless: `u_scaled` is `u * geom` and is subtracted from `u` in the main equation, so geom - and hence dx - must be dimensionless for the fixture to balance. The cadence classes this fixture exists to pin do not depend on units."
         },
         "geom": {
           "type": "unknown",
-          "units": "m^2",
+          "units": "1",
           "description": "STATE-FREE observed: its equation reads only parameters, so it must seed CONST and fold at bind. A binding that seeds every unknown CONTINUOUS gets this wrong."
         },
         "geom_chain": {
           "type": "unknown",
-          "units": "m^4",
+          "units": "1",
           "description": "Observed reading ANOTHER observed. Still CONST, but only if the resolution is transitive."
         },
         "Kdiff": {
           "type": "parameter",
-          "units": "m^2/s",
+          "units": "1/s",
           "shape": [],
           "default": 1.0,
           "update": {
@@ -63,7 +63,7 @@
         },
         "k_scaled": {
           "type": "unknown",
-          "units": "m^2/s",
+          "units": "1/s",
           "description": "Observed reading a DISCRETE parameter — seeds DISCRETE, not CONST and not CONTINUOUS."
         },
         "u_scaled": {

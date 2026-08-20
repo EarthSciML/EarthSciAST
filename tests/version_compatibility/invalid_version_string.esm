@@ -1,5 +1,5 @@
 {
-  "esm": "not-a-version",
+  "esm": "not.a.version",
   "metadata": {
     "name": "InvalidVersionString",
     "description": "Test file with invalid version string - should fail schema validation",

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "0.3.0",
   "metadata": {
     "name": "Version_0_3_0_WithUnknownFields",
     "description": "Test forward compatibility with unknown fields that should be ignored",

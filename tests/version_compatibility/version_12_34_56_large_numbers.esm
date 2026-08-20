@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "12.34.56",
   "metadata": {
     "name": "Version_12_34_56_LargeNumbers",
     "description": "Test with large version numbers - should be rejected by 0.x.x libraries",

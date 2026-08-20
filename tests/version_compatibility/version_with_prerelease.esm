@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "0.1.0-alpha.1",
   "metadata": {
     "name": "VersionWithPrerelease",
     "description": "Test with prerelease version identifier - should fail current schema validation",

@@ -333,16 +333,57 @@
             "wrt": "t"
           },
           "rhs": {
-            "op": "+",
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      "wind_u",
+                      "PBLH"
+                    ]
+                  }
+                ]
+              },
+              "O3"
+            ]
+          },
+          "_comment": "D(O3)/dt = -(wind_u / PBLH) * O3. The 0.x form ADDED wind_u (m/s) to a mol/mol rate, which no time unit reconciles; dividing by the boundary-layer height turns it into the 1/s advective loss rate it was always meant to be."
+        },
+        {
+          "_comment": "NO is a declared unknown and needs a defining equation: the document declared two unknowns and carried one equation, which was already unbalanced before 1.0.0 (both were `state` at 0.x).",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
             "args": [
               {
                 "op": "*",
                 "args": [
-                  -1e-05,
-                  "O3"
+                  {
+                    "op": "/",
+                    "args": [
+                      "emission_rate_NO",
+                      "PBLH"
+                    ]
+                  },
+                  1.0
                 ]
               },
-              "wind_u"
+              {
+                "op": "*",
+                "args": [
+                  1e-05,
+                  "NO"
+                ]
+              }
             ]
           }
         }

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "0.1.5",
   "metadata": {
     "name": "Version_0_1_5_PatchUpgrade",
     "description": "Test file with patch version 0.1.5 - should load normally with 0.1.0 libraries",
