@@ -25,6 +25,8 @@ import Blosc
 import JSON
 import ZipFile
 
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
+
 const EA_LIS = EarthSciAST
 
 # --------------------------------------------------------------------------- #
@@ -110,6 +112,22 @@ end
 _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
     EA_LIS.providers_from_document(doc; cache_root = cache_root)[key], 0.0))
 
+"""The `update.from` binding of the parameter a provider key names.
+
+From esm 1.0.0 the data binding lives on the CONSUMER: `codes`, `select` and
+`unit_conversion` are fields of the reading parameter's `update.from`, not of a
+variable the source declares — a source declares none (esm-spec §8.5)."""
+function _lis_binding(doc, key::AbstractString)
+    model, param = split(key, "."; limit = 2)
+    return doc["models"][model]["variables"][param]["update"]["from"]
+end
+
+"""The `data_sources` key the parameter a provider key names reads."""
+function _lis_source_of(doc, key::AbstractString)
+    model, param = split(key, "."; limit = 2)
+    return doc["models"][model]["variables"][param]["update"]["source"]
+end
+
 @testset "loader ingest + select (esm-spec §8.9)" begin
 
     # ---- U1: the ingest is the LOADER's, not the caller's ------------------ #
@@ -122,20 +140,25 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
             # header lines; codes mapped POLID; record_filter removed the
             # unmapped CO record and the SO2 record with no longitude. All of it
             # from the declaration — FORMAT-08-A-006/007/008.
-            @test _lis_sample(doc, cache, "EGU_Emis.pollutant") == [36.0, 36.0, 1.0]
-            @test _lis_sample(doc, cache, "EGU_Emis.annual") == [100.0, 7.0, 3.0]
-            @test _lis_sample(doc, cache, "EGU_Emis.lon") == [-90.0, -92.0, -93.0]
-            @test _lis_sample(doc, cache, "EGU_Emis.lat") == [40.0, 43.0, 44.0]
+            @test _lis_sample(doc, cache, "Ingest.pollutant") == [36.0, 36.0, 1.0]
+            @test _lis_sample(doc, cache, "Ingest.annual") == [100.0, 7.0, 3.0]
+            @test _lis_sample(doc, cache, "Ingest.lon") == [-90.0, -92.0, -93.0]
+            @test _lis_sample(doc, cache, "Ingest.lat") == [40.0, 43.0, 44.0]
         end
     end
 
-    @testset "every variable of a filtered loader declares the same extent" begin
+    @testset "every parameter fed by a filtered source declares the same extent" begin
         mktempdir() do dir
             doc = _lis_document(dir)
             provs = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
+            @test !isempty(provs)
             for (key, p) in provs
                 declared = EA_LIS.provider_extent_metaparameter(p)
-                if startswith(key, "EGU_Emis.")
+                # `extent` is the SOURCE's, inherited by every parameter that
+                # reads it. A provider key names the consuming parameter, so the
+                # source comes from the parameter's own `update` (esm-spec §8.5)
+                # rather than from a prefix on the key.
+                if _lis_source_of(doc, key) == "EGU_Emis"
                     @test declared == "N_REC"
                 else
                     @test declared === nothing
@@ -181,10 +204,10 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
     @testset "a text column with no codes map is a boundary error" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            delete!(doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"], "codes")
+            delete!(_lis_binding(doc, "Ingest.pollutant"), "codes")
             provs = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             err = try
-                EA_LIS.provider_sample(provs["EGU_Emis.pollutant"], 0.0)
+                EA_LIS.provider_sample(provs["Ingest.pollutant"], 0.0)
                 nothing
             catch e
                 e
@@ -223,24 +246,24 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
         mktempdir() do dir
             doc = _lis_document(dir)
             cache = joinpath(dir, "cache")
-            full = _lis_sample(doc, cache, "Grid.W")
+            full = _lis_sample(doc, cache, "Ingest.W")
             @test length(full) == 10               # the unselected variable is unaffected
             @test full[1] == 100.0
             # `stop` is the METAPARAMETER NAME N_SRC (default 4), not a literal.
-            prefix = _lis_sample(doc, cache, "Grid.src_W")
+            prefix = _lis_sample(doc, cache, "Ingest.src_W")
             @test prefix == full[1:4]
             @test prefix == [100.0, 101.0, 102.0, 103.0]
         end
     end
 
     # FORMAT-08-A-009: pushing the selection to the reader and applying it after
-    # the read MUST agree exactly. `Grid.src_W` is store-backed (pushed down);
+    # the read MUST agree exactly. `Ingest.src_W` is store-backed (pushed down);
     # the same declaration over a filtered table is applied engine-side.
     @testset "reader-pushed and engine-applied selections agree" begin
         mktempdir() do dir
             doc = _lis_document(dir)
             provs = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
-            src = provs["Grid.src_W"]
+            src = provs["Ingest.src_W"]
             @test src.push_to_reader                       # zarr fetches pre-sliced
             pushed = Float64.(EA_LIS.provider_sample(src, 0.0))
             # the same provider forced onto the post-read path
@@ -262,9 +285,9 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
             cache = joinpath(dir, "cache")
             # [0:2] is the first two SURVIVING records (100, 7) — never the first
             # two raw rows (100, 50) of which one is dropped.
-            @test _lis_sample(doc, cache, "EGU_Emis.annual") == [100.0, 7.0]
-            @test _lis_sample(doc, cache, "EGU_Emis.pollutant") == [36.0, 36.0]
-            @test _lis_sample(doc, cache, "EGU_Emis.lon") == [-90.0, -92.0]
+            @test _lis_sample(doc, cache, "Ingest.annual") == [100.0, 7.0]
+            @test _lis_sample(doc, cache, "Ingest.pollutant") == [36.0, 36.0]
+            @test _lis_sample(doc, cache, "Ingest.lon") == [-90.0, -92.0]
         end
     end
 
@@ -301,7 +324,7 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
     @testset "an unrecognised axis selector is refused at construction" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            doc["data_sources"]["Grid"]["variables"]["src_W"]["select"] =
+            _lis_binding(doc, "Ingest.src_W")["select"] =
                 Dict("axes" => [Dict("prefix" => 4)])
             err = try
                 EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))

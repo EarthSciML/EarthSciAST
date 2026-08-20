@@ -206,7 +206,7 @@ mutable struct RecordTable
     loader::String
     provider::EarthSciIO.Provider
     columns::Vector{ColumnSpec}
-    require_finite::Vector{String}      # loader variable names
+    require_finite::Vector{String}      # FILE variable names (esm-spec §8.9)
     cache::Union{Nothing,Dict{String,Vector{Float64}}}
 end
 
@@ -272,11 +272,31 @@ function _table_columns(t::RecordTable)
     end
     nrec < 0 && (nrec = 0)
 
+    # `require_finite` names FILE variables (esm-spec §8.9): from 1.0.0 a source
+    # declares no variables of its own, so the filter is stated in the reader's
+    # vocabulary. Resolve it there — through a bound parameter's already-decoded
+    # column when one reads it, and straight from the reader otherwise, since a
+    # source may filter on a column no parameter goes on to read.
+    by_file = Dict{String,Vector{Float64}}()
+    for spec in t.columns
+        get!(by_file, spec.file_variable) do
+            raw[spec.name]
+        end
+    end
     for name in t.require_finite
-        haskey(raw, name) || throw(RefreshError(
-            "loader '$(t.loader)': record_filter.require_finite names '$name', which " *
-            "is not one of its variables"))
-        col = raw[name]
+        col = if haskey(by_file, name)
+            by_file[name]
+        elseif haskey(nds.variables, name)
+            _widen_column(name, nds.variables[name].data)
+        else
+            throw(RefreshError(
+                "loader '$(t.loader)': record_filter.require_finite names file " *
+                "variable '$name', which the source does not deliver (present: " *
+                "$(EarthSciIO.variable_names(nds)))"))
+        end
+        length(col) == nrec || throw(RefreshError(
+            "loader '$(t.loader)': record_filter.require_finite column '$name' has " *
+            "$(length(col)) records but the table has $nrec"))
         for i in 1:nrec
             isfinite(col[i]) || (keep[i] = false)
         end
@@ -633,7 +653,10 @@ function providers_from_document(doc;
         # one keep mask, columns that stay aligned.
         table = nothing
         if !isempty(require_finite) || any(c.codes !== nothing for c in columns)
-            file_vars = sort!(unique(String[c.file_variable for c in columns]))
+            # A `require_finite` column no parameter reads is still needed to
+            # compute the mask, so it is fetched alongside the bound ones.
+            file_vars = sort!(unique(vcat(String[c.file_variable for c in columns],
+                                          require_finite)))
             table = RecordTable(lname,
                 EarthSciIO.const_provider(cache, String(url); format = String(fmt),
                                           variables = file_vars, source_loader = lname,
