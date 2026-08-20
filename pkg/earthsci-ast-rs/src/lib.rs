@@ -47,8 +47,8 @@ pub mod analysis;
 /// projection-pushdown overlap join-gate.
 pub mod broad_phase;
 pub mod cadence;
+pub mod classification;
 pub mod canonicalize;
-pub mod classify;
 pub mod intern;
 pub mod coupling;
 pub mod coupling_imports;
@@ -148,6 +148,16 @@ pub use cadence::{
     partition_model,
 };
 pub use canonicalize::{CanonicalizeError, canonical_json, canonicalize, format_canonical_float};
+// The esm-spec §6.3.1 classification API. esm 1.0.0 declares two variable
+// types and DERIVES the rest, so these are the only sanctioned way to ask
+// which unknowns are ODE states, which are observed, and which parameters are
+// Brownian / discrete / sampled / constant.
+pub use classification::{
+    Classification, LhsForm, SystemKind, algebraic_unknowns, brownian_parameters,
+    observed_definition_json,
+    constant_parameters, discrete_parameters, is_ode_state, observed_definitions,
+    observed_unknowns, ode_states, sampled_parameters, system_kind,
+};
 pub use coupling_imports::{
     CouplingImportOptions, expand_coupling_imports, has_coupling_import, is_coupling_library_doc,
 };
@@ -201,13 +211,14 @@ pub use template_imports::{
     resolve_template_machinery,
 };
 pub use types::{
-    AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole, DaeInfo,
-    DataSource, DataSourceDeterminism, DataSourceKind, DataSourceMetadata, DataSourceSource,
-    DataSourceTemporal, DataSourceBinding, DiscreteEvent, DiscreteEventTrigger, Domain, Equation,
-    EsmFile, Expr, ExpressionNode, FunctionalUpdate, Metadata, Model, ModelTest,
-    ModelTestAssertion, ModelVariable, Operator, Reaction, ReactionSystem, RecordsPerFile, Species,
-    ParameterUpdate, ParameterUpdateSpec, Distribution, Scalars, CrossingDirection,
-    StoichiometricEntry, TimeSpan, Tolerance, UnitConversion, VariableMapTransform, VariableType,
+    AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
+    CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
+    DataSourceKind, DataSourceLocation, DataSourceMetadata, DataSourceTemporal, DiscreteEvent,
+    DiscreteEventTrigger, Distribution, DistributionParam, Domain, Equation, EsmFile, Expr,
+    ExpressionNode, FunctionalAffect, FunctionalUpdate, Metadata, Model, ModelTest,
+    ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
+    ReactionSystem, RecordsPerFile, Species, StoichiometricEntry, TimeSpan, Tolerance,
+    UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, ValidationResult, validate,

@@ -12,9 +12,13 @@ total order `const ⊏ discrete ⊏ continuous`:
 
 | Class | Changes | Phase | Leaf seed |
 |---|---|---|---|
-| `const` | never | folded artifact | `parameter` / literal / index-set name / bound index |
-| `discrete` | only at discrete events | per-event handler | `discrete` variable |
-| `continuous` | every step | hot per-step `_Node` tree | `state` variable, the independent variable `t` |
+| `const` | never | folded artifact | a constant or sampled parameter, a literal, an index-set name, a bound index |
+| `discrete` | only at discrete events | per-event handler | a parameter in `discrete_parameters` |
+| `continuous` | every step | hot per-step `_Node` tree | an ODE-state or algebraic unknown, a Brownian parameter, the independent variable `t` |
+
+An OBSERVED unknown is the one leaf whose seed is not a fixed class: it is the
+class of its DEFINING EQUATION's right-hand side, resolved transitively
+(§5.7.2). See [`seed_leaf`](@ref).
 
 The pass is a **pure function of the data-dependency DAG**: `class(node) = max`
 over its inputs' classes, derived bottom-up, never declared.
@@ -109,12 +113,12 @@ function load_model_json(path::AbstractString, model_name::AbstractString)
     haskey(models, model_name) ||
         throw(CadenceError("$(path): model $(repr(model_name)) not found"))
     model = models[model_name]
-    # Attach the document's top-level `data_loaders` so the loader-seeded cadence
-    # refinement (§5.7.2) can resolve a `discrete` variable's `data_ingest`
-    # source loader and decide `discrete` (temporal) vs `const` (no temporal).
-    loaders = get(doc, "data_loaders", nothing)
-    if isa(loaders, AbstractDict) && !haskey(model, "data_loaders")
-        model = merge(model, Dict{String,Any}("data_loaders" => loaders))
+    # Attach the document's top-level `data_sources` so the source-seeded
+    # cadence refinement (§5.7.2) can resolve a `data`-update parameter's source
+    # and decide `discrete` (temporal) vs `const` (no temporal).
+    sources = get(doc, "data_sources", nothing)
+    if isa(sources, AbstractDict) && !haskey(model, "data_sources")
+        model = merge(model, Dict{String,Any}("data_sources" => sources))
     end
     return model
 end
@@ -126,15 +130,66 @@ _join(classes) = isempty(classes) ? "const" :
                  RANK_CLASS[maximum(CLASS_RANK[c] for c in classes)]
 
 """
-    seed_leaf(leaf, model) -> String
+    _observed_definitions(model) -> Dict{String,Any}
 
-Seed a leaf's cadence from its declared role (§5.7.2 leaf-seed table): `state` →
-`continuous`, `parameter`/literal → `const`, `discrete` → `discrete`. The
-independent variable `t` is `continuous` (an explicit continuous-`t` forcing is
-not piecewise-constant between events). Index-set names, bound index symbols,
-numeric literals, and relation-name tags are all `const`.
+Map each OBSERVED unknown of `model` to its defining equation's RHS, memoised on
+the model dict.
+
+An observed unknown is one an equation defines with a BARE-VARIABLE LHS
+(esm-spec §6.3.1). Before esm 1.0.0 this lived in `variables[v].expression`; the
+cadence pass must now read it from the model's `equations`, which is the one
+place the pass has to follow the format change. First definition wins, matching
+the reference implementation (`scripts/run-cadence-conformance.py`).
 """
-function seed_leaf(leaf, model)
+function _observed_definitions(model)
+    cached = get(model, "_observed_defs", nothing)
+    cached === nothing || return cached
+    variables = get(model, "variables", Dict{String,Any}())
+    defs = Dict{String,Any}()
+    for eq in get(model, "equations", Any[])
+        isa(eq, AbstractDict) || continue
+        lhs = get(eq, "lhs", nothing)
+        isa(lhs, AbstractString) || continue
+        v = get(variables, lhs, nothing)
+        (isa(v, AbstractDict) && get(v, "type", nothing) == "unknown") || continue
+        haskey(defs, lhs) || (defs[lhs] = get(eq, "rhs", nothing))
+    end
+    model["_observed_defs"] = defs
+    return defs
+end
+
+"""
+    seed_leaf(leaf, model[, resolving]) -> String
+
+Seed a leaf's cadence from its DERIVED role (§5.7.2 leaf-seed table).
+
+From esm 1.0.0 the seed cannot be read off a declared type, because there are
+only two of those. It comes from the classification of esm-spec §6.3.1, and
+every binding MUST seed from those functions rather than re-deriving the
+categories locally — five local derivations are five chances to disagree about
+which nodes fold:
+
+| Leaf | Seed |
+|---|---|
+| the independent variable `t` | `continuous` |
+| an unknown in `ode_states` or `algebraic_unknowns` | `continuous` |
+| an unknown in `observed_unknowns` | the class of its DEFINING EQUATION's RHS |
+| a parameter in `brownian_parameters` (`update.kind == "wiener"`) | `continuous` |
+| a parameter in `discrete_parameters` (any other `update`) | `discrete`, subject to the source refinement |
+| a parameter in `sampled_parameters` or `constant_parameters` | `const` |
+| numeric literal, index-set name, bound index symbol, relation tag | `const` |
+
+**The observed leaf is the one that changed, and it must not be shortcut.**
+Seeding every unknown `continuous` is sound but stops a STATE-FREE observed
+folding at bind, and const-folding exactly those is what the geometry and
+projection-pushdown paths rely on. Seeding an observed `const` — what the 0.x
+code did, with a comment admitting it was imprecise and unexercised — is
+unsound the other way, since an observed reading a state is `continuous`. So an
+observed resolves to the class of its defining equation's RHS, computed by this
+same pass and memoised; `resolving` carries the chain currently being resolved
+so a definition cycle is REPORTED rather than recursed forever.
+"""
+function seed_leaf(leaf, model, resolving::Tuple=())
     # numeric literal (Bool is excluded, mirroring the reference's `not bool`)
     if (isa(leaf, Integer) && !isa(leaf, Bool)) || isa(leaf, AbstractFloat)
         return "const"
@@ -143,16 +198,32 @@ function seed_leaf(leaf, model)
     leaf == "t" && return "continuous"
     variables = get(model, "variables", Dict{String,Any}())
     if haskey(variables, leaf)
-        kind = get(variables[leaf], "type", nothing)
-        kind == "state" && return "continuous"
-        # Loader-seeded cadence refinement (§5.7.2): a discrete variable fed by a
-        # `data_ingest` refresh whose source loader has no `temporal` block is
-        # non-time-varying and seeds `const` (folds at bind). With `temporal` (or
-        # any other trigger / unresolvable source) it keeps the `discrete` seed.
-        kind == "discrete" &&
-            return _loader_without_temporal(variables[leaf], model) ? "const" : "discrete"
-        kind == "brownian" && return "continuous"
-        (kind == "parameter" || kind == "observed") && return "const"
+        var = variables[leaf]
+        kind = get(var, "type", nothing)
+        if kind == "unknown"
+            defs = _observed_definitions(model)
+            if haskey(defs, leaf)
+                leaf in resolving && throw(CadenceError(
+                    "observed definition cycle through $(repr(leaf)): " *
+                    join(String[resolving..., leaf], " -> ")))
+                return classify(defs[leaf], model, ClassMemo(), (resolving..., leaf))
+            end
+            # An ODE state or an algebraic unknown: continuous.
+            return "continuous"
+        end
+        if kind == "parameter"
+            update = get(var, "update", nothing)
+            # No update at all — a constant or a sampled-once parameter. Both
+            # seed `const`.
+            (isa(update, AbstractDict) || isa(update, AbstractVector)) || return "const"
+            _update_has_wiener(update) && return "continuous"
+            # Source-seeded cadence refinement (RFC pure-io-data-loaders §4.6 /
+            # §5.7.2): a parameter fed by a `data` update whose source declares
+            # no `temporal` block is non-time-varying and seeds `const` (folds
+            # at bind). With `temporal` — or any other update kind, or an
+            # unresolvable source — it seeds `discrete`.
+            return _source_without_temporal(var, model) ? "const" : "discrete"
+        end
         throw(CadenceError("leaf $(repr(leaf)): unknown variable kind $(repr(kind))"))
     end
     # index-set name, bound index symbol (i, k, e, f, le), relation tag
@@ -160,22 +231,44 @@ function seed_leaf(leaf, model)
     return "const"
 end
 
-"""
-    _loader_without_temporal(var, model) -> Bool
+"""The update rules of a raw-JSON parameter, as a vector. `update` is either one
+rule object or an ordered array of two or more (esm-spec §5.4); both read the
+same here."""
+_update_rules(update) = isa(update, AbstractVector) ? update :
+                        (isa(update, AbstractDict) ? Any[update] : Any[])
 
-True iff `var` is a discrete variable whose `data_ingest` refresh names a
-DataLoader — found in the document's top-level `data_loaders`, attached to the
-model by [`load_model_json`](@ref) — that declares no `temporal` block. Such a
-loader describes non-time-varying data, so its output variable seeds `const`
-(folds at bind), not `discrete` (RFC pure-io-data-loaders §4.6 / §5.7.2).
+"""True iff any of the parameter's update rules is a `wiener` process. The schema
+forbids `wiener` inside an array, so in practice an array update is never
+Brownian — but the test reads through the rules rather than assuming it."""
+_update_has_wiener(update) =
+    any(r -> isa(r, AbstractDict) && get(r, "kind", nothing) == "wiener",
+        _update_rules(update))
+
 """
-function _loader_without_temporal(var, model)
-    refresh = get(var, "refresh", nothing)
-    (isa(refresh, AbstractDict) && get(refresh, "kind", nothing) == "data_ingest") || return false
-    loaders = get(model, "data_loaders", nothing)
-    isa(loaders, AbstractDict) || return false
-    loader = get(loaders, get(refresh, "source", nothing), nothing)
-    return isa(loader, AbstractDict) && !haskey(loader, "temporal")
+    _source_without_temporal(var, model) -> Bool
+
+True iff `var` is a parameter whose `data` update names a DataSource — found in
+the document's top-level `data_sources`, attached to the model by
+[`load_model_json`](@ref) — that declares no `temporal` block. Such a source
+describes non-time-varying data, so the parameter reading it seeds `const`
+(folds at bind), not `discrete` (RFC pure-io-data-loaders §4.6 / §5.7.2). The
+rule is unchanged from 0.x; only its spelling is, since a `discrete` variable
+with a `data_ingest` refresh is now a parameter with a `data` update.
+"""
+function _source_without_temporal(var, model)
+    rules = _update_rules(get(var, "update", nothing))
+    data_rule = nothing
+    for r in rules
+        if isa(r, AbstractDict) && get(r, "kind", nothing) == "data"
+            data_rule = r
+            break
+        end
+    end
+    data_rule === nothing && return false
+    sources = get(model, "data_sources", nothing)
+    isa(sources, AbstractDict) || return false
+    src = get(sources, get(data_rule, "source", nothing), nothing)
+    return isa(src, AbstractDict) && !haskey(src, "temporal")
 end
 
 """
@@ -218,14 +311,20 @@ classed independently of the array, so a stencil splits (§5.7.3 gather rule).
 
 `memo` caches the derived class per operator node (by identity); the walkers
 in one pass share a single memo so classification is linear in tree size.
+
+`resolving` carries the chain of OBSERVED unknowns currently being resolved
+through their defining equations (§5.7.2), so a definition cycle is reported
+rather than recursed forever. A nested resolution runs with its own memo,
+because a node's class inside an observed's definition is derived under a
+different resolution chain.
 """
-function classify(node, model, memo::ClassMemo=ClassMemo())
-    isa(node, AbstractDict) || return seed_leaf(node, model)
+function classify(node, model, memo::ClassMemo=ClassMemo(), resolving::Tuple=())
+    isa(node, AbstractDict) || return seed_leaf(node, model, resolving)
     cached = get(memo, node, nothing)
     cached !== nothing && return cached
     children = child_exprs(node)
     cls = isempty(children) ? "const" :
-          _join(String[classify(c, model, memo) for c in children])
+          _join(String[classify(c, model, memo, resolving) for c in children])
     memo[node] = cls
     return cls
 end

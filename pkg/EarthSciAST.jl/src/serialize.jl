@@ -186,14 +186,12 @@ end
 """
     _serialize_subsystem(v) -> Dict{String,Any}
 
-Serialize a single model subsystem value: a child `Model`, a pure-I/O
-`DataLoader` (RFC pure-io-data-loaders §4.3), or an unresolved `SubsystemRef`
-(which round-trips back to `{"ref": ...}`).
+Serialize a single model subsystem value: a child `Model`, or an unresolved
+`SubsystemRef` (which round-trips back to `{"ref": ...}`). From esm 1.0.0 a
+data source is a registry entry, not a component, so it never appears here.
 """
 function _serialize_subsystem(v)::Dict{String,Any}
-    if v isa DataLoader
-        return serialize_data_loader(v)
-    elseif v isa SubsystemRef
+    if v isa SubsystemRef
         out = Dict{String,Any}("ref" => v.ref)
         # Metaparameter bindings at the subsystem edge (esm-spec §9.7.6 site 3)
         # and injected imports (§9.7.10 form A) survive only while the ref is
@@ -376,8 +374,8 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     if file.reaction_systems !== nothing
         result["reaction_systems"] = Dict(k => serialize_reaction_system(v) for (k, v) in file.reaction_systems)
     end
-    if file.data_loaders !== nothing
-        result["data_loaders"] = Dict(k => serialize_data_loader(v) for (k, v) in file.data_loaders)
+    if file.data_sources !== nothing
+        result["data_sources"] = Dict(k => serialize_data_source(v) for (k, v) in file.data_sources)
     end
     if file.enums !== nothing
         # esm-spec §9.3 — enum names map to objects mapping symbol → positive
@@ -550,6 +548,8 @@ function _record_emit_expr(row, v)
         :([_to_native_json(e) for e in $v])
     elseif kind === :model_variable_type
         :(serialize_model_variable_type($v))
+    elseif kind === :float_vec
+        :([x for x in $v])
     elseif kind === :record
         :($(Symbol(:serialize_, row.of))($v))
     elseif kind === :record_vec
@@ -564,12 +564,54 @@ end
 # ── Hand-written `:custom` emit hooks (cross-field / doubly-conditional
 # omission policies the table names by symbol; `nothing` skips the key) ──────
 
-# DataLoader.determinism: emitted only when present AND its serialized dict is
+# DataSource.determinism: emitted only when present AND its serialized dict is
 # non-empty (the historical `isempty(det_dict) ||` guard).
-function _emit_data_loader_determinism(loader::DataLoader)
-    loader.determinism === nothing && return nothing
-    det = serialize_data_loader_determinism(loader.determinism)
+function _emit_data_source_determinism(src::DataSource)
+    src.determinism === nothing && return nothing
+    det = serialize_data_source_determinism(src.determinism)
     return isempty(det) ? nothing : det
+end
+
+"""
+    serialize_distribution(d::Distribution) -> Dict{String,Any}
+
+Emit a [`Distribution`](@ref) back to its wire shape, restoring the per-kind
+parameter names the struct stores by role: `normal` writes `mean`/`std`,
+`lognormal` writes `mu`/`sigma`, `uniform` writes `low`/`high` (esm-spec §6.3).
+"""
+function serialize_distribution(d::Distribution)::Dict{String,Any}
+    out = Dict{String,Any}("kind" => d.kind)
+    if d.kind == "normal"
+        out["mean"] = d.location
+        d.scale === nothing || (out["std"] = d.scale)
+    elseif d.kind == "lognormal"
+        out["mu"] = d.location
+        d.scale === nothing || (out["sigma"] = d.scale)
+    elseif d.kind == "uniform"
+        out["low"] = d.low
+        out["high"] = d.high
+    else
+        throw(ArgumentError("Unknown distribution kind: $(d.kind)"))
+    end
+    d.cov === nothing || (out["cov"] = d.cov)
+    return out
+end
+
+# ModelVariable.distribution: a plain optional record through the hand-written
+# per-kind serializer.
+_emit_distribution(v::ModelVariable) =
+    v.distribution === nothing ? nothing : serialize_distribution(v.distribution)
+
+# ModelVariable.update: the object-or-array union of esm-spec §5.4. One rule
+# emits as the OBJECT form and two or more as the array form — a one-element
+# array is invalid, so the length alone recovers the wire spelling and the
+# round trip is stable.
+function _emit_parameter_update_spec(v::ModelVariable)
+    v.update === nothing && return nothing
+    rules = v.update
+    isempty(rules) && return nothing
+    length(rules) == 1 && return serialize_parameter_update(rules[1])
+    return [serialize_parameter_update(r) for r in rules]
 end
 
 # coupling_import `bind`: always emitted (an empty bind map round-trips as {}).
@@ -598,21 +640,6 @@ function _emit_model_guesses(m::Model)
     return out
 end
 
-
-# DiscreteEvent `affects` / `functional_affect` — the schema oneOf pair.
-# A handler-based event yields the affects key to its descriptor; the
-# descriptor hook re-emits it verbatim and refuses an event carrying both.
-_emit_discrete_event_affects(e::DiscreteEvent) =
-    e.functional_affect === nothing ?
-        [serialize_affect_equation(a) for a in e.affects] : nothing
-
-function _emit_discrete_event_functional_affect(e::DiscreteEvent)
-    e.functional_affect === nothing && return nothing
-    isempty(e.affects) || throw(ArgumentError(
-        "DiscreteEvent cannot carry both symbolic `affects` and a " *
-        "`functional_affect` descriptor (schema DiscreteEvent oneOf)"))
-    return e.functional_affect
-end
 
 # Assertion `reference`: an Expression AST serializes through the standard
 # serializer; the from_file shape round-trips its keys verbatim.

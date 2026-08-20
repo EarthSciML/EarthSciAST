@@ -25,7 +25,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
     # ----------------------------------------------------------------
     @testset "scalar ic(var) RHS resolves parameters (spec §6.6.5)" begin
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=0.0),
+            "x" => ModelVariable(UnknownVariable; default=0.0),
             "k" => ModelVariable(ParameterVariable; default=3.0),
         )
         eqs = ESM.Equation[

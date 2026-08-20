@@ -3,58 +3,163 @@
 
 use earthsci_ast::{EsmFile, Expr, load};
 
-const FIXTURE: &str = r#"{
-  "esm": "1.0.0",
-  "metadata": {"name": "ft_smoke", "authors": ["test"]},
-  "function_tables": {
-    "sigma_O3": {
-      "description": "1-D linear table",
-      "axes": [
-        {"name": "lambda_idx", "values": [1, 2, 3, 4]}
-      ],
-      "interpolation": "linear",
-      "out_of_bounds": "clamp",
-      "data": [1.1e-17, 1.0e-17, 9.5e-18, 8.7e-18]
-    },
-    "F_actinic": {
-      "axes": [
-        {"name": "P", "units": "Pa", "values": [10, 100, 1000]},
-        {"name": "cos_sza", "values": [0.1, 0.5, 1.0]}
-      ],
-      "interpolation": "bilinear",
-      "outputs": ["NO2", "O3"],
-      "data": [
-        [[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]],
-        [[2.0, 2.5, 3.0], [2.1, 2.6, 3.1], [2.2, 2.7, 3.2]]
-      ]
-    }
-  },
-  "models": {
-    "M": {
-      "variables": {
-        "k_O3":   {"type": "unknown",     "default": 0.0},
-        "j_NO2":  {"type": "unknown",     "default": 0.0},
-        "P_atm":  {"type": "parameter", "default": 101325.0},
-        "cos_sza":{"type": "parameter", "default": 0.5}
+const FIXTURE: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "ft_smoke",
+        "authors": [
+          "test"
+        ]
       },
-      "equations": [
-        {"lhs": {"op": "D", "args": ["k_O3"], "wrt": "t"}, "rhs": {
-          "op": "table_lookup",
-          "table": "sigma_O3",
-          "axes": {"lambda_idx": 2},
-          "args": []
-        }},
-        {"lhs": {"op": "D", "args": ["j_NO2"], "wrt": "t"}, "rhs": {
-          "op": "table_lookup",
-          "table": "F_actinic",
-          "axes": {"P": "P_atm", "cos_sza": "cos_sza"},
-          "output": "NO2",
-          "args": []
-        }}
-      ]
+      "function_tables": {
+        "sigma_O3": {
+          "description": "1-D linear table",
+          "axes": [
+            {
+              "name": "lambda_idx",
+              "values": [
+                1,
+                2,
+                3,
+                4
+              ]
+            }
+          ],
+          "interpolation": "linear",
+          "out_of_bounds": "clamp",
+          "data": [
+            1.1e-17,
+            1e-17,
+            9.5e-18,
+            8.7e-18
+          ]
+        },
+        "F_actinic": {
+          "axes": [
+            {
+              "name": "P",
+              "units": "Pa",
+              "values": [
+                10,
+                100,
+                1000
+              ]
+            },
+            {
+              "name": "cos_sza",
+              "values": [
+                0.1,
+                0.5,
+                1.0
+              ]
+            }
+          ],
+          "interpolation": "bilinear",
+          "outputs": [
+            "NO2",
+            "O3"
+          ],
+          "data": [
+            [
+              [
+                1.0,
+                1.5,
+                2.0
+              ],
+              [
+                1.1,
+                1.6,
+                2.1
+              ],
+              [
+                1.2,
+                1.7,
+                2.2
+              ]
+            ],
+            [
+              [
+                2.0,
+                2.5,
+                3.0
+              ],
+              [
+                2.1,
+                2.6,
+                3.1
+              ],
+              [
+                2.2,
+                2.7,
+                3.2
+              ]
+            ]
+          ]
+        }
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "k_O3": {
+              "type": "unknown",
+              "default": 0.0
+            },
+            "j_NO2": {
+              "type": "unknown",
+              "default": 0.0
+            },
+            "P_atm": {
+              "type": "parameter",
+              "default": 101325.0
+            },
+            "cos_sza": {
+              "type": "parameter",
+              "default": 0.5
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "k_O3"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "table_lookup",
+                "table": "sigma_O3",
+                "axes": {
+                  "lambda_idx": 2
+                },
+                "args": []
+              }
+            },
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "j_NO2"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "table_lookup",
+                "table": "F_actinic",
+                "axes": {
+                  "P": "P_atm",
+                  "cos_sza": "cos_sza"
+                },
+                "output": "NO2",
+                "args": []
+              }
+            }
+          ]
+        }
+      }
     }
-  }
-}"#;
+    "#;
 
 #[test]
 fn function_tables_block_loads() {

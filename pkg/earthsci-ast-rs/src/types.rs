@@ -66,7 +66,10 @@ pub struct EsmFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reaction_systems: Option<HashMap<String, ReactionSystem>>,
 
-    /// External data source registrations (by reference)
+    /// Document-scoped ingest registry (esm-spec §8): named external data
+    /// sources, keyed by id. NOT components — a source is not a coupling
+    /// endpoint, a subsystem, or a scoped-reference path root; a model consumes
+    /// one through a parameter `update` naming it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_sources: Option<HashMap<String, DataSource>>,
 
@@ -168,7 +171,7 @@ pub struct FunctionTable {
 }
 
 /// Academic citation or data source reference
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reference {
     /// DOI identifier
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1647,18 +1650,6 @@ pub struct ModelVariable {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// Parameter-only: draw the value from a distribution instead of fixing it
-    /// with `default`. Mutually exclusive with `default`. With no `update` the
-    /// value is drawn once at setup; with `update.kind: "wiener"` it is redrawn
-    /// every step with √dt scaling (esm-spec §6.3).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub distribution: Option<Distribution>,
-
-    /// Parameter-only: when the parameter refreshes and what from (esm-spec
-    /// §5.4). Either one rule or an ordered array of two or more.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update: Option<ParameterUpdateSpec>,
-
     /// Arrayed-variable shape: ordered dimension names drawn from the
     /// enclosing model's domain.spatial. `None` means scalar.
     /// See discretization RFC §10.2.
@@ -1671,121 +1662,138 @@ pub struct ModelVariable {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
 
+    /// Parameter-only: draw the value from a distribution instead of fixing it
+    /// at `default` (esm-spec §6.3, schema `ModelVariable.distribution`).
+    /// Mutually exclusive with `default`. With no `update` the draw happens
+    /// ONCE at setup (`sampled_parameters`); with `update.kind: "wiener"` it is
+    /// redrawn every step with √dt scaling (`brownian_parameters`), which is
+    /// what promotes the enclosing model to an SDE. This subsumes the 0.x
+    /// `brownian` type's `noise_kind` / `correlation_group` tags: correlated
+    /// noise is one vector-valued parameter carrying a `cov` matrix, which the
+    /// tags never actually gave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<Distribution>,
+
+    /// Parameter-only: when this parameter refreshes and what from
+    /// (esm-spec §5.4). Absent means it never changes after setup. One
+    /// mechanism replacing three 0.x constructs — the `brownian` type, the
+    /// `discrete` type's `refresh` trigger, and the `discrete_parameters`
+    /// event lists with their `functional_affect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<ParameterUpdateSpec>,
 }
 
-/// Type of model variable.
-///
-/// esm 1.0.0 declares exactly TWO types and no third (esm-spec §6.3). Every
-/// finer category a solver needs — which unknowns are ODE states, which
-/// parameters are Brownian or discrete — is DERIVED from the equations and the
-/// parameter updates by the [`crate::classify`] functions, never declared.
-///
-/// The 0.x members `state`, `observed`, `brownian` and `discrete` are gone. A
-/// former `state` or `observed` is an `unknown` distinguished by the shape of
-/// its equation's LHS; a former `brownian` is a `parameter` with a
-/// `distribution` and `update: {kind: "wiener"}`; a former `discrete` is a
-/// `parameter` with any other `update`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VariableType {
-    /// A quantity the solver solves for. Its behavior is stated by the model's
-    /// `equations` and nowhere else — there is no `expression` field.
-    Unknown,
-    /// A quantity supplied to the solver: `default` or `distribution`,
-    /// optionally refreshed by an `update`.
-    Parameter,
-}
+impl ModelVariable {
+    /// Visit every Expression this variable carries, in a stable order.
+    ///
+    /// From esm 1.0.0 a variable has no `expression` field — an unknown's
+    /// definition is an EQUATION. What is left on the variable is the
+    /// parameter's `update`: each rule's `when` trigger, its `expression`
+    /// value form, and the `unit_conversion` of a `from` binding. All three
+    /// are Expression positions and so are subject to reference integrity
+    /// (esm-spec §4.9.5), which is what this walk exists to serve.
+    pub fn for_each_expression(&self, f: &mut impl FnMut(&Expr)) {
+        let Some(spec) = &self.update else { return };
+        for rule in spec.rules() {
+            if let Some(when) = rule.when() {
+                f(when);
+            }
+            let Some(value) = rule.value() else { continue };
+            if let Some(expr) = &value.expression {
+                f(expr);
+            }
+            if let Some(UnitConversion::Expression(expr)) =
+                value.from.as_ref().and_then(|b| b.unit_conversion.as_ref())
+            {
+                f(expr);
+            }
+        }
+    }
 
-/// A number, or one number per component of a vector-valued parameter.
-///
-/// This is the univariate/multivariate discriminator for [`Distribution`]:
-/// a scalar location parameter means univariate, an array means multivariate
-/// and the parameter's `shape` must agree (esm-spec §6.3).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Scalars {
-    /// Single value — a scalar parameter.
-    Scalar(f64),
-    /// One value per component — a vector-valued parameter.
-    Vector(Vec<f64>),
-}
+    /// Mutable counterpart of [`ModelVariable::for_each_expression`], for the
+    /// namespacing / renaming / range-resolution passes.
+    pub fn for_each_expression_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        let Some(spec) = &mut self.update else { return };
+        let rules: &mut [ParameterUpdate] = match spec {
+            ParameterUpdateSpec::Single(rule) => std::slice::from_mut(rule),
+            ParameterUpdateSpec::Several(rules) => rules,
+        };
+        for rule in rules {
+            if let Some(when) = rule.when_mut() {
+                f(when);
+            }
+            let Some(value) = rule.value_mut() else {
+                continue;
+            };
+            if let Some(expr) = &mut value.expression {
+                f(expr);
+            }
+            if let Some(UnitConversion::Expression(expr)) = value
+                .from
+                .as_mut()
+                .and_then(|b| b.unit_conversion.as_mut())
+            {
+                f(expr);
+            }
+        }
+    }
 
-impl Scalars {
-    /// True when this is the array form, i.e. the distribution is multivariate.
-    pub fn is_vector(&self) -> bool {
-        matches!(self, Scalars::Vector(_))
+    /// The `data_sources` keys this variable's update rules read from.
+    pub fn update_sources(&self) -> Vec<&str> {
+        self.update
+            .iter()
+            .flat_map(|spec| spec.rules())
+            .filter_map(|rule| rule.data_source())
+            .collect()
     }
 }
 
-/// Symmetric positive-semidefinite covariance matrix, row-major.
-pub type CovarianceMatrix = Vec<Vec<f64>>;
-
-/// A parameter's value drawn from a probability distribution rather than fixed.
+/// A parameter's value drawn from a probability distribution rather than fixed
+/// (esm-spec §6.3, schema `Distribution`). The closed set is `normal`,
+/// `lognormal`, `uniform` — bindings implement exactly these and reject
+/// anything else.
 ///
-/// The closed set is `normal`, `lognormal`, `uniform` (esm-spec §6.3); a
-/// binding rejects anything else. WHEN the value is drawn is decided by the
-/// parameter's [`ParameterUpdateSpec`]: with no update it is sampled once at
-/// setup, with `wiener` it is resampled every step.
+/// Univariate when the location parameter is a number, multivariate when it is
+/// an array — in which case `cov` gives the full covariance matrix and the
+/// parameter's `shape` must agree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Distribution {
-    /// Gaussian. Exactly one of `std` or `cov`.
+    /// Gaussian. Exactly one of `std` (independent components) or `cov`.
     Normal {
-        /// Mean — scalar for a scalar parameter, array for a vector-valued one.
-        mean: Scalars,
-        /// Standard deviation of INDEPENDENT components.
+        /// Mean — a number (scalar) or one entry per component (vector).
+        mean: DistributionParam,
+        /// Standard deviation of INDEPENDENT components. Excludes `cov`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        std: Option<Scalars>,
-        /// Full covariance matrix. Mutually exclusive with `std`.
+        std: Option<DistributionParam>,
+        /// Full covariance matrix, row-major. Excludes `std`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cov: Option<CovarianceMatrix>,
     },
-    /// Log-normal: the natural log of the value is normal. Both spread forms
-    /// are on the LOG scale.
+    /// Log-normal: `ln(value)` is normal with mean `mu` and spread
+    /// `sigma` / `cov` (both on the LOG scale).
     Lognormal {
         /// Mean of the underlying normal (log scale).
-        mu: Scalars,
-        /// Standard deviation of the underlying normal (log scale).
+        mu: DistributionParam,
+        /// Standard deviation of the underlying normal. Excludes `cov`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        sigma: Option<Scalars>,
-        /// Full covariance matrix. Mutually exclusive with `sigma`.
+        sigma: Option<DistributionParam>,
+        /// Full covariance matrix on the log scale. Excludes `sigma`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cov: Option<CovarianceMatrix>,
     },
-    /// Uniform on `[low, high]`. Components are independent by construction,
-    /// so there is no covariance form.
+    /// Uniform on `[low, high]`. Components are independent by construction, so
+    /// there is no covariance form.
     Uniform {
-        /// Lower bound.
-        low: Scalars,
-        /// Upper bound.
-        high: Scalars,
+        /// Lower bound(s).
+        low: DistributionParam,
+        /// Upper bound(s).
+        high: DistributionParam,
     },
 }
 
 impl Distribution {
-    /// The distribution's location parameter (`mean` / `mu` / `low`).
-    pub fn location(&self) -> &Scalars {
-        match self {
-            Distribution::Normal { mean, .. } => mean,
-            Distribution::Lognormal { mu, .. } => mu,
-            Distribution::Uniform { low, .. } => low,
-        }
-    }
-
-    /// The covariance matrix, when this distribution carries one.
-    pub fn cov(&self) -> Option<&CovarianceMatrix> {
-        match self {
-            Distribution::Normal { cov, .. } | Distribution::Lognormal { cov, .. } => cov.as_ref(),
-            Distribution::Uniform { .. } => None,
-        }
-    }
-
-    /// True when the location parameter is an array — the multivariate form.
-    pub fn is_multivariate(&self) -> bool {
-        self.location().is_vector()
-    }
-
-    /// The distribution's `kind` discriminator as spelled in the document.
+    /// The distribution's `kind` string, as it appears on the wire.
     pub fn kind(&self) -> &'static str {
         match self {
             Distribution::Normal { .. } => "normal",
@@ -1793,46 +1801,262 @@ impl Distribution {
             Distribution::Uniform { .. } => "uniform",
         }
     }
+
+    /// The LOCATION parameter (`mean` / `mu` / `low`), whose form decides
+    /// whether the distribution is univariate or multivariate.
+    pub fn location(&self) -> &DistributionParam {
+        match self {
+            Distribution::Normal { mean, .. } => mean,
+            Distribution::Lognormal { mu, .. } => mu,
+            Distribution::Uniform { low, .. } => low,
+        }
+    }
+
+    /// True when the location parameter is an array — the schema's
+    /// univariate/multivariate discriminator.
+    pub fn is_multivariate(&self) -> bool {
+        self.location().is_vector()
+    }
+
+    /// The full covariance matrix, when this distribution carries one.
+    pub fn cov(&self) -> Option<&CovarianceMatrix> {
+        match self {
+            Distribution::Normal { cov, .. } | Distribution::Lognormal { cov, .. } => cov.as_ref(),
+            Distribution::Uniform { .. } => None,
+        }
+    }
 }
 
-/// Binds a parameter to one variable of a `data_sources` entry.
+/// A distribution's location/scale parameter: a number for a scalar parameter,
+/// an array for a vector-valued one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DistributionParam {
+    /// Scalar (univariate) form.
+    Scalar(f64),
+    /// Per-component (multivariate) form.
+    Vector(Vec<f64>),
+}
+
+impl DistributionParam {
+    /// True when this is the multivariate (array) form.
+    pub fn is_vector(&self) -> bool {
+        matches!(self, DistributionParam::Vector(_))
+    }
+}
+
+/// Symmetric positive-semidefinite covariance matrix, row-major: entry
+/// `[i][j]` is the covariance of components `i` and `j`.
+pub type CovarianceMatrix = Vec<Vec<f64>>;
+
+/// A parameter's update behaviour (esm-spec §5.4, schema
+/// `ParameterUpdateSpec`): EITHER a single rule, OR an ordered array of two or
+/// more applied in declaration order.
 ///
-/// This is the 0.x `DataLoaderVariable` minus `units`: the units are declared
-/// once, on the consuming parameter, instead of twice.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataSourceBinding {
-    /// Name of the variable in the source file supplying this parameter.
-    pub file_variable: String,
+/// A single rule MUST be the object form — a one-element array is invalid — so
+/// every update set has exactly one spelling and the round trip is stable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ParameterUpdateSpec {
+    /// The object form: exactly one rule.
+    Single(ParameterUpdate),
+    /// The array form: two or more rules, applied in declaration order.
+    Several(Vec<ParameterUpdate>),
+}
 
-    /// Multiplicative factor or Expression AST taking raw file values to the
-    /// parameter's declared `units`. The schema spells this as a single
-    /// `Expression` $ref (a plain number IS an Expression); [`UnitConversion`]
-    /// is that same wire form with the bare-factor case named, which is what
-    /// the evaluation path in `unit_conversion.rs` matches on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit_conversion: Option<UnitConversion>,
+impl ParameterUpdateSpec {
+    /// The rules, in declaration order. The single form yields a one-element
+    /// slice, so every consumer reads one shape.
+    pub fn rules(&self) -> &[ParameterUpdate] {
+        match self {
+            ParameterUpdateSpec::Single(rule) => std::slice::from_ref(rule),
+            ParameterUpdateSpec::Several(rules) => rules,
+        }
+    }
 
-    /// Text-label decoding for this binding.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codes: Option<serde_json::Value>,
+    /// True iff ANY rule is `wiener` — the `brownian_parameters` test
+    /// (esm-spec §6.3.1). The schema forbids `wiener` inside the array form,
+    /// so in practice only the single form can answer true.
+    pub fn is_wiener(&self) -> bool {
+        self.rules()
+            .iter()
+            .any(|r| matches!(r, ParameterUpdate::Wiener))
+    }
 
-    /// Per-parameter override of the source-level `select`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub select: Option<serde_json::Value>,
+    /// True iff any rule requires the variable to declare a `shape` —
+    /// `schedule`, `data`, or `remesh` (esm-spec §5.4 "Cadence"): such a
+    /// parameter is a buffer whose extent is fixed at setup.
+    pub fn requires_shape(&self) -> bool {
+        self.rules().iter().any(|r| {
+            matches!(
+                r,
+                ParameterUpdate::Schedule { .. }
+                    | ParameterUpdate::Data { .. }
+                    | ParameterUpdate::Remesh { .. }
+            )
+        })
+    }
+}
 
-    /// Brief description.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+/// One update rule: WHEN a parameter refreshes, and WHAT from
+/// (esm-spec §5.4). Every kind except `wiener` carries exactly one value form
+/// — `expression`, `from`, or `handler` — held in the flattened
+/// [`UpdateValue`]; `wiener` carries none, because the parameter's
+/// `distribution` IS its value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ParameterUpdate {
+    /// A driving Wiener (Brownian) process: the parameter's `distribution` is
+    /// resampled every step with √dt increment scaling. Any such parameter
+    /// promotes the enclosing model from an ODE system to an SDE system.
+    Wiener,
+    /// Time-driven refresh at preset `times` and/or on a periodic `interval`
+    /// (at least one of the two is present) — the MTK `PresetTimeCallback` /
+    /// `tstops` analogue.
+    Schedule {
+        /// Explicit simulation times (the tstops) at which to refresh.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        times: Option<Vec<f64>>,
+        /// Periodic refresh interval in simulation time units.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interval: Option<f64>,
+        /// Offset from t=0 for the first periodic refresh.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_offset: Option<f64>,
+        /// The value form.
+        #[serde(flatten)]
+        value: UpdateValue,
+    },
+    /// Refresh at the end of any timestep at which the boolean `when` is true.
+    Condition {
+        /// Boolean expression tested at the end of each timestep.
+        when: Expr,
+        /// The value form.
+        #[serde(flatten)]
+        value: UpdateValue,
+    },
+    /// Refresh when `when` crosses zero, located by root-finding.
+    Crossing {
+        /// Expression whose zero crossing triggers the refresh.
+        when: Expr,
+        /// Which crossings count: `up`, `down`, or `any` (the default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<String>,
+        /// The value form.
+        #[serde(flatten)]
+        value: UpdateValue,
+    },
+    /// Refresh when the named `data_sources` entry advances a record.
+    Data {
+        /// Key of the `data_sources` entry driving the refresh. MUST resolve
+        /// (`data_source_undefined`).
+        source: String,
+        /// The value form.
+        #[serde(flatten)]
+        value: UpdateValue,
+    },
+    /// Refresh on a mesh-topology change (AMR refinement, moving mesh).
+    Remesh {
+        /// Optional name of the remesh hook. Absent ⇒ any remesh event.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hook: Option<String>,
+        /// The value form.
+        #[serde(flatten)]
+        value: UpdateValue,
+    },
+}
 
-    /// Academic citation or data source reference.
+impl ParameterUpdate {
+    /// The rule's `kind` string, as it appears on the wire.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ParameterUpdate::Wiener => "wiener",
+            ParameterUpdate::Schedule { .. } => "schedule",
+            ParameterUpdate::Condition { .. } => "condition",
+            ParameterUpdate::Crossing { .. } => "crossing",
+            ParameterUpdate::Data { .. } => "data",
+            ParameterUpdate::Remesh { .. } => "remesh",
+        }
+    }
+
+    /// The rule's value form, or `None` for `wiener` (which has none).
+    pub fn value(&self) -> Option<&UpdateValue> {
+        match self {
+            ParameterUpdate::Wiener => None,
+            ParameterUpdate::Schedule { value, .. }
+            | ParameterUpdate::Condition { value, .. }
+            | ParameterUpdate::Crossing { value, .. }
+            | ParameterUpdate::Data { value, .. }
+            | ParameterUpdate::Remesh { value, .. } => Some(value),
+        }
+    }
+
+    /// Mutable access to the rule's value form, or `None` for `wiener`.
+    pub fn value_mut(&mut self) -> Option<&mut UpdateValue> {
+        match self {
+            ParameterUpdate::Wiener => None,
+            ParameterUpdate::Schedule { value, .. }
+            | ParameterUpdate::Condition { value, .. }
+            | ParameterUpdate::Crossing { value, .. }
+            | ParameterUpdate::Data { value, .. }
+            | ParameterUpdate::Remesh { value, .. } => Some(value),
+        }
+    }
+
+    /// The boolean/zero-crossing trigger expression (`condition` / `crossing`).
+    pub fn when(&self) -> Option<&Expr> {
+        match self {
+            ParameterUpdate::Condition { when, .. } | ParameterUpdate::Crossing { when, .. } => {
+                Some(when)
+            }
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the trigger expression (`condition` / `crossing`).
+    pub fn when_mut(&mut self) -> Option<&mut Expr> {
+        match self {
+            ParameterUpdate::Condition { when, .. } | ParameterUpdate::Crossing { when, .. } => {
+                Some(when)
+            }
+            _ => None,
+        }
+    }
+
+    /// The `data_sources` key this rule refreshes from, for the `data` kind.
+    pub fn data_source(&self) -> Option<&str> {
+        match self {
+            ParameterUpdate::Data { source, .. } => Some(source.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// The value form of an update rule: exactly one of `expression`, `from`, or
+/// `handler` (esm-spec §5.4, "What: exactly one value form"). Modelled as three
+/// options rather than an enum so the flattened round trip stays verbatim; the
+/// "exactly one" constraint is a schema-layer check.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UpdateValue {
+    /// The new value, computed symbolically (§4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference: Option<Reference>,
+    pub expression: Option<Expr>,
+
+    /// The new value, read from the `data_sources` entry named by
+    /// `update.source` (§8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<DataSourceBinding>,
+
+    /// The new value, computed by a registered handler (§5.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler: Option<FunctionalUpdate>,
 }
 
 /// A registered handler computing a parameter's new value when its update
-/// fires. This is the 0.x event `functional_affect` relocated onto the
-/// parameter it writes — so it needs no `modified_params` write list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// fires (esm-spec §5.5). The 0.x event `functional_affect`, relocated onto the
+/// parameter it writes — which is why it needs no `modified_params` list: it
+/// writes exactly one thing, the parameter carrying it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionalUpdate {
     /// Registered identifier for the handler implementation.
     pub handler_id: String,
@@ -1850,268 +2074,59 @@ pub struct FunctionalUpdate {
     pub config: Option<serde_json::Value>,
 }
 
-/// The one value form an update rule takes: where the new value comes from.
-///
-/// Every kind except `wiener` carries EXACTLY one of these (esm-spec §5.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateValueForm {
-    /// Computed symbolically from an `expression`.
-    Expression,
-    /// Read from a data source via `from`.
-    From,
-    /// Computed by a registered `handler`.
-    Handler,
+/// Binds a parameter to ONE variable of a `data_sources` entry (esm-spec §8.5).
+/// The 0.x `DataLoaderVariable` minus `units`: the units are the parameter's
+/// own, declared once on the parameter instead of twice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataSourceBinding {
+    /// Name of the variable in the source file supplying the values.
+    pub file_variable: String,
+
+    /// Multiplicative factor or Expression AST reaching the parameter's
+    /// declared `units`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_conversion: Option<UnitConversion>,
+
+    /// Text-label decoding table, passed through verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codes: Option<serde_json::Value>,
+
+    /// Per-parameter override of the source-level `select`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<serde_json::Value>,
+
+    /// Brief description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Academic citation or data source reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Reference>,
 }
 
-/// Which crossings of a `crossing` update count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Type of model variable (esm-spec §6.3). There are **two** declared types
+/// and no third: everything else a solver needs — which unknowns are ODE
+/// states, which parameters are Brownian — is DERIVED by
+/// [`crate::classification`], never declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CrossingDirection {
-    /// Positive-going crossings only.
-    Up,
-    /// Negative-going crossings only.
-    Down,
-    /// Both directions (the default).
-    #[default]
-    Any,
-}
-
-/// Declares WHEN a parameter refreshes and WHAT it refreshes from
-/// (esm-spec §5.4).
-///
-/// Six kinds. `wiener` is a driving stochastic process and takes no value
-/// form — it resamples the parameter's own `distribution`. The other five each
-/// take exactly one of `expression`, `from`, or `handler`.
-///
-/// This one construct subsumes three that 0.x kept apart: the `brownian`
-/// variable type (now `wiener`), the `discrete` type with its `RefreshTrigger`
-/// (now `schedule` / `data` / `remesh`), and the `discrete_parameters` event
-/// lists with their `functional_affect` (now `condition` / `crossing`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ParameterUpdate {
-    /// A driving Wiener (Brownian) process: resamples the parameter's
-    /// `distribution` every step with √dt increment scaling. Takes no value
-    /// form. Any wiener-updated parameter promotes the model to an SDE.
-    Wiener,
-
-    /// Time-driven refresh on a tstops schedule. At least one of `times` or
-    /// `interval` is present.
-    Schedule {
-        /// Explicit simulation times at which the parameter refreshes.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        times: Option<Vec<f64>>,
-        /// Periodic refresh interval in simulation time units.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        interval: Option<f64>,
-        /// Offset from t=0 for the first periodic refresh.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        initial_offset: Option<f64>,
-        /// Value computed symbolically.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expression: Option<Expr>,
-        /// Value read from a data source.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        from: Option<DataSourceBinding>,
-        /// Value computed by a registered handler.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handler: Option<FunctionalUpdate>,
-    },
-
-    /// Refresh at the end of any timestep at which `when` is true.
-    Condition {
-        /// Boolean expression tested at the end of each timestep.
-        when: Expr,
-        /// Value computed symbolically.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expression: Option<Expr>,
-        /// Value read from a data source.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        from: Option<DataSourceBinding>,
-        /// Value computed by a registered handler.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handler: Option<FunctionalUpdate>,
-    },
-
-    /// Refresh when `when` crosses zero, located by root-finding.
-    Crossing {
-        /// Expression whose zero crossing triggers the refresh.
-        when: Expr,
-        /// Which crossings count.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        direction: Option<CrossingDirection>,
-        /// Value computed symbolically.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expression: Option<Expr>,
-        /// Value read from a data source.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        from: Option<DataSourceBinding>,
-        /// Value computed by a registered handler.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handler: Option<FunctionalUpdate>,
-    },
-
-    /// Refresh when the named data source advances to a new record. This is
-    /// how external data enters a model in 1.0.0: the parameter IS the loaded
-    /// field.
-    Data {
-        /// Key of the `data_sources` entry driving this refresh. MUST resolve
-        /// (`data_source_undefined`).
-        source: String,
-        /// Value computed symbolically.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expression: Option<Expr>,
-        /// Value read from a data source.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        from: Option<DataSourceBinding>,
-        /// Value computed by a registered handler.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handler: Option<FunctionalUpdate>,
-    },
-
-    /// Refresh on a mesh-topology change (AMR refinement, moving mesh).
-    Remesh {
-        /// Name of the remesh hook driving the refresh. Absent ⇒ any remesh.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hook: Option<String>,
-        /// Value computed symbolically.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        expression: Option<Expr>,
-        /// Value read from a data source.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        from: Option<DataSourceBinding>,
-        /// Value computed by a registered handler.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handler: Option<FunctionalUpdate>,
-    },
-}
-
-impl ParameterUpdate {
-    /// The rule's `kind` discriminator as it is spelled in the document.
-    pub fn kind(&self) -> &'static str {
-        match self {
-            ParameterUpdate::Wiener => "wiener",
-            ParameterUpdate::Schedule { .. } => "schedule",
-            ParameterUpdate::Condition { .. } => "condition",
-            ParameterUpdate::Crossing { .. } => "crossing",
-            ParameterUpdate::Data { .. } => "data",
-            ParameterUpdate::Remesh { .. } => "remesh",
-        }
-    }
-
-    /// True for the driving Wiener process — the sole SDE-promoting rule.
-    pub fn is_wiener(&self) -> bool {
-        matches!(self, ParameterUpdate::Wiener)
-    }
-
-    /// The rule's symbolic value expression, when it takes the `expression`
-    /// value form.
-    pub fn expression(&self) -> Option<&Expr> {
-        match self {
-            ParameterUpdate::Wiener => None,
-            ParameterUpdate::Schedule { expression, .. }
-            | ParameterUpdate::Condition { expression, .. }
-            | ParameterUpdate::Crossing { expression, .. }
-            | ParameterUpdate::Data { expression, .. }
-            | ParameterUpdate::Remesh { expression, .. } => expression.as_ref(),
-        }
-    }
-
-    /// The rule's data-source binding, when it takes the `from` value form.
-    pub fn from(&self) -> Option<&DataSourceBinding> {
-        match self {
-            ParameterUpdate::Wiener => None,
-            ParameterUpdate::Schedule { from, .. }
-            | ParameterUpdate::Condition { from, .. }
-            | ParameterUpdate::Crossing { from, .. }
-            | ParameterUpdate::Data { from, .. }
-            | ParameterUpdate::Remesh { from, .. } => from.as_ref(),
-        }
-    }
-
-    /// The rule's registered handler, when it takes the `handler` value form.
-    pub fn handler(&self) -> Option<&FunctionalUpdate> {
-        match self {
-            ParameterUpdate::Wiener => None,
-            ParameterUpdate::Schedule { handler, .. }
-            | ParameterUpdate::Condition { handler, .. }
-            | ParameterUpdate::Crossing { handler, .. }
-            | ParameterUpdate::Data { handler, .. }
-            | ParameterUpdate::Remesh { handler, .. } => handler.as_ref(),
-        }
-    }
-
-    /// The rule's trigger expression (`when`), for the two kinds that have one.
-    pub fn when(&self) -> Option<&Expr> {
-        match self {
-            ParameterUpdate::Condition { when, .. } | ParameterUpdate::Crossing { when, .. } => {
-                Some(when)
-            }
-            _ => None,
-        }
-    }
-
-    /// The `data_sources` key this rule refreshes from, for `kind: "data"`.
-    pub fn source(&self) -> Option<&str> {
-        match self {
-            ParameterUpdate::Data { source, .. } => Some(source.as_str()),
-            _ => None,
-        }
-    }
-
-    /// Which of the three value forms this rule carries, if any. `wiener`
-    /// carries none by construction; for the other five exactly one is
-    /// required, and a rule carrying none or several is a schema violation.
-    pub fn value_form(&self) -> Option<UpdateValueForm> {
-        if self.expression().is_some() {
-            Some(UpdateValueForm::Expression)
-        } else if self.from().is_some() {
-            Some(UpdateValueForm::From)
-        } else {
-            self.handler().map(|_| UpdateValueForm::Handler)
-        }
-    }
-
-    /// True for the kinds that require the variable to declare a `shape`.
-    pub fn requires_shape(&self) -> bool {
-        matches!(
-            self,
-            ParameterUpdate::Schedule { .. }
-                | ParameterUpdate::Data { .. }
-                | ParameterUpdate::Remesh { .. }
-        )
-    }
-}
-
-/// A parameter's update behavior: EITHER a single rule, OR an ordered array of
-/// two or more rules applied in declaration order (esm-spec §5.4).
-///
-/// A single rule MUST be written as the object form — a one-element array is
-/// invalid — so the representation of any update set is unique and the
-/// round-trip is stable. `wiener` is admissible only as the object form.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ParameterUpdateSpec {
-    /// Exactly one rule, written as an object.
-    Single(Box<ParameterUpdate>),
-    /// Two or more rules, applied in declaration order.
-    Many(Vec<ParameterUpdate>),
-}
-
-impl ParameterUpdateSpec {
-    /// The rules in declaration order.
-    pub fn rules(&self) -> &[ParameterUpdate] {
-        match self {
-            ParameterUpdateSpec::Single(rule) => std::slice::from_ref(rule.as_ref()),
-            ParameterUpdateSpec::Many(rules) => rules.as_slice(),
-        }
-    }
-
-    /// True when ANY rule is a Wiener process. The schema forbids `wiener`
-    /// inside an array, so in practice only the single form can be Brownian.
-    pub fn is_brownian(&self) -> bool {
-        self.rules().iter().any(ParameterUpdate::is_wiener)
-    }
+pub enum VariableType {
+    /// A quantity the solver solves for. Its behaviour is stated by the
+    /// model's `equations` and NOWHERE else — there is no `expression` field
+    /// on a variable. Subsumes the 0.x `state` and `observed` types; which of
+    /// the two an unknown is follows from the form of the equation LHS that
+    /// defines it ([`crate::classification::ode_states`] /
+    /// [`crate::classification::observed_unknowns`] /
+    /// [`crate::classification::algebraic_unknowns`]).
+    Unknown,
+    /// A quantity supplied to the solver. Its value is `default` or a
+    /// `distribution`, optionally refreshed by an `update` (§5.4). Subsumes
+    /// the 0.x `parameter`, `brownian` and `discrete` types
+    /// ([`crate::classification::brownian_parameters`] /
+    /// [`crate::classification::discrete_parameters`] /
+    /// [`crate::classification::sampled_parameters`] /
+    /// [`crate::classification::constant_parameters`]).
+    Parameter,
 }
 
 /// Differential equation
@@ -2146,6 +2161,14 @@ pub struct DiscreteEvent {
     /// What happens when the event fires
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affects: Option<Vec<AffectEquation>>,
+
+    /// Functional affect specification
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub functional_affect: Option<FunctionalAffect>,
+
+    /// Parameters modified by this event
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discrete_parameters: Option<Vec<String>>,
 
     /// Whether to reinitialize the system after the event
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2217,6 +2240,10 @@ pub struct ContinuousEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reinitialize: Option<bool>,
 
+    /// Parameters modified by this event
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discrete_parameters: Option<Vec<String>>,
+
     /// Event priority (lower number = higher priority)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<u32>,
@@ -2224,6 +2251,27 @@ pub struct ContinuousEvent {
     /// Brief description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+/// Functional affect specification for events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionalAffect {
+    /// Registered identifier for the affect implementation
+    pub handler_id: String,
+
+    /// State variables accessed by the handler
+    pub read_vars: Vec<String>,
+
+    /// Parameters accessed by the handler
+    pub read_params: Vec<String>,
+
+    /// Parameters modified by the handler
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_params: Option<Vec<String>>,
+
+    /// Handler-specific configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
 }
 
 /// Root finding direction for continuous events
@@ -2357,14 +2405,17 @@ fn default_stoichiometry() -> f64 {
     1.0
 }
 
-/// Generic, runtime-agnostic description of an external data source.
+/// Generic, runtime-agnostic description of an external data source
+/// (esm-spec §8).
 ///
-/// A `DataSource` is pure I/O (RFC pure-io-data-loaders §4.1): it carries
-/// enough structural information to locate files, map timestamps to files, and
-/// describe variable semantics — rather than pointing at a runtime handler.
-/// Grid geometry, reprojection, and regridding are expressed as ordinary data
-/// and `aggregate` FAQ expressions downstream, not on the loader. Authentication
-/// and algorithm-specific tuning are runtime-only and not part of the schema.
+/// A `DataSource` is pure I/O (RFC pure-io-data-loaders §4.1): it locates,
+/// reads, decodes, slices and filters bytes and nothing else. From esm 1.0.0 it
+/// **exposes no variables and is not a component** — not a coupling endpoint,
+/// not a subsystem, not a scoped-name path root. A model consumes it by
+/// declaring a PARAMETER whose [`ParameterUpdate::Data`] names this entry and
+/// binds one of its file variables ([`DataSourceBinding`]); the parameter owns
+/// the units. Grid geometry a source reads arrives the same way, as ordinary
+/// parameters, and is transformed downstream by `aggregate` FAQs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataSource {
     /// Structural kind of the dataset. Scientific role (emissions,
@@ -2373,9 +2424,11 @@ pub struct DataSource {
     pub kind: DataSourceKind,
 
     /// File discovery configuration.
-    pub source: DataSourceSource,
+    pub source: DataSourceLocation,
 
-    /// Temporal coverage and record layout.
+    /// Temporal coverage and record layout. ABSENT means non-time-varying,
+    /// which is what refines a `data`-updated parameter's cadence seed from
+    /// DISCRETE down to CONST (CONFORMANCE_SPEC.md §5.7.2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<DataSourceTemporal>,
 
@@ -2385,21 +2438,23 @@ pub struct DataSource {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub determinism: Option<DataSourceDeterminism>,
 
-    /// Format-specific DECODE options, passed to the format reader verbatim.
-    /// They say how bytes become an array, never what the array means.
+    /// Format-specific DECODE options, passed through to the format reader
+    /// verbatim (esm-spec §8.9.1). Held as raw JSON — the set of keys is the
+    /// bound reader's, not the schema's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_options: Option<serde_json::Value>,
 
-    /// What the source delivers — the source-level default slice, which a
-    /// consuming parameter's binding may override.
+    /// Source-level default slicing (esm-spec §8.9.2), overridable per
+    /// parameter by [`DataSourceBinding::select`]. Raw JSON passthrough.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<serde_json::Value>,
 
-    /// Which records are real.
+    /// Which records are real (esm-spec §8.9.3). Raw JSON passthrough.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record_filter: Option<serde_json::Value>,
 
-    /// A source that discovers its own size.
+    /// A source that discovers its own size (esm-spec §8.9.4). Raw JSON
+    /// passthrough.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extent: Option<serde_json::Value>,
 
@@ -2439,7 +2494,7 @@ pub struct DataSourceDeterminism {
 /// File discovery configuration. Describes how to locate data files at
 /// runtime via URL templates with date/variable substitutions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DataSourceSource {
+pub struct DataSourceLocation {
     /// Jinja-style URL template with substitutions. Supported:
     /// `{date:<strftime>}` (e.g. `{date:%Y%m%d}`), `{var}`, `{sector}`,
     /// `{species}`. Custom substitutions are allowed and must be passed
@@ -2501,7 +2556,7 @@ pub enum AutoRecords {
 
 /// Multiplicative factor (number) or Expression AST used to convert source-
 /// file values to the declared units.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 // Boxing the large variant would change the wire-facing construction/match
 // ergonomics on one of the crate's most-touched types for a size win that
@@ -2708,9 +2763,15 @@ pub enum CouplingEntry {
         /// Affect equations
         #[serde(skip_serializing_if = "Option::is_none")]
         affects: Option<Vec<AffectEquation>>,
+        /// Functional affect handler
+        #[serde(skip_serializing_if = "Option::is_none")]
+        functional_affect: Option<FunctionalAffect>,
         /// Separate affects for negative-going zero crossings
         #[serde(skip_serializing_if = "Option::is_none")]
         affect_neg: Option<Vec<AffectEquation>>,
+        /// Parameters modified by this event
+        #[serde(skip_serializing_if = "Option::is_none")]
+        discrete_parameters: Option<Vec<String>>,
         /// Root finding direction
         #[serde(skip_serializing_if = "Option::is_none")]
         root_find: Option<RootFindDirection>,
@@ -2865,3 +2926,71 @@ mod coupling_field_tests {
     }
 }
 
+#[cfg(test)]
+mod discrete_event_test {
+    use super::*;
+
+    #[test]
+    fn test_discrete_event_fields_present() {
+        // Test that we can create a DiscreteEvent with discrete_parameters and reinitialize
+        let event = DiscreteEvent {
+            name: Some("test_event".to_string()),
+            trigger: DiscreteEventTrigger::Condition {
+                expression: Expr::Number(1.0),
+            },
+            affects: None,
+            functional_affect: None,
+            discrete_parameters: Some(vec!["param1".to_string(), "param2".to_string()]),
+            reinitialize: Some(true),
+            description: Some("Test event".to_string()),
+        };
+
+        // Test serialization
+        let json = serde_json::to_string(&event).expect("Serialization should work");
+        assert!(
+            json.contains("discrete_parameters"),
+            "JSON should contain discrete_parameters field"
+        );
+        assert!(
+            json.contains("reinitialize"),
+            "JSON should contain reinitialize field"
+        );
+        assert!(
+            json.contains("param1"),
+            "JSON should contain the parameter values"
+        );
+
+        // Test deserialization
+        let deserialized: DiscreteEvent =
+            serde_json::from_str(&json).expect("Deserialization should work");
+
+        assert_eq!(
+            deserialized.discrete_parameters,
+            Some(vec!["param1".to_string(), "param2".to_string()])
+        );
+        assert_eq!(deserialized.reinitialize, Some(true));
+    }
+
+    #[test]
+    fn test_discrete_event_json_parsing() {
+        let json = r#"
+        {
+            "trigger": {
+                "type": "condition",
+                "expression": 1.0
+            },
+            "discrete_parameters": ["param1", "param2"],
+            "reinitialize": true
+        }
+        "#;
+
+        let event: DiscreteEvent = serde_json::from_str(json)
+            .expect("Should parse JSON with discrete_parameters and reinitialize");
+
+        assert_eq!(
+            event.discrete_parameters,
+            Some(vec!["param1".to_string(), "param2".to_string()])
+        );
+        assert_eq!(event.reinitialize, Some(true));
+    }
+}

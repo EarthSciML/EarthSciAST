@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // ========================================
@@ -262,10 +263,139 @@ func (r *Reaction) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// The ModelVariable decoder lives in variable_model.go, beside the 1.0.0
-// type it decodes: it has to keep two wire distinctions (an int-valued
-// `default`, a present-but-empty `shape`) that are properties of that type
-// rather than of the generic decode path.
+// Custom JSON unmarshaling for ModelVariable.
+//
+// Two fields need hand decoding. `shape` is a POINTER to a slice so that an
+// authored `"shape": []` survives the round-trip (esm 1.0.0 requires the key on
+// a schedule/data/remesh parameter, so dropping it re-emits an invalid
+// document), and `update` is the ParameterUpdateSpec union — a single rule
+// object or an ordered array of two or more — normalized into `any` holding
+// ParameterUpdate or []ParameterUpdate.
+func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
+	type TempModelVariable struct {
+		Type         string          `json:"type"`
+		Units        *string         `json:"units,omitempty"`
+		DefaultUnits *string         `json:"default_units,omitempty"`
+		Default      json.RawMessage `json:"default,omitempty"`
+		Description  *string         `json:"description,omitempty"`
+		Shape        *[]string       `json:"shape,omitempty"`
+		Location     string          `json:"location,omitempty"`
+		Distribution *Distribution   `json:"distribution,omitempty"`
+		Update       json.RawMessage `json:"update,omitempty"`
+	}
+
+	var temp TempModelVariable
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
+	}
+
+	mv.Type = temp.Type
+	mv.Units = temp.Units
+	mv.DefaultUnits = temp.DefaultUnits
+	mv.Description = temp.Description
+	mv.Shape = temp.Shape
+	mv.Location = temp.Location
+	mv.Distribution = temp.Distribution
+
+	// Decode `default` through UnmarshalExpression so an integer-valued default
+	// (`"default": 1`) keeps its int wire shape instead of collapsing to
+	// float64 and re-emitting as "1.0", per RFC §5.4.1 int/float distinction.
+	def, err := unmarshalOptionalExpression(temp.Default)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal default: %w", err)
+	}
+	mv.Default = def
+
+	update, err := unmarshalParameterUpdateSpec(temp.Update)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal update: %w", err)
+	}
+	mv.Update = update
+
+	return nil
+}
+
+// unmarshalParameterUpdateSpec decodes the esm-spec §5.4 union: absent, a single
+// rule OBJECT, or an ordered ARRAY of two or more. A one-element array is
+// invalid per the spec — the round-trip is stable only because every update set
+// has exactly one spelling — so it is rejected here rather than silently
+// normalized to the object form, which would make the emitted document differ
+// from the one loaded.
+func unmarshalParameterUpdateSpec(raw json.RawMessage) (any, error) {
+	if !rawIsPresent(raw) {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(trimmed, "[") {
+		var rules []ParameterUpdate
+		if err := json.Unmarshal(raw, &rules); err != nil {
+			return nil, err
+		}
+		if len(rules) < 2 {
+			return nil, fmt.Errorf(
+				"update array must hold at least two rules (a single rule MUST be the object form, esm-spec §5.4); got %d",
+				len(rules))
+		}
+		for _, r := range rules {
+			if r.IsBrownian() {
+				return nil, fmt.Errorf(
+					"update: `wiener` is object-form only — a driving noise process IS the parameter's whole value (esm-spec §5.4)")
+			}
+		}
+		return rules, nil
+	}
+	var rule ParameterUpdate
+	if err := json.Unmarshal(raw, &rule); err != nil {
+		return nil, err
+	}
+	return rule, nil
+}
+
+// Custom JSON unmarshaling for ParameterUpdate: `when` and `expression` are
+// Expression positions and must go through UnmarshalExpression so a numeric
+// literal keeps its int/float wire shape and an operator object becomes an
+// ExprNode rather than a raw map.
+func (u *ParameterUpdate) UnmarshalJSON(data []byte) error {
+	type TempParameterUpdate struct {
+		Kind          string             `json:"kind"`
+		Times         []float64          `json:"times,omitempty"`
+		Interval      *float64           `json:"interval,omitempty"`
+		InitialOffset *float64           `json:"initial_offset,omitempty"`
+		When          json.RawMessage    `json:"when,omitempty"`
+		Direction     string             `json:"direction,omitempty"`
+		Source        string             `json:"source,omitempty"`
+		Hook          string             `json:"hook,omitempty"`
+		Expression    json.RawMessage    `json:"expression,omitempty"`
+		From          *DataSourceBinding `json:"from,omitempty"`
+		Handler       *FunctionalUpdate  `json:"handler,omitempty"`
+	}
+	var temp TempParameterUpdate
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
+	}
+	u.Kind = temp.Kind
+	u.Times = temp.Times
+	u.Interval = temp.Interval
+	u.InitialOffset = temp.InitialOffset
+	u.Direction = temp.Direction
+	u.Source = temp.Source
+	u.Hook = temp.Hook
+	u.From = temp.From
+	u.Handler = temp.Handler
+
+	when, err := unmarshalOptionalExpression(temp.When)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal update `when`: %w", err)
+	}
+	u.When = when
+
+	expr, err := unmarshalOptionalExpression(temp.Expression)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal update `expression`: %w", err)
+	}
+	u.Expression = expr
+	return nil
+}
 
 // Custom JSON unmarshaling for Species. Decodes `default` through
 // UnmarshalExpression so an integer-valued default keeps its int wire shape
@@ -390,9 +520,35 @@ func (ec *EventCoupling) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// The 0.x `DataLoaderVariable` decoder is gone with the type. Its successor,
-// DataSourceBinding, carries its own UnmarshalJSON in variable_model.go
-// alongside the rest of the 1.0.0 variable model.
+// Custom JSON unmarshaling for DataSourceBinding. `unit_conversion` is a single
+// Expression position (a plain factor is just the number spelling of one), so it
+// goes through UnmarshalExpression to keep its int/float wire shape and to
+// become an ExprNode when it is a full AST.
+func (v *DataSourceBinding) UnmarshalJSON(data []byte) error {
+	type TempDataSourceBinding struct {
+		FileVariable   string          `json:"file_variable"`
+		UnitConversion json.RawMessage `json:"unit_conversion,omitempty"`
+		Codes          any             `json:"codes,omitempty"`
+		Select         any             `json:"select,omitempty"`
+		Description    *string         `json:"description,omitempty"`
+		Reference      *Reference      `json:"reference,omitempty"`
+	}
+	var temp TempDataSourceBinding
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
+	}
+	v.FileVariable = temp.FileVariable
+	v.Codes = temp.Codes
+	v.Select = temp.Select
+	v.Description = temp.Description
+	v.Reference = temp.Reference
+	conv, err := unmarshalOptionalExpression(temp.UnitConversion)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal unit_conversion: %w", err)
+	}
+	v.UnitConversion = conv
+	return nil
+}
 
 // Custom JSON unmarshaling for VariableMapCoupling (handles the transform
 // union: legacy string kind | ExpressionNode object). A string transform is

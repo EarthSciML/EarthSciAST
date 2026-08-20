@@ -75,10 +75,10 @@ fn state(name: &str, default: f64) -> (String, ModelVariable) {
             units: None,
             default: Some(default),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     )
 }
@@ -92,10 +92,10 @@ fn param(name: &str, default: f64) -> (String, ModelVariable) {
             units: None,
             default: Some(default),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     )
 }
@@ -697,6 +697,7 @@ fn test_error_continuous_events_rejected() {
         affect_neg: None,
         root_find: None,
         reinitialize: None,
+        discrete_parameters: None,
         priority: None,
         description: None,
     });
@@ -716,6 +717,8 @@ fn test_error_discrete_events_rejected() {
         name: Some("ping".to_string()),
         trigger: DiscreteEventTrigger::PresetTimes { times: vec![1.0] },
         affects: None,
+        functional_affect: None,
+        discrete_parameters: None,
         reinitialize: None,
         description: None,
     });
@@ -781,10 +784,10 @@ fn test_error_missing_initial_condition() {
         units: None,
         default: None,
         description: None,
-        distribution: None,
-        update: None,
         shape: None,
         location: None,
+        distribution: None,
+        update: None,
     };
     // Force a state with no default
     state_x.default = None;
@@ -829,10 +832,10 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
     FlattenedSystem {

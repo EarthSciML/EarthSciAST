@@ -4,7 +4,7 @@
 # and a Zarr v2 store, both over the `file` transport — no network).
 #
 # The document under test is the committed conformance fixture
-# `tests/valid/data_loaders_ingest_and_select.esm`; only its two `url_template`s
+# `tests/valid/data_sources_ingest_and_select.esm`; only its two `url_template`s
 # are patched onto the temporary fixtures, so what the validation sweep checks
 # and what this file runs are the same declaration. The Rust mirror is
 # `pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs` — same fixture, same
@@ -100,10 +100,10 @@ end
 
 """The committed fixture with its two placeholder URLs pointed at `dir`."""
 function _lis_document(dir)
-    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "data_loaders_ingest_and_select.esm")
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "data_sources_ingest_and_select.esm")
     doc = JSON.parsefile(path)
-    doc["data_loaders"]["EGU_Emis"]["source"]["url_template"] = _lis_write_ff10_zip(dir)
-    doc["data_loaders"]["Grid"]["source"]["url_template"] = _lis_write_grid_store(dir, 10)
+    doc["data_sources"]["EGU_Emis"]["source"]["url_template"] = _lis_write_ff10_zip(dir)
+    doc["data_sources"]["Grid"]["source"]["url_template"] = _lis_write_grid_store(dir, 10)
     return doc
 end
 
@@ -181,7 +181,7 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
     @testset "a text column with no codes map is a boundary error" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            delete!(doc["data_loaders"]["EGU_Emis"]["variables"]["pollutant"], "codes")
+            delete!(doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"], "codes")
             provs = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             err = try
                 EA_LIS.provider_sample(provs["EGU_Emis.pollutant"], 0.0)
@@ -202,7 +202,7 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
     @testset "an unrecognised reader_options key is refused" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            doc["data_loaders"]["EGU_Emis"]["reader_options"] =
+            doc["data_sources"]["EGU_Emis"]["reader_options"] =
                 Dict("member_filter" => "*egu*", "skip_header_row" => true)
             err = try
                 EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
@@ -257,7 +257,7 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
             doc = _lis_document(dir)
             # A loader-level select is the default for every variable of the
             # loader — which is what keeps a truncated table aligned.
-            doc["data_loaders"]["EGU_Emis"]["select"] =
+            doc["data_sources"]["EGU_Emis"]["select"] =
                 Dict("axes" => [Dict("range" => Dict("start" => 0, "stop" => 2))])
             cache = joinpath(dir, "cache")
             # [0:2] is the first two SURVIVING records (100, 7) — never the first
@@ -271,7 +271,7 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
     @testset "a truncated table re-discovers its own smaller extent" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            doc["data_loaders"]["EGU_Emis"]["select"] =
+            doc["data_sources"]["EGU_Emis"]["select"] =
                 Dict("axes" => [Dict("range" => Dict("start" => 0, "stop" => 2))])
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             insp = EA_LIS.BuildInspection()
@@ -301,7 +301,7 @@ _lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
     @testset "an unrecognised axis selector is refused at construction" begin
         mktempdir() do dir
             doc = _lis_document(dir)
-            doc["data_loaders"]["Grid"]["variables"]["src_W"]["select"] =
+            doc["data_sources"]["Grid"]["variables"]["src_W"]["select"] =
                 Dict("axes" => [Dict("prefix" => 4)])
             err = try
                 EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))

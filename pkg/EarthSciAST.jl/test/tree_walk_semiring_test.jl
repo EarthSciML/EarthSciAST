@@ -69,7 +69,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     @testset "(a) e2e empty scalar aggregate → 0̄" begin
         for (sr, expected) in (("sum_product", 0.0), ("min_sum", Inf),
                                ("max_product", -Inf), ("max_sum", -Inf))
-            vars = Dict("z" => ModelVariable(StateVariable))
+            vars = Dict("z" => ModelVariable(UnknownVariable))
             # D(z) = aggregate_{k ∈ [1,0]} 1   (empty range ⇒ 0̄)
             rhs = OpExpr("aggregate", ESM.ASTExpr[];
                 output_idx=Any[], semiring=sr, expr_body=_n(1.0),
@@ -86,9 +86,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     @testset "(a) non-empty min_sum / max_product reductions" begin
         # D(z) = min_{j ∈ 1:5} x[j];  D(w) = max_{j ∈ 1:5} x[j]
-        vars = Dict("x" => ModelVariable(StateVariable),
-                    "z" => ModelVariable(StateVariable),
-                    "w" => ModelVariable(StateVariable))
+        vars = Dict("x" => ModelVariable(UnknownVariable),
+                    "z" => ModelVariable(UnknownVariable),
+                    "w" => ModelVariable(UnknownVariable))
         agg_min = OpExpr("aggregate", ESM.ASTExpr[];
             output_idx=Any[], semiring="min_sum",
             expr_body=_idx("x", _v("j")), ranges=Dict("j" => Any[1, 5]))
@@ -110,7 +110,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     @testset "(b) aggregate alias ≡ arrayop" begin
         N = 4
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         ics = Dict("u[$i]" => Float64(i) for i in 1:N)
         mk(tag) = ESM.Model(vars, [ESM.Equation(
             OpExpr(tag, ESM.ASTExpr[]; output_idx=Any["i"],
@@ -133,8 +133,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     @testset "(c) interval index set resolution" begin
         N = 5
-        vars = Dict("u" => ModelVariable(StateVariable),
-                    "total" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable),
+                    "total" => ModelVariable(UnknownVariable))
         index_sets = Dict("cells" => ESM.IndexSet("interval"; size=N))
         eqs = [
             # D(u[i]) = -u[i]  for i ∈ cells
@@ -167,7 +167,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     #         the categorical index is just a const_array (keyed factor, §5.4).
     # ------------------------------------------------------------------
     @testset "(c)+(d) categorical index set + keyed-factor table" begin
-        vars = Dict("total" => ModelVariable(StateVariable))
+        vars = Dict("total" => ModelVariable(UnknownVariable))
         index_sets = Dict("county" =>
             ESM.IndexSet("categorical"; members=["Champaign", "Cook", "Sangamon"]))
         # D(total) = Σ_{c ∈ county} pop[c]   (pop is a categorical-keyed table)
@@ -194,7 +194,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         n_edges       = [1.0, 2.0, 2.0, 1.0]
         carrs = Dict("cells_on_cell" => cells_on_cell, "coeff" => coeff,
                      "n_edges_on_cell" => n_edges)
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         _c = _v("c"); _k = _v("k")
         body = _op("*", _op("index", _v("coeff"), _c, _k),
                    _op("-", _op("index", _v("u"), _op("index", _v("cells_on_cell"), _c, _k)),
@@ -234,8 +234,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # (c) Undeclared `{from}` name → clear error (no implicit interval, §5.2).
     # ------------------------------------------------------------------
     @testset "(c) undeclared index set errors" begin
-        vars = Dict("u" => ModelVariable(StateVariable),
-                    "total" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable),
+                    "total" => ModelVariable(UnknownVariable))
         eq = ESM.Equation(_op("D", _v("total"); wrt="t"),
             OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any[], semiring="sum_product",
                    expr_body=_idx("u", _v("i")),

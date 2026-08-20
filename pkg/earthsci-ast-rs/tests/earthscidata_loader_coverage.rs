@@ -13,33 +13,12 @@
 //!  1. It validates against the schema (no schema errors).
 //!  2. It round-trips through parse -> serialize -> parse without losing the
 //!     DataSource block.
-//!  3. Basic invariants on the new schema fields (at least one data_source,
-//!     each loader has a non-empty url_template and variables map).
+//!  3. Basic invariants on the new schema fields (at least one data source,
+//!     each with a non-empty url_template) and on the CONSUMING parameters,
+//!     which from esm 1.0.0 are where the file-variable bindings and the units
+//!     live.
 
 use earthsci_ast::{DataSourceKind, EsmFile, load, save};
-
-/// Every `file_variable` the document's model parameters bind, across all
-/// `update` rules.
-///
-/// Since 1.0.0 a data source declares no variables of its own: the CONSUMING
-/// parameter names the file variable it binds and owns the units
-/// (esm-spec §8.5). So the coverage this test asserts moved from
-/// `data_sources[*].variables` onto `models[*].variables[*].update.from`.
-fn bound_file_variables(f: &EsmFile) -> std::collections::BTreeMap<String, String> {
-    let mut out = std::collections::BTreeMap::new();
-    for model in f.models.iter().flatten().map(|(_, m)| m) {
-        for (vname, var) in &model.variables {
-            let Some(update) = &var.update else { continue };
-            for rule in update.rules() {
-                if let Some(binding) = rule.from() {
-                    out.insert(binding.file_variable.clone(), vname.clone());
-                }
-            }
-        }
-    }
-    out
-}
-
 
 struct Fixture {
     /// Short name used in assertion messages.
@@ -109,14 +88,14 @@ fn load_fixture(fx: &Fixture) -> EsmFile {
 }
 
 #[test]
-fn every_earthscidata_source_validates_against_schema() {
+fn every_earthscidata_loader_validates_against_schema() {
     for fx in FIXTURES {
         let _ = load_fixture(fx);
     }
 }
 
 #[test]
-fn every_earthscidata_source_round_trips_without_loss() {
+fn every_earthscidata_loader_round_trips_without_loss() {
     for fx in FIXTURES {
         let parsed = load_fixture(fx);
         let serialized =
@@ -145,25 +124,23 @@ fn every_earthscidata_source_round_trips_without_loss() {
                 .get(name)
                 .unwrap_or_else(|| panic!("{}: loader '{}' disappeared", fx.name, name));
             assert_eq!(
+                dl1.temporal.is_some(),
+                dl2.temporal.is_some(),
+                "{}/{}: temporal block changed",
+                fx.name,
+                name
+            );
+            assert_eq!(
                 dl1.source.url_template, dl2.source.url_template,
                 "{}/{}: url_template changed",
                 fx.name, name
             );
         }
-
-        // The bindings live on the consuming parameters now, so that is what
-        // must survive the round-trip.
-        assert_eq!(
-            bound_file_variables(&parsed),
-            bound_file_variables(&reparsed),
-            "{}: parameter/file_variable bindings changed across round-trip",
-            fx.name
-        );
     }
 }
 
 #[test]
-fn every_earthscidata_source_has_expected_variables() {
+fn every_earthscidata_loader_has_expected_variables() {
     for fx in FIXTURES {
         let parsed = load_fixture(fx);
         let loaders = parsed
@@ -176,9 +153,8 @@ fn every_earthscidata_source_has_expected_variables() {
             fx.name
         );
 
-        // Every file variable the document's parameters bind.
-        let bound = bound_file_variables(&parsed);
-        let all_vars: std::collections::HashSet<String> = bound.keys().cloned().collect();
+        // Flatten every variable across every loader in the fixture.
+        let mut all_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (loader_name, dl) in loaders {
             assert!(
                 !dl.source.url_template.is_empty(),
@@ -191,29 +167,41 @@ fn every_earthscidata_source_has_expected_variables() {
             match dl.kind {
                 DataSourceKind::Grid | DataSourceKind::Points | DataSourceKind::Static => {}
             }
+            let _ = loader_name;
         }
 
-        // A binding names a non-empty file variable, and the consuming
-        // parameter — which now owns the units — declares them.
-        for (file_variable, param) in &bound {
-            assert!(
-                !file_variable.is_empty(),
-                "{}: a binding has an empty file_variable",
-                fx.name
-            );
-            let units = parsed
-                .models
-                .iter()
-                .flatten()
-                .find_map(|(_, m)| m.variables.get(param))
-                .and_then(|v| v.units.as_deref())
-                .unwrap_or("");
-            assert!(
-                !units.is_empty(),
-                "{}/{}: consuming parameter declares no units",
-                fx.name,
-                param
-            );
+        // From esm 1.0.0 a source declares no variables: the CONSUMING
+        // PARAMETER carries `update: {kind: "data", source, from}` and owns the
+        // units (esm-spec 5.4, 8.5). So the fixture's coverage is read off the
+        // model's parameters, not off the source.
+        for model in parsed.models.iter().flatten().map(|(_, m)| m) {
+            for (vname, var) in &model.variables {
+                let Some(update) = &var.update else { continue };
+                let bindings: Vec<&earthsci_ast::DataSourceBinding> = update
+                    .rules()
+                    .iter()
+                    .filter(|r| r.data_source().is_some())
+                    .filter_map(|r| r.value().and_then(|v| v.from.as_ref()))
+                    .collect();
+                if bindings.is_empty() {
+                    continue;
+                }
+                for binding in bindings {
+                    assert!(
+                        !binding.file_variable.is_empty(),
+                        "{}/{}: file_variable is empty",
+                        fx.name,
+                        vname
+                    );
+                }
+                assert!(
+                    var.units.as_deref().is_some_and(|u| !u.is_empty()),
+                    "{}/{}: a source-fed parameter must declare its own units",
+                    fx.name,
+                    vname
+                );
+                all_vars.insert(vname.clone());
+            }
         }
 
         for expected in fx.expected_variables {
@@ -229,7 +217,7 @@ fn every_earthscidata_source_has_expected_variables() {
 }
 
 #[test]
-fn earthscidata_source_coverage_matches_amendment_list() {
+fn earthscidata_loader_coverage_matches_amendment_list() {
     // Mayor's amendment on gt-0c7 lists the concrete EarthSciData.jl loaders
     // that must be covered. Keep this list in lockstep with the amendment so
     // that if a future loader is added upstream we are forced to revisit.

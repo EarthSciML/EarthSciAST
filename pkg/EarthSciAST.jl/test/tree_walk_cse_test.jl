@@ -40,8 +40,8 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     # ----------------------------------------------------------------
     @testset "instrumented count: K occurrences → 1 cached subexpression" begin
         vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(StateVariable; default=0.3),
-            "b" => ModelVariable(StateVariable; default=0.5),
+            "a" => ModelVariable(UnknownVariable; default=0.3),
+            "b" => ModelVariable(UnknownVariable; default=0.5),
             "k" => ModelVariable(ParameterVariable; default=2.0),
         )
         apb = _cse_op("+", _cse_v("a"), _cse_v("b"))
@@ -74,9 +74,9 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     # ----------------------------------------------------------------
     @testset "nested cached subexpressions are topologically ordered" begin
         vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(StateVariable; default=0.7),
-            "b" => ModelVariable(StateVariable; default=0.2),
-            "c" => ModelVariable(StateVariable; default=0.0),
+            "a" => ModelVariable(UnknownVariable; default=0.7),
+            "b" => ModelVariable(UnknownVariable; default=0.2),
+            "c" => ModelVariable(UnknownVariable; default=0.0),
         )
         s  = _cse_op("+", _cse_v("a"), _cse_v("b"))
         ss = _cse_op("*", _cse_op("+", _cse_v("a"), _cse_v("b")),
@@ -109,8 +109,8 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     # ----------------------------------------------------------------
     @testset "no common subexpressions → empty prelude (unchanged f!)" begin
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
-            "y" => ModelVariable(StateVariable; default=2.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
+            "y" => ModelVariable(UnknownVariable; default=2.0),
             "r" => ModelVariable(ParameterVariable; default=0.5),
         )
         eqs = ESM.Equation[
@@ -135,9 +135,9 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
     # ----------------------------------------------------------------
     @testset "reaction-network fluxes shared across species balances" begin
         vars = Dict{String,ModelVariable}(
-            "A" => ModelVariable(StateVariable; default=1.5),
-            "B" => ModelVariable(StateVariable; default=0.8),
-            "C" => ModelVariable(StateVariable; default=0.4),
+            "A" => ModelVariable(UnknownVariable; default=1.5),
+            "B" => ModelVariable(UnknownVariable; default=0.8),
+            "C" => ModelVariable(UnknownVariable; default=0.4),
             "k1" => ModelVariable(ParameterVariable; default=0.3),
             "k2" => ModelVariable(ParameterVariable; default=0.7),
         )
@@ -186,7 +186,7 @@ _cse_fn(name, args...) = OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
         λ = 0.9
         N0 = 5.0
         vars = Dict{String,ModelVariable}(
-            "N" => ModelVariable(StateVariable; default=N0),
+            "N" => ModelVariable(UnknownVariable; default=N0),
             "lam" => ModelVariable(ParameterVariable; default=λ),
         )
         # D(N) = -(lam*N) - (lam*N) + (lam*N)  ≡ -(lam*N); lam*N appears 3×.
@@ -248,8 +248,8 @@ end
                             _cse_op("sqrt", _cse_v("a")), _cse_n(0))
         model(a0) = ESM.Model(
             Dict{String,ModelVariable}(
-                "a" => ModelVariable(StateVariable; default=a0),
-                "b" => ModelVariable(StateVariable; default=0.0),
+                "a" => ModelVariable(UnknownVariable; default=a0),
+                "b" => ModelVariable(UnknownVariable; default=0.0),
             ),
             ESM.Equation[
                 ESM.Equation(_cse_D("a"), guarded()),
@@ -284,8 +284,8 @@ end
                          _cse_op(">", _cse_op("log", _cse_v("a")), _cse_n(1)))
         m = ESM.Model(
             Dict{String,ModelVariable}(
-                "a" => ModelVariable(StateVariable; default=-1.0),
-                "b" => ModelVariable(StateVariable; default=0.0),
+                "a" => ModelVariable(UnknownVariable; default=-1.0),
+                "b" => ModelVariable(UnknownVariable; default=0.0),
             ),
             ESM.Equation[ESM.Equation(_cse_D("a"), disj()),
                          ESM.Equation(_cse_D("b"), disj())])
@@ -306,8 +306,8 @@ end
                          _cse_op(">", _cse_op("sqrt", _cse_v("a")), _cse_n(1)))
         m = ESM.Model(
             Dict{String,ModelVariable}(
-                "a" => ModelVariable(StateVariable; default=-1.0),
-                "b" => ModelVariable(StateVariable; default=0.0),
+                "a" => ModelVariable(UnknownVariable; default=-1.0),
+                "b" => ModelVariable(UnknownVariable; default=0.0),
             ),
             ESM.Equation[ESM.Equation(_cse_D("a"), conj()),
                          ESM.Equation(_cse_D("b"), conj())])
@@ -331,9 +331,9 @@ end
         apb() = _cse_op("+", _cse_v("a"), _cse_v("b"))
         m = ESM.Model(
             Dict{String,ModelVariable}(
-                "a" => ModelVariable(StateVariable; default=0.3),
-                "b" => ModelVariable(StateVariable; default=0.5),
-                "c" => ModelVariable(StateVariable; default=0.0),
+                "a" => ModelVariable(UnknownVariable; default=0.3),
+                "b" => ModelVariable(UnknownVariable; default=0.5),
+                "c" => ModelVariable(UnknownVariable; default=0.0),
             ),
             ESM.Equation[
                 ESM.Equation(_cse_D("a"),
@@ -377,11 +377,11 @@ end
     @test A + (B + C) === 0.0
 
     _vars() = Dict{String,ModelVariable}(
-        "a" => ModelVariable(StateVariable; default=A),
-        "b" => ModelVariable(StateVariable; default=B),
-        "c" => ModelVariable(StateVariable; default=C),
-        "x" => ModelVariable(StateVariable; default=0.0),
-        "y" => ModelVariable(StateVariable; default=0.0),
+        "a" => ModelVariable(UnknownVariable; default=A),
+        "b" => ModelVariable(UnknownVariable; default=B),
+        "c" => ModelVariable(UnknownVariable; default=C),
+        "x" => ModelVariable(UnknownVariable; default=0.0),
+        "y" => ModelVariable(UnknownVariable; default=0.0),
     )
     _held() = ESM.Equation[ESM.Equation(_cse_D(s), _cse_n(0)) for s in ("a", "b", "c")]
     left()  = _cse_op("+", _cse_op("+", _cse_v("a"), _cse_v("b")), _cse_v("c"))
@@ -461,16 +461,16 @@ end
     # only the `F_i` (and the `sza` beneath them) can be shared. That is precisely
     # the sharing the `fn` barrier used to forbid.
     function _fanout_model(K::Int, M::Int)
-        vars = Dict{String,ModelVariable}("sza" => ModelVariable(ObservedVariable))
+        vars = Dict{String,ModelVariable}("sza" => ModelVariable(UnknownVariable))
         eqs = ESM.Equation[ESM.Equation(_cse_v("sza"), _sza_expr())]
         for i in 1:K
-            vars["F$i"] = ModelVariable(ObservedVariable)
+            vars["F$i"] = ModelVariable(UnknownVariable)
             push!(eqs, ESM.Equation(_cse_v("F$i"),
                 _cse_fn("interp.linear", _cse_const(_band_table(i)),
                         _cse_const(_band_axis()), _cse_v("sza"))))
         end
         for j in 1:M
-            vars["x$j"] = ModelVariable(StateVariable; default=0.0)
+            vars["x$j"] = ModelVariable(UnknownVariable; default=0.0)
             terms = ESM.ASTExpr[_cse_op("*", _cse_n(1.0 + 0.5 * i + 0.25 * j),
                                         _cse_v("F$i")) for i in 1:K]
             push!(eqs, ESM.Equation(_cse_D("x$j"), OpExpr("+", terms)))
@@ -575,8 +575,8 @@ end
     @testset "subexpressions inside a `fn` argument are shared with outside uses" begin
         tbl, ax = _band_table(1), _band_axis()
         vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(StateVariable; default=0.3),
-            "b" => ModelVariable(StateVariable; default=0.5),
+            "a" => ModelVariable(UnknownVariable; default=0.3),
+            "b" => ModelVariable(UnknownVariable; default=0.5),
         )
         apb() = _cse_op("+", _cse_v("a"), _cse_v("b"))
         call() = _cse_fn("interp.linear", _cse_const(tbl), _cse_const(ax), apb())
@@ -619,8 +619,8 @@ end
     #   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
     _pg_shared_model() = ESM.Model(
         Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
-            "y" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
+            "y" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=2.0),
         ),
         begin
@@ -666,10 +666,10 @@ end
         # hoist candidate in its own right. Distinct buffer VALUES make a merge show
         # up as a wrong number, not just a wrong slot count.
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
-            "y" => ModelVariable(StateVariable; default=1.0),
-            "z" => ModelVariable(StateVariable; default=1.0),
-            "w" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
+            "y" => ModelVariable(UnknownVariable; default=1.0),
+            "z" => ModelVariable(UnknownVariable; default=1.0),
+            "w" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=2.0),
         )
         prod(buf, off) = _cse_op("*", _idx(buf, _i(off)), _cse_v("k"))
@@ -743,17 +743,21 @@ end
     #   D(x) = sin(g[1]*k) + cos(g[1]*k);  D(y) = g[1]*k;  D(z) = sin(h[1]*k) + cos(h[1]*k)
     _pg_discrete_model() = ESM.Model(
         Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
-            "y" => ModelVariable(StateVariable; default=1.0),
-            "z" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
+            "y" => ModelVariable(UnknownVariable; default=1.0),
+            "z" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=2.0),
-            "g" => ModelVariable(ObservedVariable; shape=["j"], expression=_pg_agg(1.0)),
-            "h" => ModelVariable(ObservedVariable; shape=["j"], expression=_pg_agg(3.0)),
+            # esm 1.0.0: `g` / `h` are plain unknowns; their defining bodies are
+            # the bare-variable-LHS equations below (esm-spec §6.3.1).
+            "g" => ModelVariable(UnknownVariable; shape=["j"]),
+            "h" => ModelVariable(UnknownVariable; shape=["j"]),
         ),
         begin
             gk() = _cse_op("*", _idx("g", _i(1)), _cse_v("k"))
             hk() = _cse_op("*", _idx("h", _i(1)), _cse_v("k"))
             ESM.Equation[
+                ESM.Equation(_cse_v("g"), _pg_agg(1.0)),
+                ESM.Equation(_cse_v("h"), _pg_agg(3.0)),
                 ESM.Equation(_cse_D("x"),
                     _cse_op("+", _cse_op("sin", gk()), _cse_op("cos", gk()))),
                 ESM.Equation(_cse_D("y"), gk()),
@@ -828,8 +832,8 @@ _ct_dualp(p) = NamedTuple{keys(p)}(map(v -> ForwardDiff.Dual{Nothing}(v, 1.0), v
 #   D(x) = k*x ;  D(y) = (-k)*y
 _ct_arrhenius() = ESM.Model(
     Dict{String,ModelVariable}(
-        "x"    => ModelVariable(StateVariable; default=1.5),
-        "y"    => ModelVariable(StateVariable; default=2.5),
+        "x"    => ModelVariable(UnknownVariable; default=1.5),
+        "y"    => ModelVariable(UnknownVariable; default=2.5),
         "A"    => ModelVariable(ParameterVariable; default=3.2e5),
         "Ea"   => ModelVariable(ParameterVariable; default=5.0e4),
         "R"    => ModelVariable(ParameterVariable; default=8.314),
@@ -1032,9 +1036,9 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # ----------------------------------------------------------------
     @testset "a slot reading a live forcing buffer is TIME-cadence, not const" begin
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
-            "y" => ModelVariable(StateVariable; default=1.0),
-            "z" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
+            "y" => ModelVariable(UnknownVariable; default=1.0),
+            "z" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=2.0),
             "m" => ModelVariable(ParameterVariable; default=3.0),
         )
@@ -1093,8 +1097,8 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # ----------------------------------------------------------------
     @testset "a def reading a DYNAMIC slot through a cache ref is DYNAMIC" begin
         vars = Dict{String,ModelVariable}(
-            "a" => ModelVariable(StateVariable; default=0.3),
-            "b" => ModelVariable(StateVariable; default=0.5),
+            "a" => ModelVariable(UnknownVariable; default=0.3),
+            "b" => ModelVariable(UnknownVariable; default=0.5),
         )
         S() = _cse_op("+", _cse_v("a"), _cse_v("b"))
         Q() = _cse_op("sin", S())

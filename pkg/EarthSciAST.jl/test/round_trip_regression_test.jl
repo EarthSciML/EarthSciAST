@@ -217,7 +217,7 @@ end
       "models": {
         "M": {
           "variables": {
-            "x": { "type": "state", "default": 1.5 },
+            "x": { "type": "unknown", "default": 1.5 },
             "K": { "type": "parameter", "default": 2.5 }
           },
           "equations": [
@@ -306,7 +306,7 @@ end
       },
       "models": {
         "M": {
-          "variables": { "x": { "type": "state", "default": 1.5 } },
+          "variables": { "x": { "type": "unknown", "default": 1.5 } },
           "equations": [
             { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 0.5 }
           ]

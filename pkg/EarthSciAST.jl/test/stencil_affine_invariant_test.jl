@@ -25,7 +25,7 @@ _du(f!, u0, p, t) = (du = zero(u0); f!(du, u0, p, t); du)
 
 # D(c[i]) = sin(2t)·c[i]  — sin(2t) invariant + time-varying → hoisted, re-evaluated.
 function _inv_time_model(N)
-    vars = Dict("c" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("c" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("*", _op("sin", _op("*", _n(2.0), _v("t"))), _idx("c", _v("i")))
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, N), _ao1(body, "i", 1, N))])
 end
@@ -33,7 +33,7 @@ end
 # D(u[i]) = (g/h)·(u[i-1] − 2u[i] + u[i+1])  — g/h invariant parameter subexpr.
 function _inv_param_model(N; g=3.0, h=7.0)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
         "g" => ESM.ModelVariable(ESM.ParameterVariable; default=g),
         "h" => ESM.ModelVariable(ESM.ParameterVariable; default=h))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
@@ -47,8 +47,8 @@ end
 # arrayop → s·s is loop-invariant but moves with the integrator.
 function _inv_state_model(N)
     vars = Dict{String,ESM.ModelVariable}(
-        "c" => ESM.ModelVariable(ESM.StateVariable),
-        "s" => ESM.ModelVariable(ESM.StateVariable))
+        "c" => ESM.ModelVariable(ESM.UnknownVariable),
+        "s" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("*", _op("*", _v("s"), _v("s")), _idx("c", _v("i")))
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, N), _ao1(body, "i", 1, N)),
                      ESM.Equation(_D("s"), _n(0.0))])
@@ -56,7 +56,7 @@ end
 
 # pure Laplacian — every op mixes a cell-varying gather, so nothing is invariant.
 function _inv_none_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                     _op("*", _n(-2.0), _idx("u", _v("i"))),
                     _idx("u", _op("+", _v("i"), _i(1))))

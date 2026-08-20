@@ -32,7 +32,7 @@ const _LA = [0.0, 1.0, 2.0, 3.0, 4.0]
 
 # D(u[i]) = interp.linear(table, axis, u[i]) — pure local query, one box.
 function _fn_local_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("fn", _const(_LT), _const(_LA), _idx("u", _v("i")); name="interp.linear")
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                   _ao1(body, "i", 1, N))])
@@ -42,7 +42,7 @@ end
 # interp query is a NEIGHBOUR (ghost at i=N) and it is summed with a Laplacian, so
 # interior + two boundary boxes all carry the fn leaf.
 function _fn_combined_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     itp = _op("fn", _const(_LT), _const(_LA),
               _idx("u", _op("+", _v("i"), _i(1))); name="interp.linear")
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
@@ -54,7 +54,7 @@ end
 
 # D(u[i]) = interp.searchsorted(u[i], xs) — Int-returning core wrapped to Float64.
 function _fn_searchsorted_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("fn", _idx("u", _v("i")), _const(_LA); name="interp.searchsorted")
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                   _ao1(body, "i", 1, N))])
@@ -66,7 +66,7 @@ const _BT = Any[Any[1.0, 1.5, 2.0], Any[1.1, 1.6, 2.1], Any[1.2, 1.7, 2.2]]
 const _BX = [0.0, 1.0, 2.0]
 const _BY = [0.0, 1.0, 2.0]
 function _fn_bilinear_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("fn", _const(_BT), _const(_BX), _const(_BY),
                _idx("u", _v("i")), _idx("u", _op("+", _v("i"), _i(1)));
                name="interp.bilinear")

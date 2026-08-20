@@ -240,32 +240,157 @@ class AffectEquation:
 
 
 @dataclass
-class ModelVariable:
-    """A variable in a mathematical model.
+class Distribution:
+    """A parameter's value drawn from a probability distribution (esm-spec
+    §5.4 / §6.3). The closed set is ``normal`` / ``lognormal`` / ``uniform``;
+    a binding implements exactly these and rejects anything else.
 
-    The "brownian" type denotes a stochastic noise source (Wiener process); the
-    presence of any brownian variable promotes the enclosing model from an ODE
-    system to an SDE system. The optional ``noise_kind`` and
-    ``correlation_group`` fields apply only to brownian variables.
+    Univariate when the location parameter (``mean`` / ``mu`` / ``low``) is a
+    number, multivariate when it is an array — in which case the parameter's
+    ``shape`` must agree and ``cov`` gives the full covariance matrix. The
+    location/spread slots are spelled per kind (``mean``/``std`` for normal,
+    ``mu``/``sigma`` for lognormal, ``low``/``high`` for uniform) and only the
+    slots belonging to ``kind`` are ever populated or emitted.
+
+    WHEN the value is drawn is decided by the parameter's ``update``, and that
+    is the whole difference between the two uses: with NO update it is sampled
+    once at setup (the uncertainty-quantification / ensemble case); with
+    ``update.kind == "wiener"`` it is resampled every step with sqrt(dt) scaling
+    (the stochastic-process case that makes the model an SDE).
     """
 
-    type: Literal["state", "parameter", "observed", "brownian"]
+    kind: Literal["normal", "lognormal", "uniform"]
+    # normal
+    mean: float | list[float] | None = None
+    std: float | list[float] | None = None
+    # lognormal (both spreads are on the LOG scale)
+    mu: float | list[float] | None = None
+    sigma: float | list[float] | None = None
+    # uniform (independent by construction — no covariance form)
+    low: float | list[float] | None = None
+    high: float | list[float] | None = None
+    # Symmetric positive-semidefinite covariance matrix, row-major. Shared by
+    # normal and lognormal; mutually exclusive with std / sigma. This is how the
+    # format encodes CORRELATED noise: one vector-valued parameter with a `cov`,
+    # instead of the opaque correlation-group tags 0.x used and never gave a
+    # matrix for.
+    cov: list[list[float]] | None = None
+
+
+@dataclass
+class DataSourceBinding:
+    """Binds a parameter to ONE variable of a ``data_sources`` entry (esm-spec
+    §8.5). The 0.x ``DataLoaderVariable`` minus ``units``: the units are the
+    parameter's own, declared once on the parameter instead of twice.
+
+    ``select`` overrides the source-level default for this parameter only, which
+    is how a full-grid field and a prefix of it are both read from one
+    ``file_variable`` without either being sliced by the consumer.
+    """
+
+    file_variable: str
+    # Multiplicative factor reaching the parameter's declared units: a plain
+    # number, a reference string, or a full Expression AST (§4). All three are
+    # `Expression` — spelling the field `oneOf: [number, Expression]` (0.x) was
+    # unsatisfiable for every plain factor, since a number matches both branches.
+    unit_conversion: Expr | None = None
+    codes: dict[str, Any] | None = None
+    select: dict[str, Any] | None = None
+    description: str | None = None
+    reference: Reference | None = None
+
+
+@dataclass
+class FunctionalUpdate:
+    """A registered handler computing a parameter's new value when its update
+    fires (esm-spec §5.4). The 0.x event ``functional_affect`` relocated: a
+    handler's only write channel was ``modified_params``, so it now lives ON the
+    parameter it writes and needs no write list at all.
+    """
+
+    handler_id: str
+    read_vars: list[str] = field(default_factory=list)
+    read_params: list[str] = field(default_factory=list)
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ParameterUpdate:
+    """One rule declaring WHEN a parameter refreshes and WHAT from (esm-spec
+    §5.4). Six kinds, and this single dataclass carries the union of their
+    slots — only those belonging to ``kind`` are ever populated or emitted.
+
+    ``wiener`` is a driving stochastic process: it takes no value form (it
+    resamples the parameter's own ``distribution``) and requires one. The other
+    five each take EXACTLY ONE value form — ``expression``, ``from_source``
+    (wire key ``from``), or ``handler``.
+
+    Together the six subsume three constructs 0.x kept apart: the ``brownian``
+    variable type (now ``wiener``), the ``discrete`` type with its
+    ``RefreshTrigger`` (now ``schedule`` / ``data`` / ``remesh``), and the
+    ``discrete_parameters`` event lists with their ``functional_affect`` (now
+    ``condition`` / ``crossing``). It is also the SOLE seed of the DISCRETE
+    cadence class (CONFORMANCE_SPEC §5.7.2).
+    """
+
+    kind: Literal["wiener", "schedule", "condition", "crossing", "data", "remesh"]
+    # schedule: at least one of `times` / `interval` is required.
+    times: list[float] | None = None
+    interval: float | None = None
+    initial_offset: float | None = None
+    # condition / crossing: the trigger expression.
+    when: Expr | None = None
+    # crossing: which crossings count — "up" | "down" | "any" (default "any").
+    direction: str | None = None
+    # data: the `data_sources` key whose record advance drives the refresh.
+    # MUST resolve (`data_source_undefined`).
+    source: str | None = None
+    # remesh: the remesh hook driving the refresh; absent => any remesh event.
+    hook: str | None = None
+    # The three value forms — exactly one, for every kind except `wiener`.
+    expression: Expr | None = None
+    from_source: DataSourceBinding | None = None  # wire key "from"
+    handler: FunctionalUpdate | None = None
+
+
+@dataclass
+class ModelVariable:
+    """A variable in a mathematical model — either an ``unknown`` the solver
+    solves for, or a ``parameter`` supplied to it. There is no third kind.
+
+    Everything else a solver needs is DERIVED, never declared, and
+    :mod:`earthsci_ast.classification` is the one place that derivation lives:
+    whether an unknown is an ODE state, observed or algebraic follows from the
+    model's EQUATIONS (there is no ``expression`` field on a variable), and
+    whether a parameter is Brownian, discrete, sampled or constant follows from
+    its ``distribution`` and ``update``.
+    """
+
+    type: Literal["unknown", "parameter"]
     units: str | None = None
     default: Any | None = None
     default_units: str | None = None
     description: str | None = None
-    expression: Expr | None = None
     # Arrayed-variable shape: ordered index-set names drawn from the
     # document-scoped ``index_sets`` registry (RFC semiring-faq-unified-ir §5.2).
-    # None means scalar.
+    # None means scalar. REQUIRED for a parameter whose update is `schedule`,
+    # `data` or `remesh` — such a parameter is a buffer whose extent is fixed at
+    # setup and refilled on a discrete cadence.
     shape: list[str] | None = None
     # Staggered-grid location tag (e.g. "cell_center", "edge_normal",
     # "vertex"). None means no explicit staggering. See RFC §10.2.
     location: str | None = None
-    # Brownian-only: kind of stochastic process. Currently only "wiener".
-    noise_kind: str | None = None
-    # Brownian-only: opaque tag grouping correlated noise sources.
-    correlation_group: str | None = None
+    # Parameter-only. Mutually exclusive with `default`.
+    distribution: Distribution | None = None
+    # Parameter-only: EITHER one rule, OR an ordered list of >= 2 applied in
+    # DECLARATION ORDER wherever more than one trigger fires (so a later rule's
+    # `expression` sees the earlier rule's result). The list form exists because
+    # collapsing parameter mutation onto the parameter must not cost
+    # expressiveness events had — before 1.0.0 any number of events could write
+    # one parameter. A single rule is always the object form; a one-element list
+    # is invalid, so the representation of any update set is unique. Absent means
+    # the parameter never changes after setup.
+    update: ParameterUpdate | list[ParameterUpdate] | None = None
 
 
 @dataclass
@@ -276,10 +401,10 @@ class Model:
     variables: dict[str, ModelVariable] = field(default_factory=dict)
     equations: list[Equation] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-    # A subsystem is a child Model or a pure-I/O DataLoader (RFC
-    # pure-io-data-loaders §4.3); ref subsystems are raw {"ref": ...} dicts
-    # until resolve_subsystem_refs replaces them in place.
-    subsystems: dict[str, Model | DataLoader] = field(default_factory=dict)
+    # A subsystem is a child Model. From 1.0.0 a data source is NOT a component
+    # and can no longer be mounted here; ref subsystems are raw {"ref": ...}
+    # dicts until resolve_subsystem_refs replaces them in place.
+    subsystems: dict[str, Model] = field(default_factory=dict)
     # Boundary conditions are not a declared model concern: there is no `bc` op
     # and no `boundary_conditions` field. BCs are baked into the discretization
     # rewrite rules' `makearray` bodies (esm-spec §9.6.8); nothing to store here.
@@ -523,24 +648,15 @@ class Analysis:
 
 
 @dataclass
-class FunctionalAffect:
-    """A functional effect applied during an event."""
-
-    handler_id: str
-    read_vars: list[str] = field(default_factory=list)
-    read_params: list[str] = field(default_factory=list)
-    modified_params: list[str] = field(default_factory=list)
-    config: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
 class ContinuousEvent:
-    """An event that occurs when a condition becomes true during continuous evolution."""
+    """An event that occurs when a condition becomes true during continuous
+    evolution. Affects UNKNOWNS ONLY (esm-spec §5.5); a parameter that changes on
+    a zero crossing declares `update: {kind: "crossing", ...}` on itself."""
 
     name: str
     conditions: list[Expr] = field(default_factory=list)  # Changed from single condition to array
-    affects: list[AffectEquation | FunctionalAffect] = field(default_factory=list)
-    affect_neg: list[AffectEquation | FunctionalAffect] | None = (
+    affects: list[AffectEquation] = field(default_factory=list)
+    affect_neg: list[AffectEquation] | None = (
         None  # Added: affects for negative-going zero crossings
     )
     root_find: Literal["left", "right", "all"] | None = (
@@ -561,14 +677,18 @@ class DiscreteEventTrigger:
 
 @dataclass
 class DiscreteEvent:
-    """An event that occurs at discrete time points."""
+    """An event that occurs at discrete time points.
+
+    Affects UNKNOWNS ONLY (esm-spec §5.5). From 1.0.0 a parameter carries its own
+    `update` block, so there is no `discrete_parameters` list and no
+    `functional_affect` here — a handler only ever wrote parameters, and now
+    lives on the parameter it writes.
+    """
 
     name: str
     trigger: DiscreteEventTrigger
-    affects: list[AffectEquation | FunctionalAffect] = field(default_factory=list)
+    affects: list[AffectEquation] = field(default_factory=list)
     priority: int = 0
-    # Parameters this event may modify (implicitly discrete parameters).
-    discrete_parameters: list[str] = field(default_factory=list)
     reinitialize: bool = False
     description: str | None = None
 
@@ -578,7 +698,7 @@ class DiscreteEvent:
 # ========================================
 
 
-class DataLoaderKind(Enum):
+class DataSourceKind(Enum):
     """Structural kind of an external data source."""
 
     GRID = "grid"
@@ -587,8 +707,8 @@ class DataLoaderKind(Enum):
 
 
 @dataclass
-class DataLoaderDeterminism:
-    """Reproducibility contract a loader advertises to bindings (esm-spec §8.9.2)."""
+class DataSourceDeterminism:
+    """Reproducibility contract a source advertises to bindings (esm-spec §8.9.2)."""
 
     endian: str | None = None  # "little" | "big"
     float_format: str | None = None  # "ieee754_single" | "ieee754_double"
@@ -596,16 +716,21 @@ class DataLoaderDeterminism:
 
 
 @dataclass
-class DataLoaderSource:
-    """File discovery configuration for a data loader."""
+class DataSourceLocation:
+    """File discovery configuration for a data source."""
 
     url_template: str
     mirrors: list[str] = field(default_factory=list)
 
 
 @dataclass
-class DataLoaderTemporal:
-    """Temporal coverage and record layout for a data source."""
+class DataSourceTemporal:
+    """Temporal coverage and record layout for a data source.
+
+    Its PRESENCE is what makes a source's outputs time-varying, and that is what
+    seeds a consuming parameter DISCRETE rather than CONST (CONFORMANCE_SPEC
+    §5.7.2). Absence means non-time-varying: read once, folded at bind.
+    """
 
     start: str | None = None
     end: str | None = None
@@ -616,36 +741,34 @@ class DataLoaderTemporal:
 
 
 @dataclass
-class DataLoaderVariable:
-    """A variable exposed by a data loader, mapped from a source-file variable."""
-
-    file_variable: str
-    units: str
-    unit_conversion: float | int | Expr | None = None
-    description: str | None = None
-    reference: Reference | None = None
-
-
-@dataclass
-class DataLoader:
+class DataSource:
     """
-    Generic, runtime-agnostic description of an external data source.
+    A named external data source reduced to pure I/O: it locates, reads,
+    decodes, slices and filters bytes on disk (esm-spec §8).
 
-    Pure I/O (RFC pure-io-data-loaders §4.1): carries enough structural
-    information to locate files, map timestamps to files, and describe the
-    native grid / variable semantics of the source — rather than pointing at
-    a runtime handler. Reprojection and regridding onto a model grid are a
-    downstream model concern, not a loader field.
+    From 1.0.0 it exposes NO variables and is NOT a component — it cannot be a
+    coupling endpoint, a subsystem, or a scoped-name path root. A model consumes
+    it by declaring a PARAMETER whose ``update`` names this source and binds one
+    of its ``file_variable``s (:class:`DataSourceBinding`); the parameter owns
+    the units. Grid geometry a source reads arrives as ordinary parameters and
+    is transformed downstream by ``aggregate`` FAQs and coupling expressions.
     """
 
     name: str
-    kind: DataLoaderKind
-    source: DataLoaderSource
-    variables: dict[str, DataLoaderVariable] = field(default_factory=dict)
-    temporal: DataLoaderTemporal | None = None
-    determinism: DataLoaderDeterminism | None = None
+    kind: DataSourceKind
+    source: DataSourceLocation
+    temporal: DataSourceTemporal | None = None
+    determinism: DataSourceDeterminism | None = None
     reference: Reference | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Format-specific DECODE options passed to the reader verbatim, the
+    # source-level default `select` / `record_filter` / `extent` descriptors.
+    # Carried as authored JSON so a document round-trips without losing them;
+    # the ESIO provider path reads them off the raw document.
+    reader_options: dict[str, Any] | None = None
+    select: dict[str, Any] | None = None
+    record_filter: dict[str, Any] | None = None
+    extent: dict[str, Any] | None = None
 
 
 @dataclass
@@ -655,7 +778,7 @@ class Operator:
     operator_id: str
     needed_vars: list[str]
     # The operators-map key this entry was declared under (like Model /
-    # ReactionSystem / DataLoader carry). Set at parse time; the serializer
+    # ReactionSystem / DataSource carry). Set at parse time; the serializer
     # re-emits the operator under it.
     name: str = ""
     modifies: list[str] | None = None
@@ -793,7 +916,6 @@ class EventCoupling(BaseCouplingEntry):
     trigger: DiscreteEventTrigger | None = None
     affects: list[AffectEquation] = field(default_factory=list)
     affect_neg: list[AffectEquation] = field(default_factory=list)
-    discrete_parameters: list[str] = field(default_factory=list)
     root_find: str | None = None
     reinitialize: bool | None = None
 
@@ -804,7 +926,7 @@ class CouplingImport(BaseCouplingEntry):
 
     ``ref`` is a §4.7 reference to a coupling-library file (a document with a
     top-level ``coupling_roles`` map); ``bind`` maps every declared role name to
-    an assembly component (a top-level models/reaction_systems/data_loaders key
+    an assembly component (a top-level models/reaction_systems key
     or a dotted ``Parent.Child`` subsystem path). The entry declares no wiring of
     its own — at flatten (:mod:`earthsci_ast.coupling_imports`) it expands into
     concrete edges spliced in its position, while the source entry is preserved
@@ -957,7 +1079,10 @@ class EsmFile:
     models: dict[str, Model] = field(default_factory=dict)
     reaction_systems: dict[str, ReactionSystem] = field(default_factory=dict)
     events: list[ContinuousEvent | DiscreteEvent] = field(default_factory=list)
-    data_loaders: dict[str, DataLoader] = field(default_factory=dict)
+    # Document-scoped ingest registry (esm-spec §8). NOT components: a source
+    # is consumed by a parameter whose `update` names it, never by a coupling
+    # edge or a subsystem mount.
+    data_sources: dict[str, DataSource] = field(default_factory=dict)
     operators: list[Operator] = field(default_factory=list)
     registered_functions: dict[str, RegisteredFunction] = field(default_factory=dict)
     coupling: list[CouplingEntry] = field(default_factory=list)

@@ -788,8 +788,20 @@ func validateManifoldsInRefs(node any, named map[string]any, mb map[string]bool,
 				}
 			}
 		}
+		// An EQUATION names the unknown it defines; carry that name into the path
+		// so a diagnostic raised inside its RHS names the offending CALL SITE and
+		// not merely its index. Before esm 1.0.0 a template call site sat at
+		// `variables/<name>/expression` and the name came for free; now that an
+		// observed unknown is defined by an equation, the name has to be picked
+		// up from the LHS.
+		childPath := path
+		if lhs, ok := n["lhs"].(string); ok && lhs != "" {
+			if _, hasRHS := n["rhs"]; hasRHS {
+				childPath = path + "[" + lhs + "]"
+			}
+		}
 		for _, k := range sortedKeys(n) {
-			if err := validateManifoldsInRefs(n[k], named, mb, path+"/"+k, memo); err != nil {
+			if err := validateManifoldsInRefs(n[k], named, mb, childPath+"/"+k, memo); err != nil {
 				return err
 			}
 		}
@@ -879,8 +891,7 @@ func authoredTemplateNames(origView map[string]any, orders map[string][]string) 
 // `expression_templates` block — authored match-less entries first in authored
 // order, then the materialized transitive closure of its surviving references
 // (match-less), lexicographically sorted — drops consumed
-// `expression_template_imports`, and raises the `esm` version to at least
-// 0.9.0 (never lowering it) when any
+// `expression_template_imports`, and raises the `esm` version FLOOR to 0.9.0 when any
 // surviving reference or materialized entry remains (§9.6.4 rule 8). Mirrors the
 // Julia `emit_document`.
 func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (map[string]any, error) {
@@ -963,25 +974,16 @@ func emitDocument(jsonStr, basePath string, metaparameters map[string]int64) (ma
 	}
 
 	delete(view, "expression_template_imports")
-	if bump {
-		// The §9.6.4 rule-8 stamp is a FLOOR, not an assignment: it declares that
-		// the emitted document needs at least an 0.9.0-capable loader, because it
-		// carries surviving references or a materialized registry. Assigning it
-		// unconditionally DOWNGRADED every 1.0.0 document that went through emit,
-		// which is how a 1.0.0 fixture came back stamped 0.9.0 -- a document
-		// claiming not to use the unified variable model it is written in.
-		if esmVersionBelow(view, 0, 9) || view["esm"] == nil {
-			view["esm"] = optionBMinimumVersion
-		}
+	if bump && esmVersionBelow(view, 0, 9) {
+		// esm-spec §9.6.4 rule 6: an emitted document carrying surviving
+		// references or a materialized registry declares `esm: 0.9.0` OR LATER.
+		// The stamp is a FLOOR, not an assignment — writing it unconditionally
+		// DOWNGRADED a 1.0.0 document to 0.9.0 on emit, which changed the meaning
+		// of every construct in it and diverged from the committed goldens.
+		view["esm"] = "0.9.0"
 	}
 	return view, nil
 }
-
-// optionBMinimumVersion is the lowest `esm` version whose loader implements
-// Option B (reference-preserving emit, dotted registry keys, materialized
-// registries). A document emitted with any of those present must declare at
-// least this; one already declaring more keeps what it declares.
-const optionBMinimumVersion = "0.9.0"
 
 // loadOptionB resolves the §9.7 machinery and runs the Option-B lowering,
 // PRESERVING surviving references and per-component registries (no Expand). This

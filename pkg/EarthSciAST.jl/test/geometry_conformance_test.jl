@@ -112,7 +112,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
             ),
             "models" => Dict("M" => Dict(
                 "variables" => Dict(
-                    "y" => Dict("type" => "state", "shape" => []),
+                    "y" => Dict("type" => "unknown", "shape" => []),
                 ),
                 "equations" => [Dict(
                     "lhs" => Dict("op" => "D", "args" => ["y"], "wrt" => "t"),
@@ -259,7 +259,10 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
     @testset "manifold + id survive the typed round-trip" begin
         path = joinpath(_VALID_GEOM, "intersect_polygon_clip_area.esm")
         file = EarthSciAST.load(path)
-        clip_expr = file.models["PolygonClipArea"].variables["clip"].expression
+        # esm 1.0.0 (§5.4/§6.3.1): a variable carries no `expression`; the clip's
+        # definition is its bare-variable-LHS EQUATION, reached through
+        # `observed_definition`.
+        clip_expr = observed_definition(file.models["PolygonClipArea"], "clip")
         @test clip_expr isa OpExpr
         @test clip_expr.op == "intersect_polygon"
         @test clip_expr.manifold == "spherical"

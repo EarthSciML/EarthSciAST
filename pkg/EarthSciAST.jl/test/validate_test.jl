@@ -18,7 +18,7 @@ using EarthSciAST
             "models" => Dict(
                 "test" => Dict(
                     "variables" => Dict(
-                        "x" => Dict("type" => "state")
+                        "x" => Dict("type" => "unknown")
                     ),
                     "equations" => [
                         Dict("lhs" => "x", "rhs" => 1.0)

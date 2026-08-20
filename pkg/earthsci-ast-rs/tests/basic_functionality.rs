@@ -343,10 +343,10 @@ fn test_editing() {
         units: Some("s^-1".to_string()),
         default: Some(0.1),
         description: Some("Test rate constant".to_string()),
-        distribution: None,
-        update: None,
         shape: None,
         location: None,
+        distribution: None,
+        update: None,
     };
 
     let updated_model = add_variable(&model, "k", new_var).expect("Failed to add variable");
@@ -354,70 +354,81 @@ fn test_editing() {
     assert_eq!(updated_model.variables.len(), 1);
 }
 
-/// A registered handler is now `FunctionalUpdate`, carried by the PARAMETER it
-/// writes rather than by an event (esm-spec §5.4). It needs no
-/// `modified_params` write list: the parameter it updates is the one that
-/// declares it.
+/// Test FunctionalAffect structure has all required fields
 #[test]
-fn test_functional_update_fields() {
+fn test_functional_affect_fields() {
     use serde_json;
 
-    let handler = FunctionalUpdate {
+    // Test that FunctionalAffect has all required fields
+    let functional_affect = FunctionalAffect {
         handler_id: "test_handler".to_string(),
-        read_vars: Some(vec!["var1".to_string(), "var2".to_string()]),
-        read_params: Some(vec!["param1".to_string()]),
+        read_vars: vec!["var1".to_string(), "var2".to_string()],
+        read_params: vec!["param1".to_string()],
+        modified_params: Some(vec!["param2".to_string()]),
         config: Some(serde_json::json!({
             "threshold": 0.5,
             "update_frequency": 10
         })),
     };
 
-    let json =
-        serde_json::to_string_pretty(&handler).expect("Failed to serialize FunctionalUpdate");
+    // Test serialization
+    let json = serde_json::to_string_pretty(&functional_affect)
+        .expect("Failed to serialize FunctionalAffect");
+
+    // Verify JSON contains required fields
     assert!(json.contains("handler_id"));
     assert!(json.contains("read_vars"));
     assert!(json.contains("read_params"));
+    assert!(json.contains("modified_params"));
     assert!(json.contains("config"));
-    assert!(
-        !json.contains("modified_params"),
-        "a handler no longer declares what it writes"
-    );
 
-    let deserialized: FunctionalUpdate =
-        serde_json::from_str(&json).expect("Failed to deserialize FunctionalUpdate");
+    // Test deserialization
+    let deserialized: FunctionalAffect =
+        serde_json::from_str(&json).expect("Failed to deserialize FunctionalAffect");
+
     assert_eq!(deserialized.handler_id, "test_handler");
+    assert_eq!(deserialized.read_vars, vec!["var1", "var2"]);
+    assert_eq!(deserialized.read_params, vec!["param1"]);
     assert_eq!(
-        deserialized.read_vars,
-        Some(vec!["var1".to_string(), "var2".to_string()])
+        deserialized.modified_params,
+        Some(vec!["param2".to_string()])
     );
-    assert_eq!(deserialized.read_params, Some(vec!["param1".to_string()]));
     assert!(deserialized.config.is_some());
 }
 
-/// A handler with only its required field.
+/// Test FunctionalAffect with minimal fields
 #[test]
-fn test_functional_update_minimal() {
+fn test_functional_affect_minimal() {
     use serde_json;
 
-    let handler = FunctionalUpdate {
+    // Test with only required fields
+    let functional_affect = FunctionalAffect {
         handler_id: "minimal_handler".to_string(),
-        read_vars: None,
-        read_params: None,
+        read_vars: vec!["var1".to_string()],
+        read_params: vec!["param1".to_string()],
+        modified_params: None,
         config: None,
     };
 
-    let json = serde_json::to_string_pretty(&handler)
-        .expect("Failed to serialize minimal FunctionalUpdate");
+    // Test serialization - should not include None fields due to skip_serializing_if
+    let json = serde_json::to_string_pretty(&functional_affect)
+        .expect("Failed to serialize minimal FunctionalAffect");
+
+    // Verify JSON has required fields but not optional ones
     assert!(json.contains("handler_id"));
-    // Absent means none, and the optional fields are skipped.
-    assert!(!json.contains("read_vars"));
-    assert!(!json.contains("read_params"));
+    assert!(json.contains("read_vars"));
+    assert!(json.contains("read_params"));
+    // These should be skipped
+    assert!(!json.contains("modified_params"));
     assert!(!json.contains("config"));
 
-    let deserialized: FunctionalUpdate =
-        serde_json::from_str(&json).expect("Failed to deserialize minimal FunctionalUpdate");
+    // Test deserialization
+    let deserialized: FunctionalAffect =
+        serde_json::from_str(&json).expect("Failed to deserialize minimal FunctionalAffect");
+
     assert_eq!(deserialized.handler_id, "minimal_handler");
-    assert_eq!(deserialized.read_vars, None);
-    assert_eq!(deserialized.read_params, None);
+    assert_eq!(deserialized.read_vars, vec!["var1"]);
+    assert_eq!(deserialized.read_params, vec!["param1"]);
+    assert_eq!(deserialized.modified_params, None);
     assert_eq!(deserialized.config, None);
 }

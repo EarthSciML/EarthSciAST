@@ -19,10 +19,15 @@ function syn()
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
             "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-            "a"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","f",2)),
-            "b"=>Dict{String,Any}("type"=>"observed","expression"=>op("+","a","f")),
-            "s"=>Dict{String,Any}("type"=>"state")),
-        "equations"=>Any[Dict{String,Any}(
+            # esm 1.0.0 §6.3: an observed unknown is an `unknown` DEFINED by a
+            # bare-variable-LHS equation; there is no variable-level `expression`.
+            "a"=>Dict{String,Any}("type"=>"unknown"),
+            "b"=>Dict{String,Any}("type"=>"unknown"),
+            "s"=>Dict{String,Any}("type"=>"unknown")),
+        "equations"=>Any[
+            Dict{String,Any}("lhs"=>"a","rhs"=>op("*","f",2)),
+            Dict{String,Any}("lhs"=>"b","rhs"=>op("+","a","f")),
+            Dict{String,Any}(
             "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),"rhs"=>agg)])))
 end
 
@@ -52,9 +57,11 @@ end
         sc = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"S"),
             "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>Dict{String,Any}(
                 "x"=>Dict{String,Any}("type"=>"parameter","default"=>2.0),
-                "y"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","x",3)),
-                "z"=>Dict{String,Any}("type"=>"state")),
-              "equations"=>Any[Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"y")])))
+                "y"=>Dict{String,Any}("type"=>"unknown"),
+                "z"=>Dict{String,Any}("type"=>"unknown")),
+              "equations"=>Any[
+                Dict{String,Any}("lhs"=>"y","rhs"=>op("*","x",3)),
+                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"y")])))
         f2 = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(sc))))
         p2 = E.promote_downstream_shapes(f2)
         @test all(v -> v.shape === nothing || isempty(v.shape), values(p2.observed_variables))
@@ -69,8 +76,8 @@ end
         d = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"S"),
             "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>Dict{String,Any}(
                 "x"=>Dict{String,Any}("type"=>"parameter","default"=>3.0),
-                "a"=>Dict{String,Any}("type"=>"state"),
-                "z"=>Dict{String,Any}("type"=>"state")),
+                "a"=>Dict{String,Any}("type"=>"unknown"),
+                "z"=>Dict{String,Any}("type"=>"unknown")),
               "equations"=>Any[
                 Dict{String,Any}("lhs"=>"a","rhs"=>op("*","x",2)),
                 Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"a")])))
@@ -97,10 +104,13 @@ end
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
           "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "a"=>Dict{String,Any}("type"=>"observed","shape"=>Any["c"],"expression"=>op("+","f",1)),
-          "b"=>Dict{String,Any}("type"=>"observed","shape"=>Any["c"],"expression"=>op("*","a",2)),
-          "s"=>Dict{String,Any}("type"=>"state","shape"=>Any["c"])),
-        "equations"=>Any[Dict{String,Any}(
+          "a"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
+          "b"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
+          "s"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"a","rhs"=>op("+","f",1)),
+          Dict{String,Any}("lhs"=>"b","rhs"=>op("*","a",2)),
+          Dict{String,Any}(
           "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),
           "rhs"=>op("-","f","b"))])))
     flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
@@ -119,9 +129,11 @@ end
     sc = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"S"),
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>Dict{String,Any}(
         "x"=>Dict{String,Any}("type"=>"parameter","default"=>2.0),
-        "y"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","x",3)),
-        "z"=>Dict{String,Any}("type"=>"state")),
-        "equations"=>Any[Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"y")])))
+        "y"=>Dict{String,Any}("type"=>"unknown"),
+        "z"=>Dict{String,Any}("type"=>"unknown")),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"y","rhs"=>op("*","x",3)),
+          Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"y")])))
     f2 = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(sc))))
     n2 = E.inline_elementwise_array_observeds(f2)
     @test haskey(n2.observed_variables, "M.y")       # scalar observed untouched
@@ -139,10 +151,13 @@ end
       "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
-          "psi"=>Dict{String,Any}("type"=>"state","shape"=>Any["c"]),
-          "a"=>Dict{String,Any}("type"=>"observed","shape"=>Any["c"],"expression"=>op("+","psi",1)),
-          "b"=>Dict{String,Any}("type"=>"observed","shape"=>Any["c"],"expression"=>op("*","a",2))),
-        "equations"=>Any[Dict{String,Any}(
+          "psi"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
+          "a"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
+          "b"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"a","rhs"=>op("+","psi",1)),
+          Dict{String,Any}("lhs"=>"b","rhs"=>op("*","a",2)),
+          Dict{String,Any}(
           "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["psi"],"wrt"=>"t"),
           "rhs"=>op("-","b"))])))
     f!, u0, p, _t, vmap = E.build_evaluator(d;
@@ -165,9 +180,11 @@ end
         "variables"=>Dict{String,Any}(
           "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
           "g"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["d"]),
-          "a"=>Dict{String,Any}("type"=>"observed","expression"=>op("+","f","g")),
-          "s"=>Dict{String,Any}("type"=>"state")),
-        "equations"=>Any[Dict{String,Any}(
+          "a"=>Dict{String,Any}("type"=>"unknown"),
+          "s"=>Dict{String,Any}("type"=>"unknown")),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"a","rhs"=>op("+","f","g")),
+          Dict{String,Any}(
           "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),"rhs"=>"a")])))
     flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
     @test_throws E.DimensionPromotionError E.promote_downstream_shapes(flat)
@@ -195,8 +212,8 @@ end
         E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("m")]; wrt="t"), ma),
     ]
     states = E.OrderedDict{String,E.ModelVariable}(
-        "O3" => E.ModelVariable(E.StateVariable),                      # scalar ⇒ liftable
-        "m"  => E.ModelVariable(E.StateVariable; shape=["lon"]),       # already spatial ⇒ not
+        "O3" => E.ModelVariable(E.UnknownVariable),                      # scalar ⇒ liftable
+        "m"  => E.ModelVariable(E.UnknownVariable; shape=["lon"]),       # already spatial ⇒ not
     )
     lifted = E._pointwise_lifted_species(eqs, states)
     @test "O3" in lifted
@@ -205,6 +222,6 @@ end
     # A state with no makearray in its RHS is not a lift candidate either.
     eqs2 = E.Equation[E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("x")]; wrt="t"),
                                  E.NumExpr(0.0))]
-    states2 = E.OrderedDict{String,E.ModelVariable}("x" => E.ModelVariable(E.StateVariable))
+    states2 = E.OrderedDict{String,E.ModelVariable}("x" => E.ModelVariable(E.UnknownVariable))
     @test isempty(E._pointwise_lifted_species(eqs2, states2))
 end

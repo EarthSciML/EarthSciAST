@@ -361,7 +361,7 @@ _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
     EsmFile(file.esm, file.metadata;
             models=file.models,
             reaction_systems=file.reaction_systems,
-            data_loaders=file.data_loaders,
+            data_sources=file.data_sources,
             coupling=coupling,
             domain=file.domain,
             enums=file.enums,
@@ -471,11 +471,6 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     coupling_rules_applied = String[]
     opaque_refs = String[]
 
-    # Top-level data-loader names — used to recognize a `param_to_var` whose
-    # producer is a LOADED field, so a grid-shaped binding keeps its shape.
-    loader_names = file.data_loaders === nothing ? Set{String}() :
-                   Set{String}(String(k) for k in keys(file.data_loaders))
-
     # Names a `variable_map` SUBSTITUTED in the visible equation ASTs
     # (`_substitute_variable_map!`; the expression-transform arm leaves `to`
     # references intact, so it is exempt). A surviving template-registry body
@@ -493,7 +488,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
             _apply_couple!(equations, entry, opaque_refs)
         elseif entry isa CouplingVariableMap
             _apply_variable_map!(equations, params, entry;
-                                 loader_names=loader_names, observeds=observeds)
+                                 observeds=observeds)
             entry.transform isa ASTExpr || push!(map_rewritten_names, entry.to)
         elseif entry isa CouplingOperatorApply
             push!(opaque_refs, "operator_apply:$(entry.operator)")

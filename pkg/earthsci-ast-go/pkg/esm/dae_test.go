@@ -38,8 +38,8 @@ func singleModelFile(m Model) *ESMFile {
 func TestApplyDAEContract_PureODE_NoChange(t *testing.T) {
 	m := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown, Default: 1.0},
-			"k": {Type: VarTypeParameter, Default: 0.5},
+			"x": {Type: "unknown", Default: 1.0},
+			"k": {Type: "parameter", Default: 0.5},
 		},
 		Equations: []Equation{
 			dEq("x", "t", opNode("*", opNode("-", "k"), "x")),
@@ -72,9 +72,9 @@ func TestApplyDAEContract_TrivialObserved_Factored(t *testing.T) {
 	// y ~ x^2; D(x)/dt ~ -k*y  ==>  D(x)/dt ~ -k*x^2
 	m := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown, Default: 1.0},
-			"y": {Type: VarTypeUnknown},
-			"k": {Type: VarTypeParameter, Default: 0.5},
+			"x": {Type: "unknown", Default: 1.0},
+			"y": {Type: "unknown"},
+			"k": {Type: "parameter", Default: 0.5},
 		},
 		Equations: []Equation{
 			algEq("y", opNode("^", "x", int64(2))),
@@ -120,9 +120,9 @@ func TestApplyDAEContract_TrivialChain_FixedPoint(t *testing.T) {
 	// z ~ y + 1; y ~ x; D(x)/dt ~ z  ==>  D(x)/dt ~ x + 1
 	m := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown},
-			"y": {Type: VarTypeUnknown},
-			"z": {Type: VarTypeUnknown},
+			"x": {Type: "unknown"},
+			"y": {Type: "unknown"},
+			"z": {Type: "unknown"},
 		},
 		Equations: []Equation{
 			algEq("z", opNode("+", "y", int64(1))),
@@ -158,8 +158,8 @@ func TestApplyDAEContract_NontrivialConstraint(t *testing.T) {
 	}
 	m := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown},
-			"y": {Type: VarTypeUnknown},
+			"x": {Type: "unknown"},
+			"y": {Type: "unknown"},
 		},
 		Equations: []Equation{
 			dEq("x", "t", "y"),
@@ -207,9 +207,9 @@ func TestApplyDAEContract_CyclicObserved(t *testing.T) {
 	// which is not factorable — residual.
 	m := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown},
-			"y": {Type: VarTypeUnknown},
-			"z": {Type: VarTypeUnknown},
+			"x": {Type: "unknown"},
+			"y": {Type: "unknown"},
+			"z": {Type: "unknown"},
 		},
 		Equations: []Equation{
 			algEq("y", "z"),
@@ -241,9 +241,9 @@ func TestApplyDAEContract_SkipsNonlinearSystem(t *testing.T) {
 	m := Model{
 		SystemKind: &kind,
 		Variables: map[string]ModelVariable{
-			"H":   {Type: VarTypeUnknown},
-			"SO4": {Type: VarTypeUnknown},
-			"Ksp": {Type: VarTypeParameter},
+			"H":   {Type: "unknown"},
+			"SO4": {Type: "unknown"},
+			"Ksp": {Type: "parameter"},
 		},
 		Equations: []Equation{constraint},
 	}
@@ -261,41 +261,48 @@ func TestApplyDAEContract_SkipsNonlinearSystem(t *testing.T) {
 	}
 }
 
-// TestApplyDAEContract_ObservedExpressionSubstituted guards an
-// easy-to-miss corner: when a trivial equation is factored out, every OTHER
-// equation that references the factored symbol must be rewritten, so the model
-// stays internally consistent.
-//
-// In 0.x this test guarded a second substitution pass over
-// `ModelVariable.Expression`, because that is where an observed's definition
-// lived. 1.0.0 removed the field: `w`'s definition is now an ordinary equation,
-// so the single pass over `equations` is what has to carry it, and this test
-// pins that it does.
+// TestApplyDAEContract_ObservedDefinitionSubstituted guards the same corner the
+// 0.x test did, at its new address. An observed unknown's definition used to
+// live in `ModelVariable.Expression` and now lives in the model's `equations`,
+// so what must stay consistent after a factoring step is the DEFINING EQUATION
+// of every other observed — which is exactly what the substitution loop over
+// `model.Equations` already covers, and this asserts.
 func TestApplyDAEContract_ObservedDefinitionSubstituted(t *testing.T) {
-	// y ~ x; w ~ y*2 (an observed defined from another observed); D(x)/dt = 1
+	// w ~ y*2; y ~ x; D(x)/dt = 1. Factoring `y ~ x` must rewrite w's
+	// definition to `x*2` before that definition is itself factored out.
 	m := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown},
-			"y": {Type: VarTypeUnknown},
-			"w": {Type: VarTypeUnknown},
+			"x": {Type: "unknown"},
+			"y": {Type: "unknown"},
+			"w": {Type: "unknown"},
 		},
 		Equations: []Equation{
-			algEq("y", "x"),
 			{LHS: "w", RHS: opNode("*", "y", int64(2))},
+			algEq("y", "x"),
 			dEq("x", "t", int64(1)),
 		},
 	}
+	// Before factoring, ObservedDefinition is where the definition is read from.
+	if def, ok := ObservedDefinition(&m, "w"); !ok || !Contains(def, "y") {
+		t.Fatalf("precondition: w's defining equation should reference y, got %v (ok=%v)", def, ok)
+	}
+
 	file := singleModelFile(m)
-	if _, err := ApplyDAEContract(file); err != nil {
+	info, err := ApplyDAEContract(file)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Whatever survives factoring, nothing may still reference the eliminated
-	// symbol -- a surviving reference to `y` is exactly the silent corruption
-	// this test exists to catch.
-	for i, eq := range file.Models["M"].Equations {
-		if Contains(eq.LHS, "y") || Contains(eq.RHS, "y") {
-			t.Errorf("equation %d still references factored y: %+v", i, eq)
-		}
+	// Both observed-style equations are trivially factorable, so the model
+	// reduces to the pure ODE in x with no residual algebraic equations.
+	if info.PerModelFactored["M"] != 2 {
+		t.Errorf("factored = %d, want 2 (w ~ y*2 and y ~ x)", info.PerModelFactored["M"])
+	}
+	got := file.Models["M"]
+	if len(got.Equations) != 1 {
+		t.Fatalf("equations after factoring = %d, want 1: %+v", len(got.Equations), got.Equations)
+	}
+	if Contains(got.Equations[0].RHS, "y") {
+		t.Errorf("the surviving equation still references factored y: %+v", got.Equations[0])
 	}
 }
 
@@ -306,7 +313,7 @@ func TestApplyDAEContract_DomainIndepVar(t *testing.T) {
 	iv := "time"
 	m := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown},
+			"x": {Type: "unknown"},
 		},
 		Equations: []Equation{
 			dEq("x", "time", int64(1)),

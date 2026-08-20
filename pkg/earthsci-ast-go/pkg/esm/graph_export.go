@@ -173,7 +173,6 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 	builder.WriteString("\n")
 	builder.WriteString("    classDef model fill:#e1f5fe\n")
 	builder.WriteString("    classDef reaction_system fill:#f3e5f5\n")
-	builder.WriteString("    classDef data_loader fill:#e8f5e8\n")
 
 	// Apply classes to nodes
 	for _, node := range nodes {
@@ -302,22 +301,25 @@ func getNodeColor(nodeType string) string {
 		return "lightblue"
 	case "reaction_system":
 		return "lightpink"
-	case "data_loader":
-		return "lightgreen"
+	// A `data_sources` entry is not a component node from esm 1.0.0, so no
+	// "data_loader"/"data_source" case remains here.
 	default:
 		return "white"
 	}
 }
 
-// getVariableNodeColor returns appropriate color for different variable types in DOT format
+// getVariableNodeColor returns appropriate color for a variable node's DERIVED
+// role (esm-spec §6.3.1; see variableRoles in graph.go) in DOT format.
 func getVariableNodeColor(kind string) string {
 	switch kind {
-	case "state":
+	case RoleODEState, RoleAlgebraic:
 		return "lightblue"
-	case "parameter":
+	case "parameter", RoleConstant, RoleSampled, RoleDiscrete:
 		return "lightyellow"
-	case "observed":
+	case RoleObserved:
 		return "lightgreen"
+	case RoleBrownian:
+		return "lightsalmon"
 	case "species":
 		return "lightpink"
 	default:
@@ -364,8 +366,6 @@ func getMermaidNodeShape(nodeType string) (open, closeTok string) {
 		return "[[", "]]"
 	case "reaction_system":
 		return "([", "])"
-	case "data_loader":
-		return "{", "}"
 	default:
 		return "[", "]"
 	}

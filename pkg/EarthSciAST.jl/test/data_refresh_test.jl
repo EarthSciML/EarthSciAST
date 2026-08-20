@@ -54,7 +54,7 @@ struct _BareSource end
         # interior anchors t=1,2. With D(y)=c on each unit segment Tsit5 is exact,
         # so y(3) is the exact piecewise integral — a direct readout of "the RHS
         # saw the refreshed buffer on each segment."
-        model = ESM.Model(Dict("y" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))])
         buf = [2.0]                       # setup-time materialize for the first segment [0,1)
         f!, u0, p, _ts, vm = build_evaluator(model;
@@ -83,8 +83,13 @@ struct _BareSource end
         # dep = 2*forcing[1] (observed, inlined); D(y) = dep. Nothing refreshes
         # `dep` explicitly — it is an RHS expression over the live buffer, so the
         # refresh shows through. y(3) = 2·(piecewise integral).
-        vars = Dict("y" => ModelVariable(StateVariable),
-                    "dep" => ModelVariable(ObservedVariable))
+        #
+        # esm 1.0.0 (§6.3.1): `dep` is declared as a plain `unknown`; what makes
+        # it OBSERVED is the bare-variable-LHS equation `dep ~ 2*forcing[1]`
+        # below, not a declared type. (0.x declared `ObservedVariable` and hung
+        # the expression off the variable.)
+        vars = Dict("y" => ModelVariable(UnknownVariable),
+                    "dep" => ModelVariable(UnknownVariable))
         eqs = [ESM.Equation(_v("dep"), _op("*", _n(2.0), _idx("forcing", _i(1)))),
                ESM.Equation(_D("y"), _v("dep"))]
         model = ESM.Model(vars, eqs)
@@ -107,7 +112,7 @@ struct _BareSource end
     @testset "CONST provider: materialize-once, no tstops, never refreshed" begin
         # A CONST provider (empty refresh_times) contributes NO tstops and is
         # absent from the callback — it is never sampled.
-        model = ESM.Model(Dict("y" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))])
         buf = [4.0]
         f!, u0, p, _ts, vm = build_evaluator(model;
@@ -129,7 +134,7 @@ struct _BareSource end
     @testset "several variables sharing one provider are sampled once per boundary" begin
         # D(y) = a[1] + b[1]; both a and b come from ONE provider. At the single
         # anchor t=1 the provider must be sampled exactly once, not once per var.
-        model = ESM.Model(Dict("y" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_D("y"), _op("+", _idx("a", _i(1)), _idx("b", _i(1))))])
         abuf = [1.0]; bbuf = [1.0]
         f!, u0, p, _ts, vm = build_evaluator(model;
@@ -156,7 +161,7 @@ struct _BareSource end
         N = 8
         _ao1(body, idx, lo, hi) = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any[idx], expr_body=body, ranges=Dict(idx => [lo, hi]))
-        model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_ao1(_op("D", _idx("u", _v("i")); wrt="t"), "i", 1, N),
                           _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
         buf = collect(1.0:Float64(N))
@@ -200,7 +205,7 @@ struct _BareSource end
         @test_throws RefreshError provider_sample(_BareSource(), 0.0)
 
         # A DISCRETE provider whose variable has no buffer is rejected.
-        model = ESM.Model(Dict("y" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))])
         prov = MockProvider([1.0], Dict(1.0 => Dict("forcing" => [5.0])))
         err = try

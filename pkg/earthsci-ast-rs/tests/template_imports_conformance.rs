@@ -22,11 +22,11 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// The DEFINING EQUATION RHS of an observed unknown. Since 1.0.0 an unknown's
-/// behaviour is stated by an equation, not by a `variables[v].expression`
-/// field (esm-spec §6.3.1).
-fn observed_def<'a>(model: &'a earthsci_ast::Model, name: &str) -> &'a Expr {
-    earthsci_ast::classify::observed_definition(model, name)
+/// An observed unknown's defining expression: from esm 1.0.0 that is the RHS of
+/// the equation whose LHS is the bare variable (esm-spec §6.3.1), not a field
+/// on the variable.
+fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    earthsci_ast::classification::observed_definition_json(model, name)
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
@@ -117,7 +117,7 @@ fn aggregate_int_ratio_golden_matches_golden() {
     );
     // The in-aggregate ratio and the standalone dx=1/8 both stay integers.
     let expanded = expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"]));
-    let dx = &expanded["models"]["M"]["variables"]["dx"]["expression"]["args"];
+    let dx = &(*earthsci_ast::classification::observed_definition_json(&expanded["models"]["M"], "dx").expect("dx defining equation"))["args"];
     assert!(dx[0].is_i64() || dx[0].is_u64());
     assert!(dx[1].is_i64() || dx[1].is_u64());
 }
@@ -169,11 +169,11 @@ fn import_order_pins_tie_break_and_priority_flips_it() {
     // Winner sanity, independent of the goldens: earlier import wins the
     // equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
     assert_eq!(
-        d1["models"]["M"]["variables"]["y"]["expression"]["args"][0],
+        (*earthsci_ast::classification::observed_definition_json(&d1["models"]["M"], "y").expect("y defining equation"))["args"][0],
         json!(2)
     );
     assert_eq!(
-        d2["models"]["M"]["variables"]["y"]["expression"]["args"][0],
+        (*earthsci_ast::classification::observed_definition_json(&d2["models"]["M"], "y").expect("y defining equation"))["args"][0],
         json!(5)
     );
 }
@@ -208,9 +208,9 @@ fn import_where_rename_two_instances_matches_golden() {
             "expanded.esm"
         ]))
     );
-    let vars = &d["models"]["TwoGrids"]["variables"];
-    let va = &vars["div_A"]["expression"];
-    let vb = &vars["div_B"]["expression"];
+    let model = &d["models"]["TwoGrids"];
+    let va = obs_def(model, "div_A");
+    let vb = obs_def(model, "div_B");
     assert_eq!(va["op"], "*"); // both div nodes lowered
     assert_eq!(vb["op"], "*");
     assert_eq!(va["args"][0]["op"], "/");
@@ -330,20 +330,57 @@ fn json_float_literals_round_trip_bit_exact() {
 
     // End-to-end through the crate load→emit: a const carrying the full-precision
     // coordinates survives parse→emit verbatim (AST byte identity).
-    let doc = r#"{
-      "esm": "1.0.0",
-      "metadata": {"name": "ulp"},
-      "models": {"M": {
-        "variables": {
-          "x": {"type": "unknown", "units": "1", "default": 0.5},
-          "pt": {"type": "observed", "units": "1",
-                  "expression": {"op": "const", "args": [],
-                                 "value": [-104.52369275835723, 42.059133583516356]}}
-        },
-        "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                       "rhs": {"op": "-", "args": ["x"]}}]
-      }}
-    }"#
+    let doc = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "ulp"
+          },
+          "models": {
+            "M": {
+              "variables": {
+                "x": {
+                  "type": "unknown",
+                  "units": "1",
+                  "default": 0.5
+                },
+                "pt": {
+                  "type": "unknown",
+                  "units": "1"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "x"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "-",
+                    "args": [
+                      "x"
+                    ]
+                  }
+                },
+                {
+                  "lhs": "pt",
+                  "rhs": {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      -104.52369275835723,
+                      42.059133583516356
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+        "#
     .to_string();
     let f = earthsci_ast::load(&doc).expect("load ulp doc");
     let text = earthsci_ast::save(&f).expect("save ulp doc");
@@ -383,15 +420,15 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         let sweep = &f.models.as_ref().expect("models")["Sweep"];
         let problem = &sweep.subsystems.as_ref().expect("subsystems")["Problem"];
         // Expression position: bare "N" substituted as an integer literal.
-        assert_eq!(problem["variables"]["npts"]["expression"], json!(n));
+        assert_eq!((*earthsci_ast::classification::observed_definition_json(&problem, "npts").expect("npts defining equation")), json!(n));
         // Expression-position division stays an AST division (no folding).
         assert_eq!(
-            problem["variables"]["half"]["expression"],
+            (*earthsci_ast::classification::observed_definition_json(&problem, "half").expect("half defining equation")),
             json!({"op": "/", "args": [n, 2]})
         );
         // Structural site: the aggregate dense range folded exactly.
         assert_eq!(
-            problem["variables"]["ramp"]["expression"]["ranges"]["i"],
+            (*earthsci_ast::classification::observed_definition_json(&problem, "ramp").expect("ramp defining equation"))["ranges"]["i"],
             json!([1, n / 2])
         );
     }
@@ -404,15 +441,19 @@ fn loader_api_bindings_and_defaults() {
     let problem = conf(&["metaparameter_resolutions", "problem.esm"]);
     let fdef = load_path(&problem).expect("default load");
     let models = fdef.models.as_ref().expect("models");
-    let npts = observed_def(&models["Problem"], "npts");
-    assert_eq!(*npts, Expr::Integer(2)); // default
+    let npts = earthsci_ast::classification::observed_definitions(&models["Problem"])
+        .remove("npts")
+        .expect("npts defining equation");
+    assert_eq!(npts, Expr::Integer(2)); // default
 
     let mut api = BTreeMap::new();
     api.insert("N".to_string(), 6i64);
     let fapi = load_path_with_options(&problem, &api).expect("API-bound load");
     let models = fapi.models.as_ref().expect("models");
-    let npts = observed_def(&models["Problem"], "npts");
-    assert_eq!(*npts, Expr::Integer(6)); // API > default
+    let npts = earthsci_ast::classification::observed_definitions(&models["Problem"])
+        .remove("npts")
+        .expect("npts defining equation");
+    assert_eq!(npts, Expr::Integer(6)); // API > default
 
     let mut bogus = BTreeMap::new();
     bogus.insert("Q".to_string(), 1i64);
@@ -453,9 +494,13 @@ fn valid_suite_library_and_minimal_consumer() {
     );
     // scale_by_n(x) lowered by the imported match rule to x * 8 (the
     // zero-parameter n_cells body composed and N folded at registration).
-    let y = observed_def(&m.models.as_ref().expect("models")["M"], "y");
+    let y = earthsci_ast::classification::observed_definitions(
+        &m.models.as_ref().expect("models")["M"],
+    )
+    .remove("y")
+    .expect("y defining equation");
     assert_eq!(
-        serde_json::to_value(y).expect("serialize y"),
+        serde_json::to_value(&y).expect("serialize y"),
         json!({"op": "*", "args": ["x", 8]})
     );
 }
@@ -817,30 +862,122 @@ fn metaparameter_fold_ranges_regions_size_exact() {
     let f = load_in(
         dir.path(),
         r#"
-    {
-      "esm": "1.0.0",
-      "metadata": {"name": "fold"},
-      "metaparameters": {"N": {"type": "integer", "default": 6}},
-      "index_sets": {"cells": {"kind": "interval", "size": {"op": "*", "args": ["N", 2]}}},
-      "models": {
-        "M": {
-          "variables": {
-            "x": {"type": "unknown", "units": "1", "default": 0.5},
-            "agg": {"type": "observed", "units": "1",
-              "expression": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
-                "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
-                "expr": {"op": "*", "args": ["x", "i"]}}},
-            "ma": {"type": "observed", "units": "1",
-              "expression": {"op": "makearray", "args": [],
-                "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
-                "values": [1.5]}}
-          },
-          "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                         "rhs": {"op": "-", "args": ["x"]}}]
-        }
-      }
-    }
-    "#,
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "fold"
+              },
+              "metaparameters": {
+                "N": {
+                  "type": "integer",
+                  "default": 6
+                }
+              },
+              "index_sets": {
+                "cells": {
+                  "kind": "interval",
+                  "size": {
+                    "op": "*",
+                    "args": [
+                      "N",
+                      2
+                    ]
+                  }
+                }
+              },
+              "models": {
+                "M": {
+                  "variables": {
+                    "x": {
+                      "type": "unknown",
+                      "units": "1",
+                      "default": 0.5
+                    },
+                    "agg": {
+                      "type": "unknown",
+                      "units": "1"
+                    },
+                    "ma": {
+                      "type": "unknown",
+                      "units": "1"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "x"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": {
+                        "op": "-",
+                        "args": [
+                          "x"
+                        ]
+                      }
+                    },
+                    {
+                      "lhs": "agg",
+                      "rhs": {
+                        "op": "aggregate",
+                        "output_idx": [
+                          "i"
+                        ],
+                        "args": [
+                          "x"
+                        ],
+                        "ranges": {
+                          "i": [
+                            1,
+                            {
+                              "op": "-",
+                              "args": [
+                                "N",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "expr": {
+                          "op": "*",
+                          "args": [
+                            "x",
+                            "i"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "lhs": "ma",
+                      "rhs": {
+                        "op": "makearray",
+                        "args": [],
+                        "regions": [
+                          [
+                            [
+                              {
+                                "op": "/",
+                                "args": [
+                                  "N",
+                                  2
+                                ]
+                              },
+                              "N"
+                            ]
+                          ]
+                        ],
+                        "values": [
+                          1.5
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            "#,
     )
     .expect("fold load");
     assert_eq!(
@@ -848,9 +985,10 @@ fn metaparameter_fold_ranges_regions_size_exact() {
         Some(12)
     );
     let m = &f.models.as_ref().expect("models")["M"];
-    let agg = serde_json::to_value(observed_def(m, "agg")).unwrap();
+    let defs = earthsci_ast::classification::observed_definitions(m);
+    let agg = serde_json::to_value(defs.get("agg").expect("agg equation")).unwrap();
     assert_eq!(agg["ranges"]["i"], json!([1, 5]));
-    let ma = serde_json::to_value(observed_def(m, "ma")).unwrap();
+    let ma = serde_json::to_value(defs.get("ma").expect("ma equation")).unwrap();
     assert_eq!(ma["regions"], json!([[[3, 6]]]));
 }
 
@@ -885,28 +1023,70 @@ fn expression_position_substitution_never_folds() {
     let f = load_in(
         dir.path(),
         r#"
-    {
-      "esm": "1.0.0",
-      "metadata": {"name": "subst"},
-      "metaparameters": {"N": {"type": "integer", "default": 144}},
-      "models": {
-        "M": {
-          "variables": {
-            "x": {"type": "unknown", "units": "1", "default": 0.5},
-            "dlon": {"type": "observed", "units": "1",
-                     "expression": {"op": "/", "args": [360, "N"]}}
-          },
-          "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                         "rhs": {"op": "-", "args": ["x"]}}]
-        }
-      }
-    }
-    "#,
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "subst"
+              },
+              "metaparameters": {
+                "N": {
+                  "type": "integer",
+                  "default": 144
+                }
+              },
+              "models": {
+                "M": {
+                  "variables": {
+                    "x": {
+                      "type": "unknown",
+                      "units": "1",
+                      "default": 0.5
+                    },
+                    "dlon": {
+                      "type": "unknown",
+                      "units": "1"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "x"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": {
+                        "op": "-",
+                        "args": [
+                          "x"
+                        ]
+                      }
+                    },
+                    {
+                      "lhs": "dlon",
+                      "rhs": {
+                        "op": "/",
+                        "args": [
+                          360,
+                          "N"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            "#,
     )
     .expect("subst load");
-    let dlon = observed_def(&f.models.as_ref().expect("models")["M"], "dlon");
+    let dlon = earthsci_ast::classification::observed_definitions(
+        &f.models.as_ref().expect("models")["M"],
+    )
+    .remove("dlon")
+    .expect("dlon defining equation");
     assert_eq!(
-        serde_json::to_value(dlon).unwrap(),
+        serde_json::to_value(&dlon).unwrap(),
         json!({"op": "/", "args": [360, 144]})
     );
 }
@@ -953,7 +1133,7 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
             "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
                           "y": {"type": "unknown", "units": "1"}},
             "equations": [
-                    {"lhs": "y", "rhs": {"op": "apply_expression_template",
+                {"lhs": "y", "rhs": {"op": "apply_expression_template",
                                                "args": [], "name": "c1", "bindings": {}}},{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                            "rhs": {"op": "-", "args": ["x"]}}]
         }}
@@ -963,7 +1143,7 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
     lower_expression_templates(&mut doc).expect("lower");
     expand(&mut doc).expect("expand");
     assert_eq!(
-        doc["models"]["M"]["variables"]["y"]["expression"],
+        (*earthsci_ast::classification::observed_definition_json(&doc["models"]["M"], "y").expect("y defining equation")),
         json!({"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]})
     );
 

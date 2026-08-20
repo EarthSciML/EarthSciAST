@@ -31,7 +31,7 @@ except ImportError:
         files = None
 
 if TYPE_CHECKING:
-    from .esm_types import DataLoader, RegisteredFunction
+    from .esm_types import DataSource, RegisteredFunction
 
 import jsonschema
 from jsonschema import validate
@@ -54,13 +54,14 @@ from .esm_types import (
     CouplingEntry,
     CouplingImport,
     CouplingType,
-    DataLoader,
-    DataLoaderDeterminism,
-    DataLoaderKind,
-    DataLoaderSource,
-    DataLoaderTemporal,
-    DataLoaderVariable,
+    DataSource,
+    DataSourceBinding,
+    DataSourceDeterminism,
+    DataSourceKind,
+    DataSourceLocation,
+    DataSourceTemporal,
     DiscreteEvent,
+    Distribution,
     DiscreteEventTrigger,
     Domain,
     Equation,
@@ -68,7 +69,7 @@ from .esm_types import (
     EventCoupling,
     Expr,
     ExprNode,
-    FunctionalAffect,
+    FunctionalUpdate,
     FunctionTable,
     FunctionTableAxis,
     Metadata,
@@ -78,6 +79,7 @@ from .esm_types import (
     OperatorApplyCoupling,
     OperatorComposeCoupling,
     Parameter,
+    ParameterUpdate,
     ParameterSweep,
     Plot,
     PlotAxis,
@@ -147,7 +149,7 @@ def _count_top_level_systems(parsed) -> int:
     return (
         len(parsed.models or {})
         + len(parsed.reaction_systems or {})
-        + len(parsed.data_loaders or {})
+        + len(parsed.data_sources or {})
     )
 
 
@@ -160,7 +162,7 @@ def _count_top_level_systems(parsed) -> int:
 # are rejected by the schema's `additionalProperties: false`. Prior steps: 0.4.0
 # added the sampled-function-tables block + `table_lookup`; 0.5.0 widened
 # `plots.y`; 0.6.0 added the `integral` AST op.
-_CURRENT_VERSION = (0, 9, 0)
+_CURRENT_VERSION = (1, 0, 0)
 
 
 def _check_version_compatibility(version_string: str) -> None:
@@ -332,63 +334,143 @@ def _parse_affect_equation(affect_data: dict[str, Any]) -> AffectEquation:
     return AffectEquation(lhs=lhs, rhs=rhs)
 
 
-def _parse_functional_affect(functional_affect_data: dict[str, Any]) -> FunctionalAffect:
-    """Parse a functional affect from JSON data."""
-    handler_id = functional_affect_data["handler_id"]
-    read_vars = functional_affect_data.get("read_vars", [])
-    read_params = functional_affect_data.get("read_params", [])
-    modified_params = functional_affect_data.get("modified_params", [])
-    config = functional_affect_data.get("config", {})
-
-    return FunctionalAffect(
-        handler_id=handler_id,
-        read_vars=read_vars,
-        read_params=read_params,
-        modified_params=modified_params,
-        config=config,
-    )
-
-
-def _parse_affect(affect: Any):
+def _parse_affect(affect: Any) -> AffectEquation:
     """Parse one affect entry from an event's ``affects`` / ``affect_neg`` list.
 
-    A dict carrying a ``handler_id`` is a :class:`FunctionalAffect`; anything
-    else is an :class:`AffectEquation`.
+    From 1.0.0 an event affects UNKNOWNS ONLY, so every entry is an
+    :class:`AffectEquation`. The 0.x ``functional_affect`` escape hatch is gone:
+    a handler's only write channel was ``modified_params``, so it now lives on
+    the parameter it writes, as that parameter's ``update.handler``.
     """
-    if isinstance(affect, dict) and "handler_id" in affect:
-        return _parse_functional_affect(affect)
     return _parse_affect_equation(affect)
 
 
+def _parse_distribution(dist_data: dict[str, Any]) -> Distribution:
+    """Parse a parameter's ``distribution`` (esm-spec §5.4).
+
+    Only the slots belonging to the declared ``kind`` are read, so a document
+    cannot smuggle a normal's ``std`` onto a uniform. The kind itself is a
+    CLOSED set: anything outside normal / lognormal / uniform is rejected here
+    rather than carried as an opaque tag some downstream binding might honour.
+    """
+    kind = dist_data.get("kind")
+    if kind not in ("normal", "lognormal", "uniform"):
+        raise ParseError(
+            f"Unknown distribution kind: {kind!r} (the closed set is "
+            f"normal / lognormal / uniform)"
+        )
+    return Distribution(
+        kind=kind,
+        mean=dist_data.get("mean") if kind == "normal" else None,
+        std=dist_data.get("std") if kind == "normal" else None,
+        mu=dist_data.get("mu") if kind == "lognormal" else None,
+        sigma=dist_data.get("sigma") if kind == "lognormal" else None,
+        low=dist_data.get("low") if kind == "uniform" else None,
+        high=dist_data.get("high") if kind == "uniform" else None,
+        cov=dist_data.get("cov") if kind in ("normal", "lognormal") else None,
+    )
+
+
+def _parse_data_source_binding(binding_data: dict[str, Any]) -> DataSourceBinding:
+    """Parse an update's ``from`` binding — one variable of a data source
+    (esm-spec §8.5). ``unit_conversion`` is a full Expression position, so a
+    plain number, a reference string and an operator node all parse the same
+    way and all reach the reference-integrity and namespacing passes."""
+    unit_conversion = binding_data.get("unit_conversion")
+    if unit_conversion is not None:
+        unit_conversion = _parse_expression(unit_conversion)
+    reference = None
+    if "reference" in binding_data:
+        reference = _parse_reference(binding_data["reference"])
+    return DataSourceBinding(
+        file_variable=binding_data["file_variable"],
+        unit_conversion=unit_conversion,
+        codes=binding_data.get("codes"),
+        select=binding_data.get("select"),
+        description=binding_data.get("description"),
+        reference=reference,
+    )
+
+
+def _parse_functional_update(handler_data: dict[str, Any]) -> FunctionalUpdate:
+    """Parse an update's registered ``handler`` (esm-spec §5.4) — the 0.x event
+    ``functional_affect`` relocated onto the parameter it writes, which is why
+    it carries no write list."""
+    return FunctionalUpdate(
+        handler_id=handler_data["handler_id"],
+        read_vars=list(handler_data.get("read_vars", [])),
+        read_params=list(handler_data.get("read_params", [])),
+        config=dict(handler_data.get("config", {})),
+    )
+
+
+#: The six update kinds (esm-spec §5.4). Closed, like the distribution set.
+_UPDATE_KINDS = ("wiener", "schedule", "condition", "crossing", "data", "remesh")
+
+
+def _parse_parameter_update(update_data: dict[str, Any]) -> ParameterUpdate:
+    """Parse ONE parameter update rule.
+
+    Every kind except ``wiener`` takes exactly one value form — ``expression``,
+    ``from`` or ``handler``. ``wiener`` takes none: it resamples the parameter's
+    own ``distribution``.
+    """
+    kind = update_data.get("kind")
+    if kind not in _UPDATE_KINDS:
+        raise ParseError(
+            f"Unknown parameter update kind: {kind!r} "
+            f"(the closed set is {' / '.join(_UPDATE_KINDS)})"
+        )
+    when = update_data.get("when")
+    expression = update_data.get("expression")
+    from_data = update_data.get("from")
+    handler_data = update_data.get("handler")
+    return ParameterUpdate(
+        kind=kind,
+        times=list(update_data["times"]) if update_data.get("times") is not None else None,
+        interval=update_data.get("interval"),
+        initial_offset=update_data.get("initial_offset"),
+        when=_parse_expression(when) if when is not None else None,
+        direction=update_data.get("direction"),
+        source=update_data.get("source"),
+        hook=update_data.get("hook"),
+        expression=_parse_expression(expression) if expression is not None else None,
+        from_source=_parse_data_source_binding(from_data) if from_data is not None else None,
+        handler=_parse_functional_update(handler_data) if handler_data is not None else None,
+    )
+
+
+def _parse_parameter_update_spec(update_data: Any):
+    """Parse a parameter's ``update``: one rule, or an ordered list of >= 2
+    applied in declaration order. The two spellings are kept distinct so the
+    round-trip is stable — a one-element list is not a legal document."""
+    if isinstance(update_data, list):
+        return [_parse_parameter_update(rule) for rule in update_data]
+    return _parse_parameter_update(update_data)
+
+
 def _parse_model_variable(var_data: dict[str, Any]) -> ModelVariable:
-    """Parse a model variable from JSON data."""
-    var_type = var_data["type"]
-    units = var_data.get("units")
-    default = var_data.get("default")
-    default_units = var_data.get("default_units")
-    description = var_data.get("description")
-    expression = None
-    if "expression" in var_data:
-        expression = _parse_expression(var_data["expression"])
+    """Parse a model variable from JSON data.
+
+    Two declared types and no third. There is no ``expression`` field to read:
+    an unknown's behaviour is stated by the model's ``equations``. A parameter
+    may carry a ``distribution`` and/or an ``update``.
+    """
     shape = var_data.get("shape")
     if shape is not None:
         shape = list(shape)
-    location = var_data.get("location")
-
-    noise_kind = var_data.get("noise_kind")
-    correlation_group = var_data.get("correlation_group")
-
+    distribution = var_data.get("distribution")
+    update = var_data.get("update")
     return ModelVariable(
-        type=var_type,
-        units=units,
-        default=default,
-        default_units=default_units,
-        description=description,
-        expression=expression,
+        type=var_data["type"],
+        units=var_data.get("units"),
+        default=var_data.get("default"),
+        default_units=var_data.get("default_units"),
+        description=var_data.get("description"),
         shape=shape,
-        location=location,
-        noise_kind=noise_kind,
-        correlation_group=correlation_group,
+        location=var_data.get("location"),
+        distribution=_parse_distribution(distribution) if distribution is not None else None,
+        update=_parse_parameter_update_spec(update) if update is not None else None,
     )
 
 
@@ -414,14 +496,8 @@ def _parse_continuous_event(event_data: dict[str, Any]) -> ContinuousEvent:
     conditions = [_parse_expression(cond) for cond in event_data["conditions"]]
     affects = []
 
-    # Parse affects: distinguish AffectEquation from FunctionalAffect
     if "affects" in event_data:
         affects = [_parse_affect(affect) for affect in event_data["affects"]]
-
-    # Parse functional_affect (FunctionalAffect object)
-    if "functional_affect" in event_data:
-        functional_affect = _parse_functional_affect(event_data["functional_affect"])
-        affects.append(functional_affect)
 
     priority = event_data.get("priority", 0)
 
@@ -452,14 +528,8 @@ def _parse_discrete_event(event_data: dict[str, Any]) -> DiscreteEvent:
     trigger = _parse_discrete_event_trigger(event_data["trigger"])
     affects = []
 
-    # Parse affects: distinguish AffectEquation from FunctionalAffect
     if "affects" in event_data:
         affects = [_parse_affect(affect) for affect in event_data["affects"]]
-
-    # Parse functional_affect (FunctionalAffect object)
-    if "functional_affect" in event_data:
-        functional_affect = _parse_functional_affect(event_data["functional_affect"])
-        affects.append(functional_affect)
 
     priority = event_data.get("priority", 0)
 
@@ -468,7 +538,6 @@ def _parse_discrete_event(event_data: dict[str, Any]) -> DiscreteEvent:
         trigger=trigger,
         affects=affects,
         priority=priority,
-        discrete_parameters=event_data.get("discrete_parameters", []),
         reinitialize=event_data.get("reinitialize", False),
         description=event_data.get("description"),
     )
@@ -632,21 +701,15 @@ def _parse_model(model_data: dict[str, Any]) -> Model:
         for eq_data in model_data["equations"]:
             equations.append(_parse_equation(eq_data))
 
-    # Extract subsystems. Each entry is either a parsed Model, a parsed
-    # data loader (RFC pure-io-data-loaders §4.3), or a raw dict carrying a
-    # "ref" field to be resolved later by resolve_subsystem_refs.
+    # Extract subsystems. Each entry is either a parsed child Model or a raw
+    # dict carrying a "ref" field to be resolved later by resolve_subsystem_refs.
+    # A data source is NOT a component from 1.0.0 and cannot be mounted here;
+    # the schema's subsystem oneOf is [Model, SubsystemRef].
     subsystems: dict[str, Any] = {}
     if "subsystems" in model_data:
         for sub_name, sub_data in model_data["subsystems"].items():
             if isinstance(sub_data, dict) and "ref" in sub_data:
                 subsystems[sub_name] = sub_data
-            elif isinstance(sub_data, dict) and "kind" in sub_data and "source" in sub_data:
-                # Inline data-loader subsystem: discriminated from a Model by
-                # the loader-only required fields (kind + source); a Model has
-                # equations instead. Schema oneOf [Model, DataLoader, SubsystemRef].
-                sub_loader = _parse_data_loader(sub_data)
-                sub_loader.name = sub_name
-                subsystems[sub_name] = sub_loader
             else:
                 sub_model = _parse_model(sub_data)
                 sub_model.name = sub_name
@@ -851,15 +914,15 @@ def _parse_metadata(metadata_data: dict[str, Any]) -> Metadata:
     )
 
 
-def _parse_data_loader_source(src_data: dict[str, Any]) -> DataLoaderSource:
-    return DataLoaderSource(
+def _parse_data_source_location(src_data: dict[str, Any]) -> DataSourceLocation:
+    return DataSourceLocation(
         url_template=src_data["url_template"],
         mirrors=list(src_data.get("mirrors", [])),
     )
 
 
-def _parse_data_loader_temporal(tmp_data: dict[str, Any]) -> DataLoaderTemporal:
-    return DataLoaderTemporal(
+def _parse_data_source_temporal(tmp_data: dict[str, Any]) -> DataSourceTemporal:
+    return DataSourceTemporal(
         start=tmp_data.get("start"),
         end=tmp_data.get("end"),
         file_period=tmp_data.get("file_period"),
@@ -869,63 +932,45 @@ def _parse_data_loader_temporal(tmp_data: dict[str, Any]) -> DataLoaderTemporal:
     )
 
 
-def _parse_data_loader_variable(var_data: dict[str, Any]) -> DataLoaderVariable:
-    unit_conversion = var_data.get("unit_conversion")
-    if isinstance(unit_conversion, dict):
-        unit_conversion = _parse_expression(unit_conversion)
-    reference = None
-    if "reference" in var_data:
-        reference = _parse_reference(var_data["reference"])
-    return DataLoaderVariable(
-        file_variable=var_data["file_variable"],
-        units=var_data["units"],
-        unit_conversion=unit_conversion,
-        description=var_data.get("description"),
-        reference=reference,
-    )
-
-
-def _parse_data_loader_determinism(det_data: dict[str, Any]) -> DataLoaderDeterminism:
+def _parse_data_source_determinism(det_data: dict[str, Any]) -> DataSourceDeterminism:
     """Parse a determinism block from JSON data (esm-spec §8.9.2)."""
-    return DataLoaderDeterminism(
+    return DataSourceDeterminism(
         endian=det_data.get("endian"),
         float_format=det_data.get("float_format"),
         integer_width=det_data.get("integer_width"),
     )
 
 
-def _parse_data_loader(loader_data: dict[str, Any]) -> DataLoader:
-    """Parse a data loader from JSON data."""
-    kind = DataLoaderKind(loader_data["kind"])
-    source = _parse_data_loader_source(loader_data["source"])
+def _parse_data_source(source_data: dict[str, Any]) -> DataSource:
+    """Parse a ``data_sources`` entry from JSON data (esm-spec §8).
 
-    variables = {
-        vname: _parse_data_loader_variable(vdef) for vname, vdef in loader_data["variables"].items()
-    }
-
+    A source declares no variables: from 1.0.0 the consuming PARAMETER carries
+    the per-variable binding on its ``update.from``, and owns the units.
+    """
     temporal = None
-    if "temporal" in loader_data:
-        temporal = _parse_data_loader_temporal(loader_data["temporal"])
+    if "temporal" in source_data:
+        temporal = _parse_data_source_temporal(source_data["temporal"])
 
     determinism = None
-    if "determinism" in loader_data:
-        determinism = _parse_data_loader_determinism(loader_data["determinism"])
+    if "determinism" in source_data:
+        determinism = _parse_data_source_determinism(source_data["determinism"])
 
     reference = None
-    if "reference" in loader_data:
-        reference = _parse_reference(loader_data["reference"])
+    if "reference" in source_data:
+        reference = _parse_reference(source_data["reference"])
 
-    metadata = dict(loader_data.get("metadata", {}))
-
-    return DataLoader(
+    return DataSource(
         name="",  # Name comes from the key
-        kind=kind,
-        source=source,
-        variables=variables,
+        kind=DataSourceKind(source_data["kind"]),
+        source=_parse_data_source_location(source_data["source"]),
         temporal=temporal,
         determinism=determinism,
         reference=reference,
-        metadata=metadata,
+        metadata=dict(source_data.get("metadata", {})),
+        reader_options=source_data.get("reader_options"),
+        select=source_data.get("select"),
+        record_filter=source_data.get("record_filter"),
+        extent=source_data.get("extent"),
     )
 
 
@@ -1086,11 +1131,6 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
         if "affects" in coupling_data:
             affects = [_parse_affect_equation(affect) for affect in coupling_data["affects"]]
 
-        # Parse functional_affect (FunctionalAffect object)
-        if "functional_affect" in coupling_data:
-            functional_affect = _parse_functional_affect(coupling_data["functional_affect"])
-            affects.append(functional_affect)
-
         # Parse affect_neg
         affect_neg = []
         if "affect_neg" in coupling_data and coupling_data["affect_neg"] is not None:
@@ -1103,7 +1143,6 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             trigger=trigger,
             affects=affects,
             affect_neg=affect_neg,
-            discrete_parameters=coupling_data.get("discrete_parameters", []),
             root_find=coupling_data.get("root_find"),
             reinitialize=coupling_data.get("reinitialize"),
         )
@@ -1211,13 +1250,13 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     if "index_sets" in data and data["index_sets"] is not None:
         index_sets = dict(data["index_sets"])
 
-    # Parse data loaders
-    data_loaders: dict[str, DataLoader] = {}
-    if "data_loaders" in data:
-        for loader_name, loader_data in data["data_loaders"].items():
-            loader = _parse_data_loader(loader_data)
-            loader.name = loader_name
-            data_loaders[loader_name] = loader
+    # Parse the document-scoped data-source ingest registry (esm-spec §8).
+    data_sources: dict[str, DataSource] = {}
+    if "data_sources" in data:
+        for source_name, source_data in data["data_sources"].items():
+            source = _parse_data_source(source_data)
+            source.name = source_name
+            data_sources[source_name] = source
 
     # Parse operators
     operators = []
@@ -1322,7 +1361,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
         models=models,
         reaction_systems=reaction_systems,
         events=events,
-        data_loaders=data_loaders,
+        data_sources=data_sources,
         operators=operators,
         registered_functions=registered_functions,
         enums=enums,
@@ -1786,9 +1825,10 @@ def _resolve_model_subsystems(
         # file's axes and a disagreement fails loudly (deep-equal-or-error).
         _merge_subsystem_index_sets(registry, parsed.index_sets, ref_str)
 
-        # Extract the single top-level model or data loader. A referenced
-        # file with exactly one top-level data loader (RFC pure-io-data-loaders
-        # §4.4) resolves to that loader, named by the parent subsystem key.
+        # Extract the single top-level model. A data source is NOT a component
+        # from 1.0.0, so a referenced file carrying only `data_sources` no longer
+        # resolves as a subsystem mount: a model consumes a source by declaring a
+        # parameter whose `update` names it.
         if parsed.models:
             # Take the first (and expected-only) model
             sub_model = next(iter(parsed.models.values()))
@@ -1797,15 +1837,7 @@ def _resolve_model_subsystems(
             # index sets merge into the SAME (top document) registry.
             _resolve_model_subsystems(sub_model, new_base, new_seen, registry, new_chain)
             return sub_model
-        if parsed.data_loaders:
-            # Single-loader file: a data loader has no subsystems, so there
-            # is nothing further to resolve.
-            sub_loader = next(iter(parsed.data_loaders.values()))
-            sub_loader.name = sub_name
-            return sub_loader
-        raise SubsystemRefError(
-            f"Subsystem ref '{ref_str}' does not contain a model or data loader"
-        )
+        raise SubsystemRefError(f"Subsystem ref '{ref_str}' does not contain a model")
 
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, Model):
@@ -2171,14 +2203,14 @@ def load(
     # applied to a DECLARATION that must survive (§9.6.4 rule 5: a library file
     # MUST round-trip to itself) — so the authored registry is kept. Nothing in
     # the document can consume these sizes: a library declares no model,
-    # reaction system or data loader.
+    # reaction system or data source.
     #
     # The exception is a caller who BINDS at the loader API (§9.7.6 site 4):
     # `load(lib, metaparameters={"N": 12})` is a request to INSTANTIATE the
     # library at that size, so the fold is what was asked for and the concrete
     # sizes stand.
     _is_pure_library = bool(_raw_expression_templates) and not (
-        data.get("models") or data.get("reaction_systems") or data.get("data_loaders")
+        data.get("models") or data.get("reaction_systems") or data.get("data_sources")
     )
     _raw_index_sets = (
         copy.deepcopy(data.get("index_sets") or {})

@@ -24,7 +24,7 @@ const ESM = EarthSciAST
 
     @testset "scalar gather reads live + reflects in-place refresh" begin
         # D(y) = forcing[2]
-        model = ESM.Model(Dict("y" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("y" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_op("D", _v("y"); wrt="t"), _idx("forcing", _i(2)))])
         buf = [3.0, 7.0, 11.0]
         f!, u0, p, _t, _vm = build_evaluator(model;
@@ -40,7 +40,7 @@ const ESM = EarthSciAST
     @testset "vectorized gather reads live + reflects in-place refresh" begin
         # D(u[i]) = forcing[i] + u[i]
         N = 6
-        model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                           _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
         buf = collect(10.0:10.0:10.0 * N)
@@ -59,7 +59,7 @@ const ESM = EarthSciAST
         # forcing2d[i,3] for each i — i.e. column-major linear index 2*4 + i.
         nx, ny = 4, 5
         f2d = reshape(collect(1.0:Float64(nx * ny)), nx, ny)
-        model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, nx),
                           _ao1(_idx("forcing2d", _v("i"), _i(3)), "i", 1, nx))])
         ics = Dict("u[$k]" => 0.0 for k in 1:nx)
@@ -75,7 +75,7 @@ const ESM = EarthSciAST
         # mutating the forcing buffer in place DOES refresh. This is the cadence
         # routing the node exists to honor: const ⇒ frozen, discrete ⇒ live.
         N = 4
-        model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                           _ao1(_op("+", _idx("w", _v("i")), _idx("forcing", _v("i"))), "i", 1, N))])
         wsrc = collect(1.0:Float64(N))         # const source (will be inlined)
@@ -103,7 +103,7 @@ const ESM = EarthSciAST
         # homogeneous + zero-alloc. A scalar parameter `a` still rides `p`.
         N = 3
         vars = Dict(
-            "u" => ModelVariable(StateVariable),
+            "u" => ModelVariable(UnknownVariable),
             "a" => ModelVariable(ParameterVariable; default=2.0),
             "forcing" => ModelVariable(ParameterVariable; shape=["i"]))
         model = ESM.Model(vars,
@@ -131,8 +131,8 @@ const ESM = EarthSciAST
         # hoist. This is the same in-place `buf[2] = 42.0` refresh, run through a
         # CSE'd expression instead of a bare gather.
         #   D(y) = sin(forcing[2]*a) + cos(forcing[2]*a);  D(z) = forcing[2]*a
-        vars = Dict("y" => ModelVariable(StateVariable),
-                    "z" => ModelVariable(StateVariable),
+        vars = Dict("y" => ModelVariable(UnknownVariable),
+                    "z" => ModelVariable(UnknownVariable),
                     "a" => ModelVariable(ParameterVariable; default=0.5))
         fa() = _op("*", _idx("forcing", _i(2)), _v("a"))
         model = ESM.Model(vars, [
@@ -171,7 +171,7 @@ const ESM = EarthSciAST
 
     @testset "build-time guards" begin
         N = 3
-        mk(body) = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+        mk(body) = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(body, "i", 1, N))])
         ics = Dict("u[$k]" => 0.0 for k in 1:N)
 

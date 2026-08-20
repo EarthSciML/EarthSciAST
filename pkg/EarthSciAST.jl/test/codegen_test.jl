@@ -40,7 +40,7 @@ const _CG = EarthSciAST
                     "atmospheric" => Model(
                         Dict(
                             "O3" => ModelVariable(
-                                StateVariable;
+                                UnknownVariable;
                                 default = 50.0,
                                 units = "ppb"
                             ),
@@ -111,7 +111,7 @@ const _CG = EarthSciAST
                 models = Dict(
                     "m" => Model(
                         Dict(
-                            "x" => ModelVariable(StateVariable; default = 1.0),
+                            "x" => ModelVariable(UnknownVariable; default = 1.0),
                             "p" => ModelVariable(ParameterVariable; default = 2.0),
                             "q" => ModelVariable(ParameterVariable; default = 3.0),
                         ),
@@ -172,8 +172,8 @@ const _CG = EarthSciAST
                     "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
                 "variables" => Dict{String,Any}(
                     "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
-                    "y" => Dict{String,Any}("type" => "state", "default" => 1.0),
-                    "z" => Dict{String,Any}("type" => "state", "default" => 2.0)),
+                    "y" => Dict{String,Any}("type" => "unknown", "default" => 1.0),
+                    "z" => Dict{String,Any}("type" => "unknown", "default" => 2.0)),
                 "equations" => Any[
                     Dict{String,Any}(
                         "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),

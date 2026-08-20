@@ -150,29 +150,33 @@ func evalFixtureExpr(expr any, bindings map[string]float64) (float64, bool) {
 	}
 }
 
-// resolveUnitsFixtureObserved evaluates a model's observed unknowns into the
-// binding set, iterating to a fixpoint so a chain (an observed reading another
-// observed) resolves whatever order it is written in.
+// resolveUnitsFixtureObserved evaluates each OBSERVED unknown from its DEFINING
+// EQUATION, iterating to a fixed point so a chain of observeds resolves in any
+// declaration order.
 //
-// The definitions come from the model's `equations`, not from a
-// `variables[v].expression` field: esm 1.0.0 removed that field, so an observed
-// unknown is the bare-variable LHS of an equation. This function used to look up
-// the removed field and, after the fixture conversion, silently bound nothing --
-// every assertion then failed with "observed did not resolve".
-func resolveUnitsFixtureObserved(model map[string]any, bindings map[string]float64) {
-	// Index the candidate definitions once: LHS name -> RHS expression.
+// esm 1.0.0 has no `observed` type and no `expression` field: an observed
+// unknown is one an equation defines with a bare-variable LHS (esm-spec §6.3.1),
+// so the definitions are collected from `equations` and the `unknown` type is
+// what gates them.
+func resolveUnitsFixtureObserved(variables map[string]any, equations []any, bindings map[string]float64) {
 	defs := map[string]any{}
-	eqs, _ := model["equations"].([]any)
-	for _, raw := range eqs {
-		eq, ok := raw.(map[string]any)
+	for _, e := range equations {
+		eq, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
-		if lhs, ok := eq["lhs"].(string); ok {
+		lhs, ok := eq["lhs"].(string)
+		if !ok {
+			continue
+		}
+		v, ok := variables[lhs].(map[string]any)
+		if !ok || v["type"] != "unknown" {
+			continue
+		}
+		if _, seen := defs[lhs]; !seen {
 			defs[lhs] = eq["rhs"]
 		}
 	}
-
 	n := len(defs) + 1
 	for i := 0; i < n; i++ {
 		progress := false
@@ -204,7 +208,7 @@ func buildUnitsFixtureBindings(
 			continue
 		}
 		typ, _ := v["type"].(string)
-		if typ != VarTypeParameter && typ != VarTypeUnknown {
+		if typ != "parameter" && typ != "state" {
 			continue
 		}
 		if d, ok := v["default"].(float64); ok {
@@ -298,7 +302,8 @@ func TestUnitsFixturesInlineTestsExecution(t *testing.T) {
 					ic := mapOr(tc, "initial_conditions")
 					po := mapOr(tc, "parameter_overrides")
 					bindings := buildUnitsFixtureBindings(variables, ic, po)
-					resolveUnitsFixtureObserved(model, bindings)
+					equations, _ := model["equations"].([]any)
+					resolveUnitsFixtureObserved(variables, equations, bindings)
 
 					assertionsRaw, _ := tc["assertions"].([]any)
 					testTol := tc["tolerance"]

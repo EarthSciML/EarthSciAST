@@ -53,15 +53,19 @@ using JSON3
     end
 
     @testset "ModelVariableType Parsing" begin
-        # Test schema values
-        @test EarthSciAST.coerce_model_variable_type("state") == StateVariable
+        # The two wire spellings esm 1.0.0 declares, and nothing else.
+        @test EarthSciAST.coerce_model_variable_type("unknown") == UnknownVariable
         @test EarthSciAST.coerce_model_variable_type("parameter") == ParameterVariable
-        @test EarthSciAST.coerce_model_variable_type("observed") == ObservedVariable
 
-        # Test Julia enum values for compatibility
-        @test EarthSciAST.coerce_model_variable_type("StateVariable") == StateVariable
+        # The CamelCase Julia member names stay parse-only aliases.
+        @test EarthSciAST.coerce_model_variable_type("UnknownVariable") == UnknownVariable
         @test EarthSciAST.coerce_model_variable_type("ParameterVariable") == ParameterVariable
-        @test EarthSciAST.coerce_model_variable_type("ObservedVariable") == ObservedVariable
+
+        # The 0.x spellings are NOT aliases: 1.0.0 is a clean break, so a
+        # document declaring one is rejected rather than reinterpreted.
+        for legacy in ("state", "observed", "brownian", "discrete")
+            @test_throws EarthSciAST.ParseError EarthSciAST.coerce_model_variable_type(legacy)
+        end
     end
 
     @testset "Simple ESM File Loading" begin
@@ -78,7 +82,7 @@ using JSON3
             "simple": {
               "variables": {
                 "x": {
-                  "type": "state",
+                  "type": "unknown",
                   "default": 1.0,
                   "description": "State variable x"
                 }
@@ -114,7 +118,7 @@ using JSON3
             @test haskey(model.variables, "x")
 
             var_x = model.variables["x"]
-            @test var_x.type == StateVariable
+            @test var_x.type == UnknownVariable
             @test var_x.default == 1.0
             @test var_x.description == "State variable x"
 
@@ -138,7 +142,7 @@ using JSON3
         # Create test data
         metadata = Metadata("test_roundtrip", authors=["Author 1", "Author 2"])
 
-        variables = Dict("x" => ModelVariable(StateVariable, default=1.0))
+        variables = Dict("x" => ModelVariable(UnknownVariable, default=1.0))
 
         lhs = OpExpr("D", Vector{EarthSciAST.ASTExpr}([VarExpr("x")]), wrt="t")
         rhs = OpExpr("*", Vector{EarthSciAST.ASTExpr}([NumExpr(-0.1), VarExpr("x")]))
@@ -171,7 +175,7 @@ using JSON3
 
             loaded_model = loaded_file.models["test_model"]
             @test haskey(loaded_model.variables, "x")
-            @test loaded_model.variables["x"].type == StateVariable
+            @test loaded_model.variables["x"].type == UnknownVariable
             @test loaded_model.variables["x"].default == 1.0
 
             @test length(loaded_model.equations) == 1
@@ -261,7 +265,7 @@ using JSON3
         model_json = """
         {
           "variables": {
-            "x": { "type": "state", "default": 1.0 },
+            "x": { "type": "unknown", "default": 1.0 },
             "thresh": { "type": "parameter", "default": 0.5 }
           },
           "equations": [
@@ -317,7 +321,7 @@ using JSON3
             "models" => Dict{String,Any}(
                 "M" => Dict{String,Any}(
                     "variables" => Dict{String,Any}(
-                        "x" => Dict{String,Any}("type" => "state", "default" => 2.5),
+                        "x" => Dict{String,Any}("type" => "unknown", "default" => 2.5),
                         "k" => Dict{String,Any}("type" => "parameter", "default" => 0.1),
                     ),
                     "equations" => Any[Dict{String,Any}(
@@ -356,7 +360,7 @@ using JSON3
             "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "leaf"),
             "models" => Dict{String,Any}("Inner" => Dict{String,Any}(
                 "variables" => Dict{String,Any}(
-                    "x" => Dict{String,Any}("type" => "state", "default" => 1.0)),
+                    "x" => Dict{String,Any}("type" => "unknown", "default" => 1.0)),
                 "equations" => Any[Dict{String,Any}(
                     "lhs" => Dict{String,Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
                     "rhs" => 1.0)])))
@@ -402,8 +406,8 @@ using JSON3
           "models": {
             "AB": {
               "variables": {
-                "A": { "type": "state", "default": 1.0 },
-                "B": { "type": "state", "default": 0.0 }
+                "A": { "type": "unknown", "default": 1.0 },
+                "B": { "type": "unknown", "default": 0.0 }
               },
               "equations": [
                 { "lhs": { "op": "D", "args": ["A"], "wrt": "t" }, "rhs": { "op": "*", "args": [-0.1, "A"] } },
@@ -444,13 +448,15 @@ using JSON3
           "models": {
             "Src": {
               "variables": {
-                "F": { "type": "observed", "units": "1", "expression": 4.0 }
+                "F": { "type": "unknown", "units": "1" }
               },
-              "equations": []
+              "equations": [
+                { "lhs": "F", "rhs": 4.0 }
+              ]
             },
             "Sink": {
               "variables": {
-                "u": { "type": "state", "default": 0.0 },
+                "u": { "type": "unknown", "default": 0.0 },
                 "offset": { "type": "parameter", "default": 1.5, "units": "1" },
                 "F_in": { "type": "parameter", "units": "1" }
               },
@@ -511,10 +517,11 @@ using JSON3
           "index_sets": { "x": { "kind": "interval", "size": 8 } },
           "models": { "M": {
             "variables": {
-              "u": { "type": "state", "shape": ["x"] },
-              "dx": { "type": "observed", "units": "1", "expression": { "op": "/", "args": [1, 8] } }
+              "u": { "type": "unknown", "shape": ["x"] },
+              "dx": { "type": "unknown", "units": "1" }
             },
             "equations": [
+              { "lhs": "dx", "rhs": { "op": "/", "args": [1, 8] } },
               { "lhs": { "op": "aggregate", "output_idx": ["i"], "args": [],
                          "ranges": { "i": { "from": "x" } },
                          "expr": { "op": "D", "args": [ { "op": "index", "args": ["u","i"] } ], "wrt": "t" } },
@@ -545,7 +552,9 @@ using JSON3
         @test !occursin("1.0,8.0", s)
 
         # Every `/` node's operands are IntExpr, and it evaluates as TRUE division.
-        u_rate_dx = file.models["M"].variables["dx"].expression
+        # `dx` is an OBSERVED unknown, so its body is reached through its
+        # defining equation (esm-spec §6.3.1), not off the declaration.
+        u_rate_dx = observed_definition(file.models["M"], "dx")
         @test u_rate_dx.args[1] isa IntExpr
         @test u_rate_dx.args[2] isa IntExpr
         @test EarthSciAST.evaluate_expr(u_rate_dx, Dict{String,Float64}()) == 0.125

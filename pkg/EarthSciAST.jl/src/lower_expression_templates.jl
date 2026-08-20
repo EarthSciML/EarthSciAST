@@ -1893,14 +1893,38 @@ function _expand_refs!(file::EsmFile)::EsmFile
     return file
 end
 
+# The `update` rules of one variable, expanded. Returns `nothing` when no rule
+# changed, so every caller can pass the variable through BY IDENTITY rather than
+# reconstructing it. Shared by the load-time walk and the `FlattenedSystem`
+# boundary seam so the two cannot drift on which positions they expand.
+function _expand_update_refs(var::ModelVariable, reg, sites::_TemplateSites,
+                             memo::_ExpandMemo)
+    var.update === nothing && return nothing
+    rules = ParameterUpdate[]
+    changed = false
+    for r in var.update
+        nw = r.when === nothing ? nothing :
+             _expand_expr_refs(r.when, reg, sites, memo)
+        ne = r.expression === nothing ? nothing :
+             _expand_expr_refs(r.expression, reg, sites, memo)
+        (nw !== r.when || ne !== r.expression) && (changed = true)
+        push!(rules, ParameterUpdate(r.kind; times=r.times, interval=r.interval,
+            initial_offset=r.initial_offset, when=nw, direction=r.direction,
+            source=r.source, hook=r.hook, expression=ne, from=r.from,
+            handler=r.handler))
+    end
+    return changed ? rules : nothing
+end
+
 function _expand_model_refs!(model::Model, reg; sites::_TemplateSites=nothing,
                              memo::_ExpandMemo=_expand_memo_disabled() ? nothing :
                                    Dict{Tuple{String,String},OpExpr}())
+    # esm 1.0.0: the only per-variable expression positions are a parameter
+    # update's `when` trigger and `expression` value form (esm-spec §5.4); an
+    # observed unknown's body is an equation, expanded just below.
     for (name, var) in model.variables
-        if var.expression !== nothing
-            lowered = _expand_expr_refs(var.expression, reg, sites, memo)
-            lowered === var.expression || _replace_var_expression!(model.variables, name, var, lowered)
-        end
+        rules = _expand_update_refs(var, reg, sites, memo)
+        rules === nothing || (model.variables[name] = reconstruct(var; update=rules))
     end
     _expand_equations_refs!(model.equations, reg; sites=sites, memo=memo)
     _expand_equations_refs!(model.initialization_equations, reg; sites=sites, memo=memo)
@@ -1948,13 +1972,15 @@ the MTK `System`/`PDESystem` constructors do; the tree-walk `build_evaluator`
 does NOT (it expands at its own entry with site recording, the compile-once
 tier).
 
-Every EXPRESSION-BEARING variable is expanded, not only the observeds: the
-flattener namespaces `v.expression` for EVERY variable type before partitioning
-it into `state_variables` / `parameters` (parameters AND discrete variables) /
-`observed_variables` (`_collect_model!`, namespacing.jl), so any of the three
-buckets can legally carry an `apply_expression_template`. Expanding only the
-observeds left an Option-B node in a state's or a parameter's `expression` for
-a consumer that had been promised an Option-A image.
+Every expression-bearing position ON A VARIABLE is expanded too, not only the
+equations. In esm 1.0.0 an observed unknown's body is its defining EQUATION, so
+the declaration itself carries no expression; what remains on a variable is a
+parameter update's `when` trigger and its `expression` value form (esm-spec
+§5.4). The flattener namespaces those for every variable before partitioning it
+into `state_variables` / `parameters` / `observed_variables`, so any of the
+three buckets can legally carry an `apply_expression_template` inside an
+`update`. Expanding only the equations left an Option-B node in a parameter's
+update for a consumer that had been promised an Option-A image.
 
 `memo` is the shared expansion memo (`_expand_model_refs!`'s default, ~34% of
 build wall time on the 7×7×7 transport fixture when absent): structurally
@@ -1979,18 +2005,15 @@ function expand_flattened_refs(flat::FlattenedSystem;
 end
 
 # One variable bucket of a `FlattenedSystem`, expanded. Unchanged variables are
-# passed through BY IDENTITY (`ex === var.expression`), so a bucket with no
-# references costs one dictionary rebuild and no `ModelVariable` allocation.
+# passed through BY IDENTITY (`_expand_update_refs` returns `nothing`), so a
+# bucket with no references costs one dictionary rebuild and no `ModelVariable`
+# allocation.
 function _expand_vars_refs(vars::OrderedDict{String,ModelVariable}, reg,
                            memo::_ExpandMemo)
     out = OrderedDict{String,ModelVariable}()
     for (name, var) in vars
-        if var.expression === nothing
-            out[name] = var
-        else
-            ex = _expand_expr_refs(var.expression, reg, nothing, memo)
-            out[name] = ex === var.expression ? var : reconstruct(var; expression=ex)
-        end
+        rules = _expand_update_refs(var, reg, nothing, memo)
+        out[name] = rules === nothing ? var : reconstruct(var; update=rules)
     end
     return out
 end

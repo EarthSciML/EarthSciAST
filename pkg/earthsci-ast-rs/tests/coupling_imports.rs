@@ -297,16 +297,47 @@ fn subsystem_ref_targeting_a_coupling_library_is_rejected() {
         serde_json::to_string(&lib()).unwrap(),
     )
     .unwrap();
-    let wrapper = r#"{
-        "esm": "1.0.0",
-        "metadata": { "name": "t" },
-        "models": { "M": {
-            "variables": { "x": { "type": "unknown", "units": "1", "default": 0.5 } },
-            "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-                            "rhs": { "op": "-", "args": ["x"] } }],
-            "subsystems": { "Sub": { "ref": "clib.esm" } }
-        } }
-    }"#;
+    let wrapper = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "t"
+          },
+          "models": {
+            "M": {
+              "variables": {
+                "x": {
+                  "type": "unknown",
+                  "units": "1",
+                  "default": 0.5
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "x"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "-",
+                    "args": [
+                      "x"
+                    ]
+                  }
+                }
+              ],
+              "subsystems": {
+                "Sub": {
+                  "ref": "clib.esm"
+                }
+              }
+            }
+          }
+        }
+        "#;
     let e = load_with_options(wrapper, &load_opts(dir.path()))
         .expect_err("subsystem ref to a coupling library must fail");
     assert!(
@@ -323,16 +354,47 @@ fn template_import_targeting_a_coupling_library_is_rejected() {
         serde_json::to_string(&lib()).unwrap(),
     )
     .unwrap();
-    let wrapper = r#"{
-        "esm": "1.0.0",
-        "metadata": { "name": "t" },
-        "models": { "M": {
-            "expression_template_imports": [{ "ref": "clib.esm" }],
-            "variables": { "x": { "type": "unknown", "units": "1", "default": 0.5 } },
-            "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-                            "rhs": { "op": "-", "args": ["x"] } }]
-        } }
-    }"#;
+    let wrapper = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "t"
+          },
+          "models": {
+            "M": {
+              "expression_template_imports": [
+                {
+                  "ref": "clib.esm"
+                }
+              ],
+              "variables": {
+                "x": {
+                  "type": "unknown",
+                  "units": "1",
+                  "default": 0.5
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "x"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "-",
+                    "args": [
+                      "x"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+        "#;
     let e = load_with_options(wrapper, &load_opts(dir.path()))
         .expect_err("template import of a coupling library must fail");
     assert!(

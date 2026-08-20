@@ -20,11 +20,12 @@ from .esm_types import (
     CouplingCouple,
     CouplingEntry,
     CouplingImport,
-    DataLoader,
-    DataLoaderDeterminism,
-    DataLoaderSource,
-    DataLoaderTemporal,
-    DataLoaderVariable,
+    DataSource,
+    DataSourceBinding,
+    DataSourceDeterminism,
+    DataSourceLocation,
+    DataSourceTemporal,
+    Distribution,
     DiscreteEvent,
     DiscreteEventTrigger,
     Domain,
@@ -33,7 +34,6 @@ from .esm_types import (
     EventCoupling,
     Expr,
     ExprNode,
-    FunctionalAffect,
     Metadata,
     Model,
     ModelVariable,
@@ -204,19 +204,111 @@ def _serialize_equation(equation: Equation) -> dict[str, Any]:
 
 
 def _serialize_affect_equation(affect) -> dict[str, Any]:
-    """Serialize an affect equation or functional affect to JSON-compatible format."""
-    if isinstance(affect, FunctionalAffect):
-        result = {"handler_id": affect.handler_id}
-        if affect.read_vars:
-            result["read_vars"] = affect.read_vars
-        if affect.read_params:
-            result["read_params"] = affect.read_params
-        if affect.modified_params:
-            result["modified_params"] = affect.modified_params
-        if affect.config:
-            result["config"] = affect.config
-        return result
+    """Serialize an affect equation. From 1.0.0 an event affects UNKNOWNS ONLY,
+    so there is no functional-affect branch: a handler lives on the parameter it
+    writes, as that parameter's ``update.handler``."""
     return {"lhs": affect.lhs, "rhs": _serialize_expression(affect.rhs)}
+
+
+#: Per-kind wire order for a `distribution`. Only the slots belonging to the
+#: declared kind are emitted, so a normal never grows a `low` on the way out.
+_DISTRIBUTION_SPEC_BY_KIND = {
+    "normal": ("mean", "std", "cov"),
+    "lognormal": ("mu", "sigma", "cov"),
+    "uniform": ("low", "high"),
+}
+
+
+def _serialize_distribution(distribution: Distribution) -> dict[str, Any]:
+    """Serialize a parameter's `distribution` (esm-spec §5.4)."""
+    result: dict[str, Any] = {"kind": distribution.kind}
+    for attr in _DISTRIBUTION_SPEC_BY_KIND.get(distribution.kind, ()):
+        value = getattr(distribution, attr, None)
+        if value is not None:
+            result[attr] = value
+    return result
+
+
+_DATA_SOURCE_BINDING_SPEC = (
+    ("file_variable", "file_variable", _KEEP, None),
+    ("unit_conversion", "unit_conversion", _OMIT_NONE, _serialize_expression),
+    ("codes", "codes", _OMIT_NONE, None),
+    ("select", "select", _OMIT_NONE, None),
+    ("description", "description", _OMIT_NONE, None),
+    ("reference", "reference", _OMIT_NONE, None),  # codec patched in below
+)
+
+
+def _serialize_data_source_binding(binding: DataSourceBinding) -> dict[str, Any]:
+    """Serialize an update's `from` binding (esm-spec §8.5). `unit_conversion`
+    goes through the ordinary Expression codec, which renders a bare number as
+    a number and an operator node as a node."""
+    result = _serialize_by_spec(binding, _DATA_SOURCE_BINDING_SPEC)
+    if binding.reference is not None:
+        result["reference"] = _serialize_reference(binding.reference)
+    return result
+
+
+_FUNCTIONAL_UPDATE_SPEC = (
+    ("handler_id", "handler_id", _KEEP, None),
+    ("read_vars", "read_vars", _OMIT_FALSY, list),
+    ("read_params", "read_params", _OMIT_FALSY, list),
+    ("config", "config", _OMIT_FALSY, dict),
+)
+
+
+def _serialize_functional_update(handler) -> dict[str, Any]:
+    """Serialize an update's registered `handler` (esm-spec §5.4)."""
+    return _serialize_by_spec(handler, _FUNCTIONAL_UPDATE_SPEC)
+
+
+#: Per-kind wire order for a `ParameterUpdate`, as (attr, wire key, codec).
+#: The trailing value form (expression / from / handler) is common to every kind
+#: but `wiener`, which takes none, so it is emitted separately below. `when` is
+#: an EXPRESSION, not a scalar -- emitting it verbatim leaves an ExprNode in the
+#: dict and `json.dumps` fails on the way out.
+_UPDATE_SPEC_BY_KIND = {
+    "wiener": (),
+    "schedule": (
+        ("times", "times", None),
+        ("interval", "interval", None),
+        ("initial_offset", "initial_offset", None),
+    ),
+    "condition": (("when", "when", _serialize_expression),),
+    "crossing": (
+        ("when", "when", _serialize_expression),
+        ("direction", "direction", None),
+    ),
+    "data": (("source", "source", None),),
+    "remesh": (("hook", "hook", None),),
+}
+
+
+def _serialize_parameter_update(update) -> dict[str, Any]:
+    """Serialize ONE parameter update rule (esm-spec §5.4)."""
+    result: dict[str, Any] = {"kind": update.kind}
+    for attr, wire, codec in _UPDATE_SPEC_BY_KIND.get(update.kind, ()):
+        value = getattr(update, attr, None)
+        if value is not None:
+            result[wire] = codec(value) if codec is not None else value
+    if update.kind == "wiener":
+        return result
+    if update.expression is not None:
+        result["expression"] = _serialize_expression(update.expression)
+    if update.from_source is not None:
+        result["from"] = _serialize_data_source_binding(update.from_source)
+    if update.handler is not None:
+        result["handler"] = _serialize_functional_update(update.handler)
+    return result
+
+
+def _serialize_parameter_update_spec(update) -> Any:
+    """Serialize a parameter's `update`: one rule, or an ordered list of >= 2.
+    The two spellings stay distinct — a one-element list is not a legal
+    document, so round-tripping a single rule must not produce one."""
+    if isinstance(update, list):
+        return [_serialize_parameter_update(rule) for rule in update]
+    return _serialize_parameter_update(update)
 
 
 _MODEL_VARIABLE_SPEC = (
@@ -225,11 +317,10 @@ _MODEL_VARIABLE_SPEC = (
     ("default", "default", _OMIT_NONE, None),
     ("default_units", "default_units", _OMIT_NONE, None),
     ("description", "description", _OMIT_NONE, None),
-    ("expression", "expression", _OMIT_NONE, _serialize_expression),
     ("shape", "shape", _OMIT_NONE, list),
     ("location", "location", _OMIT_NONE, None),
-    ("noise_kind", "noise_kind", _OMIT_NONE, None),
-    ("correlation_group", "correlation_group", _OMIT_NONE, None),
+    ("distribution", "distribution", _OMIT_NONE, _serialize_distribution),
+    ("update", "update", _OMIT_NONE, _serialize_parameter_update_spec),
 )
 
 
@@ -252,30 +343,14 @@ def _serialize_discrete_event_trigger(trigger: DiscreteEventTrigger) -> dict[str
     return result
 
 
-def _split_affects(affects) -> tuple:
-    """Split an event's affects into (symbolic equations, functional affect).
-
-    Parsing folds a schema ``functional_affect`` into the event's ``affects``
-    list; on the way out it must be re-emitted under the singular
-    ``functional_affect`` key the schema defines (an event carries at most one).
-    """
-    equations = [a for a in affects if not isinstance(a, FunctionalAffect)]
-    functional = [a for a in affects if isinstance(a, FunctionalAffect)]
-    return equations, (functional[0] if functional else None)
-
-
 def _serialize_continuous_event(event: ContinuousEvent) -> dict[str, Any]:
     """Serialize a continuous event to JSON-compatible format."""
-    equations, functional = _split_affects(event.affects)
     result = {
         "conditions": [_serialize_expression(cond) for cond in event.conditions],
     }
     if event.name:
         result["name"] = event.name
-    if equations or functional is None:
-        result["affects"] = [_serialize_affect_equation(a) for a in equations]
-    if functional is not None:
-        result["functional_affect"] = _serialize_affect_equation(functional)
+    result["affects"] = [_serialize_affect_equation(a) for a in event.affects]
     if event.priority != 0:
         result["priority"] = event.priority
 
@@ -293,20 +368,14 @@ def _serialize_continuous_event(event: ContinuousEvent) -> dict[str, Any]:
 
 def _serialize_discrete_event(event: DiscreteEvent) -> dict[str, Any]:
     """Serialize a discrete event to JSON-compatible format."""
-    equations, functional = _split_affects(event.affects)
     result = {
         "trigger": _serialize_discrete_event_trigger(event.trigger),
     }
     if event.name:
         result["name"] = event.name
-    if equations or functional is None:
-        result["affects"] = [_serialize_affect_equation(a) for a in equations]
-    if functional is not None:
-        result["functional_affect"] = _serialize_affect_equation(functional)
+    result["affects"] = [_serialize_affect_equation(a) for a in event.affects]
     if event.priority != 0:
         result["priority"] = event.priority
-    if event.discrete_parameters:
-        result["discrete_parameters"] = list(event.discrete_parameters)
     if event.reinitialize:
         result["reinitialize"] = event.reinitialize
     if event.description:
@@ -545,16 +614,14 @@ def _serialize_model(model: Model) -> dict[str, Any]:
 
 def _serialize_subsystem(sub: Any) -> dict[str, Any]:
     """Serialize one entry of a ``subsystems`` map: an inline Model /
-    ReactionSystem / DataLoader, or an unresolved ``{ref, bindings?}`` dict
-    carried verbatim (deep-copied)."""
+    ReactionSystem, or an unresolved ``{ref, bindings?}`` dict carried verbatim
+    (deep-copied). A data source is not a component and cannot appear here."""
     if isinstance(sub, dict):
         return json.loads(json.dumps(sub))
     if isinstance(sub, Model):
         return _serialize_model(sub)
     if isinstance(sub, ReactionSystem):
         return _serialize_reaction_system(sub)
-    if isinstance(sub, DataLoader):
-        return _serialize_data_loader(sub)
     raise ValueError(f"Invalid subsystem type: {type(sub)}")
 
 
@@ -728,17 +795,17 @@ def _serialize_domain(domain: Domain) -> dict[str, Any]:
     return result
 
 
-_DATA_LOADER_SOURCE_SPEC = (
+_DATA_SOURCE_LOCATION_SPEC = (
     ("url_template", "url_template", _KEEP, None),
     ("mirrors", "mirrors", _OMIT_FALSY, list),
 )
 
 
-def _serialize_data_loader_source(source: DataLoaderSource) -> dict[str, Any]:
-    return _serialize_by_spec(source, _DATA_LOADER_SOURCE_SPEC)
+def _serialize_data_source_location(source: DataSourceLocation) -> dict[str, Any]:
+    return _serialize_by_spec(source, _DATA_SOURCE_LOCATION_SPEC)
 
 
-_DATA_LOADER_TEMPORAL_SPEC = (
+_DATA_SOURCE_TEMPORAL_SPEC = (
     ("start", "start", _OMIT_NONE, None),
     ("end", "end", _OMIT_NONE, None),
     ("file_period", "file_period", _OMIT_NONE, None),
@@ -748,60 +815,52 @@ _DATA_LOADER_TEMPORAL_SPEC = (
 )
 
 
-def _serialize_data_loader_temporal(temporal: DataLoaderTemporal) -> dict[str, Any]:
-    return _serialize_by_spec(temporal, _DATA_LOADER_TEMPORAL_SPEC)
+def _serialize_data_source_temporal(temporal: DataSourceTemporal) -> dict[str, Any]:
+    return _serialize_by_spec(temporal, _DATA_SOURCE_TEMPORAL_SPEC)
 
 
-def _serialize_data_loader_variable(variable: DataLoaderVariable) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "file_variable": variable.file_variable,
-        "units": variable.units,
-    }
-    if variable.unit_conversion is not None:
-        if isinstance(variable.unit_conversion, (int, float)):
-            result["unit_conversion"] = variable.unit_conversion
-        else:
-            result["unit_conversion"] = _serialize_expression(variable.unit_conversion)
-    if variable.description is not None:
-        result["description"] = variable.description
-    if variable.reference is not None:
-        result["reference"] = _serialize_reference(variable.reference)
-    return result
-
-
-_DATA_LOADER_DETERMINISM_SPEC = (
+_DATA_SOURCE_DETERMINISM_SPEC = (
     ("endian", "endian", _OMIT_NONE, None),
     ("float_format", "float_format", _OMIT_NONE, None),
     ("integer_width", "integer_width", _OMIT_NONE, None),
 )
 
 
-def _serialize_data_loader_determinism(det: DataLoaderDeterminism) -> dict[str, Any]:
+def _serialize_data_source_determinism(det: DataSourceDeterminism) -> dict[str, Any]:
     """Serialize a determinism block (esm-spec §8.9.2)."""
-    return _serialize_by_spec(det, _DATA_LOADER_DETERMINISM_SPEC)
+    return _serialize_by_spec(det, _DATA_SOURCE_DETERMINISM_SPEC)
 
 
-def _serialize_data_loader(loader: DataLoader) -> dict[str, Any]:
-    """Serialize a data loader to JSON-compatible format."""
+def _serialize_data_source(source: DataSource) -> dict[str, Any]:
+    """Serialize a `data_sources` entry (esm-spec §8).
+
+    A source emits NO `variables` map: from 1.0.0 the per-variable binding lives
+    on the consuming parameter's `update.from`.
+    """
     result: dict[str, Any] = {
-        "kind": loader.kind.value,
-        "source": _serialize_data_loader_source(loader.source),
-        "variables": {
-            vname: _serialize_data_loader_variable(vdef) for vname, vdef in loader.variables.items()
-        },
+        "kind": source.kind.value,
+        "source": _serialize_data_source_location(source.source),
     }
-    if loader.temporal is not None:
-        temporal_dict = _serialize_data_loader_temporal(loader.temporal)
+    if source.temporal is not None:
+        temporal_dict = _serialize_data_source_temporal(source.temporal)
         if temporal_dict:
             result["temporal"] = temporal_dict
-    if loader.determinism is not None:
-        det_dict = _serialize_data_loader_determinism(loader.determinism)
+    if source.determinism is not None:
+        det_dict = _serialize_data_source_determinism(source.determinism)
         if det_dict:
             result["determinism"] = det_dict
-    if loader.reference is not None:
-        result["reference"] = _serialize_reference(loader.reference)
-    if loader.metadata:
-        result["metadata"] = dict(loader.metadata)
+    if source.reader_options is not None:
+        result["reader_options"] = _json_deepcopy(source.reader_options)
+    if source.select is not None:
+        result["select"] = _json_deepcopy(source.select)
+    if source.record_filter is not None:
+        result["record_filter"] = _json_deepcopy(source.record_filter)
+    if source.extent is not None:
+        result["extent"] = _json_deepcopy(source.extent)
+    if source.reference is not None:
+        result["reference"] = _serialize_reference(source.reference)
+    if source.metadata:
+        result["metadata"] = dict(source.metadata)
 
     return result
 
@@ -931,21 +990,14 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
             result["conditions"] = [_serialize_expression(cond) for cond in coupling.conditions]
         if coupling.trigger:
             result["trigger"] = _serialize_discrete_event_trigger(coupling.trigger)
-        # Parsing folds a schema ``functional_affect`` into ``affects``; split it
-        # back out so ``affects`` carries only AffectEquations and the
-        # FunctionalAffect is re-emitted under the singular ``functional_affect``
-        # key the schema defines (dumping it into ``affects`` is schema-invalid).
-        equations, functional = _split_affects(coupling.affects)
-        if equations:
-            result["affects"] = [_serialize_affect_equation(affect) for affect in equations]
-        if functional is not None:
-            result["functional_affect"] = _serialize_affect_equation(functional)
+        if coupling.affects:
+            result["affects"] = [
+                _serialize_affect_equation(affect) for affect in coupling.affects
+            ]
         if coupling.affect_neg:
             result["affect_neg"] = [
                 _serialize_affect_equation(affect) for affect in coupling.affect_neg
             ]
-        if coupling.discrete_parameters:
-            result["discrete_parameters"] = coupling.discrete_parameters
         if coupling.root_find:
             result["root_find"] = coupling.root_find
         if coupling.reinitialize is not None:
@@ -1005,10 +1057,10 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     if getattr(esm_file, "expression_templates", None):
         result["expression_templates"] = esm_file.expression_templates
 
-    # Serialize data loaders
-    if esm_file.data_loaders:
-        result["data_loaders"] = {
-            name: _serialize_data_loader(loader) for name, loader in esm_file.data_loaders.items()
+    # Serialize the document-scoped data-source ingest registry (esm-spec §8)
+    if esm_file.data_sources:
+        result["data_sources"] = {
+            name: _serialize_data_source(source) for name, source in esm_file.data_sources.items()
         }
 
     # Serialize operators

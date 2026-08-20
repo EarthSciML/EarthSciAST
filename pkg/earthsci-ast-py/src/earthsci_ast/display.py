@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import re
 
+from .classification import algebraic_unknowns, observed_unknowns, ode_states
 from .esm_types import Equation, EsmFile, Expr, ExprNode, Model, ReactionSystem
 from .serialize import _canonical_number
 
@@ -1427,13 +1428,22 @@ def _format_model_summary(model: Model, format_type: str) -> str:
     if not model.variables:
         return f"Model: {name} (0 variables, {eq_count} equations)"
 
-    # Count variables by type according to spec Section 6.3
+    # Count variables by DERIVED role (esm-spec §6.3.1). The document declares
+    # only `unknown` / `parameter`; a summary that reported those two would say
+    # less than the 0.x one did, so the finer roles are recovered rather than
+    # read off a declared type. An algebraic unknown is counted with the states:
+    # both are solved for.
+    states = set(ode_states(model)) | set(algebraic_unknowns(model))
+    observed = set(observed_unknowns(model))
     type_counts = {"state": 0, "parameter": 0, "observed": 0}
 
-    for _var_name, var_info in model.variables.items():
-        var_type = getattr(var_info, "type", "unknown")
-        if var_type in type_counts:
-            type_counts[var_type] += 1
+    for var_name, var_info in model.variables.items():
+        if getattr(var_info, "type", None) == "parameter":
+            type_counts["parameter"] += 1
+        elif var_name in observed:
+            type_counts["observed"] += 1
+        elif var_name in states:
+            type_counts["state"] += 1
 
     # Create the type summary according to spec Section 6.3 format
     type_parts = []
@@ -1472,10 +1482,10 @@ def _format_esm_file_summary(esm_file: EsmFile, format_type: str) -> str:
     """Format ESM file summary (implementation per spec Section 6.3)."""
     models_count = len(esm_file.models) if esm_file.models else 0
     reaction_systems_count = len(esm_file.reaction_systems) if esm_file.reaction_systems else 0
-    data_loaders_count = len(esm_file.data_loaders) if esm_file.data_loaders else 0
+    data_sources_count = len(esm_file.data_sources) if esm_file.data_sources else 0
     title = getattr(esm_file.metadata, "title", "Untitled")
 
-    return f"ESM v{esm_file.version}: {title} ({models_count} models, {reaction_systems_count} reaction systems, {data_loaders_count} data loaders)"
+    return f"ESM v{esm_file.version}: {title} ({models_count} models, {reaction_systems_count} reaction systems, {data_sources_count} data sources)"
 
 
 # Add _repr_latex_ methods for Jupyter notebook rich display

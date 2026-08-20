@@ -53,7 +53,7 @@ _d_index(arr::AbstractString, idxs...) =
     _op("D", _idx(arr, idxs...); wrt="t")
 
 # Build a scalar state variable with an initial value.
-_state(default) = ESM2.ModelVariable(ESM2.StateVariable; default=default)
+_state(default) = ESM2.ModelVariable(ESM2.UnknownVariable; default=default)
 
 # Solve an ESM Model and return (sol, compiled_system).
 function _build_and_solve(model::ESM2.Model, name::Symbol,
@@ -188,7 +188,7 @@ end
     @testset "1. Pure ODE N=5 analytical" begin
         N = 5
         vars = Dict{String,ESM2.ModelVariable}(
-            "u" => ESM2.ModelVariable(ESM2.StateVariable),
+            "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         lhs = _arrayop1d(_d_index("u", _var("i")), "i", 1, N)
         rhs = _arrayop1d(_op("-", _idx("u", _var("i"))), "i", 1, N)
@@ -214,8 +214,8 @@ end
     @testset "2. Mixed ODE + algebraic (v eliminated)" begin
         N = 5
         vars = Dict{String,ESM2.ModelVariable}(
-            "u" => ESM2.ModelVariable(ESM2.StateVariable),
-            "v" => ESM2.ModelVariable(ESM2.StateVariable),
+            "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
+            "v" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         # D(u[i]) = v[i]
         eq_ode = ESM2.Equation(
@@ -250,7 +250,7 @@ end
     @testset "3. 1D diffusion stencil N=10 vs scalar ref" begin
         N = 10
         vars = Dict{String,ESM2.ModelVariable}(
-            "u" => ESM2.ModelVariable(ESM2.StateVariable),
+            "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         # interior arrayop (1-based output range, offsets baked into body)
         body = _op("+",
@@ -296,8 +296,8 @@ end
     @testset "6. Rearranged algebraic (v buried in LHS sum)" begin
         N = 5
         vars = Dict{String,ESM2.ModelVariable}(
-            "u" => ESM2.ModelVariable(ESM2.StateVariable),
-            "v" => ESM2.ModelVariable(ESM2.StateVariable),
+            "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
+            "v" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         # D(u[i]) = v[i]
         eq_ode = ESM2.Equation(
@@ -333,7 +333,7 @@ end
     @testset "8. 2D ArrayOp (M,N)=(4,3) analytical" begin
         M, Nd = 4, 3
         vars = Dict{String,ESM2.ModelVariable}(
-            "u" => ESM2.ModelVariable(ESM2.StateVariable),
+            "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         lhs = _arrayop2d(_op("D", _idx("u", _var("i"), _var("j")); wrt="t"),
                          "i", 1, M, "j", 1, Nd)
@@ -561,16 +561,19 @@ end
         # left fold gives [1e16, 1e16, 0, 1] — what the tree-walk produces. The
         # MTK path re-associates and gives [1e16, 1e16, 1, 2]: an O(1) error,
         # not a last-ulp one. Cells 1-2 agree (nothing has cancelled yet).
+        # esm 1.0.0 §6.3: `u` is an `unknown` DEFINED by the bare-variable-LHS
+        # equation `u ~ makearray(...)` — no variable-level `expression`.
         cancel = EarthSciAST.Model(
-            Dict("u" => EarthSciAST.ModelVariable(EarthSciAST.ObservedVariable;
-                     shape=["x"],
-                     expression=_op("makearray";
-                         regions=[[[1, 1]], [[2, 2]], [[3, 3]], [[4, 4]]],
-                         values=EarthSciAST.ASTExpr[_num(1e16), _num(1.0),
-                                                    _num(-1e16), _num(1.0)])),
-                 "c" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable;
+            Dict("u" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable;
+                     shape=["x"]),
+                 "c" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable;
                      shape=["x"], default=0.0)),
-            [EarthSciAST.Equation(
+            [EarthSciAST.Equation(_var("u"),
+                _op("makearray";
+                    regions=[[[1, 1]], [[2, 2]], [[3, 3]], [[4, 4]]],
+                    values=EarthSciAST.ASTExpr[_num(1e16), _num(1.0),
+                                               _num(-1e16), _num(1.0)])),
+             EarthSciAST.Equation(
                 _op("aggregate"; output_idx=Any["i"],
                     expr_body=_op("D", _idx("c", _var("i")); wrt="t"),
                     ranges=Dict("i" => EarthSciAST.IndexSetRef("x"))),

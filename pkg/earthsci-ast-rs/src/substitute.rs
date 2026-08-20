@@ -77,6 +77,10 @@ fn map_exprs_in_discrete_event(
                 .map(|affect| map_exprs_in_affect(affect, m))
                 .collect()
         }),
+        // Functional affects are opaque platform snippets, carried verbatim
+        // rather than substituted (matching the sibling bindings).
+        functional_affect: event.functional_affect.clone(),
+        discrete_parameters: event.discrete_parameters.clone(),
         reinitialize: event.reinitialize,
         description: event.description.clone(),
     }
@@ -102,6 +106,7 @@ fn map_exprs_in_continuous_event(
         }),
         root_find: event.root_find.clone(),
         reinitialize: event.reinitialize,
+        discrete_parameters: event.discrete_parameters.clone(),
         priority: event.priority,
         description: event.description.clone(),
     }
@@ -554,10 +559,10 @@ mod tests {
                 units: Some("K".to_string()),
                 default: Some(298.15),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -637,10 +642,10 @@ mod tests {
                 units: Some("K".to_string()),
                 default: Some(298.15),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -723,10 +728,10 @@ mod tests {
                 units: Some("K".to_string()),
                 default: Some(298.15),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -809,10 +814,10 @@ mod tests {
                 units: Some("mol/L".to_string()),
                 default: Some(40e-9),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
         model_variables.insert(
@@ -823,10 +828,10 @@ mod tests {
                 units: Some("s-1".to_string()),
                 default: Some(1.8e-12),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -942,6 +947,8 @@ mod tests {
                 lhs: "target".to_string(),
                 rhs: Expr::Variable("y".to_string()),
             }]),
+            functional_affect: None,
+            discrete_parameters: None,
             reinitialize: None,
             description: None,
         };
@@ -984,6 +991,7 @@ mod tests {
             affect_neg: None,
             root_find: None,
             reinitialize: None,
+            discrete_parameters: None,
             priority: None,
             description: None,
         };
@@ -1028,10 +1036,10 @@ mod tests {
                         units: Some("m".to_string()),
                         default: Some(0.0),
                         description: None,
-                        distribution: None,
-                        update: None,
                         shape: None,
                         location: None,
+                        distribution: None,
+                        update: None,
                     },
                 );
                 vars
@@ -1046,6 +1054,8 @@ mod tests {
                     lhs: "state_var".to_string(),
                     rhs: Expr::Variable("param".to_string()),
                 }]),
+                functional_affect: None,
+                discrete_parameters: None,
                 reinitialize: None,
                 description: None,
             }]),
@@ -1059,6 +1069,7 @@ mod tests {
                 affect_neg: None,
                 root_find: None,
                 reinitialize: None,
+                discrete_parameters: None,
                 priority: None,
                 description: None,
             }]),

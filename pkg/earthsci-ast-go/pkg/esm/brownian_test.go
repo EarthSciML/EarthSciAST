@@ -8,17 +8,18 @@ import (
 	"testing"
 )
 
-// brownian_test.go covers what the `brownian` VARIABLE TYPE became in esm
-// 1.0.0: a parameter carrying a `distribution` and `update: {kind: "wiener"}`.
-// The type, its `noise_kind` sidecar, and its `correlation_group` tag are all
-// gone, so these tests assert the replacement shape rather than a renamed
-// version of the old one.
+// brownian_test.go covers the esm 1.0.0 spelling of a stochastic noise source.
+// There is no `brownian` variable TYPE any more: a noise source is a PARAMETER
+// carrying a `distribution` and `update: {kind: "wiener"}`, and "which
+// parameters are Brownian" is answered by the classification function
+// BrownianParameters (esm-spec §6.3.1), never by reading a declared type.
+// Correlated noise is likewise one VECTOR-VALUED parameter whose distribution
+// carries an explicit `cov`, replacing the 0.x `correlation_group` tag that
+// named a correlation without ever giving one.
 
-// A wiener-updated parameter must survive parse -> serialize -> parse with its
-// distribution and update intact, and must classify as Brownian.
-func TestWienerParameterRoundTrip(t *testing.T) {
-	repoRoot := filepath.Join("..", "..", "..", "..")
-	fixture := filepath.Join(repoRoot, "tests", "fixtures", "sde", "ornstein_uhlenbeck.esm")
+func loadSDEFixture(t *testing.T, name string) *ESMFile {
+	t.Helper()
+	fixture := filepath.Join("..", "..", "..", "..", "tests", "fixtures", "sde", name)
 	raw, err := os.ReadFile(fixture)
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
@@ -27,42 +28,29 @@ func TestWienerParameterRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
-	model := parsed.Models["OU"]
-	bw, ok := model.Variables["Bw"]
+	return &parsed
+}
+
+// A wiener-updated parameter round-trips through parse → serialize → parse with
+// its distribution and its update rule intact.
+func TestWienerParameterRoundTrip(t *testing.T) {
+	parsed := loadSDEFixture(t, "ornstein_uhlenbeck.esm")
+	bw, ok := parsed.Models["OU"].Variables["Bw"]
 	if !ok {
 		t.Fatalf("Bw variable missing in fixture")
 	}
-
-	// The declared type is `parameter` -- there is no `brownian` type to check.
 	if bw.Type != VarTypeParameter {
-		t.Errorf("Bw.Type = %q, want %q", bw.Type, VarTypeParameter)
+		t.Errorf("Bw.Type = %q, want %q — a noise source is a parameter in 1.0.0", bw.Type, VarTypeParameter)
 	}
-	// Brownian-ness is DERIVED from the update, not declared.
-	if !bw.Update.IsWiener() {
-		t.Errorf("Bw.Update.IsWiener() = false, want true (update = %+v)", bw.Update)
+	rules := bw.UpdateRules()
+	if len(rules) != 1 || rules[0].Kind != UpdateKindWiener {
+		t.Fatalf("Bw update = %+v, want a single wiener rule", rules)
 	}
-	if bw.Update.IsArray {
-		t.Error("a wiener update is admissible only as the object form, not an array")
-	}
-	if bw.Distribution == nil {
-		t.Fatal("a wiener parameter requires a distribution -- it is what gets resampled")
-	}
-	if bw.Distribution.Kind != DistributionNormal {
-		t.Errorf("Bw distribution kind = %q, want %q", bw.Distribution.Kind, DistributionNormal)
-	}
-	if bw.Distribution.IsMultivariate() {
-		t.Error("a scalar mean must classify as univariate")
+	if bw.Distribution == nil || bw.Distribution.Kind != DistributionNormal {
+		t.Fatalf("Bw.Distribution = %+v, want a normal distribution (a wiener update resamples it)", bw.Distribution)
 	}
 
-	if got := BrownianParameters(&model); !reflect.DeepEqual(got, []string{"Bw"}) {
-		t.Errorf("BrownianParameters = %v, want [Bw]", got)
-	}
-	// One wiener parameter is what makes the enclosing model an SDE.
-	if got := SystemKind(&model); got != SystemKindSDE {
-		t.Errorf("SystemKind = %q, want %q", got, SystemKindSDE)
-	}
-
-	out, err := json.Marshal(&parsed)
+	out, err := json.Marshal(parsed)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -76,74 +64,92 @@ func TestWienerParameterRoundTrip(t *testing.T) {
 	}
 }
 
-// Correlated noise is ONE vector-valued parameter whose distribution carries a
-// `cov`. The 0.x spelling was two brownian variables sharing a
-// `correlation_group: "wind"` tag, which named the correlation without stating
-// it; the covariance matrix states it.
-func TestCorrelatedNoiseIsOneVectorParameter(t *testing.T) {
-	repoRoot := filepath.Join("..", "..", "..", "..")
-	fixture := filepath.Join(repoRoot, "tests", "fixtures", "sde", "correlated_noise.esm")
-	raw, err := os.ReadFile(fixture)
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
-	var parsed ESMFile
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	model := parsed.Models["TwoBody"]
+// The four parameter sets of esm-spec §6.3.1 partition, and only the
+// wiener-updated parameter is Brownian. `sigma` — the noise INTENSITY — is an
+// ordinary constant, which is the mistake this pins against: a binding that
+// treated "anything with noise-ish units" or "anything with a distribution" as
+// Brownian would put it in the wrong set.
+func TestBrownianParametersClassification(t *testing.T) {
+	parsed := loadSDEFixture(t, "ornstein_uhlenbeck.esm")
+	model := parsed.Models["OU"]
 
-	// ONE parameter, not two: the pair of increments is a vector.
-	want := []string{"B"}
-	if got := BrownianParameters(&model); !reflect.DeepEqual(got, want) {
+	if got, want := BrownianParameters(&model), []string{"Bw"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("BrownianParameters = %v, want %v", got, want)
 	}
-
-	b := model.Variables["B"]
-	if b.Distribution == nil {
-		t.Fatal("B must carry a distribution")
+	if got, want := ConstantParameters(&model), []string{"sigma", "theta"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ConstantParameters = %v, want %v", got, want)
 	}
-	if !b.Distribution.IsMultivariate() {
-		t.Error("an array-valued mean must classify as multivariate")
+	if got := DiscreteParameters(&model); len(got) != 0 {
+		t.Errorf("DiscreteParameters = %v, want none", got)
 	}
-	if len(b.Distribution.Cov) != 2 {
-		t.Fatalf("want a 2x2 covariance, got %v", b.Distribution.Cov)
+	if got := SampledParameters(&model); len(got) != 0 {
+		t.Errorf("SampledParameters = %v, want none — Bw has an update, so it is Brownian, not sampled", got)
 	}
-	// The off-diagonal IS the correlation the old tag could only name.
-	if b.Distribution.Cov[0][1] == 0 {
-		t.Error("the off-diagonal must be non-zero; that is what makes the noise correlated")
-	}
-	if !b.ShapeDeclared() {
-		t.Error("a vector-valued distribution requires the parameter's shape to agree")
+	// Any Brownian parameter promotes the model to an SDE.
+	if got := SystemKind(&model, parsed.Domain); got != SystemKindSDE {
+		t.Errorf("SystemKind = %q, want %q", got, SystemKindSDE)
 	}
 }
 
-// Flattening a coupled file must surface a wiener parameter in
-// FlattenedSystem.BrownianParameters, dot-namespaced -- and in Parameters too,
-// since it IS a parameter now rather than a fourth variable kind.
-func TestFlattenBrownianParameters(t *testing.T) {
-	repoRoot := filepath.Join("..", "..", "..", "..")
-	fixture := filepath.Join(repoRoot, "tests", "fixtures", "sde", "correlated_noise.esm")
-	raw, err := os.ReadFile(fixture)
+// Correlated noise: ONE vector-valued parameter whose distribution carries the
+// covariance matrix. The `cov` must survive the round-trip — it is the only
+// place the correlation is stated.
+func TestCorrelatedNoiseIsOneVectorParameter(t *testing.T) {
+	parsed := loadSDEFixture(t, "correlated_noise.esm")
+	model := parsed.Models["TwoBody"]
+
+	if got, want := BrownianParameters(&model), []string{"B"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("BrownianParameters = %v, want %v (one vector-valued source, not two scalars)", got, want)
+	}
+	b := model.Variables["B"]
+	if b.Distribution == nil {
+		t.Fatal("B carries no distribution")
+	}
+	wantCov := [][]float64{{1.0, 0.5}, {0.5, 1.0}}
+	if !reflect.DeepEqual(b.Distribution.Cov, wantCov) {
+		t.Errorf("B.Distribution.Cov = %v, want %v", b.Distribution.Cov, wantCov)
+	}
+	if got, want := b.Dims(), []string{"wind_noise"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("B shape = %v, want %v (the cov order must match it)", got, want)
+	}
+
+	out, err := json.Marshal(parsed)
 	if err != nil {
-		t.Fatalf("read fixture: %v", err)
+		t.Fatalf("marshal: %v", err)
 	}
-	var parsed ESMFile
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	var reparsed ESMFile
+	if err := json.Unmarshal(out, &reparsed); err != nil {
+		t.Fatalf("unmarshal round-trip: %v", err)
 	}
-	flat, err := Flatten(&parsed)
+	if !reflect.DeepEqual(b, reparsed.Models["TwoBody"].Variables["B"]) {
+		t.Errorf("correlated-noise parameter lost information on round-trip: got %+v want %+v",
+			reparsed.Models["TwoBody"].Variables["B"], b)
+	}
+}
+
+// Flattening surfaces the derived Brownian set under its dot-namespaced names.
+// The parameter is ALSO an ordinary parameter of the flattened system, which is
+// the substantive change from 0.x: a noise source is no longer a variable kind
+// of its own.
+func TestFlattenBrownianParameters(t *testing.T) {
+	parsed := loadSDEFixture(t, "correlated_noise.esm")
+	flat, err := Flatten(parsed)
 	if err != nil {
 		t.Fatalf("flatten: %v", err)
 	}
-	want := []string{"TwoBody.B"}
-	if !reflect.DeepEqual(flat.BrownianParameters, want) {
+	if want := []string{"TwoBody.B"}; !reflect.DeepEqual(flat.BrownianParameters, want) {
 		t.Errorf("BrownianParameters = %v, want %v", flat.BrownianParameters, want)
 	}
-	if !contains(flat.Parameters, "TwoBody.B") {
-		t.Errorf("a brownian parameter must also appear in Parameters, got %v", flat.Parameters)
+	found := false
+	for _, p := range flat.Parameters {
+		if p == "TwoBody.B" {
+			found = true
+		}
 	}
-	if got := flat.Variables["TwoBody.B"]; got != ClassBrownianParameter {
-		t.Errorf("Variables[TwoBody.B] = %q, want %q", got, ClassBrownianParameter)
+	if !found {
+		t.Errorf("Parameters = %v, want it to include TwoBody.B — a noise source IS a parameter", flat.Parameters)
+	}
+	if want := []string{"TwoBody.x", "TwoBody.y"}; !reflect.DeepEqual(flat.StateVariables, want) {
+		t.Errorf("StateVariables = %v, want %v", flat.StateVariables, want)
 	}
 }

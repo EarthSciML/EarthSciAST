@@ -43,6 +43,12 @@ RuntimeGeneratedFunctions.init(@__MODULE__)
 
 # Core data model + validation
 include("types.jl")
+# Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it
+# is stated over `Model`) and precede every consumer, which is nearly all of
+# them: from esm 1.0.0 there are only two declared variable types, so ODE
+# state / observed / algebraic / brownian / discrete / sampled / constant are
+# all questions only this module may answer.
+include("classification.jl")
 # Operator-vocabulary registry — single source of truth for the derived op
 # sets (tree-walk fold/CSE/stencil/geometry whitelists, the MTK-ext known-op
 # set, validate.jl's builtin names, units.jl's dimensional-rule classes, and
@@ -131,15 +137,28 @@ export
     # Equation types
     Equation, AffectEquation,
     # Model component types
-    ModelVariableType, StateVariable, ParameterVariable, ObservedVariable, BrownianVariable,
-    DiscreteVariable,
+    ModelVariableType, UnknownVariable, ParameterVariable,
     ModelVariable, Model, SubsystemRef, Species, Parameter, Reaction, ReactionSystem,
+    # Parameter value model (esm-spec §5.4, §5.5, §6.3)
+    Distribution, ParameterUpdate, FunctionalUpdate, DataSourceBinding,
+    PARAMETER_UPDATE_KINDS, SHAPE_REQUIRING_UPDATE_KINDS,
+    # Derived classification (esm-spec §6.3.1) — the ONLY sanctioned way to ask
+    # which unknowns are ODE states / observed / algebraic and which parameters
+    # are Brownian / discrete / sampled / constant.
+    unknown_names, parameter_names,
+    ode_states, is_ode_state, observed_unknowns, algebraic_unknowns,
+    solver_unknowns,
+    observed_definitions, observed_definition,
+    brownian_parameters, discrete_parameters, sampled_parameters,
+    constant_parameters,
+    system_kind, declared_system_kind_mismatch,
+    has_spatial_derivative, has_time_derivative,
+    assert_classification_partitions,
     # Event types
     EventType, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger,
-    # Data and operator types
-    DataLoader, DataLoaderSource, DataLoaderTemporal,
-    DataLoaderVariable, DataLoaderDeterminism,
+    # Data-source registry types (esm-spec §8)
+    DataSource, DataSourceLocation, DataSourceTemporal, DataSourceDeterminism,
     CouplingEntry,
     # Concrete coupling types
     CouplingOperatorCompose, CouplingCouple, CouplingVariableMap,

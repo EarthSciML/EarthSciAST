@@ -437,7 +437,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
       "metadata": {"name": "t"},$top_fields
       "models": {
         "M": {$extra_model_fields
-          "variables": {"x": {"type": "state", "units": "1", "default": 0.5}},
+          "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5}},
           "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                          "rhs": {"op": "-", "args": ["x"]}}]
         }
@@ -713,7 +713,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
               "models": {
                 "M": {
                   "variables": {
-                    "x": {"type": "state", "units": "1", "default": 0.5},
+                    "x": {"type": "unknown", "units": "1", "default": 0.5},
                     "agg": {"type": "observed", "units": "1",
                       "expression": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
                         "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
@@ -749,7 +749,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
               "models": {
                 "M": {
                   "variables": {
-                    "x": {"type": "state", "units": "1", "default": 0.5},
+                    "x": {"type": "unknown", "units": "1", "default": 0.5},
                     "dlon": {"type": "observed", "units": "1",
                              "expression": {"op": "/", "args": [360, "N"]}}
                   },
@@ -784,7 +784,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                   {"op": "apply_expression_template", "args": [], "name": "c3", "bindings": {}}]}},
                 "c3": {"params": [], "body": 3}
               },
-              "variables": {"x": {"type": "state", "units": "1", "default": 0.5},
+              "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
                             "y": {"type": "observed", "units": "1",
                                   "expression": {"op": "apply_expression_template",
                                                  "args": [], "name": "c1", "bindings": {}}}},
@@ -815,7 +815,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             Dict("esm" => "0.8.0", "metadata" => Dict("name" => "chain"),
                  "models" => Dict("M" => Dict(
                      "expression_templates" => tpl,
-                     "variables" => Dict("x" => Dict("type" => "state", "default" => 0.5)),
+                     "variables" => Dict("x" => Dict("type" => "unknown", "default" => 0.5)),
                      "equations" => [Dict(
                          "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
                          "rhs" => Dict("op" => "-", "args" => ["x"]))])))
@@ -845,7 +845,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         ]
             doc = JSON3.read("""
             {"esm": "0.7.0", "metadata": {"name": "old"},$snippet
-             "models": {"M": {"variables": {"x": {"type": "state", "default": 0.5}},
+             "models": {"M": {"variables": {"x": {"type": "unknown", "default": 0.5}},
                               "equations": []}}}""")
             @test _err_code(() -> reject_template_imports_pre_v08(doc)) ==
                   "template_import_version_too_old"
@@ -921,7 +921,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
              "models": {"Outer": {
                "expression_template_imports": [{"ref": "tpl/lib.esm"}],
                "variables": {
-                 "u": {"type": "state", "units": "1", "default": 1.5},
+                 "u": {"type": "unknown", "units": "1", "default": 1.5},
                  "w": {"type": "observed", "units": "1",
                        "expression": {"op": "scale_by_n", "args": ["u"]}}},
                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
@@ -936,7 +936,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             "https://esm.invalid/models/inner.esm" => """
             {"esm": "0.8.0", "metadata": {"name": "url_inner"},
              "models": {"Inner": {
-               "variables": {"v": {"type": "state", "units": "1", "default": 0.5}},
+               "variables": {"v": {"type": "unknown", "units": "1", "default": 0.5}},
                "equations": []}}}""",
         )
         _fetched = String[]
@@ -957,7 +957,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                    "expression_template_imports":
                      [{"ref": "https://esm.invalid/lib/stencil.esm"}],
                    "variables": {
-                     "x": {"type": "state", "units": "1", "default": 1.5},
+                     "x": {"type": "unknown", "units": "1", "default": 1.5},
                      "y": {"type": "observed", "units": "1",
                            "expression": {"op": "scale_by_n", "args": ["x"]}}},
                    "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
@@ -976,7 +976,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                  "models": {"M": {
                    "expression_template_imports":
                      [{"ref": "https://esm.invalid/cyc/a.esm"}],
-                   "variables": {"x": {"type": "state", "units": "1", "default": 1.5}},
+                   "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5}},
                    "equations": []}}}""")
                 @test _err_code(() -> EarthSciAST.load(cyc)) ==
                       "template_import_cycle"
@@ -987,7 +987,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 write(wrapper, """
                 {"esm": "0.8.0", "metadata": {"name": "url_wrapper"},
                  "models": {"Top": {
-                   "variables": {"z": {"type": "state", "units": "1", "default": 2.5}},
+                   "variables": {"z": {"type": "unknown", "units": "1", "default": 2.5}},
                    "equations": [],
                    "subsystems": {"S": {"ref": "https://esm.invalid/models/outer.esm"}}}}}""")
                 fw = EarthSciAST.load(wrapper)
@@ -1107,7 +1107,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
           },
           "models": {
             "Regrid": {
-              "variables": {"u": {"type": "state", "units": "1", "default": 0.0}},
+              "variables": {"u": {"type": "unknown", "units": "1", "default": 0.0}},
               "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                              "rhs": {"op": "*", "args": [-0.5, "u"]}}]
             }

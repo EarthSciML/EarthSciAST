@@ -59,8 +59,8 @@ const CodeArrayShapeMismatch = "array_shape_mismatch"
 func (s *structuralScan) validateArrayBroadcastShapes(model *Model, basePath string) {
 	declaredAxes := make(map[string][]string, len(model.Variables))
 	for name, variable := range model.Variables {
-		if len(variable.Shape) > 0 {
-			declaredAxes[name] = variable.Shape
+		if dims := variable.Dims(); len(dims) > 0 {
+			declaredAxes[name] = dims
 		}
 	}
 	if len(declaredAxes) == 0 {
@@ -77,26 +77,11 @@ func (s *structuralScan) validateArrayBroadcastShapes(model *Model, basePath str
 			fmt.Sprintf("%s/equations/%d/rhs", basePath, i))
 	}
 
-	// A declared array-shaped observed's defining expression is the same bare
-	// array-level form under the same alignment rule -- and in 1.0.0 that
-	// expression IS one of the equations already walked above, so it needs no
-	// separate pass.
-	//
-	// What does still need one is an arrayed PARAMETER's update: a `schedule`,
-	// `data` or `remesh` parameter must declare a `shape`, and the `expression`
-	// that refills that buffer is a bare array-level form subject to the same
-	// broadcast rule. Sorted so the emitted findings are deterministic.
-	for _, varName := range sortedKeys(model.Variables) {
-		v := model.Variables[varName]
-		_ = v.MapUpdateExpressions(func(expr Expression, rule int, pos string) (Expression, error) {
-			if pos != UpdatePosExpression {
-				return expr, nil
-			}
-			s.checkOperandAxes(expr, varName, declaredAxes,
-				updatePointer(basePath, varName, v.Update, rule, pos))
-			return expr, nil
-		})
-	}
+	// An array-shaped OBSERVED unknown's defining expression is the same bare
+	// array-level form under the same alignment rule. From esm 1.0.0 that
+	// expression IS one of the equations walked above (a bare-variable LHS), so
+	// it needs no second pass here — checking it twice would report one defect at
+	// two pointers.
 }
 
 // wholeArrayLHSTarget returns the whole-array variable an equation LHS defines —

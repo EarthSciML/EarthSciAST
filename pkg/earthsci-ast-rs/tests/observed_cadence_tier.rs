@@ -20,34 +20,196 @@ use earthsci_ast::simulate_array::ArrayCompiled;
 ///     buffer at runtime); state-free & `t`-free → DISCRETE.
 ///   * `h[i] := u[i] * 2`  — reads the integrated state `u` → CONTINUOUS.
 /// plus the state `D(u[i]) = g[i] + h[i]`.
-const MODEL: &str = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "cadence_tiers"},
- "models": {"M": {
-   "variables": {
-     "u": {"type": "unknown", "shape": ["i"]},
-     "g": {"type": "unknown", "shape": ["i"]},
-     "h": {"type": "unknown", "shape": ["i"]}
-   },
-   "equations": [
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "index", "args": ["g", "i"]}, "ranges": {"i": [1, 3]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "*", "args": [{"op": "index", "args": ["f", "i"]}, 2]}}},
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "index", "args": ["h", "i"]}, "ranges": {"i": [1, 3]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "*", "args": [{"op": "index", "args": ["u", "i"]}, 2]}}},
-    {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-             "ranges": {"i": [1, 3]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "+", "args": [
-               {"op": "index", "args": ["g", "i"]},
-               {"op": "index", "args": ["h", "i"]}]}}}
-   ]
- }}
-}"#;
+const MODEL: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "cadence_tiers"
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "u": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            },
+            "g": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            },
+            "h": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "g",
+                    "i"
+                  ]
+                },
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "f",
+                        "i"
+                      ]
+                    },
+                    2
+                  ]
+                }
+              }
+            },
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "h",
+                    "i"
+                  ]
+                },
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    },
+                    2
+                  ]
+                }
+              }
+            },
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                },
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "g",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "h",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+    "#;
 
 fn has(v: &[String], name: &str) -> bool {
     v.iter().any(|n| n == name || n.ends_with(&format!(".{name}")))

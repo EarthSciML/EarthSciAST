@@ -207,20 +207,20 @@ func TestSubstituteInAffectEquation(t *testing.T) {
 }
 
 func TestSubstituteInModel(t *testing.T) {
+	// `y` is an observed unknown; its definition is an EQUATION from esm 1.0.0,
+	// and `p` is a parameter whose `update` carries the remaining Expression
+	// positions a variable can hold.
 	model := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown},
-			"y": {Type: VarTypeUnknown},
-			// A parameter whose update expression names `k`: in 1.0.0 this is the
-			// Expression position ON a variable, replacing the observed's removed
-			// `expression` field, and substitution has to reach it.
-			"gate": {
-				Type: VarTypeParameter,
-				Update: &ParameterUpdateSpec{Rules: []ParameterUpdate{{
+			"x": {Type: "unknown"},
+			"y": {Type: "unknown"},
+			"p": {
+				Type: "parameter",
+				Update: ParameterUpdate{
 					Kind:       UpdateKindCondition,
-					When:       ExprNode{Op: ">", Args: []any{"x", 1.0}},
+					When:       ExprNode{Op: ">", Args: []any{"x", "k"}},
 					Expression: ExprNode{Op: "*", Args: []any{"k", 2.0}},
-				}}},
+				},
 			},
 		},
 		Equations: []Equation{
@@ -228,7 +228,6 @@ func TestSubstituteInModel(t *testing.T) {
 				LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 				RHS: ExprNode{Op: "*", Args: []any{"k", "x"}},
 			},
-			// `y` is an observed unknown; its definition is this equation.
 			{
 				LHS: "y",
 				RHS: ExprNode{Op: "+", Args: []any{"x", "k"}},
@@ -245,21 +244,17 @@ func TestSubstituteInModel(t *testing.T) {
 	expectedEqRHS := ExprNode{Op: "*", Args: []any{0.1, "x"}}
 	assert.Equal(t, expectedEqRHS, result.Equations[0].RHS)
 
-	// An observed unknown's definition is an equation now, so it substitutes
-	// through the same pass.
-	expectedObsRHS := ExprNode{Op: "+", Args: []any{"x", 0.1}}
-	assert.Equal(t, expectedObsRHS, result.Equations[1].RHS)
+	// The observed unknown's DEFINING EQUATION is substituted along with the
+	// rest — it is an ordinary equation now.
+	def, ok := ObservedDefinition(&result, "y")
+	assert.True(t, ok, "y should still have a defining equation")
+	assert.Equal(t, ExprNode{Op: "+", Args: []any{"x", 0.1}}, def)
 
-	// The update's expression must substitute too -- this is what the removed
-	// per-variable pass used to cover, repointed at the position that now exists.
-	expectedUpdate := ExprNode{Op: "*", Args: []any{0.1, 2.0}}
-	assert.Equal(t, expectedUpdate, result.Variables["gate"].Update.Rules[0].Expression)
-
-	// The ORIGINAL model must be unchanged: SubstituteInModel returns a copy, and
-	// an update spec held behind a pointer is the easiest thing to alias by
-	// accident.
-	assert.Equal(t, ExprNode{Op: "*", Args: []any{"k", 2.0}},
-		model.Variables["gate"].Update.Rules[0].Expression)
+	// Both Expression positions of the parameter update are substituted.
+	rules := result.Variables["p"].UpdateRules()
+	assert.Len(t, rules, 1)
+	assert.Equal(t, ExprNode{Op: ">", Args: []any{"x", 0.1}}, rules[0].When)
+	assert.Equal(t, ExprNode{Op: "*", Args: []any{0.1, 2.0}}, rules[0].Expression)
 }
 
 func TestSubstituteInReactionSystem(t *testing.T) {

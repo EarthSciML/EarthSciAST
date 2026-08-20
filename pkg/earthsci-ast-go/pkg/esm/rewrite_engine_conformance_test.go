@@ -35,14 +35,11 @@ func lowerConfFixture(t *testing.T, name string) map[string]any {
 	return v
 }
 
-// modelMDefinitions indexes models.m's `equations` by the bare-variable LHS each
-// one defines, returning the RHS.
-//
-// It replaces modelMVariables: every one of these rewrite-engine tests inspects
-// the LOWERED FORM of an observed unknown, which lived in
-// `variables[v].expression` in 0.x and is the RHS of the defining equation in
-// esm 1.0.0.
-func modelMDefinitions(t *testing.T, v map[string]any) map[string]any {
+// modelMEquations returns models.m.equations from a RAW document view. From esm
+// 1.0.0 the rewritable expressions of a component live here, not in the variable
+// declarations — an unknown's behaviour is stated by the equations and nowhere
+// else — so the lowering goldens are compared on this subtree.
+func modelMEquations(t *testing.T, v map[string]any) []any {
 	t.Helper()
 	models, ok := v["models"].(map[string]any)
 	if !ok {
@@ -52,18 +49,28 @@ func modelMDefinitions(t *testing.T, v map[string]any) map[string]any {
 	if !ok {
 		t.Fatalf("models.m missing")
 	}
-	out := map[string]any{}
-	eqs, _ := m["equations"].([]any)
-	for _, raw := range eqs {
-		eq, ok := raw.(map[string]any)
+	eqs, ok := m["equations"].([]any)
+	if !ok {
+		t.Fatalf("models.m.equations missing")
+	}
+	return eqs
+}
+
+// modelMDefinition returns the RHS of the equation whose LHS is the bare name
+// `v` — the defining expression of an observed unknown.
+func modelMDefinition(t *testing.T, doc map[string]any, name string) any {
+	t.Helper()
+	for _, e := range modelMEquations(t, doc) {
+		eq, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
-		if lhs, ok := eq["lhs"].(string); ok {
-			out[lhs] = eq["rhs"]
+		if lhs, ok := eq["lhs"].(string); ok && lhs == name {
+			return eq["rhs"]
 		}
 	}
-	return out
+	t.Fatalf("models.m has no defining equation for %q", name)
+	return nil
 }
 
 // TestRewriteEngine_GodunovBeatsInnerDerivative is the anti-regression for the
@@ -76,16 +83,16 @@ func TestRewriteEngine_GodunovBeatsInnerDerivative(t *testing.T) {
 	got := lowerConfFixture(t, "godunov_beats_inner_deriv")
 	want := decodeFixture(t, string(confFixtureBytes(t, "godunov_beats_inner_deriv", "expanded.esm")))
 
-	gotVars := mustJSON(t, modelMDefinitions(t, got))
-	wantVars := mustJSON(t, modelMDefinitions(t, want))
-	if gotVars != wantVars {
-		t.Errorf("variables diverge from expanded.esm:\n got=%s\nwant=%s", gotVars, wantVars)
+	gotEqs := mustJSON(t, modelMEquations(t, got))
+	wantEqs := mustJSON(t, modelMEquations(t, want))
+	if gotEqs != wantEqs {
+		t.Errorf("equations diverge from expanded.esm:\n got=%s\nwant=%s", gotEqs, wantEqs)
 	}
 
 	// Guard the rewritten EXPRESSION subtree (the variables dict still declares an
 	// `inv_dx` parameter): the compound rule's product appears; the per-derivative
 	// rule's `inv_dx` product does not.
-	exprJSON := mustJSON(t, modelMDefinitions(t, got)["grad_mag"])
+	exprJSON := mustJSON(t, modelMDefinition(t, got, "grad_mag"))
 	if strings.Contains(exprJSON, "inv_dx") {
 		t.Errorf("expanded grad_mag still contains inv_dx (per-derivative rule fired): %s", exprJSON)
 	}
@@ -101,14 +108,13 @@ func TestRewriteEngine_NestedDerivativeFixpoint(t *testing.T) {
 	got := lowerConfFixture(t, "fixpoint_nested_deriv")
 	want := decodeFixture(t, string(confFixtureBytes(t, "fixpoint_nested_deriv", "expanded.esm")))
 
-	gotVars := mustJSON(t, modelMDefinitions(t, got))
-	wantVars := mustJSON(t, modelMDefinitions(t, want))
-	if gotVars != wantVars {
-		t.Errorf("variables diverge from expanded.esm:\n got=%s\nwant=%s", gotVars, wantVars)
+	gotEqs := mustJSON(t, modelMEquations(t, got))
+	wantEqs := mustJSON(t, modelMEquations(t, want))
+	if gotEqs != wantEqs {
+		t.Errorf("equations diverge from expanded.esm:\n got=%s\nwant=%s", gotEqs, wantEqs)
 	}
 
-	lap := modelMDefinitions(t, got)["lap"].(map[string]any)
-	exprJSON := mustJSON(t, lap["expression"])
+	exprJSON := mustJSON(t, modelMDefinition(t, got, "lap"))
 	if strings.Contains(exprJSON, "laplacian") {
 		t.Errorf("expanded lap still contains laplacian: %s", exprJSON)
 	}
@@ -216,7 +222,7 @@ func TestRewriteEngine_AttrsBindAsScalarMetavariables(t *testing.T) {
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("lowering failed: %v", err)
 	}
-	got := mustJSON(t, modelMDefinitions(t, v)["y"])
+	got := mustJSON(t, modelMDefinition(t, v, "y"))
 	// Go marshals map keys in sorted order: "args" before "op"; the bound
 	// gamma literal (1.4) substitutes into the first arg.
 	const want = `{"args":[1.4,"u"],"op":"*"}`

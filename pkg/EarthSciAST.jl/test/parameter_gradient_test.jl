@@ -54,7 +54,7 @@ _pg_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
 _pg_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
-_pg_state(; kw...) = Dict{String,Any}("type" => "state",
+_pg_state(; kw...) = Dict{String,Any}("type" => "unknown",
                                       (String(k) => v for (k, v) in kw)...)
 _pg_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
 

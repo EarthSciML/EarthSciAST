@@ -556,24 +556,47 @@ mod tests {
 
     #[test]
     fn test_new_wasm_exports_compile() {
-        let json = r#"{
-            "esm": "1.0.0",
-            "metadata": {
+        let json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
                 "name": "Test Model",
                 "description": "A simple test model for WASM exports"
-            },
-            "models": {
+              },
+              "models": {
                 "SimpleModel": {
-                    "variables": {
-                        "x": {"type": "unknown", "units": "m", "default": 1.0},
-                        "k": {"type": "parameter", "default": 0.5}
+                  "variables": {
+                    "x": {
+                      "type": "unknown",
+                      "units": "m",
+                      "default": 1.0
                     },
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["x"]}, "rhs": {"op": "*", "args": ["k", "x"]}}
-                    ]
+                    "k": {
+                      "type": "parameter",
+                      "default": 0.5
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "x"
+                        ]
+                      },
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          "k",
+                          "x"
+                        ]
+                      }
+                    }
+                  ]
                 }
+              }
             }
-        }"#;
+            "#;
 
         // Test that the core functions work (without WASM feature for regular tests)
         let esm_file = rust_load(json).expect("Should load valid ESM file");

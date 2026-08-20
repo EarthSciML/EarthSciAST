@@ -135,10 +135,10 @@ mod tests {
                 units: Some("m".to_string()),
                 default: Some(0.0),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 

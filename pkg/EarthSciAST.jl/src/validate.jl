@@ -366,8 +366,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 1. Validate model equation-unknown balance.
     #
     # (e) A COUPLED model is skipped ENTIRELY. Its states may be supplied from
-    # outside — by a `variable_map` (tests/valid/data_loaders_comprehensive.esm
-    # feeds `SimpleChemistry.wind_u` from a loader) or by the system it is
+    # outside — by a `variable_map`, or by the system it is
     # composed onto — so its own equations need not balance its own unknowns.
     # Demanding a defining equation for every declared state rejected three
     # perfectly good fixtures. The narrower `check_excess=false` carve-out that
@@ -395,29 +394,42 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         end
     end
 
-    # 3b. Data-loader `unit_conversion` expressions (audit finding (h)). A
-    # loader variable's conversion may be an Expression rather than a numeric
-    # factor, and nothing walked it — an undefined name in one was invisible.
+    # 3b. A data-update binding's `unit_conversion` expression (audit finding
+    # (h)). It may be an Expression rather than a numeric factor, and an
+    # undefined name in one used to be invisible.
     #
-    # Its scope is the DOCUMENT-WIDE declared names, not the loader's own
-    # variables: a loader is pure I/O with no equations, and its conversion may
-    # scale a loaded field by a MODEL's declared parameter (mirrors TS
+    # Its scope is the DOCUMENT-WIDE declared names: a conversion may scale a
+    # loaded field by a MODEL's declared parameter (mirrors TS
     # `documentDeclaredNames`; `tests/invalid/undefined_variable_in_unit_conversion.esm`
     # multiplies the loaded field by the model parameter `k`, whose only defect
-    # is the separate undefined name `undefined_xyz`). The loader-local scope
-    # over-reported `k` as a second `undefined_variable`.
-    if file.data_loaders !== nothing
-        lscope = _document_declared_names(file)
-        union!(lscope, keys(file.index_sets))
-        for loader_name in sort!(collect(keys(file.data_loaders)))
-            loader = file.data_loaders[loader_name]
-            for vname in sort!(collect(keys(loader.variables)))
-                uc = loader.variables[vname].unit_conversion
-                isa(uc, ASTExpr) || continue
-                append!(errors, validate_expression_references(
-                    file, uc, "/data_loaders/$loader_name/variables/$vname/unit_conversion";
-                    scope=lscope))
-            end
+    # is the separate undefined name `undefined_xyz`). From esm 1.0.0 the
+    # binding lives on the CONSUMING PARAMETER (esm-spec §8.5), so the walk
+    # follows the models rather than a loader table.
+    if file.models !== nothing
+        ucscope = _document_declared_names(file)
+        union!(ucscope, keys(file.index_sets))
+        for model_name in sort!(collect(keys(file.models)))
+            _check_update_unit_conversions!(errors, file, file.models[model_name],
+                                            "/models/$model_name", ucscope)
+        end
+    end
+
+    # 3c. `update.source` must resolve to a declared `data_sources` entry
+    # (esm-spec §8.5, `data_source_undefined`).
+    if file.models !== nothing
+        available = file.data_sources === nothing ? String[] :
+                    sort!(String[String(k) for k in keys(file.data_sources)])
+        for model_name in sort!(collect(keys(file.models)))
+            _check_update_sources!(errors, file.models[model_name],
+                                   "/models/$model_name", available)
+        end
+    end
+
+    # 3d. A present `system_kind` field must agree with the derivation
+    # (esm-spec §6.3.1, `system_kind_mismatch`).
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_system_kind!(errors, file.models[model_name], "/models/$model_name")
         end
     end
 
@@ -602,10 +614,10 @@ end
     model_subsystems(model::Model)
 
 Iterator over the `(name, subsystem)` pairs of `model.subsystems` whose value
-is itself a `Model`. Model subsystems may also hold DataLoader / SubsystemRef
-entries (RFC pure-io-data-loaders §4.3), which carry no model semantics for
-the model-specific validators — this helper skips them once, instead of every
-recursion site repeating the `subsys isa Model || continue` boilerplate.
+is itself a `Model`. Model subsystems may also hold an unresolved `SubsystemRef`,
+which carries no model semantics for the model-specific validators — this helper
+skips it once, instead of every recursion site repeating the
+`subsys isa Model || continue` boilerplate.
 """
 model_subsystems(model::Model) =
     (pair for pair in model.subsystems if pair.second isa Model)
@@ -668,102 +680,80 @@ end
 """
     validate_model_balance(model::Model, path::String) -> Vector{StructuralError}
 
-Validate equation/unknown balance for a model, in BOTH directions (the docstring
-has always promised "equation-unknown balance"; only the first direction was
-ever implemented — bug audit 2026-07-14, finding J3):
+Validate the equation/unknown balance of a model (esm-spec §4.9.4).
 
-1. **A state variable with no defining equation.** Skipped when the model has
-   subsystems: its dynamics may live there (`tests/valid/scoped_refs_coupling.esm`
-   declares state variables and `equations: []` for exactly this reason).
-2. **An excess equation** — one that solves for a name the model does not
-   declare, e.g. a stray `D(y)` in a model whose only state is `x`.
+From esm 1.0.0 the balance is stated over UNKNOWNS and EQUATIONS, not over a
+declared `state` type: an unknown's behaviour is given by the equations and
+nowhere else, so a model is well-determined exactly when it writes one equation
+per unknown. An equation counts whichever LHS form it takes — a derivative
+(`D(u,t)`), a bare variable (`y ~ f(…)`), or an expression (`H*H*SO4 ~ Ksp`) —
+because all three determine the unknowns they name. An `ic` LHS prescribes an
+initial value rather than dynamics and does not count.
 
-Both are reported under the code the shared corpus pins,
-`equation_count_mismatch`, at the MODEL's pointer (`/models/<M>`) — a balance is
-a property of the model, not of any one equation.
+That single rule replaces three 0.x checks: the "state variable with no
+defining equation" direction, the "excess equation" direction, and the separate
+square-ness rule that `system_kind: "nonlinear"` used to need. It also absorbs
+the retired `missing_observed_expr` diagnostic — an observed unknown with
+nothing defining it is no longer a malformed declaration but an unbalanced
+system, and `missing_equations_for` names exactly the unknowns that code used
+to name.
 
-`check_excess=false` disables direction 2 only. It is passed for a model that
-participates in an `operator_compose` coupling: such a model is an OPERATOR, and
-its equations act on the unknowns of the system it is composed onto, not on
-unknowns of its own. `tests/valid/minimal_chemistry.esm` is the canonical shape —
-`Advection` declares only the parameters `u_wind`/`v_wind` and writes
-`D(u) = -u_wind*grad(u,x) - …`, where `u` is the advected field supplied by the
-composition. Treating that `u` as an excess equation rejects a valid file.
-Direction 1 still applies: an operator that declares a state of its own must
-still define it.
+Reported at the MODEL's pointer (`/models/<M>`) under `equation_count_mismatch`
+— a balance is a property of the model, not of any one equation.
+
+Two exemptions carry over, and both are one-directional:
+
+- A model **with subsystems** is exempt from the SHORTFALL direction: its
+  dynamics may live in a subsystem (`tests/valid/scoped_refs_coupling.esm`
+  declares unknowns and `equations: []` for exactly this reason).
+- `check_excess=false` exempts the SURPLUS direction. It is passed for a model
+  participating in an `operator_compose` coupling: such a model is an OPERATOR,
+  and its equations act on the unknowns of the system it is composed onto, not
+  on unknowns of its own. `tests/valid/minimal_chemistry.esm` is the canonical
+  shape — `Advection` declares only parameters and writes `D(u) ~ …`, where `u`
+  is the advected field the composition supplies.
 """
 function validate_model_balance(model::Model, path::String;
                                 check_excess::Bool=true)::Vector{StructuralError}
     errors = StructuralError[]
 
-    state_vars = Set{String}()
-    for (name, var) in model.variables
-        var.type == StateVariable && push!(state_vars, name)
-    end
+    unknowns = unknown_names(model)
+    n_unknowns = length(unknowns)
 
-    # An ALGEBRAIC model (`system_kind: "nonlinear"`) has NO derivatives, and its
-    # equations need not have an assignment target: ISORROPIA's charge balance is
-    # `H ~ 2*SO4` (a bare target) but its solubility product is `H*H*SO4 ~ Ksp` —
-    # an expression on the left, crediting no single variable. The balance is
-    # therefore a COUNT (square-ness), not a per-variable credit: 2 equations
-    # determine 2 unknowns. Running the per-variable rule there reports "no
-    # defining equation" for a perfectly balanced system.
-    #
     # An `ic` equation prescribes an initial value, not a determining equation,
-    # so it does not count toward the square-ness.
-    if model.system_kind == "nonlinear"
-        n_eqs = count(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
-        n_states = length(state_vars)
-        if n_states != n_eqs
-            push!(errors, StructuralError(
-                path,
-                "Equation-unknown balance failed: found $n_states state variables " *
-                "but $n_eqs algebraic equations",
-                "equation_count_mismatch",
-                Dict{String,Any}("state_count" => n_states, "equation_count" => n_eqs)
-            ))
-        end
-        return errors
-    end
+    # so it does not count toward the balance.
+    n_eqs = count(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
 
-    # Names solved for by the model's own equations.
+    # Names credited by the model's own equation left-hand sides.
     equation_vars = Set{String}()
     for eq in model.equations
         union!(equation_vars, _equation_lhs_names(eq.lhs))
     end
+    missing_for = String[u for u in unknowns if !(u in equation_vars)]
 
     has_subsystems = !isempty(model.subsystems)
+    shortfall = n_unknowns - n_eqs
 
-    # Direction 1: a declared state with nothing to define it. An observed-style
-    # `expression` on the variable counts as its definition. A model WITH
-    # subsystems is exempt — the defining equation may be down there.
-    if !has_subsystems
-        for var in sort!(collect(state_vars))
-            var ∈ equation_vars && continue
-            model.variables[var].expression === nothing || continue
-            push!(errors, StructuralError(
-                path,
-                "Model declares state variable '$var' but has no defining equation for it",
-                "equation_count_mismatch",
-                Dict{String,Any}("variable" => var)
-            ))
-        end
-    end
-
-    # Direction 2: an equation solving for a name the model never declares.
-    # `_equation_lhs_names` already dropped dotted cross-system targets, and the
-    # time variable is never an unknown.
-    if check_excess
-        for name in sort!(collect(equation_vars))
-            (name == "t" || haskey(model.variables, name)) && continue
-            push!(errors, StructuralError(
-                path,
-                "Equation solves for '$name', which is not a declared variable of this model " *
-                "(number of equations does not match the number of unknowns)",
-                "equation_count_mismatch",
-                Dict{String,Any}("variable" => name)
-            ))
-        end
+    report = (shortfall > 0 && !has_subsystems) || (shortfall < 0 && check_excess)
+    if report
+        details = Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs)
+        isempty(missing_for) || (details["missing_equations_for"] = missing_for)
+        push!(errors, StructuralError(
+            path,
+            "Number of equations ($n_eqs) does not match number of unknowns ($n_unknowns)",
+            "equation_count_mismatch",
+            details))
+    elseif !has_subsystems && !isempty(missing_for)
+        # Square by COUNT but not by assignment: some unknown has nothing
+        # crediting it while some equation credits a name the model does not
+        # declare. Same defect class, same code — the count alone cannot say it.
+        push!(errors, StructuralError(
+            path,
+            "Model declares unknown '$(first(missing_for))' but has no defining " *
+            "equation for it",
+            "equation_count_mismatch",
+            Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs,
+                             "missing_equations_for" => missing_for)))
     end
 
     # Recursively check subsystems. The operator exemption is inherited: a
@@ -773,6 +763,95 @@ function validate_model_balance(model::Model, path::String;
                                                check_excess=check_excess))
     end
 
+    return errors
+end
+
+"""
+    _check_update_unit_conversions!(errors, file, model, path, scope)
+
+Walk the `unit_conversion` Expression of every `update.from` binding in `model`
+(and, recursively, its subsystems). From esm 1.0.0 the binding lives on the
+CONSUMING PARAMETER (esm-spec §8.5), so this is where the 0.x loader-variable
+walk moved to. A plain numeric factor has nothing to resolve.
+"""
+function _check_update_unit_conversions!(errors::Vector{StructuralError}, file::EsmFile,
+                                         model::Model, path::String, scope::Set{String})
+    for name in sort!(collect(keys(model.variables)))
+        rules = model.variables[name].update
+        rules === nothing && continue
+        for (ri, rule) in enumerate(rules)
+            rule.from === nothing && continue
+            uc = rule.from.unit_conversion
+            isa(uc, ASTExpr) || continue
+            append!(errors, validate_expression_references(
+                file, uc,
+                "$path/variables/$name/update/$(ri-1)/from/unit_conversion";
+                scope=scope))
+        end
+    end
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_update_unit_conversions!(errors, file, subsys,
+                                        "$path/subsystems/$subsys_name", scope)
+    end
+    return errors
+end
+
+"""
+    _check_update_sources!(errors, model, path, available)
+
+esm-spec §8.5: a `data` update's `source` MUST name a declared `data_sources`
+entry, or `data_source_undefined`. This is the only way left to name a data
+source wrongly — from 1.0.0 a source is not a coupling endpoint, a subsystem,
+or a scoped-reference path root — and, unlike the 0.x coupling reference it
+replaces, it is schema-valid by construction (any string), so the defect
+genuinely reaches structural validation instead of being masked by a schema
+rejection.
+"""
+function _check_update_sources!(errors::Vector{StructuralError}, model::Model,
+                                path::String, available::Vector{String})
+    for name in sort!(collect(keys(model.variables)))
+        rules = model.variables[name].update
+        rules === nothing && continue
+        for (ri, rule) in enumerate(rules)
+            rule.kind == "data" || continue
+            src = rule.source
+            (src === nothing || src in available) && continue
+            push!(errors, StructuralError(
+                "$path/variables/$name/update",
+                "Parameter update names data source '$src', which the document " *
+                "does not declare",
+                "data_source_undefined",
+                Dict{String,Any}("variable" => name, "source" => src,
+                                 "available_sources" => available)))
+        end
+    end
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_update_sources!(errors, subsys, "$path/subsystems/$subsys_name", available)
+    end
+    return errors
+end
+
+"""
+    _check_system_kind!(errors, model, path)
+
+esm-spec §6.3.1: a binding uses the `system_kind` DERIVATION when the field is
+absent, and reports `system_kind_mismatch` when a present field contradicts it.
+Recurses into subsystems.
+"""
+function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path::String)
+    mism = declared_system_kind_mismatch(model)
+    if mism !== nothing
+        declared, derived = mism
+        push!(errors, StructuralError(
+            "$path/system_kind",
+            "Model declares system_kind '$declared' but its equations and " *
+            "parameters derive '$derived'",
+            "system_kind_mismatch",
+            Dict{String,Any}("declared" => declared, "derived" => derived)))
+    end
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_system_kind!(errors, subsys, "$path/subsystems/$subsys_name")
+    end
     return errors
 end
 
@@ -867,19 +946,16 @@ end
 # threaded down unchanged.
 function _check_model_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
                                   model::Model, path::String, registry::Set{String})
-    state_vars = Set{String}()
-    for (name, var) in model.variables
-        var.type == StateVariable && push!(state_vars, name)
-    end
+    # The continuous-relational guard keys off the CONTINUOUS leaves, which
+    # from esm 1.0.0 are derived: the ODE states plus the algebraic unknowns
+    # (CONFORMANCE_SPEC §5.7.2). Observed unknowns are deliberately excluded —
+    # a state-free observed is not continuous, and the guard would otherwise
+    # reject the const-folding geometry paths that rely on it.
+    state_vars = Set{String}(solver_unknowns(model))
 
     for (i, eq) in enumerate(model.equations)
         _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i-1)/lhs", state_vars, registry)
         _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i-1)/rhs", state_vars, registry)
-    end
-    for name in sort!(collect(keys(model.variables)))
-        expr = model.variables[name].expression
-        expr === nothing && continue
-        _walk_aggregates!(errors, file, expr, "$path/variables/$name/expression", state_vars, registry)
     end
     for (i, eq) in enumerate(model.initialization_equations)
         _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i-1)/lhs", state_vars, registry)
@@ -1074,15 +1150,9 @@ function _check_model_broadcasts!(errors::Vector{StructuralError}, model::Model,
         tgt === nothing ||
             _check_broadcast_axes!(errors, eq.rhs, tgt[1], tgt[2], var_shapes, anchor)
     end
-    for name in sort!(collect(keys(model.variables)))
-        expr = model.variables[name].expression
-        expr === nothing && continue
-        anchor = "$path/variables/$name/expression"
-        _walk_broadcast_fns!(errors, expr, anchor)
-        axes = get(var_shapes, name, nothing)
-        axes === nothing ||
-            _check_broadcast_axes!(errors, expr, name, axes, var_shapes, anchor)
-    end
+    # esm 1.0.0: an observed unknown's defining expression is an equation, so
+    # the equation loop above already covers it (its bare-variable LHS gives
+    # `_wholearray_result_axes` the same target axes this loop used to supply).
     for (i, eq) in enumerate(model.initialization_equations)
         _walk_broadcast_fns!(errors, eq.lhs, "$path/initialization_equations/$(i-1)/lhs")
         _walk_broadcast_fns!(errors, eq.rhs, "$path/initialization_equations/$(i-1)/rhs")
@@ -1427,8 +1497,14 @@ function _coordinate_names(file::EsmFile)::Set{String}
         for eq in model.equations
             walk(eq.lhs); walk(eq.rhs)
         end
+        # esm 1.0.0: a variable carries no defining expression. A parameter's
+        # update rules do, and a spatial `D` may appear in one.
         for (_, v) in model.variables
-            v.expression === nothing || walk(v.expression)
+            v.update === nothing && continue
+            for rule in v.update
+                rule.when === nothing || walk(rule.when)
+                rule.expression === nothing || walk(rule.expression)
+            end
         end
     end
     return coords
@@ -1500,11 +1576,9 @@ function _document_declared_names(file::EsmFile)::Set{String}
             end
         end
     end
-    if file.data_loaders !== nothing
-        for (_, loader) in file.data_loaders
-            union!(names, keys(loader.variables))
-        end
-    end
+    # esm 1.0.0: a data source declares no variables of its own — the consuming
+    # PARAMETER does, and it is already collected from its model above
+    # (esm-spec §8).
     return names
 end
 
@@ -1615,12 +1689,20 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
     # change.
     # ---------------------------------------------------------------------
 
-    # 1. Observed variables' defining expressions.
+    # 1. A parameter update's expression-bearing fields (esm-spec §5.4): the
+    #    `when` trigger and the `expression` value form. An observed unknown's
+    #    defining expression is NOT here any more — it is an ordinary equation,
+    #    walked with every other equation.
     for name in sort!(collect(keys(model.variables)))
-        expr = model.variables[name].expression
-        expr === nothing && continue
-        append!(errors, validate_expression_references(
-            file, expr, "$path/variables/$name/expression"; scope=scope))
+        rules = model.variables[name].update
+        rules === nothing && continue
+        for (ri, rule) in enumerate(rules)
+            for (field, e) in (("when", rule.when), ("expression", rule.expression))
+                e === nothing && continue
+                append!(errors, validate_expression_references(
+                    file, e, "$path/variables/$name/update/$(ri-1)/$field"; scope=scope))
+            end
+        end
     end
 
     # 2. `guesses` — an initial guess may be a bare number (nothing to check) or
@@ -2402,8 +2484,8 @@ function system_exists_in_file(file::EsmFile, system_name::String)::Bool
             end
         end
         next === nothing && return false
-        # A DataLoader leaf is a legal endpoint, but nothing can be nested under
-        # it, so any remaining segment cannot resolve.
+        # Only a Model can carry further nesting; any other node (an unresolved
+        # `SubsystemRef`) can only be the final segment.
         next isa Model || return seg == segments[end]
         current = next
     end
@@ -2482,6 +2564,7 @@ function validate_single_event_consistency(model::Model, event::EventType, event
                 Dict{String,Any}("variable" => affect.lhs)
             ))
         end
+        _check_event_affects_unknowns!(errors, model, event, event_path, "continuous")
 
     elseif isa(event, DiscreteEvent)
         # For condition triggers, ensure expression could produce boolean
@@ -2501,50 +2584,92 @@ function validate_single_event_consistency(model::Model, event::EventType, event
                 Dict{String,Any}("variable" => affect.lhs)
             ))
         end
+        _check_event_affects_unknowns!(errors, model, event, event_path, "discrete")
 
-        # `discrete_parameters` names what the event mutates as a PARAMETER
-        # (MTK's `discrete_parameters`). Naming a state variable there is a
-        # category error: the integrator owns that name, so the event's write is
-        # either ignored or fights the solver.
-        if event.discrete_parameters !== nothing
-            # The defect is carried by the event's `discrete_parameters` field
-            # (§7.1.2); the corpus pins `.../discrete_events/i/discrete_parameters`.
-            dp_path = "$event_path/discrete_parameters"
-            for name in event.discrete_parameters
-                var = get(model.variables, name, nothing)
-                if var === nothing
-                    push!(errors, StructuralError(
-                        dp_path,
-                        "Discrete parameter '$name' is not declared in the model",
-                        "invalid_discrete_param",
-                        Dict{String,Any}("parameter" => name)
-                    ))
-                elseif var.type != ParameterVariable
-                    push!(errors, StructuralError(
-                        dp_path,
-                        "Discrete parameter '$name' is not declared as a parameter " *
-                        "(found as $(_variable_type_word(var.type)) variable)",
-                        "invalid_discrete_param",
-                        Dict{String,Any}("parameter" => name,
-                                         "found_type" => _variable_type_word(var.type))
-                    ))
-                end
-            end
-        end
     end
 
     return errors
 end
 
-# Lower-case spelling of a ModelVariableType for diagnostics ("state",
-# "parameter", "observed", "brownian", "discrete"). Total over the enum: a
-# missing arm here silently MISLABELS a variable in the diagnostic it prints.
-function _variable_type_word(t::ModelVariableType)::String
-    t == StateVariable && return "state"
-    t == ParameterVariable && return "parameter"
-    t == ObservedVariable && return "observed"
-    t == BrownianVariable && return "brownian"
-    return "discrete"
+# Lower-case wire spelling of a ModelVariableType for diagnostics. Total over
+# the enum: a missing arm here silently MISLABELS a variable in the diagnostic
+# it prints.
+_variable_type_word(t::ModelVariableType)::String =
+    t == ParameterVariable ? "parameter" : "unknown"
+
+"""
+    _check_event_affects_unknowns!(errors, model, event, event_path, event_kind)
+
+esm-spec §5.4 / §6.3.1: **an event may affect UNKNOWNS only.** From 1.0.0 a
+parameter that changes during a run declares its own `update` block, so the
+0.x `discrete_parameters` list and `functional_affect` handler are gone and an
+`affects` LHS naming a parameter is the `event_affects_parameter` defect —
+reported at the affect entry, which is where the offending write is written.
+
+The remedy names the `update.kind` that expresses the same intent legally, so
+the diagnostic tells the author what to write instead of only what is wrong: a
+periodic/preset-times trigger becomes a `schedule`, a boolean condition becomes
+a `condition`, and a continuous event's zero crossing becomes a `crossing`.
+"""
+function _check_event_affects_unknowns!(errors::Vector{StructuralError},
+                                        model::Model, event, event_path::String,
+                                        event_kind::String)
+    affects = event.affects
+    for (j, affect) in enumerate(affects)
+        var = get(model.variables, affect.lhs, nothing)
+        (var !== nothing && var.type == ParameterVariable) || continue
+        details = Dict{String,Any}(
+            "variable" => affect.lhs,
+            "variable_type" => "parameter",
+            "event_type" => event_kind,
+            "remedy" => _event_affect_remedy(event, affect.lhs))
+        ename = _event_name(event)
+        ename === nothing || (details["event_name"] = ename)
+        tkind = _event_trigger_kind(event)
+        tkind === nothing || (details["trigger_type"] = tkind)
+        subject = ename === nothing ? "Event" : "Event '$(ename)'"
+        push!(errors, StructuralError(
+            "$event_path/affects/$(j-1)",
+            "$(subject) affects '$(affect.lhs)', which is a parameter; " *
+            "an event may affect unknowns only",
+            "event_affects_parameter",
+            details))
+    end
+    return errors
+end
+
+_event_name(event)::Union{String,Nothing} =
+    hasproperty(event, :name) ? getproperty(event, :name) : nothing
+
+function _event_trigger_kind(event)::Union{String,Nothing}
+    isa(event, DiscreteEvent) || return nothing
+    t = event.trigger
+    t isa PeriodicTrigger && return "periodic"
+    t isa PresetTimesTrigger && return "preset_times"
+    t isa ConditionTrigger && return "condition"
+    return nothing
+end
+
+# The legal 1.0.0 spelling of the same intent, named concretely where the
+# trigger supplies enough to name it.
+function _event_affect_remedy(event, name::AbstractString)::String
+    if isa(event, DiscreteEvent)
+        t = event.trigger
+        if t isa PeriodicTrigger
+            return "declare the change as update: {kind: \"schedule\", " *
+                   "interval: $(t.period)} on '$(name)' (esm-spec 5.4)"
+        elseif t isa PresetTimesTrigger
+            return "declare the change as update: {kind: \"schedule\", times: " *
+                   "$(t.times)} on '$(name)' (esm-spec 5.4)"
+        elseif t isa ConditionTrigger
+            return "declare the change as update: {kind: \"condition\", when: …} " *
+                   "on '$(name)' (esm-spec 5.4)"
+        end
+    elseif isa(event, ContinuousEvent)
+        return "declare the change as update: {kind: \"crossing\", when: …} " *
+               "on '$(name)' (esm-spec 5.4)"
+    end
+    return "declare the change as the parameter's own update (esm-spec 5.4)"
 end
 
 # ============================================================================
@@ -2619,10 +2744,10 @@ function validate_physical_constant_units(model::Model, path::String)::Vector{St
         dimension(declared_unit) == dimension(canonical_unit) && continue
 
         usage_name = nothing
-        for (other_name, other_var) in model.variables
-            other_var.type == ObservedVariable || continue
-            other_var.expression === nothing && continue
-            if _expr_references_name(other_var.expression, constant_name)
+        for other_name in observed_unknowns(model)
+            defn = observed_definition(model, other_name)
+            defn === nothing && continue
+            if _expr_references_name(defn, constant_name)
                 usage_name = other_name
                 break
             end
@@ -2678,11 +2803,10 @@ checked. Mirrors Python's `parse._check_conversion_factor_consistency`
 function validate_conversion_factor_consistency(model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
 
-    for (vname, var) in model.variables
-        var.type == ObservedVariable || continue
+    for (vname, expr) in observed_definitions(model)
+        var = model.variables[vname]
         lhs_units = var.units
         (lhs_units === nothing || isempty(lhs_units)) && continue
-        expr = var.expression
         expr isa OpExpr || continue
         expr.op == "*" || continue
         length(expr.args) == 2 || continue

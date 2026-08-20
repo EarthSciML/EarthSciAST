@@ -48,17 +48,54 @@ using EarthSciAST
     end
 
     @testset "ModelVariable Types" begin
-        # Test ModelVariableType enum
-        @test StateVariable isa ModelVariableType
+        # esm 1.0.0 declares TWO variable types and no third (esm-spec §6.3).
+        @test UnknownVariable isa ModelVariableType
         @test ParameterVariable isa ModelVariableType
-        @test ObservedVariable isa ModelVariableType
+        @test Set(instances(ModelVariableType)) ==
+              Set([UnknownVariable, ParameterVariable])
 
         # Test ModelVariable
-        mv = ModelVariable(StateVariable, default=1.0, description="Test variable")
-        @test mv.type == StateVariable
+        mv = ModelVariable(UnknownVariable, default=1.0, description="Test variable")
+        @test mv.type == UnknownVariable
         @test mv.default == 1.0
         @test mv.description == "Test variable"
-        @test mv.expression === nothing
+        # An unknown carries no defining expression: its behaviour is stated by
+        # the model's equations and nowhere else.
+        @test !hasproperty(mv, :expression)
+        @test mv.distribution === nothing
+        @test mv.update === nothing
+
+        # A parameter's value model: `default`, or a distribution, optionally
+        # refreshed by an update (esm-spec §5.4, §6.3).
+        w = ModelVariable(ParameterVariable; units="1/s^0.5",
+            distribution=Distribution("normal"; location=0.0, scale=1.0),
+            update=ParameterUpdate("wiener"))
+        @test w.distribution.kind == "normal"
+        @test w.distribution.location == 0.0
+        @test w.distribution.scale == 1.0
+        # A single rule is stored as a one-element vector whatever its wire
+        # spelling, so every consumer iterates one shape.
+        @test length(w.update) == 1
+        @test w.update[1].kind == "wiener"
+
+        # An ordered array of two or more rules (esm-spec §5.4) keeps its order.
+        multi = ModelVariable(ParameterVariable; default=1.0, update=[
+            ParameterUpdate("condition"; when=VarExpr("a"), expression=NumExpr(1.0)),
+            ParameterUpdate("condition"; when=VarExpr("b"), expression=NumExpr(2.0))])
+        @test length(multi.update) == 2
+        @test multi.update[1].when == VarExpr("a")
+
+        # The `data` value form binds one file variable of a data source.
+        fed = ModelVariable(ParameterVariable; units="K", shape=String[],
+            update=ParameterUpdate("data"; source="MET",
+                                   from=DataSourceBinding("T2M")))
+        @test fed.update[1].source == "MET"
+        @test fed.update[1].from.file_variable == "T2M"
+
+        # A registered handler is the third value form (esm-spec §5.5).
+        h = FunctionalUpdate("PIDController"; read_vars=["T"], read_params=["Kp"])
+        @test h.handler_id == "PIDController"
+        @test h.read_vars == ["T"]
     end
 
     @testset "Model Component Types" begin
@@ -164,11 +201,8 @@ using EarthSciAST
         # behavior-neutral; a failure means the vocabulary drifted.
         @test Tuple((row.enum, row.wire, row.legacy)
                     for row in ESM.MODEL_VARIABLE_TYPE_TABLE) == (
-            (StateVariable,         "state",     ("StateVariable",)),
-            (ParameterVariable,     "parameter", ("ParameterVariable",)),
-            (ObservedVariable,      "observed",  ("ObservedVariable",)),
-            (ESM.BrownianVariable,  "brownian",  ("BrownianVariable",)),
-            (ESM.DiscreteVariable,  "discrete",  ("DiscreteVariable",)),
+            (UnknownVariable,   "unknown",   ("UnknownVariable",)),
+            (ParameterVariable, "parameter", ("ParameterVariable",)),
         )
         # One row per enum member, in order (also asserted at load time).
         @test [row.enum for row in ESM.MODEL_VARIABLE_TYPE_TABLE] ==

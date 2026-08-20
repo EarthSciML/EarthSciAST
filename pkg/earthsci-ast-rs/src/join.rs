@@ -160,9 +160,23 @@ pub fn resolve_aggregate_joins(
             lower_expr_joins(&mut eq.rhs, index_sets)?;
         }
     }
-    // (An observed's defining expression is an ordinary equation since 1.0.0,
-    // so the equation walk above already reached it.)
-    Ok(())
+    // Parameter-update expressions are the only Expressions still carried on a
+    // variable from esm 1.0.0; an unknown's definition is an equation, lowered
+    // above.
+    let mut failure = None;
+    for var in model.variables.values_mut() {
+        var.for_each_expression_mut(&mut |expr| {
+            if failure.is_none()
+                && let Err(e) = lower_expr_joins(expr, index_sets)
+            {
+                failure = Some(e);
+            }
+        });
+    }
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// `true` iff any node in `e`'s subtree carries a `join` clause. The
@@ -373,8 +387,9 @@ pub fn resolve_overlap_join_syms(model: &mut Model) {
             resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
         }
     }
-    // (An observed's defining expression is an ordinary equation since 1.0.0,
-    // so the equation walk above already reached it.)
+    for var in model.variables.values_mut() {
+        var.for_each_expression_mut(&mut |expr| resolve_overlap_syms_expr(expr, &var_shapes));
+    }
 }
 
 /// Every declared variable's shape (index-set names), for

@@ -141,6 +141,10 @@ fn geom_arrays(g: &Geom) -> HashMap<String, ArrayD<f64>> {
 fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
     let g = geometry();
     let mut vars = serde_json::Map::new();
+    // An OBSERVED unknown is declared `unknown` and DEFINED by a
+    // bare-variable-LHS equation (esm-spec 6.3.1); esm 1.0.0 has no
+    // `expression` field on a variable.
+    let mut eqs: Vec<Value> = Vec::new();
     for (k, v) in rect_params("cells") {
         vars.insert(k.to_string(), v);
     }
@@ -156,9 +160,10 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
     vars.insert(
         "P".into(),
         json!({
-            "type": "observed",
-            "shape": ["points"],
-            "expression": {
+            "type": "unknown",
+            "shape": ["points"]}),
+    );
+    eqs.push(json!({"lhs": "P", "rhs": {
                 "op": "aggregate",
                 "reduce": "+",
                 "output_idx": ["p"],
@@ -171,9 +176,7 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
                 "filter": contains("c", "p"),
                 "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
                 "expr": {"op": "+", "args": [ix("src_W", "c"), ix("src_S", "c")]}
-            }
-        }),
-    );
+            }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_mirror"},
@@ -181,7 +184,7 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
             "points": {"kind": "interval", "size": NPTS},
             "cells": {"kind": "interval", "size": NCELLS}
         },
-        "models": {"Mirror": {"variables": Value::Object(vars), "equations": []}}
+        "models": {"Mirror": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
 
     let opts = PrepareOptions {
@@ -222,6 +225,10 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
 fn rewritten_forward_binning_aggregate_is_candidate_driven() {
     let g = geometry();
     let mut vars = serde_json::Map::new();
+    // An OBSERVED unknown is declared `unknown` and DEFINED by a
+    // bare-variable-LHS equation (esm-spec 6.3.1); esm 1.0.0 has no
+    // `expression` field on a variable.
+    let mut eqs: Vec<Value> = Vec::new();
     for (k, v) in rect_params("cells") {
         vars.insert(k.to_string(), v);
     }
@@ -245,9 +252,10 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
     vars.insert(
         "E".into(),
         json!({
-            "type": "observed",
-            "shape": ["cells"],
-            "expression": {
+            "type": "unknown",
+            "shape": ["cells"]}),
+    );
+    eqs.push(json!({"lhs": "E", "rhs": {
                 "op": "aggregate",
                 "reduce": "+",
                 "output_idx": ["c"],
@@ -257,17 +265,16 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
                     {"op": "ifelse", "args": [contains("c", "r"), 1.0, 0.0]},
                     ix("annual", "r")
                 ]}
-            }
-        }),
-    );
+            }}));
     // conc[o] = SUM_{s in cells} SR[s, o] * E[s]  — the provider-backed mat-vec
     // whose presence is what makes the binning aggregate a FORWARD match.
     vars.insert(
         "conc".into(),
         json!({
-            "type": "observed",
-            "shape": ["rcv"],
-            "expression": {
+            "type": "unknown",
+            "shape": ["rcv"]}),
+    );
+    eqs.push(json!({"lhs": "conc", "rhs": {
                 "op": "aggregate",
                 "reduce": "+",
                 "output_idx": ["o"],
@@ -277,9 +284,7 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
                     {"op": "index", "args": ["SR", "s", "o"]},
                     ix("E", "s")
                 ]}
-            }
-        }),
-    );
+            }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_forward"},
@@ -288,14 +293,14 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
             "cells": {"kind": "interval", "size": NCELLS},
             "rcv": {"kind": "interval", "size": 2}
         },
-        "models": {"Fwd": {"variables": Value::Object(vars), "equations": []}}
+        "models": {"Fwd": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
 
     // The rewrite emits the derived gate over the COMPACT-axis envelopes.
     let rewritten = earthsci_ast::pushdown_rewrite::desugar_pushdown(&doc, Some("Fwd"))
         .expect("desugar")
         .into_owned();
-    let ov = &rewritten["models"]["Fwd"]["variables"]["E"]["expression"]["join"][0]["overlap"];
+    let ov = &(*earthsci_ast::classification::observed_definition_json(&rewritten["models"]["Fwd"], "E").expect("E defining equation"))["join"][0]["overlap"];
     assert_eq!(ov["src_env"], json!(["px", "py"]));
     assert_eq!(
         ov["tgt_env"],
@@ -378,8 +383,12 @@ fn pir_arrays() -> HashMap<String, ArrayD<f64>> {
     .collect()
 }
 
-fn pir_vars() -> serde_json::Map<String, Value> {
+fn pir_vars() -> (serde_json::Map<String, Value>, Vec<Value>) {
     let mut vars = serde_json::Map::new();
+    // An OBSERVED unknown is declared `unknown` and DEFINED by a
+    // bare-variable-LHS equation (esm-spec 6.3.1); esm 1.0.0 has no
+    // `expression` field on a variable.
+    let eqs: Vec<Value> = Vec::new();
     for (k, v) in rect_params("cells") {
         vars.insert(k.to_string(), v);
     }
@@ -391,7 +400,7 @@ fn pir_vars() -> serde_json::Map<String, Value> {
         "py".into(),
         json!({"type": "parameter", "shape": ["points"]}),
     );
-    vars
+    (vars, eqs)
 }
 
 fn pir_index_sets() -> Value {
@@ -416,13 +425,14 @@ fn overlap_clause() -> Value {
 /// bit-identical to the filtered full product.
 #[test]
 fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
-    let mut vars = pir_vars();
+    let (mut vars, mut eqs) = pir_vars();
     vars.insert(
         "total".into(),
         json!({
-            "type": "observed",
-            "shape": ["one"],
-            "expression": {
+            "type": "unknown",
+            "shape": ["one"]}),
+    );
+    eqs.push(json!({"lhs": "total", "rhs": {
                 "op": "aggregate",
                 "reduce": "+",
                 "output_idx": ["k"],
@@ -435,14 +445,12 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
                 "filter": contains("c", "r"),
                 "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
                 "expr": {"op": "+", "args": [ix("src_W", "c"), ix("px", "r")]}
-            }
-        }),
-    );
+            }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "overlap_pair_drive"},
         "index_sets": pir_index_sets(),
-        "models": {"Pairs": {"variables": Value::Object(vars), "equations": []}}
+        "models": {"Pairs": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
     let opts = PrepareOptions {
         model_name: Some("Pairs".into()),
@@ -473,13 +481,14 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
 /// aggregate is a correctness requirement.
 #[test]
 fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
-    let mut vars = pir_vars();
+    let (mut vars, mut eqs) = pir_vars();
     vars.insert(
         "hit".into(),
         json!({
-            "type": "observed",
-            "shape": ["points", "cells"],
-            "expression": {
+            "type": "unknown",
+            "shape": ["points", "cells"]}),
+    );
+    eqs.push(json!({"lhs": "hit", "rhs": {
                 "op": "aggregate",
                 "reduce": "+",
                 "output_idx": ["r", "c"],
@@ -487,14 +496,12 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
                 "join": overlap_clause(),
                 "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
                 "expr": {"op": "ifelse", "args": [contains("c", "r"), 1.0, 0.0]}
-            }
-        }),
-    );
+            }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "overlap_membership"},
         "index_sets": pir_index_sets(),
-        "models": {"Member": {"variables": Value::Object(vars), "equations": []}}
+        "models": {"Member": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
     let opts = PrepareOptions {
         model_name: Some("Member".into()),

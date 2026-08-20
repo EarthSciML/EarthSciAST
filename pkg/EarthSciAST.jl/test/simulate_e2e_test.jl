@@ -41,7 +41,7 @@ end
         k_val = 0.1
         x0 = 1.0
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=x0),
+            "x" => ModelVariable(UnknownVariable; default=x0),
             "k" => ModelVariable(ParameterVariable; default=k_val),
         )
         eq = Equation(
@@ -75,8 +75,8 @@ end
         # (the test's purpose is solve correctness, not reaction-to-ODE
         # derivation — that path is covered by test case 3 below).
         vars = Dict{String,ModelVariable}(
-            "A" => ModelVariable(StateVariable; default=A0),
-            "B" => ModelVariable(StateVariable; default=B0),
+            "A" => ModelVariable(UnknownVariable; default=A0),
+            "B" => ModelVariable(UnknownVariable; default=B0),
             "k1" => ModelVariable(ParameterVariable; default=k1),
             "k2" => ModelVariable(ParameterVariable; default=k2),
         )
@@ -180,9 +180,9 @@ end
     @testset "Robertson stiff benchmark — reference values to reltol 1e-4" begin
         A0, B0, C0 = 1.0, 0.0, 0.0
         vars = Dict{String,ModelVariable}(
-            "A" => ModelVariable(StateVariable; default=A0),
-            "B" => ModelVariable(StateVariable; default=B0),
-            "C" => ModelVariable(StateVariable; default=C0),
+            "A" => ModelVariable(UnknownVariable; default=A0),
+            "B" => ModelVariable(UnknownVariable; default=B0),
+            "C" => ModelVariable(UnknownVariable; default=C0),
         )
         _n(x) = NumExpr(x)
         _v(n) = VarExpr(n)

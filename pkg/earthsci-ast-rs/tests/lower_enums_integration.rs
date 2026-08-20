@@ -21,10 +21,10 @@ fn enums_categorical_lookup_fixture_lowers_enum_ops() {
         .expect("file should have models")
         .get("DryDep")
         .expect("DryDep model present");
-    // An observed unknown's defining expression is its equation's RHS
-    // (esm-spec §6.3.1).
-    let expr = earthsci_ast::classify::observed_definition(model, "r_c")
-        .expect("r_c has a defining equation");
+    // `r_c` is an OBSERVED unknown; its defining expression is the RHS of the
+    // bare-variable-LHS equation (esm-spec §6.3.1), not a field on the variable.
+    let defs = earthsci_ast::classification::observed_definitions(model);
+    let expr = defs.get("r_c").expect("r_c has a defining equation");
 
     let Expr::Operator(node) = expr else {
         panic!("r_c expression must be an Operator node, got {expr:?}");
@@ -57,22 +57,40 @@ fn enums_block_round_trips_through_save_reload() {
 
 #[test]
 fn unknown_enum_rejected_at_load() {
-    let bad = r#"{
-      "esm": "1.0.0",
-      "metadata": {"name": "BadEnum"},
-      "enums": {"season": {"summer": 3}},
-      "models": {
-        "M": {
-          "variables": {
-            "x": {
-              "type": "observed",
-              "expression": {"op": "enum", "args": ["weekday", "monday"]}
+    let bad = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "BadEnum"
+          },
+          "enums": {
+            "season": {
+              "summer": 3
             }
           },
-          "equations": []
+          "models": {
+            "M": {
+              "variables": {
+                "x": {
+                  "type": "unknown"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "x",
+                  "rhs": {
+                    "op": "enum",
+                    "args": [
+                      "weekday",
+                      "monday"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
         }
-      }
-    }"#;
+        "#;
     let err = load(bad).expect_err("expected unknown_enum diagnostic");
     let msg = format!("{err}");
     assert!(
@@ -83,22 +101,40 @@ fn unknown_enum_rejected_at_load() {
 
 #[test]
 fn unknown_enum_symbol_rejected_at_load() {
-    let bad = r#"{
-      "esm": "1.0.0",
-      "metadata": {"name": "BadEnumSym"},
-      "enums": {"season": {"summer": 3}},
-      "models": {
-        "M": {
-          "variables": {
-            "x": {
-              "type": "observed",
-              "expression": {"op": "enum", "args": ["season", "winter"]}
+    let bad = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "BadEnumSym"
+          },
+          "enums": {
+            "season": {
+              "summer": 3
             }
           },
-          "equations": []
+          "models": {
+            "M": {
+              "variables": {
+                "x": {
+                  "type": "unknown"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "x",
+                  "rhs": {
+                    "op": "enum",
+                    "args": [
+                      "season",
+                      "winter"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
         }
-      }
-    }"#;
+        "#;
     let err = load(bad).expect_err("expected unknown_enum_symbol diagnostic");
     let msg = format!("{err}");
     assert!(

@@ -29,26 +29,36 @@ func formatStoich(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
-// FlattenedSystem represents a coupled system flattened into a single system
+// FlattenedSystem represents a coupled system flattened into a single system.
+//
+// From esm 1.0.0 the per-role lists below are DERIVED by the esm-spec §6.3.1
+// classification functions (classify.go), not read off a declared variable type
+// — there are only two of those left. `Variables` therefore records the DECLARED
+// type ("unknown" / "parameter"), and the role a solver cares about is read from
+// the corresponding list.
 type FlattenedSystem struct {
-	// The unknown partition (esm-spec 6.3.1), each dot-namespaced. These are
-	// DERIVED from the equations, not read off a declared type: 1.0.0 has no
-	// `state` or `observed` type to read.
-	ODEStates         []string
-	ObservedUnknowns  []string
-	AlgebraicUnknowns []string
-	// Parameters is every declared parameter, dot-namespaced; the three slices
-	// after it are the non-constant subsets, so a caller wanting only the
-	// constants subtracts them.
-	Parameters         []string
+	// StateVariables are the dot-namespaced ODE states: unknowns under D(·,t) on
+	// some equation LHS (plus every reaction-system species, which is one by
+	// construction).
+	StateVariables []string
+	// ObservedVariables are the dot-namespaced unknowns defined by a
+	// bare-variable-LHS equation — eliminable, materializable.
+	ObservedVariables []string
+	// AlgebraicVariables are the dot-namespaced unknowns constrained only
+	// implicitly (an expression-LHS equation).
+	AlgebraicVariables []string
+	// Parameters are ALL dot-namespaced parameters, of every cadence. A Brownian
+	// noise source is a parameter in 1.0.0, so it appears here as well as in
+	// BrownianParameters.
+	Parameters []string
+	// BrownianParameters are the dot-namespaced parameters whose update is
+	// `wiener` — the SDE noise sources. Any of them promotes the flattened system
+	// from an ODE to an SDE.
 	BrownianParameters []string
+	// DiscreteParameters are the dot-namespaced parameters carrying any other
+	// update — piecewise-constant between refreshes.
 	DiscreteParameters []string
-	SampledParameters  []string
-	// Variables maps a dot-namespaced name to its DERIVED class -- one of
-	// "ode_state", "observed", "algebraic", or the four parameter classes. It
-	// used to hold the DECLARED type, which in 1.0.0 would say only "unknown" or
-	// "parameter" and answer nothing a caller actually asks.
-	Variables map[string]string
+	Variables          map[string]string // dot-namespaced variable name -> DECLARED type
 	// InitialValues maps a dot-namespaced reaction-system state variable to its
 	// initial concentration, taken from the species' declared scalar `default`
 	// (falling back to 0.0 when a species declares no default). Mirrors the
@@ -118,13 +128,31 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 		}
 		allVarNames[systemName] = varNames
 
-		// Register variables with namespaced names, classified through the
-		// esm-spec 6.3.1 functions. Switching on `variable.Type` here would now
-		// yield only "unknown" or "parameter" -- the finer split a flattened
-		// system needs is derived from the equations and the parameter sidecars,
-		// and deriving it locally is exactly what classification.go exists to
-		// prevent.
-		flat.classifyModelVariables(file, &model, systemName)
+		// Register variables with namespaced names, recording the DECLARED type.
+		for varName, variable := range model.Variables {
+			flat.Variables[systemName+"."+varName] = variable.Type
+		}
+
+		// Derive the solver roles from the §6.3.1 classification functions
+		// rather than from the declared type — which no longer carries them.
+		m := model
+		ns := func(names []string) []string {
+			out := make([]string, len(names))
+			for i, n := range names {
+				out[i] = systemName + "." + n
+			}
+			return out
+		}
+		flat.StateVariables = append(flat.StateVariables, ns(ODEStates(&m))...)
+		flat.ObservedVariables = append(flat.ObservedVariables, ns(ObservedUnknowns(&m))...)
+		flat.AlgebraicVariables = append(flat.AlgebraicVariables, ns(AlgebraicUnknowns(&m))...)
+		flat.BrownianParameters = append(flat.BrownianParameters, ns(BrownianParameters(&m))...)
+		flat.DiscreteParameters = append(flat.DiscreteParameters, ns(DiscreteParameters(&m))...)
+		for varName, variable := range model.Variables {
+			if variable.Type == VarTypeParameter {
+				flat.Parameters = append(flat.Parameters, systemName+"."+varName)
+			}
+		}
 
 		// Namespace and collect equations
 		for _, eq := range model.Equations {
@@ -167,15 +195,17 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 		// scalar `default` through as the state's initial value.
 		for speciesName, species := range rs.Species {
 			nsName := systemName + "." + speciesName
-			flat.Variables[nsName] = ClassODEState
-			flat.ODEStates = append(flat.ODEStates, nsName)
+			// A species has no declared `type`; its flattened role is an ODE
+			// state, and the declared-type slot records the 1.0.0 vocabulary.
+			flat.Variables[nsName] = VarTypeUnknown
+			flat.StateVariables = append(flat.StateVariables, nsName)
 			flat.InitialValues[nsName] = speciesInitialValue(species)
 		}
 
 		// Register parameters
 		for paramName := range rs.Parameters {
 			nsName := systemName + "." + paramName
-			flat.Variables[nsName] = ClassConstantParameter
+			flat.Variables[nsName] = VarTypeParameter
 			flat.Parameters = append(flat.Parameters, nsName)
 		}
 
@@ -203,14 +233,13 @@ func FlattenWithOptions(file *ESMFile, opts CouplingImportOptions) (*FlattenedSy
 		}
 	}
 
-	// Sort every partition for deterministic output.
-	sort.Strings(flat.ODEStates)
-	sort.Strings(flat.ObservedUnknowns)
-	sort.Strings(flat.AlgebraicUnknowns)
+	// Sort every derived role list for deterministic output
+	sort.Strings(flat.StateVariables)
+	sort.Strings(flat.ObservedVariables)
+	sort.Strings(flat.AlgebraicVariables)
 	sort.Strings(flat.Parameters)
 	sort.Strings(flat.BrownianParameters)
 	sort.Strings(flat.DiscreteParameters)
-	sort.Strings(flat.SampledParameters)
 
 	// ---------------------------------------------------------------
 	// Step 3: Expand coupling_import entries (esm-spec §10.10.3), then apply
@@ -533,13 +562,10 @@ func namespaceDiscreteEvent(de DiscreteEvent, systemName string, varNames map[st
 		nsEvent.Trigger.Expression = nsExpr
 	}
 
-	// Namespace affects
+	// Namespace affects. There is no `discrete_parameters` list to namespace
+	// from esm 1.0.0: an event affects unknowns only, and a parameter that
+	// changes during a run carries its own `update` block.
 	nsEvent.Affects = namespaceAffects(de.Affects, systemName, varNames)
-
-	// There is no `discrete_parameters` list to namespace any more: events affect
-	// unknowns only, and a parameter that changes during a run carries its own
-	// `update` (esm-spec 5.4). The update's own expressions are namespaced with
-	// the variable that owns them, not here.
 
 	return nsEvent
 }
@@ -1002,51 +1028,4 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// classifyModelVariables registers one model's variables into the flattened
-// system under their dot-namespaced names, classified through the esm-spec
-// §6.3.1 functions (classification.go).
-//
-// Every unknown and every parameter is registered, so `Variables` stays a total
-// map over the model's declarations; the category slices then carry the same
-// names split the way a solver assembles them. ConstantParameters gets no slice
-// of its own because it is `Parameters` minus the other three.
-func (flat *FlattenedSystem) classifyModelVariables(file *ESMFile, model *Model, systemName string) {
-	ns := func(name string) string { return systemName + "." + name }
-
-	unknowns := classifyUnknowns(file, model)
-	for name := range unknowns.ode {
-		flat.Variables[ns(name)] = ClassODEState
-		flat.ODEStates = append(flat.ODEStates, ns(name))
-	}
-	for name := range unknowns.observed {
-		flat.Variables[ns(name)] = ClassObserved
-		flat.ObservedUnknowns = append(flat.ObservedUnknowns, ns(name))
-	}
-	for name := range unknowns.algebraic {
-		flat.Variables[ns(name)] = ClassAlgebraic
-		flat.AlgebraicUnknowns = append(flat.AlgebraicUnknowns, ns(name))
-	}
-
-	params := classifyParameters(model)
-	for name := range params.brownian {
-		flat.Variables[ns(name)] = ClassBrownianParameter
-		flat.Parameters = append(flat.Parameters, ns(name))
-		flat.BrownianParameters = append(flat.BrownianParameters, ns(name))
-	}
-	for name := range params.discrete {
-		flat.Variables[ns(name)] = ClassDiscreteParameter
-		flat.Parameters = append(flat.Parameters, ns(name))
-		flat.DiscreteParameters = append(flat.DiscreteParameters, ns(name))
-	}
-	for name := range params.sampled {
-		flat.Variables[ns(name)] = ClassSampledParameter
-		flat.Parameters = append(flat.Parameters, ns(name))
-		flat.SampledParameters = append(flat.SampledParameters, ns(name))
-	}
-	for name := range params.constant {
-		flat.Variables[ns(name)] = ClassConstantParameter
-		flat.Parameters = append(flat.Parameters, ns(name))
-	}
 }

@@ -63,7 +63,7 @@ func TestAuditG2_DAEContractNoDanglingReference(t *testing.T) {
 	  "metadata":{"name":"g2"},
 	  "models":{"M":{
 	    "variables":{
-	      "z":{"type": "unknown","default":0.0},
+	      "z":{"type":"unknown","default":0.0},
 	      "a":{"type":"parameter","default":2.0},
 	      "w":{"type":"parameter","default":1.0},
 	      "y":{"type":"unknown"}
@@ -134,7 +134,7 @@ func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
 	  "metadata":{"name":"g4"},
 	  "models":{"M":{
 	    "variables":{
-	      "x":{"type": "unknown","default":0.0},
+	      "x":{"type":"unknown","default":0.0},
 	      "t_utc":{"type":"parameter","default":0.0},
 	      "yr":{"type":"parameter","default":0.0}
 	    },
@@ -186,9 +186,9 @@ func operatorComposeSwapFile(t *testing.T) *ESMFile {
 	  "esm":"0.2.0",
 	  "metadata":{"name":"g5"},
 	  "models":{
-	    "A":{"variables":{"x":{"type": "unknown","default":0.0},"q":{"type":"parameter","default":1.0}},
+	    "A":{"variables":{"x":{"type":"unknown","default":0.0},"q":{"type":"parameter","default":1.0}},
 	         "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":{"op":"+","args":["q","q"]}}]},
-	    "B":{"variables":{"y":{"type": "unknown","default":0.0},"r":{"type":"parameter","default":2.0}},
+	    "B":{"variables":{"y":{"type":"unknown","default":0.0},"r":{"type":"parameter","default":2.0}},
 	         "equations":[{"lhs":{"op":"D","args":["y"],"wrt":"t"},"rhs":"r"}]}
 	  },
 	  "coupling":[{"type":"operator_compose","systems":["A","B"],
@@ -351,68 +351,49 @@ func TestAuditG6_UnloweredOperatorCode(t *testing.T) {
 	}
 }
 
-// --- G7: a data SOURCE is neither a scopable namespace nor an endpoint -------
-//
-// This pin is INVERTED by esm 1.0.0. The 0.x audit finding was that Go rejected
-// documents wiring a loader's variables into a model, because loaders were
-// missing from the scoped-reference resolver and the couplable-system set. From
-// 1.0.0 a data source is not a component at all (esm-spec 8): it exposes no
-// variables, and it cannot be a coupling endpoint, a subsystem, or the path root
-// of a scoped reference. The wiring the audit was defending is now spelled as a
-// PARAMETER declaration, so what these tests pin is that the old spelling is
-// rejected and the new one accepted.
+// --- G7: a data source is NOT a namespace and NOT a coupling endpoint --------
 
-// The 1.0.0 spelling: the loaded field IS a parameter of the consuming model,
-// named without a prefix, and reaching its source through `update.source`.
-func TestAuditG7_DataFedParameterResolves(t *testing.T) {
+// esm 1.0.0 INVERTS the 0.x G7 finding. A loader used to expose a `variables`
+// map, and G7 was that `GEOSFP_MeteoData.u` had to resolve as a scoped reference
+// and the loader had to be a legal `variable_map` endpoint. From 1.0.0 a data
+// source exposes nothing and is not a component (esm-spec §8): the field is a
+// PARAMETER of the consuming model, carrying the binding on itself, and there is
+// no coupling edge at all. What the checker owes is that the parameter's
+// `update.source` RESOLVES — and that a source named as a coupling endpoint is
+// rejected rather than silently accepted.
+func TestAuditG7_DataSourceIsNotAnEndpoint(t *testing.T) {
+	// The 1.0.0 spelling: no coupling, the loaded field declared where it is used.
 	src := `{
 	  "esm":"1.0.0",
-	  "metadata":{"name":"g7","authors":["Test"]},
-	  "index_sets":{"cells":{"kind":"interval","size":4}},
+	  "metadata":{"name":"g7"},
 	  "models":{"Transport":{
 	    "variables":{
-	      "c":{"type":"unknown","units":"1","default":0.0},
-	      "u":{"type":"parameter","units":"1/s","shape":["cells"],
+	      "c":{"type":"unknown","default":0.0},
+	      "u":{"type":"parameter","units":"m/s","shape":[],
 	           "update":{"kind":"data","source":"GEOSFP_MeteoData",
 	                     "from":{"file_variable":"u"}}}},
 	    "equations":[{"lhs":{"op":"D","args":["c"],"wrt":"t"},
 	                  "rhs":{"op":"*","args":["u","c"]}}]}},
 	  "data_sources":{"GEOSFP_MeteoData":{
 	    "kind":"grid",
-	    "source":{"url_template":"file:///data/GEOSFP/{date:%Y%m%d}.nc"},
-	    "temporal":{"file_period":"P1D","frequency":"PT3H"}}}}`
+	    "source":{"url_template":"file:///data/GEOSFP/{date:%Y%m%d}.nc"}}}}`
 
 	file, err := LoadString(src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	res := ValidateFile(file, src)
-	for _, se := range res.StructuralErrors {
-		if se.Level == "warning" {
-			continue
-		}
-		t.Errorf("the 1.0.0 data-fed parameter spelling must validate, got [%s] %s @%s",
-			se.Code, se.Message, se.Path)
+	if !res.IsValid {
+		t.Errorf("the 1.0.0 spelling must validate: %+v", res.StructuralErrors)
 	}
 
-	// And the parameter classifies as DISCRETE -- it is refreshed when the source
-	// advances a record, not resampled every step and not constant.
-	model := file.Models["Transport"]
-	if got := DiscreteParameters(&model); len(got) != 1 || got[0] != "u" {
-		t.Errorf("DiscreteParameters = %v, want [u]", got)
-	}
-}
-
-// The 0.x spelling is now a defect: a source named as a coupling endpoint is an
-// undefined system, because it is not in the couplable namespace at all.
-func TestAuditG7_DataSourceIsNotACouplingEndpoint(t *testing.T) {
-	src := `{
+	// A source named as a coupling endpoint is an undefined SYSTEM: it is not a
+	// component, so there is nothing there to couple.
+	bad := `{
 	  "esm":"1.0.0",
-	  "metadata":{"name":"g7neg","authors":["Test"]},
+	  "metadata":{"name":"g7neg"},
 	  "models":{"Transport":{
-	    "variables":{
-	      "c":{"type":"unknown","units":"1","default":0.0},
-	      "u":{"type":"parameter","units":"m/s","default":0.0}},
+	    "variables":{"c":{"type":"unknown","default":0.0},"u":{"type":"parameter","default":0.0}},
 	    "equations":[{"lhs":{"op":"D","args":["c"],"wrt":"t"},
 	                  "rhs":{"op":"*","args":["u","c"]}}]}},
 	  "data_sources":{"GEOSFP_MeteoData":{
@@ -420,29 +401,14 @@ func TestAuditG7_DataSourceIsNotACouplingEndpoint(t *testing.T) {
 	    "source":{"url_template":"file:///data/GEOSFP/{date:%Y%m%d}.nc"}}},
 	  "coupling":[{"type":"variable_map","from":"GEOSFP_MeteoData.u","to":"Transport.u",
 	               "transform":"param_to_var"}]}`
-
-	file, err := LoadString(src)
+	badFile, err := LoadString(bad)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := ValidateFile(file, src)
-	if !hasCode(res, ErrorUndefinedSystem) {
-		t.Errorf("a data source is not a coupling endpoint; want undefined_system, got %+v",
-			res.StructuralErrors)
-	}
-}
-
-// A parameter update naming a source the document does not declare is
-// `data_source_undefined` -- the only route by which a source can now be
-// misnamed, since it is no longer reachable through coupling.
-func TestAuditG7_DataSourceUndefined(t *testing.T) {
-	file, content := loadInvalidFixture(t, "data_source_undefined_reference.esm")
-	res := ValidateFile(file, content)
-	if !hasCode(res, ErrorDataSourceUndefined) {
-		t.Errorf("want data_source_undefined: %+v", res.StructuralErrors)
-	}
-	if res.IsValid {
-		t.Error("fixture is pinned invalid")
+	badRes := ValidateFile(badFile, bad)
+	if !hasCode(badRes, ErrorUndefinedSystem) {
+		t.Errorf("a data source used as a coupling endpoint must be undefined_system: %+v",
+			badRes.StructuralErrors)
 	}
 }
 
@@ -578,7 +544,7 @@ func TestAuditG12_MetaparamDoesNotRewriteOpSlot(t *testing.T) {
 	  "metadata":{"name":"g12"},
 	  "metaparameters":{"max":{"type":"integer","default":3}},
 	  "models":{"M":{
-	    "variables":{"x":{"type": "unknown","default":0.0},"k":{"type":"parameter","default":1.0}},
+	    "variables":{"x":{"type":"unknown","default":0.0},"k":{"type":"parameter","default":1.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},
 	                  "rhs":{"op":"max","args":["k",0.0]}}]}}}`
 
@@ -605,10 +571,10 @@ func TestAuditG13_VariableMapFactorIsParenthesized(t *testing.T) {
 	  "esm":"0.2.0",
 	  "metadata":{"name":"g13"},
 	  "models":{
-	    "A":{"variables":{"p":{"type": "unknown","default":0.0},"x":{"type":"parameter","default":1.0}},
+	    "A":{"variables":{"p":{"type":"unknown","default":0.0},"x":{"type":"parameter","default":1.0}},
 	         "equations":[{"lhs":{"op":"D","args":["p"],"wrt":"t"},
 	                       "rhs":{"op":"^","args":["x",2.0]}}]},
-	    "B":{"variables":{"q":{"type": "unknown","default":0.0},"y":{"type":"parameter","default":1.0}},
+	    "B":{"variables":{"q":{"type":"unknown","default":0.0},"y":{"type":"parameter","default":1.0}},
 	         "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},"rhs":"y"}]}
 	  },
 	  "coupling":[{"type":"variable_map","from":"A.x","to":"B.y",
@@ -665,7 +631,7 @@ func TestAuditG15_LowerEnumsReachesEvents(t *testing.T) {
 	  "metadata":{"name":"g15"},
 	  "enums":{"phase":{"solid":1,"liquid":2}},
 	  "models":{"M":{
-	    "variables":{"x":{"type": "unknown","default":0.0},"s":{"type":"parameter","default":0.0}},
+	    "variables":{"x":{"type":"unknown","default":0.0},"s":{"type":"parameter","default":0.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":1.0}],
 	    "discrete_events":[{
 	      "trigger":{"type":"condition","expression":{"op":"==","args":["s",{"op":"enum","args":["phase","solid"]}]}},
@@ -707,7 +673,7 @@ func TestAuditG15_UnknownEnumIsDiagnosedInEvents(t *testing.T) {
 	  "metadata":{"name":"g15b"},
 	  "enums":{"phase":{"solid":1}},
 	  "models":{"M":{
-	    "variables":{"x":{"type": "unknown","default":0.0},"s":{"type":"parameter","default":0.0}},
+	    "variables":{"x":{"type":"unknown","default":0.0},"s":{"type":"parameter","default":0.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":1.0}],
 	    "discrete_events":[{
 	      "trigger":{"type":"periodic","interval":1.0},
@@ -826,9 +792,8 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 						"alpha": {Type: VarTypeParameter, Units: strPtr("dimensionless")},
 						"y":     {Type: VarTypeUnknown, Units: strPtr("kg")},
 					},
-					// `y` is an OBSERVED unknown, and in 1.0.0 that is expressed by
-					// giving it a bare-variable-LHS equation rather than an
-					// `expression` field. Two unknowns, two equations: balanced.
+					// `y`'s defining expression is an EQUATION from esm 1.0.0, not
+					// a field on the variable.
 					Equations: []Equation{
 						{LHS: ExprNode{Op: OpDerivative, Args: []any{"x"}, Wrt: strPtr("t")}, RHS: "x"},
 						{LHS: "y", RHS: expr},
@@ -1232,7 +1197,7 @@ func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 	  "esm":"0.8.0",
 	  "metadata":{"name":"implicit-names","authors":["t"]},
 	  "models":{"M":{
-	    "variables":{"u":{"type": "unknown","units":"1","default":0.0}},
+	    "variables":{"u":{"type":"unknown","units":"1","default":0.0}},
 	    "equations":[
 	      {"lhs":{"op":"ic","args":["u"]},
 	       "rhs":{"op":"tanh","args":[{"op":"-","args":["x",0.3]}]}},
@@ -1268,7 +1233,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	  "metadata":{"name":"operator-placeholder","authors":["t"]},
 	  "models":{
 	    "Chem":{
-	      "variables":{"O3":{"type": "unknown","units":"ppb","default":30.0},
+	      "variables":{"O3":{"type":"unknown","units":"ppb","default":30.0},
 	                   "k":{"type":"parameter","units":"1/s","default":0.1}},
 	      "equations":[{"lhs":{"op":"D","args":["O3"],"wrt":"t"},
 	                    "rhs":{"op":"*","args":[{"op":"-","args":["k"]},"O3"]}}]},
@@ -1303,7 +1268,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	  "esm":"0.8.0",
 	  "metadata":{"name":"uncoupled","authors":["t"]},
 	  "models":{"M":{
-	    "variables":{"x":{"type": "unknown","units":"1","default":1.0}},
+	    "variables":{"x":{"type":"unknown","units":"1","default":1.0}},
 	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":0.0}],
 	    "discrete_events":[{"trigger":{"type":"periodic","interval":1.0},
 	                        "affects":[{"lhs":"nonexistent_var","rhs":0.0}]}]}}}`
@@ -1328,11 +1293,11 @@ func TestCheckerB_C_ScopedRefsAreArbitraryDepth(t *testing.T) {
 	      "variables":{"p":{"type":"parameter","units":"Pa","default":101325.0}},
 	      "equations":[],
 	      "subsystems":{"Temperature":{
-	        "variables":{"surface_temp":{"type": "unknown","units":"K","default":288.0}},
+	        "variables":{"surface_temp":{"type":"unknown","units":"K","default":288.0}},
 	        "equations":[{"lhs":{"op":"D","args":["surface_temp"],"wrt":"t"},"rhs":0.0}]}}},
 	    "Chem":{
 	      "variables":{"T":{"type":"parameter","units":"K","default":298.0},
-	                   "O3":{"type": "unknown","units":"ppb","default":30.0}},
+	                   "O3":{"type":"unknown","units":"ppb","default":30.0}},
 	      "equations":[{"lhs":{"op":"D","args":["O3"],"wrt":"t"},"rhs":0.0}]}},
 	  "coupling":[{"type":"variable_map",
 	               "from":"Meteorology.Temperature.surface_temp",
@@ -1366,7 +1331,7 @@ func TestCheckerB_D_ReactionRateScopedRefsAndUndefinedParameter(t *testing.T) {
 	  "esm":"0.8.0",
 	  "metadata":{"name":"rate-scope","authors":["t"]},
 	  "models":{"Meteo":{
-	    "variables":{"T":{"type": "unknown","units":"K","default":298.0}},
+	    "variables":{"T":{"type":"unknown","units":"K","default":298.0}},
 	    "equations":[{"lhs":{"op":"D","args":["T"],"wrt":"t"},"rhs":0.0}]}},
 	  "reaction_systems":{"Chem":{
 	    "species":{"A":{"units":"mol/m^3","default":1.0},"B":{"units":"mol/m^3","default":0.0}},
@@ -1408,8 +1373,8 @@ func TestCheckerB_E_NonlinearEquationBalance(t *testing.T) {
 	  "models":{"Eq":{
 	    "system_kind":"nonlinear",
 	    "variables":{
-	      "H":{"type": "unknown","units":"mol/m^3","default":1.0e-6},
-	      "SO4":{"type": "unknown","units":"mol/m^3","default":1.0e-6},
+	      "H":{"type":"unknown","units":"mol/m^3","default":1.0e-6},
+	      "SO4":{"type":"unknown","units":"mol/m^3","default":1.0e-6},
 	      "Ksp":{"type":"parameter","units":"mol^3/m^9","default":1.0e-12}},
 	    "equations":[
 	      {"lhs":"H","rhs":{"op":"*","args":[2,"SO4"]}},
@@ -1489,7 +1454,7 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 		  "esm":"0.8.0",
 		  "metadata":{"name":"unresolved","authors":["t"]},
 		  "models":{"Host":{
-		    "variables":{"x":{"type": "unknown","units":"1","default":0.0}},
+		    "variables":{"x":{"type":"unknown","units":"1","default":0.0}},
 		    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":0.0}],
 		    "subsystems":{"Sub":{"ref":"./nowhere.esm"}}}}}`
 		if !hasCode(validateSrc(t, src), CodeUnresolvedSubsystemRef) {
@@ -1500,17 +1465,17 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 
 // --- the two adjacent corpus pins Go also left unmet -------------------------
 
-// An event may affect UNKNOWNS ONLY (esm-spec 5.4). Both fixtures write a
-// PARAMETER from an event -- one through a `condition` trigger, one through a
-// `periodic` one -- and both are `event_affects_parameter`.
+// An event may affect UNKNOWNS ONLY (esm-spec §5.4): a parameter that changes
+// during a run carries its own `update` block, so an event `affects` LHS naming
+// a parameter is `event_affects_parameter`. This replaces the 0.x
+// `invalid_discrete_param` / `undeclared_discrete_parameter` pair — there is no
+// `discrete_parameters` list left to be missing from, so the write is wrong
+// outright rather than wrong-unless-declared.
 //
-// The pair is what pins that the diagnostic keys off the AFFECTS TARGET rather
-// than off the trigger kind. In 0.x these were `invalid_discrete_param`, reached
-// through a `discrete_parameters` list that 1.0.0 removed; the defect the
-// fixtures pin is unchanged, only the route to it and the code.
-//
-// The second filename still says "discrete_param" because it is hard-referenced
-// from this test and from the Rust suite, and was deliberately kept.
+// The two fixture names are kept as-is: `invalid_discrete_param_not_parameter.esm`
+// is hard-referenced from the Rust suite too, and the pair is what pins that the
+// diagnostic keys off the AFFECTS TARGET rather than the trigger kind (one
+// carries a `condition` trigger, the other a `periodic` one).
 func TestCheckerB_EventAffectsParameter(t *testing.T) {
 	for _, name := range []string{"invalid_discrete_param.esm", "invalid_discrete_param_not_parameter.esm"} {
 		t.Run(name, func(t *testing.T) {
@@ -1684,7 +1649,7 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	  "index_sets":{"cells":{"kind":"interval","size":3}},
 	  "models":{"M":{
 	    "variables":{
-	      "u":{"type": "unknown","units":"1","shape":["cells"],"default":0.0},
+	      "u":{"type":"unknown","units":"1","shape":["cells"],"default":0.0},
 	      "k":{"type":"parameter","units":"1/s","default":0.1}},
 	    "equations":[{
 	      "lhs":{"op":"aggregate","args":[],"output_idx":["i"],
@@ -1727,8 +1692,8 @@ func TestCheckerB_G_BoundIndicesAreInScope(t *testing.T) {
 	  "index_sets":{"cells":{"kind":"interval","size":3}},
 	  "models":{"M":{
 	    "variables":{
-	      "u":{"type": "unknown","units":"1","shape":["cells"],"default":0.0},
-	      "w":{"type": "unknown","units":"1","default":0.0}},
+	      "u":{"type":"unknown","units":"1","shape":["cells"],"default":0.0},
+	      "w":{"type":"unknown","units":"1","default":0.0}},
 	    "equations":[
 	      {"lhs":{"op":"aggregate","args":[],"output_idx":["i"],
 	              "expr":{"op":"D","args":[{"op":"index","args":["u","i"]}],"wrt":"t"},

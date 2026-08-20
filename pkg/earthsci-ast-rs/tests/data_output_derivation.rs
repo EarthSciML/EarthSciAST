@@ -170,27 +170,85 @@ fn coordinates_registry_round_trips() {
 // RFC decision 8: output is state PLUS a caller-named subset of observed.
 // --------------------------------------------------------------------------
 
-const OBSERVED_DOC: &str = r#"{
-  "esm": "1.0.0",
-  "metadata": { "name": "ObservedGating" },
-  "domain": { "independent_variable": "t" },
-  "models": {
-    "M": {
-      "variables": {
-        "x":  { "type": "unknown",     "units": "kg",   "default": 1.0 },
-        "k":  { "type": "parameter", "units": "1/s",  "default": 0.5 },
-        "y":  { "type": "observed",  "units": "kg/s", "description": "flux",
-                "expression": { "op": "*", "args": ["k", "x"] } },
-        "z":  { "type": "observed",  "units": "kg",
-                "expression": { "op": "+", "args": ["x", 1.0] } }
+const OBSERVED_DOC: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "ObservedGating"
       },
-      "equations": [
-        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] } }
-      ]
+      "domain": {
+        "independent_variable": "t"
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "x": {
+              "type": "unknown",
+              "units": "kg",
+              "default": 1.0
+            },
+            "k": {
+              "type": "parameter",
+              "units": "1/s",
+              "default": 0.5
+            },
+            "y": {
+              "type": "unknown",
+              "units": "kg/s",
+              "description": "flux"
+            },
+            "z": {
+              "type": "unknown",
+              "units": "kg"
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "x"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "k"
+                    ]
+                  },
+                  "x"
+                ]
+              }
+            },
+            {
+              "lhs": "y",
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "k",
+                  "x"
+                ]
+              }
+            },
+            {
+              "lhs": "z",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "x",
+                  1.0
+                ]
+              }
+            }
+          ]
+        }
+      }
     }
-  }
-}"#;
+    "#;
 
 /// The runner's flat rows: the state, plus the observed trajectories it
 /// appended (as `Solution::state_variable_names` carries them).

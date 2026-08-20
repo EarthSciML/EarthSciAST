@@ -16,36 +16,154 @@ use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
 
 /// A wrap + ghost stencil with a CONST-tier observed — enough structure that
 /// a genuine divergence between the two paths would be caught.
-const MODEL: &str = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "tape_check_mode"},
- "models": {
-  "M": {
-   "variables": {
-     "u": {"type": "unknown", "shape": ["i"]},
-     "g": {"type": "observed", "shape": ["i"],
-           "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
-               "ranges": {"i": [1, 8]},
-               "expr": {"op": "sin", "args": [{"op": "*", "args": [0.5, "i"]}]}}}
-   },
-   "equations": [
+const MODEL: &str = r#"
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-             "ranges": {"i": [1, 8]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "ranges": {"i": [1, 8]},
-             "expr": {"op": "+", "args": [
-               {"op": "index", "args": ["u", {"op": "-", "args": ["i", 1]}]},
-               {"op": "*", "args": [-2.0, {"op": "index", "args": ["u", "i"]}]},
-               {"op": "index", "args": ["u", {"op": "+", "args": ["i", 1]}]},
-               {"op": "index", "args": ["g", "i"]}
-             ]}}
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "tape_check_mode"
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "u": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            },
+            "g": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                },
+                "ranges": {
+                  "i": [
+                    1,
+                    8
+                  ]
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    8
+                  ]
+                },
+                "expr": {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        -2.0,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "g",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "lhs": "g",
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    8
+                  ]
+                },
+                "expr": {
+                  "op": "sin",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        0.5,
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
     }
-   ]
-  }
- }
-}"#;
+    "#;
 
 #[test]
 fn ess_tape_check_runs_both_paths_without_panicking() {

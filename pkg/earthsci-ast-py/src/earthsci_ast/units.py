@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .classification import observed_definitions
 from .esm_types import EsmFile, Expr, ExprNode, Model, ReactionSystem
 
 # ---------------------------------------------------------------------------
@@ -750,19 +751,29 @@ class UnitValidator:
                         f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}"
                     )
 
-        # Validate equations
+        # Validate equations. An observed unknown's DEFINING equation is
+        # skipped here and typed below instead, under the VARIABLE's name --
+        # where 0.x reported it, and where an author looks. Typing it in both
+        # places reported one defect twice.
+        definitions = observed_definitions(model)
         if model.equations:
             for i, equation in enumerate(model.equations):
+                lhs = getattr(equation, "lhs", None)
+                if isinstance(lhs, str) and lhs in definitions:
+                    continue
                 eq_result = self.validate_equation(equation, f"eq_{i}")
                 result.errors.extend(eq_result.errors)
                 result.warnings.extend(eq_result.warnings)
 
-        # Validate variable expressions
-        for var_name, var_info in model.variables.items():
-            if hasattr(var_info, "expression") and var_info.expression:
-                expr_result = self.validate_expression(var_info.expression, var_name)
-                if expr_result.errors:
-                    result.errors.extend([f"Variable {var_name}: {e}" for e in expr_result.errors])
+        # Validate each observed unknown's DEFINING EXPRESSION -- its
+        # bare-variable-LHS equation's RHS (esm-spec §6.3.1). Before 1.0.0 this
+        # was `variables[v].expression`; the equations are the only place it can
+        # live now. (The equation loop above already types both sides, so this
+        # reports the finding against the VARIABLE name, as it always did.)
+        for var_name, definition in definitions.items():
+            expr_result = self.validate_expression(definition, var_name)
+            if expr_result.errors:
+                result.errors.extend([f"Variable {var_name}: {e}" for e in expr_result.errors])
 
         result.is_valid = len(result.errors) == 0
         return result

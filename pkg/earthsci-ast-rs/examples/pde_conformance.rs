@@ -378,11 +378,18 @@ fn reproj_wrapper_doc(lib_file_name: &str, params: &Value) -> Result<Value, Stri
                 "inv_lon": {"type": "unknown", "units": "deg"},
                 "inv_lat": {"type": "unknown", "units": "deg"},
             },
+            // Each of the four is an OBSERVED unknown, DEFINED by a
+            // bare-variable-LHS equation (esm-spec 6.3.1).
             "equations": [
-                    {"lhs": "inv_lat", "rhs": mkapply("lambert_conformal_inverse_lat", ["x", "y"])},
-                    {"lhs": "inv_lon", "rhs": mkapply("lambert_conformal_inverse_lon", ["x", "y"])},
-                    {"lhs": "fwd_y", "rhs": mkapply("lambert_conformal_forward_y", ["lon", "lat"])},
-                    {"lhs": "fwd_x", "rhs": mkapply("lambert_conformal_forward_x", ["lon", "lat"])}]
+                {"lhs": "fwd_x",
+                 "rhs": mkapply("lambert_conformal_forward_x", ["lon", "lat"])},
+                {"lhs": "fwd_y",
+                 "rhs": mkapply("lambert_conformal_forward_y", ["lon", "lat"])},
+                {"lhs": "inv_lon",
+                 "rhs": mkapply("lambert_conformal_inverse_lon", ["x", "y"])},
+                {"lhs": "inv_lat",
+                 "rhs": mkapply("lambert_conformal_inverse_lat", ["x", "y"])}
+            ]
         }}
     }))
 }
@@ -405,11 +412,13 @@ fn reproj_expressions(lib: &Path, params: &Value) -> Result<HashMap<String, Expr
         .as_ref()
         .and_then(|ms| ms.get("Reproject"))
         .ok_or("wrapper doc lost its Reproject model")?;
+    // An observed unknown's composed expression is its defining EQUATION's RHS
+    // from esm 1.0.0 (esm-spec 6.3.1).
+    let defs = earthsci_ast::classification::observed_definitions(model);
     let mut out = HashMap::new();
     for name in ["fwd_x", "fwd_y", "inv_lon", "inv_lat"] {
-        // An observed unknown's composed expression is its defining equation's
-        // RHS since 1.0.0 (esm-spec §6.3.1).
-        let expr = earthsci_ast::classify::observed_definition(model, name)
+        let expr = defs
+            .get(name)
             .cloned()
             .ok_or_else(|| format!("wrapper variable '{name}' has no composed expression"))?;
         out.insert(name.to_string(), expr);

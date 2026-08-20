@@ -55,13 +55,13 @@ func resolveScopedReference(scopedRef string, file *ESMFile, currentSystem strin
 		return resolveScopedInReactionSystem(remainingPath, &system)
 	}
 
-	// A DATA SOURCE is deliberately NOT a scopable namespace. In 0.x a loader was
-	// a component and `GEOSFP_MeteoData.u` named a variable it exposed; from
-	// 1.0.0 a source is a document-scoped ingest registry that exposes no
-	// variables at all, and esm-spec 8 states it cannot be a coupling endpoint, a
-	// subsystem, or the path root of a scoped reference. The loaded field is an
-	// ordinary parameter of the consuming model, named without a prefix, so a
-	// source-rooted path resolves to nothing and must report as such.
+	// A DATA SOURCE is deliberately NOT a scopable namespace. Until esm 1.0.0 a
+	// loader exposed a `variables` map and `GEOSFP.u` named one of them; from
+	// 1.0.0 a source exposes nothing and is not a path root (esm-spec §8) — a
+	// model reaches external data through a PARAMETER whose `update` names the
+	// source, and that parameter is resolved like any other model variable. A
+	// source-rooted scoped reference is therefore unresolved, which is the
+	// correct answer rather than a gap.
 
 	return scopedRef, false
 }

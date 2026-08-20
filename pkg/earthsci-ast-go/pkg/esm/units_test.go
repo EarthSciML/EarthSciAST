@@ -477,9 +477,9 @@ func TestValidateModelUnitsIntegration(t *testing.T) {
 	units := func(s string) *string { return &s }
 	model := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown, Units: units("m")},
-			"v": {Type: VarTypeUnknown, Units: units("m/s")},
-			"t": {Type: VarTypeParameter, Units: units("s")},
+			"x": {Type: "unknown", Units: units("m")},
+			"v": {Type: "unknown", Units: units("m/s")},
+			"t": {Type: "parameter", Units: units("s")},
 		},
 		Equations: []Equation{
 			// Consistent: dx/dt = v

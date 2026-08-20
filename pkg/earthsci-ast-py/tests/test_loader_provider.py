@@ -4,7 +4,7 @@ C1 (``ess-06y``) built the segmented-solve skeleton + the by-reference
 ``loader_arrays`` registry; N1 re-points that seam at the **EarthSciIO Provider
 contract**. ``simulate()`` now (by default, and via an injected
 ``provider_factory``) builds one
-:class:`~earthsci_ast.data_loaders.provider.Provider` per loader field at
+:class:`~earthsci_ast.data_sources.provider.Provider` per loader field at
 setup and drives it at cadence — CONST → ``materialize()`` once, DISCRETE →
 ``refresh(t)`` at the seed and each boundary — with the segment boundaries taken
 from ``Provider.refresh_times()`` rather than local frequency arithmetic.
@@ -33,7 +33,7 @@ from earthsci_ast.simulation import (
     _provider_array,
     simulate,
 )
-from earthsci_ast.data_loaders.provider import (
+from earthsci_ast.data_sources.provider import (
     LoadDataProvider,
     Provider,
     build_default_provider,
@@ -70,7 +70,7 @@ def _c_at(result, t: float) -> float:
 
 
 def _seg_value(t: float) -> float:
-    """Wind u[2] for the segment containing time ``t`` (matches C1's fixture)."""
+    """Wind U[2] for the segment containing time ``t`` (matches C1's fixture)."""
     return 10.0 + 10.0 * round(t)
 
 
@@ -99,12 +99,12 @@ def _make_factory(calls: Dict[str, List], *, anchors_seconds: Optional[List[floa
         def refresh(self, t: _dt.datetime):
             secs = (t - _EPOCH).total_seconds()
             calls.setdefault(self.field.var, []).append(secs)
-            if self.field.var == "u":
-                return _NativeDataset({"u": _NativeField([99.0, _seg_value(secs), -99.0], ("x",))})
+            if self.field.var == "U":
+                return _NativeDataset({"U": _NativeField([99.0, _seg_value(secs), -99.0], ("x",))})
             return _NativeDataset({self.field.var: _NativeField([0.25, 1.0, 0.25], ("x",))})
 
         def refresh_times(self) -> List[_dt.datetime]:
-            if self.field.loader.temporal is None or self.window is None:
+            if self.field.data_source.temporal is None or self.window is None:
                 return []
             if anchors_seconds is not None:
                 return [_EPOCH + _dt.timedelta(seconds=s) for s in anchors_seconds]
@@ -136,7 +136,7 @@ def test_provider_object_path_refreshes_at_cadence() -> None:
     assert result.success, result.message
     assert result.vars == ["Plume.c"]
 
-    # Same analytic piecewise solution as C1 (dc/dt = (u[2] + z0[2]) - c, c0=0),
+    # Same analytic piecewise solution as C1 (dc/dt = (wind[2] + rough[2]) - c, c0=0),
     # proving the refreshed native arrays reach the RHS and dependent vars
     # (the coupled wind/rough forcing) pick them up between segments.
     f0, f1 = _seg_value(0.0) + 1.0, _seg_value(1.0) + 1.0  # 11 on [0,1), 21 on [1,2)
@@ -158,14 +158,14 @@ def test_const_materialized_once_discrete_refreshed_per_boundary() -> None:
     assert result.success, result.message
 
     # CONST loader: materialize() exactly once, never refreshed.
-    assert calls["z0"] == ["materialize"]
+    assert calls["Z0"] == ["materialize"]
 
     # DISCRETE loader: refresh() at the seed (t=0) + once per interior cadence
     # boundary (t=1 for the 1 s cadence over [0,2)) — and NOTHING per RHS eval.
     # invocation count == #segments (boundaries), << #RHS calls.
-    assert calls["u"] == [0.0, 1.0]
+    assert calls["U"] == [0.0, 1.0]
     assert result.nfev > 10
-    assert len(calls["u"]) < result.nfev
+    assert len(calls["U"]) < result.nfev
 
 
 def test_boundaries_come_from_refresh_times_not_frequency() -> None:
@@ -182,7 +182,7 @@ def test_boundaries_come_from_refresh_times_not_frequency() -> None:
         provider_factory=_make_factory(calls, anchors_seconds=[0.0, 0.5, 1.5]),
     )
     assert result.success, result.message
-    assert calls["u"] == [0.0, 0.5, 1.5]
+    assert calls["U"] == [0.0, 0.5, 1.5]
 
 
 def test_provider_factory_ignored_when_callable_given() -> None:
@@ -217,8 +217,8 @@ def test_provider_factory_ignored_when_callable_given() -> None:
 
 def test_load_data_provider_refresh_times_from_temporal() -> None:
     flat = flatten(load(_FIXTURE))
-    u_field = next(f for f in flat.loader_fields if f.var == "u")
-    z0_field = next(f for f in flat.loader_fields if f.var == "z0")
+    u_field = next(f for f in flat.loader_fields if f.var == "U")
+    z0_field = next(f for f in flat.loader_fields if f.var == "Z0")
 
     window = (_EPOCH, _EPOCH + _dt.timedelta(seconds=3))
     prov = build_default_provider(u_field, window)
@@ -236,7 +236,7 @@ def test_load_data_provider_refresh_times_from_temporal() -> None:
 
 def test_load_data_provider_refresh_times_needs_window() -> None:
     flat = flatten(load(_FIXTURE))
-    u_field = next(f for f in flat.loader_fields if f.var == "u")
+    u_field = next(f for f in flat.loader_fields if f.var == "U")
     # Unbounded (no window) → no enumerable schedule (falls back to freq math).
     assert build_default_provider(u_field, None).refresh_times() == []
 
@@ -266,7 +266,7 @@ def _loader_field(var, method=None):
         owner="ERA5",
         subkey="pl",
         var=var,
-        loader=SimpleNamespace(temporal=None),
+        data_source=SimpleNamespace(temporal=None),
         cadence="discrete",
     )
 
@@ -283,46 +283,40 @@ def test_provider_array_identity_without_target_or_coords() -> None:
     assert np.array_equal(out, np.array([1.0, 2.0, 3.0, 4.0]))
 
 
-def test_provider_array_resolves_file_variable_band_name() -> None:
-    """Gap V: an EarthSciIO reader keys its NativeDataset by the loader's
-    ``file_variable`` (a GeoTIFF band ``"Band1"``), but the flattened
-    ``field.var`` is the model-facing semantic name (``"fuel_model"``). The
-    extraction must remap ``var -> file_variable`` to find the band."""
-    loader = SimpleNamespace(
-        temporal=None,
-        variables={"fuel_model": SimpleNamespace(file_variable="Band1")},
-    )
+def test_provider_array_indexes_by_the_bound_file_variable() -> None:
+    """An EarthSciIO reader keys its NativeDataset by the ON-DISK name (a GeoTIFF
+    band ``"Band1"``). From esm 1.0.0 that is exactly what ``field.var`` carries:
+    the binding lives on the consuming parameter and names its ``file_variable``
+    directly, so there is no semantic-name -> file-name remap left to do. The
+    model-facing name is the PARAMETER's, and it is ``field.name``."""
     field = LoaderField(
-        name="LANDFIRE.raw.fuel_model",
+        name="LANDFIRE.fuel_model",
         owner="LANDFIRE",
         subkey="raw",
-        var="fuel_model",
-        loader=loader,
+        var="Band1",
+        data_source=SimpleNamespace(temporal=None),
         cadence="const",
     )
     native = _NativeDataset({"Band1": _NativeField([[7.0, 8.0], [9.0, 10.0]], ("y", "x"))})
-    # No target → raw flatten, but the fuel_model → Band1 remap must still apply.
     out = _provider_array(field, native, None)
     assert np.array_equal(out, np.array([7.0, 8.0, 9.0, 10.0]))
 
 
-def test_provider_array_file_variable_matching_name_and_stub() -> None:
-    """When ``file_variable`` equals ``var`` (ERA5 ``"t"``), or the loader has no
-    variables mapping (a stub provider), extraction falls back to the semantic
-    ``var`` unchanged — the remap is a no-op."""
-    # Matching name: file_variable == var.
-    loader = SimpleNamespace(temporal=None, variables={"t": SimpleNamespace(file_variable="t")})
+def test_provider_array_when_the_parameter_and_file_names_agree() -> None:
+    """The common case: the parameter is named after the file variable (ERA5
+    ``"t"``), so ``field.name`` tail and ``field.var`` coincide and nothing about
+    the extraction changes."""
     field = LoaderField(
-        name="ERA5.pl.t",
+        name="ERA5.t",
         owner="ERA5",
         subkey="pl",
         var="t",
-        loader=loader,
+        data_source=SimpleNamespace(temporal=None),
         cadence="discrete",
     )
     native = _NativeDataset({"t": _NativeField([[1.0, 2.0]], ("y", "x"))})
     assert np.array_equal(_provider_array(field, native, None), np.array([1.0, 2.0]))
-    # Stub loader (no .variables) → index by the semantic var.
+    # A stub provider keyed by the same name resolves identically.
     native2 = _NativeDataset({"u": _NativeField([[5.0, 6.0]], ("y", "x"))})
     assert np.array_equal(
         _provider_array(_loader_field("u", None), native2, None), np.array([5.0, 6.0])

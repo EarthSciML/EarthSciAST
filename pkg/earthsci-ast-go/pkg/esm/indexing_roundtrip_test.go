@@ -55,9 +55,9 @@ func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
 		Models: map[string]Model{
 			"M": {
 				Variables: map[string]ModelVariable{
-					"u":           {Type: VarTypeUnknown},
-					"s_literal":   {Type: VarTypeUnknown},
-					"s_composite": {Type: VarTypeUnknown},
+					"u":           {Type: "unknown"},
+					"s_literal":   {Type: "unknown"},
+					"s_composite": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{

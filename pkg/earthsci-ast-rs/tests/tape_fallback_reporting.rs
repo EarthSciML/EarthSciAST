@@ -28,47 +28,171 @@ use earthsci_ast::{SimulateOptions, load, simulate};
 /// so the rule that reads it cannot be taped. Kept deliberately unrelated to
 /// the nested-aggregate shadowing this release taught the admission test about:
 /// this fixture must keep falling back for the assertion to mean anything.
-const FALLBACK_MODEL: &str = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "fallback_reporting"},
- "index_sets": {"c": {"kind": "interval", "size": 3}},
- "models": {"M": {
-   "variables": {
-     "psi": {"type": "unknown", "shape": ["c"], "default": 1.0},
-     "k": {"type": "observed", "shape": ["c"],
-           "expression": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
-     "a": {"type": "observed", "shape": ["c"],
-           "expression": {"op": "+", "args": ["psi", "k"]}}
-   },
-   "equations": [
-     {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
-      "rhs": {"op": "-", "args": ["a"]}}
-   ]
- }}
-}"#;
+const FALLBACK_MODEL: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "fallback_reporting"
+      },
+      "index_sets": {
+        "c": {
+          "kind": "interval",
+          "size": 3
+        }
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "psi": {
+              "type": "unknown",
+              "shape": [
+                "c"
+              ],
+              "default": 1.0
+            },
+            "k": {
+              "type": "unknown",
+              "shape": [
+                "c"
+              ]
+            },
+            "a": {
+              "type": "unknown",
+              "shape": [
+                "c"
+              ]
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "psi"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "-",
+                "args": [
+                  "a"
+                ]
+              }
+            },
+            {
+              "lhs": "k",
+              "rhs": {
+                "op": "const",
+                "value": [
+                  1.0,
+                  2.0,
+                  3.0
+                ],
+                "args": []
+              }
+            },
+            {
+              "lhs": "a",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "psi",
+                  "k"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+    "#;
 
 /// The same physics with the constant table written as an arithmetic ramp over
 /// the output index instead of an array literal: fully vectorizable, hence
 /// fully taped.
-const TAPED_MODEL: &str = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "taped_reporting"},
- "index_sets": {"c": {"kind": "interval", "size": 3}},
- "models": {"M": {
-   "variables": {
-     "psi": {"type": "unknown", "shape": ["c"], "default": 1.0},
-     "k": {"type": "observed", "shape": ["c"],
-           "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                          "ranges": {"i": [1, 3]}, "expr": "i"}},
-     "a": {"type": "observed", "shape": ["c"],
-           "expression": {"op": "+", "args": ["psi", "k"]}}
-   },
-   "equations": [
-     {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
-      "rhs": {"op": "-", "args": ["a"]}}
-   ]
- }}
-}"#;
+const TAPED_MODEL: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "taped_reporting"
+      },
+      "index_sets": {
+        "c": {
+          "kind": "interval",
+          "size": 3
+        }
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "psi": {
+              "type": "unknown",
+              "shape": [
+                "c"
+              ],
+              "default": 1.0
+            },
+            "k": {
+              "type": "unknown",
+              "shape": [
+                "c"
+              ]
+            },
+            "a": {
+              "type": "unknown",
+              "shape": [
+                "c"
+              ]
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "psi"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "-",
+                "args": [
+                  "a"
+                ]
+              }
+            },
+            {
+              "lhs": "k",
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": "i"
+              }
+            },
+            {
+              "lhs": "a",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  "psi",
+                  "k"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+    "#;
 
 fn run(json: &str) -> earthsci_ast::Solution {
     let file = load(json).expect("fixture loads");

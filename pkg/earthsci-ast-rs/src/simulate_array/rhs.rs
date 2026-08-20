@@ -1189,13 +1189,13 @@ mod elementwise_array_observed_tests {
             "index_sets": {"c": {"kind": "interval", "size": 3}},
             "models": {"M": {
                 "variables": {
-                    "psi": {"type": "state", "units": "1", "shape": ["c"]},
-                    "k": {"type": "observed", "shape": ["c"],
-                          "expression": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
-                    "a": {"type": "observed", "shape": ["c"],
-                          "expression": {"op": "+", "args": ["psi", "k"]}}
+                    "psi": {"type": "unknown", "units": "1", "shape": ["c"]},
+                    "k": {"type": "unknown", "shape": ["c"]},
+                    "a": {"type": "unknown", "shape": ["c"]}
                 },
                 "equations": [
+                {"lhs": "k", "rhs": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
+                {"lhs": "a", "rhs": {"op": "+", "args": ["psi", "k"]}},
                     {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
                     {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"}, "rhs": {"op": "-", "args": ["a"]}}
                 ]

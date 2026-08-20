@@ -63,14 +63,18 @@ fn argmin_model() -> String {
       }},
       "models": {{ "M": {{
         "variables": {{
-          "gx": {{ "type": "observed", "shape": ["generators"], "expression": {{ "op": "const", "args": [], "value": [0.0, 1.0, 2.0] }} }},
-          "gy": {{ "type": "observed", "shape": ["generators"], "expression": {{ "op": "const", "args": [], "value": [0.0, 0.0, 0.0] }} }},
-          "px": {{ "type": "observed", "shape": ["points"],     "expression": {{ "op": "const", "args": [], "value": [0.0, 1.0, 1.5, 2.0] }} }},
-          "py": {{ "type": "observed", "shape": ["points"],     "expression": {{ "op": "const", "args": [], "value": [0.0, 0.5, 0.0, 0.0] }} }},
+          "gx": {{ "type": "unknown", "shape": ["generators"]}},
+          "gy": {{ "type": "unknown", "shape": ["generators"]}},
+          "px": {{ "type": "unknown", "shape": ["points"]}},
+          "py": {{ "type": "unknown", "shape": ["points"]}},
           "assign": {{ "type": "unknown", "shape": ["points"], "description": "nearest-generator index (argmin arg-witness output)" }},
           "u":      {{ "type": "unknown", "shape": ["points"], "description": "integrated witness: D(u[i]) = assign[i]" }}
         }},
         "equations": [
+          {{ "lhs": "gx", "rhs": {{ "op": "const", "args": [], "value": [0.0, 1.0, 2.0] }} }},
+          {{ "lhs": "gy", "rhs": {{ "op": "const", "args": [], "value": [0.0, 0.0, 0.0] }} }},
+          {{ "lhs": "px", "rhs": {{ "op": "const", "args": [], "value": [0.0, 1.0, 1.5, 2.0] }} }},
+          {{ "lhs": "py", "rhs": {{ "op": "const", "args": [], "value": [0.0, 0.5, 0.0, 0.0] }} }},
           {{
             "lhs": {{ "op": "index", "args": ["assign", "i"] }},
             "rhs": {{ "op": "aggregate", "output_idx": ["i"], "ranges": {{ "i": {{ "from": "points" }} }},
@@ -160,50 +164,391 @@ fn argmin_nearest_generator_simulates_end_to_end() {
 /// integrated `cu(1)` equals the next Lloyd/SCVT generator positions — exactly
 /// the numbers the `value_invention` front-door goldens assert.
 fn centroid_model() -> &'static str {
-    r#"{
-      "esm": "1.0.0",
-      "metadata": { "name": "centroid_simulate" },
-      "index_sets": {
-        "points":     { "kind": "interval", "size": 4 },
-        "generators": { "kind": "interval", "size": 3 }
-      },
-      "models": { "M": {
-        "variables": {
-          "gx":  { "type": "observed", "shape": ["generators"], "expression": { "op": "const", "args": [], "value": [0.0, 1.0, 2.0] } },
-          "px":  { "type": "observed", "shape": ["points"],     "expression": { "op": "const", "args": [], "value": [0.0, 0.75, 1.25, 2.0] } },
-          "rho": { "type": "observed", "shape": ["points"],     "expression": { "op": "const", "args": [], "value": [1.0, 1.0, 3.0, 4.0] } },
-          "assign":   { "type": "unknown", "shape": ["points"] },
-          "num":      { "type": "unknown", "shape": ["generators"] },
-          "den":      { "type": "unknown", "shape": ["generators"] },
-          "centroid": { "type": "unknown", "shape": ["generators"] },
-          "cu":       { "type": "unknown", "shape": ["generators"], "description": "integrated centroid: D(cu[g]) = centroid[g]" }
-        },
-        "equations": [
-          { "lhs": { "op": "index", "args": ["assign", "i"] },
-            "rhs": { "op": "aggregate", "output_idx": ["i"], "ranges": { "i": { "from": "points" } },
-                     "args": ["px", "gx"],
-                     "expr": { "op": "argmin", "args": ["px", "gx"], "arg": "g", "ranges": { "g": { "from": "generators" } },
-                               "expr": { "op": "*", "args": [
-                                  { "op": "-", "args": [ {"op":"index","args":["px","i"]}, {"op":"index","args":["gx","g"]} ] },
-                                  { "op": "-", "args": [ {"op":"index","args":["px","i"]}, {"op":"index","args":["gx","g"]} ] } ] } } } },
-          { "lhs": { "op": "index", "args": ["num", "g"] },
-            "rhs": { "op": "aggregate", "output_idx": ["g"], "ranges": { "g": { "from": "generators" }, "p": { "from": "points" } },
-                     "semiring": "sum_product", "join": [ { "on": [ ["assign", "g"] ] } ], "args": ["assign", "rho", "px"],
-                     "expr": { "op": "*", "args": [ {"op":"index","args":["rho","p"]}, {"op":"index","args":["px","p"]} ] } } },
-          { "lhs": { "op": "index", "args": ["den", "g"] },
-            "rhs": { "op": "aggregate", "output_idx": ["g"], "ranges": { "g": { "from": "generators" }, "p": { "from": "points" } },
-                     "semiring": "sum_product", "join": [ { "on": [ ["assign", "g"] ] } ], "args": ["assign", "rho"],
-                     "expr": { "op": "index", "args": ["rho", "p"] } } },
-          { "lhs": { "op": "index", "args": ["centroid", "g"] },
-            "rhs": { "op": "aggregate", "output_idx": ["g"], "ranges": { "g": { "from": "generators" } }, "args": ["num", "den"],
-                     "expr": { "op": "/", "args": [ {"op":"index","args":["num","g"]}, {"op":"index","args":["den","g"]} ] } } },
-          { "lhs": { "op": "aggregate", "args": [], "output_idx": ["g"], "ranges": { "g": { "from": "generators" } },
-                     "expr": { "op": "D", "args": [ { "op": "index", "args": ["cu", "g"] } ], "wrt": "t" } },
-            "rhs": { "op": "aggregate", "args": [], "output_idx": ["g"], "ranges": { "g": { "from": "generators" } },
-                     "expr": { "op": "index", "args": ["centroid", "g"] } } }
-        ]
-      } }
-    }"#
+    r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "centroid_simulate"
+          },
+          "index_sets": {
+            "points": {
+              "kind": "interval",
+              "size": 4
+            },
+            "generators": {
+              "kind": "interval",
+              "size": 3
+            }
+          },
+          "models": {
+            "M": {
+              "variables": {
+                "gx": {
+                  "type": "unknown",
+                  "shape": [
+                    "generators"
+                  ]
+                },
+                "px": {
+                  "type": "unknown",
+                  "shape": [
+                    "points"
+                  ]
+                },
+                "rho": {
+                  "type": "unknown",
+                  "shape": [
+                    "points"
+                  ]
+                },
+                "assign": {
+                  "type": "unknown",
+                  "shape": [
+                    "points"
+                  ]
+                },
+                "num": {
+                  "type": "unknown",
+                  "shape": [
+                    "generators"
+                  ]
+                },
+                "den": {
+                  "type": "unknown",
+                  "shape": [
+                    "generators"
+                  ]
+                },
+                "centroid": {
+                  "type": "unknown",
+                  "shape": [
+                    "generators"
+                  ]
+                },
+                "cu": {
+                  "type": "unknown",
+                  "shape": [
+                    "generators"
+                  ],
+                  "description": "integrated centroid: D(cu[g]) = centroid[g]"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "index",
+                    "args": [
+                      "assign",
+                      "i"
+                    ]
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": {
+                        "from": "points"
+                      }
+                    },
+                    "args": [
+                      "px",
+                      "gx"
+                    ],
+                    "expr": {
+                      "op": "argmin",
+                      "args": [
+                        "px",
+                        "gx"
+                      ],
+                      "arg": "g",
+                      "ranges": {
+                        "g": {
+                          "from": "generators"
+                        }
+                      },
+                      "expr": {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              {
+                                "op": "index",
+                                "args": [
+                                  "px",
+                                  "i"
+                                ]
+                              },
+                              {
+                                "op": "index",
+                                "args": [
+                                  "gx",
+                                  "g"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "-",
+                            "args": [
+                              {
+                                "op": "index",
+                                "args": [
+                                  "px",
+                                  "i"
+                                ]
+                              },
+                              {
+                                "op": "index",
+                                "args": [
+                                  "gx",
+                                  "g"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "lhs": {
+                    "op": "index",
+                    "args": [
+                      "num",
+                      "g"
+                    ]
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "output_idx": [
+                      "g"
+                    ],
+                    "ranges": {
+                      "g": {
+                        "from": "generators"
+                      },
+                      "p": {
+                        "from": "points"
+                      }
+                    },
+                    "semiring": "sum_product",
+                    "join": [
+                      {
+                        "on": [
+                          [
+                            "assign",
+                            "g"
+                          ]
+                        ]
+                      }
+                    ],
+                    "args": [
+                      "assign",
+                      "rho",
+                      "px"
+                    ],
+                    "expr": {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "rho",
+                            "p"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "px",
+                            "p"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "lhs": {
+                    "op": "index",
+                    "args": [
+                      "den",
+                      "g"
+                    ]
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "output_idx": [
+                      "g"
+                    ],
+                    "ranges": {
+                      "g": {
+                        "from": "generators"
+                      },
+                      "p": {
+                        "from": "points"
+                      }
+                    },
+                    "semiring": "sum_product",
+                    "join": [
+                      {
+                        "on": [
+                          [
+                            "assign",
+                            "g"
+                          ]
+                        ]
+                      }
+                    ],
+                    "args": [
+                      "assign",
+                      "rho"
+                    ],
+                    "expr": {
+                      "op": "index",
+                      "args": [
+                        "rho",
+                        "p"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "lhs": {
+                    "op": "index",
+                    "args": [
+                      "centroid",
+                      "g"
+                    ]
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "output_idx": [
+                      "g"
+                    ],
+                    "ranges": {
+                      "g": {
+                        "from": "generators"
+                      }
+                    },
+                    "args": [
+                      "num",
+                      "den"
+                    ],
+                    "expr": {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "num",
+                            "g"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "den",
+                            "g"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "lhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "g"
+                    ],
+                    "ranges": {
+                      "g": {
+                        "from": "generators"
+                      }
+                    },
+                    "expr": {
+                      "op": "D",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "cu",
+                            "g"
+                          ]
+                        }
+                      ],
+                      "wrt": "t"
+                    }
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "g"
+                    ],
+                    "ranges": {
+                      "g": {
+                        "from": "generators"
+                      }
+                    },
+                    "expr": {
+                      "op": "index",
+                      "args": [
+                        "centroid",
+                        "g"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "lhs": "gx",
+                  "rhs": {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      0.0,
+                      1.0,
+                      2.0
+                    ]
+                  }
+                },
+                {
+                  "lhs": "px",
+                  "rhs": {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      0.0,
+                      0.75,
+                      1.25,
+                      2.0
+                    ]
+                  }
+                },
+                {
+                  "lhs": "rho",
+                  "rhs": {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      1.0,
+                      1.0,
+                      3.0,
+                      4.0
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+        "#
 }
 
 /// The grouped `group_aggregate` (num / den) over the argmin key and the derived

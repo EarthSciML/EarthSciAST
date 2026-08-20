@@ -37,7 +37,7 @@ const MTK3 = ModelingToolkit
                             x_default::Float64=0.0)
         vars = OrderedDict{String,ESM3.ModelVariable}(
             "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default=x_default),
-            "y" => ESM3.ModelVariable(ESM3.StateVariable;     default=0.0),
+            "y" => ESM3.ModelVariable(ESM3.UnknownVariable;     default=0.0),
         )
         rhs = _fn("interp.linear", _const(table), _const(axis), _v("x"))
         eqs = ESM3.Equation[
@@ -52,7 +52,7 @@ const MTK3 = ModelingToolkit
         vars = OrderedDict{String,ESM3.ModelVariable}(
             "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default=x_default),
             "y" => ESM3.ModelVariable(ESM3.ParameterVariable; default=y_default),
-            "z" => ESM3.ModelVariable(ESM3.StateVariable;     default=0.0),
+            "z" => ESM3.ModelVariable(ESM3.UnknownVariable;     default=0.0),
         )
         rhs = _fn("interp.bilinear", _const(table), _const(axis_x), _const(axis_y),
                   _v("x"), _v("y"))
@@ -118,7 +118,7 @@ const MTK3 = ModelingToolkit
         vars = OrderedDict{String,ESM3.ModelVariable}(
             "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default=0.5),
             "y" => ESM3.ModelVariable(ESM3.ParameterVariable; default=5.0),
-            "z" => ESM3.ModelVariable(ESM3.StateVariable;     default=0.0),
+            "z" => ESM3.ModelVariable(ESM3.UnknownVariable;     default=0.0),
         )
         # Sum 100 interp.bilinear calls.
         sum_args = ESM3.ASTExpr[]

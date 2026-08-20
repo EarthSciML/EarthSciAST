@@ -341,6 +341,53 @@ struct Binning {
     tgt_env: [String; 4],
 }
 
+/// The RHS of the equation whose LHS is the bare variable `name` — the esm
+/// 1.0.0 home of the 0.x `variables[name].expression` (esm-spec §6.3.1). An
+/// unknown defined by a bare-variable LHS IS the observed this pass matches on,
+/// so "has a definition here" and "is observed" are the same question.
+fn pd_def<'a>(model: &'a Value, name: &str) -> Option<&'a Value> {
+    model
+        .get("equations")?
+        .as_array()?
+        .iter()
+        .find(|eq| eq.get("lhs").and_then(Value::as_str) == Some(name))?
+        .get("rhs")
+}
+
+/// Mutable counterpart of [`pd_def`].
+fn pd_def_mut<'a>(model: &'a mut Value, name: &str) -> Option<&'a mut Value> {
+    model
+        .get_mut("equations")?
+        .as_array_mut()?
+        .iter_mut()
+        .find(|eq| eq.get("lhs").and_then(Value::as_str) == Some(name))?
+        .get_mut("rhs")
+}
+
+/// Give `name` a defining equation with RHS `rhs`, replacing any existing one.
+fn pd_set_def(model: &mut Value, name: &str, rhs: Value) {
+    if let Some(existing) = pd_def_mut(model, name) {
+        *existing = rhs;
+        return;
+    }
+    let eqs = model
+        .as_object_mut()
+        .expect("model is an object")
+        .entry("equations")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !eqs.is_array() {
+        *eqs = Value::Array(Vec::new());
+    }
+    if let Some(list) = eqs.as_array_mut() {
+        list.push(json!({"lhs": name, "rhs": rhs}));
+    }
+}
+
+/// Is `v` a declared UNKNOWN (esm-spec §6.3)?
+fn pd_is_unknown(v: &Value) -> bool {
+    v.get("type").and_then(Value::as_str) == Some("unknown")
+}
+
 /// Is `ev` a binning aggregate whose OUTPUT axis is `out_set`? Returns the
 /// binding, or `None`.
 ///
@@ -352,15 +399,14 @@ struct Binning {
 /// single other range supplies the opposite side, and the CONTAINMENT PREDICATE
 /// itself says which symbol is the cell (it carries the four rect BOUND
 /// factors) and which is the record (the two point coordinates).
-fn pd_detect_binning(ev: &Value, out_set: &str) -> Option<Binning> {
-    if ev.get("type")?.as_str()? != "observed" {
+fn pd_detect_binning(ev: &Value, agg: &Value, out_set: &str) -> Option<Binning> {
+    if !pd_is_unknown(ev) {
         return None;
     }
     let shape = ev.get("shape")?.as_array()?;
     if shape.len() != 1 || shape[0].as_str()? != out_set {
         return None;
     }
-    let agg = ev.get("expression")?;
     if !is_aggregate_op(op_of(agg)) {
         return None;
     }
@@ -491,38 +537,54 @@ fn pd_expand_for_detection(node: &Value, templates: Option<&Map<String, Value>>)
         .ok()
 }
 
-/// `model["variables"]` with every surviving `apply_expression_template`
-/// reference in a variable's `expression` expanded — the `Expand(tree)` view the
-/// pattern matcher must see. `None` means "use the model's own variables map
-/// unchanged": there is no registry, or no reference to expand, so a
-/// template-free document takes the byte-identical pre-existing path.
-fn pd_detection_variables(model: &Value) -> Option<Map<String, Value>> {
-    let variables = model.get("variables")?.as_object()?;
-    let templates = pd_templates(model)?;
-    if !variables
-        .values()
-        .any(|v| v.get("expression").map(pd_has_apply).unwrap_or(false))
-    {
-        return None;
+/// The definitions ([`pd_def`]) that carried a surviving
+/// `apply_expression_template` reference, EXPANDED — the `Expand(tree)` view the
+/// pattern matcher must see (§9.6.4 rule 2). From esm 1.0.0 an observed
+/// unknown's body is its defining EQUATION's right-hand side, so this — not the
+/// variable table — is what the detector matches against.
+///
+/// Only the expanded definitions are returned, as OVERRIDES for [`pd_def_view`]
+/// to consult: a template-free document builds an empty map, allocates no
+/// `Value`, and takes the byte-identical pre-existing path.
+///
+/// DETECTION ONLY. The emission side reads [`pd_def`] / [`pd_def_mut`] so it
+/// edits the AUTHORED body (and, for a template-factored one, the call site's
+/// `bindings`) rather than a detached expansion.
+fn pd_detection_defs(model: &Value) -> Map<String, Value> {
+    let mut out = Map::new();
+    let templates = pd_templates(model);
+    if templates.is_none() {
+        return out;
     }
-    let mut out = variables.clone();
-    for (name, v) in variables {
-        let Some(ex) = v.get("expression") else {
+    let Some(eqs) = model.get("equations").and_then(Value::as_array) else {
+        return out;
+    };
+    for eq in eqs {
+        let Some(lhs) = eq.get("lhs").and_then(Value::as_str) else {
             continue;
         };
-        if !pd_has_apply(ex) {
-            continue;
-        }
-        let Some(expanded) =
-            pd_expand_for_detection(ex, Some(templates))
-        else {
+        let Some(rhs) = eq.get("rhs") else {
             continue;
         };
-        if let Some(slot) = out.get_mut(name).and_then(Value::as_object_mut) {
-            slot.insert("expression".to_string(), expanded);
+        // FIRST definition wins, matching `pd_def`.
+        if out.contains_key(lhs) {
+            continue;
+        }
+        if let Some(expanded) = pd_expand_for_detection(rhs, templates) {
+            out.insert(lhs.to_string(), expanded);
         }
     }
-    Some(out)
+    out
+}
+
+/// [`pd_def`] through the detection view: the EXPANDED body when
+/// [`pd_detection_defs`] produced one for `name`, else the authored body.
+fn pd_def_view<'a>(
+    model: &'a Value,
+    defs: &'a Map<String, Value>,
+    name: &str,
+) -> Option<&'a Value> {
+    defs.get(name).or_else(|| pd_def(model, name))
 }
 
 // --------------------------------------------------------------------------- //
@@ -552,22 +614,24 @@ pub const PD_UNGATED_CONSEQUENCE: &str =
 is produced and no gate is emitted";
 
 /// Why [`pd_detect_binning`] refused `ev`, for a caller that has ALREADY
-/// established `ev` sits in the join position.
+/// established `ev` sits in the join position. `agg` is `ev`'s defining
+/// equation RHS from the detection view, exactly as [`pd_detect_binning`]
+/// received it.
 ///
 /// `None` ⇒ `ev` is simply not join-shaped (no diagnostic warranted). Otherwise
 /// `(reason, template)`: `("surviving_template_reference", Some(name))` when the
 /// body carries a reference that could not be expanded for matching,
 /// `("predicate_unparsed", None)` when a containment `ifelse` was found but did
 /// not read as a rectangle containment in either orientation.
-fn pd_binning_refusal(ev: &Value, out_set: &str) -> Option<(&'static str, Option<String>)> {
-    if ev.get("type").and_then(Value::as_str) != Some("observed") {
-        return None;
-    }
+fn pd_binning_refusal(
+    ev: &Value,
+    agg: &Value,
+    out_set: &str,
+) -> Option<(&'static str, Option<String>)> {
     let shape = ev.get("shape")?.as_array()?;
     if shape.len() != 1 || shape[0].as_str() != Some(out_set) {
         return None;
     }
-    let agg = ev.get("expression")?;
     if !is_aggregate_op(op_of(agg)) {
         return None;
     }
@@ -642,24 +706,31 @@ through the template's params, or write the predicate longhand.",
 /// arm"). Its cell axis stays the FULL `c_set`, so its envelope factors are the
 /// document's own const-array rects, unrewritten.
 fn pd_mirror_specs(
-    variables: &Map<String, Value>,
+    model: &Value,
+    defs: &Map<String, Value>,
     c_set: &str,
     r_set: &str,
     forward_names: &[String],
 ) -> Vec<(String, [String; 2], [String; 4])> {
     let mut out: Vec<(String, [String; 2], [String; 4])> = Vec::new();
+    let Some(variables) = model.get("variables").and_then(Value::as_object) else {
+        return out;
+    };
     for (name, v) in variables {
         if forward_names.iter().any(|f| f == name) {
             continue;
         }
-        let Some(bind) = pd_detect_binning(v, r_set) else {
+        let Some(agg) = pd_def_view(model, defs, name) else {
+            continue;
+        };
+        let Some(bind) = pd_detect_binning(v, agg, r_set) else {
             continue;
         };
         if bind.out_is_cell || bind.c_set != c_set || bind.r_set != r_set {
             continue;
         }
         // Never stack a second gate on an aggregate that already declares a join.
-        if v.get("expression").and_then(|e| e.get("join")).is_some() {
+        if agg.get("join").is_some() {
             continue;
         }
         out.push((name.clone(), bind.src_env, bind.tgt_env));
@@ -697,14 +768,19 @@ struct Plan {
 
 /// Detect the pushdown pattern across a model's observeds.
 ///
-/// `variables` is the DETECTION view ([`pd_detection_variables`]): the model's
-/// variables with surviving template references expanded, so a binning body
-/// factored through a template matches exactly as its expansion would.
+/// `defs` is the DETECTION view ([`pd_detection_defs`]): the observed
+/// definitions with surviving template references expanded, so a binning body
+/// factored through a template matches exactly as its expansion would. `model`
+/// supplies the declarations beside them — shapes and types, which no expansion
+/// touches.
 ///
 /// Returns `(plan, diagnostics)` — `plan` `None` when nothing matches / the
 /// semiring guard fails, `diagnostics` the residual "a join I could not read"
 /// records (see [`pd_binning_refusal`]).
-fn pd_detect(variables: &Map<String, Value>) -> (Option<Plan>, Vec<Value>) {
+fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Value>) {
+    let Some(variables) = model.get("variables").and_then(Value::as_object) else {
+        return (None, Vec::new());
+    };
     let mut diags: Vec<Value> = Vec::new();
     let mut conc_specs: Vec<(String, String)> = Vec::new();
     let mut a_names: Vec<String> = Vec::new();
@@ -712,10 +788,13 @@ fn pd_detect(variables: &Map<String, Value>) -> (Option<Plan>, Vec<Value>) {
     let mut plan: Option<Plan> = None;
 
     for (cname, cv) in variables {
-        if cv.get("type").and_then(Value::as_str) != Some("observed") {
+        if !pd_is_unknown(cv) {
             continue;
         }
-        let Some(agg) = cv.get("expression") else {
+        // An OBSERVED unknown is one with a bare-variable-LHS defining
+        // equation (esm-spec §6.3.1); one without is a state or algebraic
+        // unknown and matches nothing here.
+        let Some(agg) = pd_def_view(model, defs, cname) else {
             continue;
         };
         if !is_aggregate_op(op_of(agg)) {
@@ -777,12 +856,15 @@ fn pd_detect(variables: &Map<String, Value>) -> (Option<Plan>, Vec<Value>) {
         let Some(ev) = variables.get(&ename) else {
             continue;
         };
-        let Some(bind) = pd_detect_binning(ev, c_set) else {
+        let Some(eagg) = pd_def_view(model, defs, &ename) else {
+            continue;
+        };
+        let Some(bind) = pd_detect_binning(ev, eagg, c_set) else {
             // `ev` is the rank-1 factor of a `+`-mat-vec against a
             // provider-backed `[c_set, r_set]` array: the join position. If it
             // is ALSO binning-shaped but unreadable, say so — silence here is
             // the ungated whole-array fetch that surfaces hours later.
-            if let Some((reason, template)) = pd_binning_refusal(ev, c_set) {
+            if let Some((reason, template)) = pd_binning_refusal(ev, eagg, c_set) {
                 diags.push(json!({
                     "code": "pushdown_join_unrecognised",
                     "variable": ename,
@@ -863,7 +945,8 @@ fn pd_detect(variables: &Map<String, Value>) -> (Option<Plan>, Vec<Value>) {
     // trigger, so a document holding only mirrored binning aggregates is not
     // rewritten at all (§5.5.7).
     let forward_names: Vec<String> = e_specs.iter().map(|(e, ..)| e.clone()).collect();
-    plan.mirror_specs = pd_mirror_specs(variables, &plan.c_set, &plan.r_set, &forward_names);
+    plan.mirror_specs =
+        pd_mirror_specs(model, defs, &plan.c_set, &plan.r_set, &forward_names);
     plan.conc_specs = conc_specs;
     plan.a_names = a_names;
     plan.e_specs = e_specs;
@@ -1051,19 +1134,17 @@ fn pd_apply(
     let model = root
         .get_mut("models")
         .and_then(|m| m.get_mut(mname))
-        .and_then(Value::as_object_mut)
+        .filter(|m| m.is_object())
         .ok_or_else(|| PushdownRewriteError(format!("model '{mname}' is not an object")))?;
-    let mv = model
-        .get_mut("variables")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
-
     // --- producer filter comparisons, deep-copied from the representative E
-    //     BEFORE E is rewritten (they must keep full-grid rect factor refs) ---
-    let repexpr = mv
-        .get(&plan.rep_ename)
-        .and_then(|v| v.get("expression"))
-        .ok_or_else(|| PushdownRewriteError("representative E lost its expression".into()))?;
+    //     BEFORE E is rewritten (they must keep full-grid rect factor refs).
+    //     Read off the DEFINING EQUATION: esm 1.0.0 has no variable
+    //     `expression` field. ---
+    let repexpr = pd_def(model, &plan.rep_ename)
+        .cloned()
+        .ok_or_else(|| {
+            PushdownRewriteError("representative E lost its defining equation".into())
+        })?;
     // When the call site hides the predicate behind a template reference, read it
     // off the EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID
     // rect references, which is exactly what the pre-rewrite expansion yields.
@@ -1092,6 +1173,11 @@ fn pd_apply(
     };
     let prod_filter = json!({"op": "*", "args": comps});
 
+    let mv = model
+        .get_mut("variables")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
+
     // --- member state var + member_factor param ---
     mv.insert(
         memvar.clone(),
@@ -1103,22 +1189,37 @@ fn pd_apply(
     );
 
     // --- per-rect cell-gather observeds ---
+    // The DECLARATION is a bare `unknown`; what makes it observed is the
+    // bare-variable-LHS equation added below (esm-spec §6.3.1).
+    let mut cellgath_defs: Vec<(String, Value)> = Vec::new();
     for f in &rects {
         mv.insert(
             cellgath(f),
             json!({
-                "type": "observed",
+                "type": "unknown",
                 "shape": [setname.clone()],
-                "expression": {
-                    "op": "aggregate",
-                    "output_idx": ["c"],
-                    "ranges": {"c": {"from": setname.clone()}},
-                    "args": [f.clone(), mfactor.clone()],
-                    "expr": pd_ix(f.clone(), pd_ix(mfactor.clone(), "c")),
-                },
             }),
         );
+        cellgath_defs.push((
+            cellgath(f),
+            json!({
+                "op": "aggregate",
+                "output_idx": ["c"],
+                "ranges": {"c": {"from": setname.clone()}},
+                "args": [f.clone(), mfactor.clone()],
+                "expr": pd_ix(f.clone(), pd_ix(mfactor.clone(), "c")),
+            }),
+        ));
     }
+
+    // The cell-gather DEFINITIONS, now that the `variables` borrow is done.
+    for (name, rhs) in cellgath_defs {
+        pd_set_def(model, &name, rhs);
+    }
+    let mv = model
+        .get_mut("variables")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
 
     // --- gate the provider-backed arrays onto the derived axis ---
     for a in &plan.a_names {
@@ -1139,10 +1240,9 @@ fn pd_apply(
     // not authored: its envelopes are exactly the ones `pd_parse_containment`
     // read out of this aggregate's own containment predicate.
     for (ename, csym, e_src, e_tgt) in &plan.e_specs {
-        let expr = mv
-            .get_mut(ename)
-            .and_then(|v| v.get_mut("expression"))
-            .ok_or_else(|| PushdownRewriteError(format!("E '{ename}' lost its expression")))?;
+        let expr = pd_def_mut(model, ename).ok_or_else(|| {
+            PushdownRewriteError(format!("E '{ename}' lost its defining equation"))
+        })?;
         if let Some(from) = expr
             .get_mut("ranges")
             .and_then(|r| r.get_mut(csym))
@@ -1171,7 +1271,11 @@ fn pd_apply(
             );
         }
         let expr_snapshot = expr.clone();
-        if let Some(evo) = mv.get_mut(ename).and_then(Value::as_object_mut) {
+        if let Some(evo) = model
+            .get_mut("variables")
+            .and_then(|v| v.get_mut(ename))
+            .and_then(Value::as_object_mut)
+        {
             evo.insert("shape".to_string(), json!([setname.clone()]));
         }
         pd_assert_rects_rebound(&expr_snapshot, ename, &rectmap, templates)?;
@@ -1189,7 +1293,7 @@ fn pd_apply(
     // stay the document's own const-array factors (the cell axis is not
     // re-pointed), so the mirror also needs no rect gathers.
     for (pname, p_src, p_tgt) in &plan.mirror_specs {
-        let Some(pexpr) = mv.get_mut(pname).and_then(|v| v.get_mut("expression")) else {
+        let Some(pexpr) = pd_def_mut(model, pname) else {
             continue;
         };
         if pexpr.get("join").is_none()
@@ -1204,9 +1308,7 @@ fn pd_apply(
 
     // --- restrict the conc reductions to the derived axis ---
     for (cname, ssym) in &plan.conc_specs {
-        if let Some(from) = mv
-            .get_mut(cname)
-            .and_then(|v| v.get_mut("expression"))
+        if let Some(from) = pd_def_mut(model, cname)
             .and_then(|e| e.get_mut("ranges"))
             .and_then(|r| r.get_mut(ssym))
             .and_then(Value::as_object_mut)
@@ -1242,6 +1344,8 @@ fn pd_apply(
         },
     });
     let eqs = model
+        .as_object_mut()
+        .expect("model is an object")
         .entry("equations")
         .or_insert_with(|| Value::Array(Vec::new()));
     match eqs.as_array_mut() {
@@ -1365,9 +1469,9 @@ pub fn pushdown_diagnostics(esm: &Value, model_name: Option<&str>) -> Vec<Value>
 /// emission side needs.
 #[allow(clippy::type_complexity)]
 fn pd_analyze(model: &Value) -> Option<(Option<Plan>, Vec<Value>, Option<Map<String, Value>>)> {
-    let own = model.get("variables")?.as_object()?;
-    let expanded = pd_detection_variables(model);
-    let (plan, diags) = pd_detect(expanded.as_ref().unwrap_or(own));
+    model.get("variables")?.as_object()?;
+    let defs = pd_detection_defs(model);
+    let (plan, diags) = pd_detect(model, &defs);
     Some((plan, diags, pd_templates(model).cloned()))
 }
 

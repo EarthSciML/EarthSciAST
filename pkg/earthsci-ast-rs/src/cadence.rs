@@ -26,8 +26,7 @@
 
 use crate::relational::{Key, canonical_index_set_json, rank, skolem};
 use serde_json::{Map, Value};
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// A cadence-partition contract violation in a fixture or producer output (a
 /// wrong `expect_cadence`, a `CONTINUOUS` relational node, a `from_faq` cycle, a
@@ -67,12 +66,6 @@ impl Cadence {
     }
 }
 
-/// The lattice join (`max`) over cadence classes — the §5.7 propagation rule.
-/// Empty (a leaf with no inputs / a nullary op) is `const`.
-fn join(classes: impl IntoIterator<Item = Cadence>) -> Cadence {
-    classes.into_iter().max().unwrap_or(Cadence::Const)
-}
-
 /// The relational / value-invention ops that may not run on the hot path (§5.7
 /// guard 2): one classifying `CONTINUOUS` is a hard error. Includes the
 /// arg-witness reducers (`argmin`/`argmax`, §5.7 rule 6) — a state-dependent
@@ -81,246 +74,206 @@ const RELATIONAL_OPS: [&str; 6] = ["distinct", "join", "skolem", "rank", "argmin
 
 // === Leaf seeds + classification ==========================================
 
-/// The §6.3.1 classification of one model, plus the raw defining equations an
-/// observed leaf resolves through.
+/// The per-pass context the §5.7.2 leaf seeds need.
 ///
-/// CONFORMANCE_SPEC §5.7.2 requires every binding to seed the cadence leaves
-/// from the classification functions rather than re-deriving the categories
-/// locally, "because five local derivations are five chances to disagree about
-/// which nodes fold". So the category sets here come straight from
-/// [`crate::classify`]; only the defining-equation RHS is read back out of the
-/// raw JSON, because the cadence walker classifies `serde_json::Value` nodes.
-struct LeafSeeds<'a> {
+/// It exists because ONE leaf seed is not a local property of the leaf: an
+/// OBSERVED unknown seeds from the class of its DEFINING EQUATION's RHS, which
+/// is itself classified by this same pass. That resolution is transitive, so it
+/// is memoised here and guarded against a cycle (a cycle is a defect and MUST
+/// be reported, never silently seeded — §5.7.2).
+///
+/// Every category comes from [`crate::classification`] — the esm-spec §6.3.1
+/// functions — rather than being re-derived locally. §5.7.2 states the leaf-seed
+/// table in terms of those functions precisely so that five bindings' local
+/// derivations cannot disagree about which nodes fold.
+struct Ctx<'a> {
+    /// The model object, with the document registries merged down
+    /// ([`model_with_loaders`]).
     model: &'a Value,
-    ode_states: HashSet<String>,
-    algebraic: HashSet<String>,
-    observed: HashSet<String>,
-    brownian: HashSet<String>,
-    discrete: HashSet<String>,
-    /// Observed name → the RHS of its defining equation, as raw JSON.
-    observed_defs: HashMap<String, &'a Value>,
-    /// Memoised observed-leaf resolutions (§5.7.2: "computed by this same pass
-    /// and memoised").
-    memo: RefCell<HashMap<String, Cadence>>,
-    /// Observed names currently being resolved — the cycle guard. The observed
-    /// sub-DAG is acyclic by the §4.9.4 balance plus the DAE contract, so a
-    /// cycle is a defect and is reported rather than silently seeded.
-    in_progress: RefCell<HashSet<String>>,
+    /// The §6.3.1 classification of this model.
+    class: crate::classification::Classification,
+    /// Each observed unknown's defining equation RHS, as raw JSON — the node
+    /// this pass recurses into for that leaf's seed.
+    observed_rhs: HashMap<String, &'a Value>,
+    /// Memoised observed seeds.
+    memo: HashMap<String, Cadence>,
+    /// Observed names on the current resolution stack, for the cycle guard.
+    resolving: Vec<String>,
 }
 
-impl<'a> LeafSeeds<'a> {
-    fn build(model: &'a Value) -> Result<LeafSeeds<'a>, CadenceError> {
-        // The cadence pass receives a model object that `model_with_loaders`
-        // has augmented with a `data_sources` key; `Model` ignores unknown
-        // fields, so it round-trips. Several call sites (the provider
-        // classifier, the relational guards) pass a PARTIAL model carrying only
-        // the block they care about, so the two required members are defaulted
-        // rather than demanded — a model with no equations classifies every
-        // unknown as algebraic, which is the right answer for a fragment.
-        let mut owned = model.clone();
-        if let Value::Object(map) = &mut owned {
-            map.entry("variables".to_string())
-                .or_insert_with(|| Value::Object(Map::new()));
-            map.entry("equations".to_string())
-                .or_insert_with(|| Value::Array(Vec::new()));
-        }
-        let typed: crate::types::Model = serde_json::from_value(owned)
-            .map_err(|e| err(format!("cadence: model does not deserialize: {e}")))?;
+impl<'a> Ctx<'a> {
+    fn new(model: &'a Value) -> Result<Ctx<'a>, CadenceError> {
+        let class = crate::classification::Classification::from_json(model)
+            .map_err(|e| err(format!("model does not deserialize for classification: {e}")))?;
 
-        let observed_defs = model
-            .get("equations")
-            .and_then(|e| e.as_array())
-            .map(|eqs| {
-                let mut m: HashMap<String, &Value> = HashMap::new();
-                for eq in eqs {
-                    let Some(lhs) = eq.get("lhs") else { continue };
-                    // A bare-variable LHS (optionally indexed) is a DEFINITION.
-                    let name = match lhs {
-                        Value::String(s) => Some(s.clone()),
-                        Value::Object(o) if o.get("op").and_then(|v| v.as_str()) == Some("index") => o
-                            .get("args")
-                            .and_then(|a| a.as_array())
-                            .and_then(|a| a.first())
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string),
-                        _ => None,
-                    };
-                    if let (Some(name), Some(rhs)) = (name, eq.get("rhs")) {
-                        m.entry(name).or_insert(rhs);
-                    }
+        // Pair each observed unknown with the RAW JSON of its defining
+        // equation's RHS. The LHS form is decided by the one shared
+        // `classification::lhs_form`, so "which equation defines this observed"
+        // has a single answer across the binding.
+        let mut observed_rhs: HashMap<String, &'a Value> = HashMap::new();
+        if let Some(equations) = model.get("equations").and_then(|v| v.as_array()) {
+            for eq in equations {
+                let (Some(lhs), Some(rhs)) = (eq.get("lhs"), eq.get("rhs")) else {
+                    continue;
+                };
+                let Ok(lhs_expr) = serde_json::from_value::<crate::types::Expr>(lhs.clone()) else {
+                    continue;
+                };
+                if let crate::classification::LhsForm::Bare(name) =
+                    crate::classification::lhs_form(&lhs_expr)
+                    && class.is_observed(&name)
+                {
+                    observed_rhs.entry(name).or_insert(rhs);
                 }
-                m
-            })
-            .unwrap_or_default();
+            }
+        }
 
-        Ok(LeafSeeds {
+        Ok(Ctx {
             model,
-            ode_states: crate::classify::ode_states(&typed).into_iter().collect(),
-            algebraic: crate::classify::algebraic_unknowns(&typed)
-                .into_iter()
-                .collect(),
-            observed: crate::classify::observed_unknowns(&typed)
-                .into_iter()
-                .collect(),
-            brownian: crate::classify::brownian_parameters(&typed)
-                .into_iter()
-                .collect(),
-            discrete: crate::classify::discrete_parameters(&typed)
-                .into_iter()
-                .collect(),
-            observed_defs,
-            memo: RefCell::new(HashMap::new()),
-            in_progress: RefCell::new(HashSet::new()),
+            class,
+            observed_rhs,
+            memo: HashMap::new(),
+            resolving: Vec::new(),
         })
     }
 
-    /// Seed one leaf (§5.7.2 leaf-seed table).
-    fn seed(&self, leaf: &Value) -> Result<Cadence, CadenceError> {
+    /// The §5.7.2 leaf-seed table.
+    fn seed_leaf(&mut self, leaf: &Value) -> Result<Cadence, CadenceError> {
         match leaf {
             // A numeric literal (int or float) is CONST. JSON booleans are not
             // valid value leaves (they only appear as op bodies like
             // `{op:"true"}`).
             Value::Number(_) => Ok(Cadence::Const),
             Value::String(s) => {
-                // The independent variable is continuous: an explicit
+                // The independent variable is CONTINUOUS: an explicit
                 // continuous-`t` forcing is not piecewise-constant between
                 // events.
                 if s == "t" {
                     return Ok(Cadence::Continuous);
                 }
-                if self.ode_states.contains(s) || self.algebraic.contains(s) {
-                    return Ok(Cadence::Continuous);
+                if self.class.is_observed(s) {
+                    return self.seed_observed(s);
                 }
-                // Resampled every step, so continuous like a state.
-                if self.brownian.contains(s) {
-                    return Ok(Cadence::Continuous);
-                }
-                if self.discrete.contains(s) {
-                    return Ok(self.discrete_seed(s));
-                }
-                if self.observed.contains(s) {
-                    return self.observed_seed(s);
-                }
-                if self
-                    .model
-                    .get("variables")
-                    .and_then(|v| v.get(s))
-                    .is_some()
+                if self.class.is_ode_state(s)
+                    || self.class.algebraic_unknowns.iter().any(|n| n == s)
+                    || self.class.is_brownian(s)
                 {
-                    // Declared, and in neither unknown nor refreshed-parameter
-                    // class: a sampled-once or plain constant parameter.
-                    return Ok(Cadence::Const);
+                    return Ok(Cadence::Continuous);
                 }
-                // index-set name, bound index symbol (i, k, e, f, le), relation
-                // tag ("edge"), or numeric-string literal — all CONST topology.
+                if self.class.is_discrete_parameter(s) {
+                    return Ok(self.discrete_parameter_seed(s));
+                }
+                // A sampled or constant parameter is CONST — and so is an
+                // index-set name, a bound index symbol (i, k, e, f, le), a
+                // relation tag ("edge"), or a numeric-string literal.
                 Ok(Cadence::Const)
             }
             other => Err(err(format!("unexpected leaf {other}"))),
         }
     }
 
-    /// A discrete parameter seeds `DISCRETE`, refined to `CONST` when its
-    /// `data` update names a source with no `temporal` block (§5.7.2
-    /// source-seeded refinement; RFC `pure-io-data-loaders` §4.6).
-    ///
-    /// A source WITH `temporal` is time-varying, so the parameter keeps its
-    /// DISCRETE refresh cadence; one WITHOUT describes non-time-varying data,
-    /// so the parameter is loaded once and folds to CONST. Every other update
-    /// kind — and a `source` that resolves to no entry — keeps DISCRETE.
-    fn discrete_seed(&self, name: &str) -> Cadence {
-        let Some(update) = self
+    /// Source-seeded refinement (§5.7.2 / RFC pure-io-data-loaders §4.6): a
+    /// parameter whose update is the `data` kind takes its cadence from the
+    /// SOURCE, not from its own declaration. A source WITH a `temporal` block
+    /// is time-varying and keeps the DISCRETE seed; one WITHOUT describes
+    /// non-time-varying data and refines down to CONST (loaded once at bind,
+    /// never refreshed). Any other update kind — and a `source` that resolves
+    /// to no entry — keeps DISCRETE.
+    fn discrete_parameter_seed(&self, name: &str) -> Cadence {
+        let Some(var) = self
             .model
             .get("variables")
             .and_then(|v| v.get(name))
-            .and_then(|v| v.get("update"))
+            .and_then(|v| serde_json::from_value::<crate::types::ModelVariable>(v.clone()).ok())
         else {
             return Cadence::Discrete;
         };
-        let rules: Vec<&Value> = match update {
-            Value::Array(rs) => rs.iter().collect(),
-            other => vec![other],
-        };
-        // Refine only when EVERY rule is a data update on a non-temporal
-        // source: one time-varying rule keeps the whole parameter DISCRETE.
-        let all_const = !rules.is_empty()
-            && rules.iter().all(|r| {
-                if r.get("kind").and_then(|v| v.as_str()) != Some("data") {
-                    return false;
-                }
-                let Some(source) = r.get("source").and_then(|v| v.as_str()) else {
-                    return false;
-                };
-                match self.model.get("data_sources").and_then(|l| l.get(source)) {
-                    Some(src) => src.is_object() && src.get("temporal").is_none(),
-                    None => false,
-                }
-            });
-        if all_const {
-            Cadence::Const
-        } else {
-            Cadence::Discrete
+        let sources = var.update_sources();
+        if sources.is_empty() {
+            return Cadence::Discrete;
         }
+        // Several `data` rules on one parameter: the JOIN of their seeds, so a
+        // single time-varying source keeps the whole parameter DISCRETE.
+        let mut seed = Cadence::Const;
+        for source in sources {
+            let entry = self
+                .model
+                .get("data_sources")
+                .and_then(|registry| registry.get(source));
+            let refined = match entry {
+                Some(e) if e.is_object() && e.get("temporal").is_none() => Cadence::Const,
+                // Unresolvable, or time-varying: keep the DISCRETE seed.
+                _ => Cadence::Discrete,
+            };
+            seed = seed.max(refined);
+        }
+        seed
     }
 
-    /// An OBSERVED leaf resolves to the join of the leaves of its DEFINING
-    /// EQUATION's RHS, computed by this same pass, memoised, with a cycle
-    /// guard (§5.7.2).
+    /// An OBSERVED unknown's seed is the class of its DEFINING EQUATION's RHS,
+    /// resolved transitively, memoised, with a cycle guard.
     ///
-    /// This is the one place the cadence pass must follow the 1.0.0
-    /// relocation: an observed's definition used to live in
-    /// `variables[v].expression` and now lives in `equations` as the
-    /// bare-variable-LHS equation naming it. Neither shortcut is available —
-    /// seeding CONST is unsound for an observed reading a state, and seeding
-    /// CONTINUOUS would stop a state-free observed folding at bind, which the
-    /// geometry and projection-pushdown paths rely on.
-    fn observed_seed(&self, name: &str) -> Result<Cadence, CadenceError> {
-        if let Some(c) = self.memo.borrow().get(name) {
+    /// This is the one place the cadence pass must follow the 1.0.0 relocation:
+    /// an observed's definition used to live in `variables[v].expression` and
+    /// now lives in the model's `equations`. Neither shortcut works — seeding
+    /// every unknown CONTINUOUS stops a state-free observed folding at bind,
+    /// and seeding an observed CONST (what the 0.x code did) is unsound the
+    /// other way, since an observed reading a state IS continuous.
+    fn seed_observed(&mut self, name: &str) -> Result<Cadence, CadenceError> {
+        if let Some(c) = self.memo.get(name) {
             return Ok(*c);
         }
-        if !self.in_progress.borrow_mut().insert(name.to_string()) {
+        if self.resolving.iter().any(|n| n == name) {
+            let mut cycle = self.resolving.clone();
+            cycle.push(name.to_string());
             return Err(err(format!(
-                "cadence: cyclic observed definition through {name:?}"
+                "observed-definition cycle: {} — an observed unknown's cadence seed is its \
+                 defining equation's RHS, so a cycle is an implicit solve (§5.7.2)",
+                cycle.join(" -> ")
             )));
         }
-        let result = match self.observed_defs.get(name) {
-            Some(rhs) => self.classify(rhs),
-            // Classified observed with no defining equation: the balance check
-            // (`equation_count_mismatch`) owns that defect. Seed CONST rather
-            // than failing the cadence pass over it.
-            None => Ok(Cadence::Const),
+        let Some(rhs) = self.observed_rhs.get(name).copied() else {
+            // An observed with no defining equation is an UNBALANCED system,
+            // reported by `equation_count_mismatch`; the classification cannot
+            // put it here, so this is unreachable in a validated document.
+            return Ok(Cadence::Const);
         };
-        self.in_progress.borrow_mut().remove(name);
-        let c = result?;
-        self.memo.borrow_mut().insert(name.to_string(), c);
-        Ok(c)
+        self.resolving.push(name.to_string());
+        let result = self.classify(rhs);
+        self.resolving.pop();
+        let class = result?;
+        self.memo.insert(name.to_string(), class);
+        Ok(class)
     }
 
-    /// Derive a node's cadence class. For a leaf, seed it. For an operator
-    /// node, `class = max` over child classes — which, for a gather
-    /// `index(A, e…)`, is `max(class(A), class(e…))`: the index expressions are
-    /// classed **independently of the array**, so a stencil splits
-    /// (§5.7.3 gather rule).
-    fn classify(&self, node: &Value) -> Result<Cadence, CadenceError> {
+    /// `class = max` over children; a leaf seeds from the table above.
+    fn classify(&mut self, node: &Value) -> Result<Cadence, CadenceError> {
         let Value::Object(map) = node else {
-            return self.seed(node);
+            return self.seed_leaf(node);
         };
-        let mut classes = Vec::new();
+        let mut acc = Cadence::Const;
         for c in child_exprs(map) {
-            classes.push(self.classify(c)?);
+            acc = acc.max(self.classify(c)?);
         }
-        Ok(join(classes))
+        Ok(acc)
     }
 }
 
-/// Seed a leaf's cadence from the §6.3.1 classification of its model
-/// (§5.7.2 leaf-seed table): an ODE state, an algebraic unknown, a Brownian
-/// parameter and the independent variable `t` are all `CONTINUOUS`; a
-/// discrete parameter is `DISCRETE` subject to the source refinement; a
-/// sampled or constant parameter, an index-set name, a bound index symbol, a
-/// relation tag and a numeric literal are all `CONST`; and an OBSERVED unknown
-/// resolves to the class of its defining equation's RHS.
+/// Seed a leaf's cadence (§5.7.2 leaf-seed table). Every category is DERIVED
+/// through [`crate::classification`] — the esm-spec §6.3.1 functions — never
+/// read off a declared type: esm 1.0.0 declares only `unknown` and `parameter`.
+///
+/// | Leaf | Seed |
+/// |---|---|
+/// | the independent variable `t` | CONTINUOUS |
+/// | an unknown in `ode_states` / `algebraic_unknowns` | CONTINUOUS |
+/// | an unknown in `observed_unknowns` | the class of its defining equation's RHS |
+/// | a parameter in `brownian_parameters` | CONTINUOUS |
+/// | a parameter in `discrete_parameters` | DISCRETE, subject to the source refinement |
+/// | a parameter in `sampled_parameters` / `constant_parameters` | CONST |
+/// | literal, index-set name, bound index symbol, relation tag | CONST |
 pub fn seed_leaf(leaf: &Value, model: &Value) -> Result<Cadence, CadenceError> {
-    LeafSeeds::build(model)?.seed(leaf)
+    Ctx::new(model)?.seed_leaf(leaf)
 }
 
 /// Every sub-Expression of a node: the operand list `args` plus the
@@ -344,7 +297,7 @@ fn child_exprs(node: &Map<String, Value>) -> Vec<&Value> {
 /// `max(class(A), class(e…))`: the index expressions are classed
 /// **independently of the array**, so a stencil splits (§5.7.3 gather rule).
 pub fn classify(node: &Value, model: &Value) -> Result<Cadence, CadenceError> {
-    LeafSeeds::build(model)?.classify(node)
+    Ctx::new(model)?.classify(node)
 }
 
 /// Walk the tree; wherever a node carries `expect_cadence`, assert the derived
@@ -356,11 +309,20 @@ pub fn check_expect_cadence(
     model: &Value,
     problems: &mut Vec<String>,
 ) -> Result<(), CadenceError> {
+    Ctx::new(model)?.check_expect_cadence(node, problems)
+}
+
+impl Ctx<'_> {
+    fn check_expect_cadence(
+        &mut self,
+        node: &Value,
+        problems: &mut Vec<String>,
+    ) -> Result<(), CadenceError> {
     let Value::Object(map) = node else {
         return Ok(());
     };
     if let Some(want) = map.get("expect_cadence").and_then(|v| v.as_str()) {
-        let derived = classify(node, model)?;
+        let derived = self.classify(node)?;
         if derived.as_str() != want {
             problems.push(format!(
                 "expect_cadence mismatch on op={:?}: declared {:?} but derived {:?}",
@@ -371,9 +333,10 @@ pub fn check_expect_cadence(
         }
     }
     for c in child_exprs(map) {
-        check_expect_cadence(c, model, problems)?;
+        self.check_expect_cadence(c, problems)?;
     }
     Ok(())
+    }
 }
 
 /// Count annotated nodes (those carrying `expect_cadence`) by derived class —
@@ -383,33 +346,49 @@ pub fn tally_classes(
     model: &Value,
     counts: &mut ClassSummary,
 ) -> Result<(), CadenceError> {
-    let Value::Object(map) = node else {
-        return Ok(());
-    };
-    if map.contains_key("expect_cadence") {
-        counts.bump(classify(node, model)?);
+    Ctx::new(model)?.tally_classes(node, counts)
+}
+
+impl Ctx<'_> {
+    fn tally_classes(
+        &mut self,
+        node: &Value,
+        counts: &mut ClassSummary,
+    ) -> Result<(), CadenceError> {
+        let Value::Object(map) = node else {
+            return Ok(());
+        };
+        if map.contains_key("expect_cadence") {
+            counts.bump(self.classify(node)?);
+        }
+        for c in child_exprs(map) {
+            self.tally_classes(c, counts)?;
+        }
+        Ok(())
     }
-    for c in child_exprs(map) {
-        tally_classes(c, model, counts)?;
-    }
-    Ok(())
 }
 
 /// `true` iff `node` or any of its descendants classifies `CONTINUOUS` (used to
 /// decide whether an equation contributes to the hot per-step tree).
 pub fn has_continuous(node: &Value, model: &Value) -> Result<bool, CadenceError> {
-    if let Value::Object(map) = node {
-        if classify(node, model)? == Cadence::Continuous {
-            return Ok(true);
-        }
-        for c in child_exprs(map) {
-            if has_continuous(c, model)? {
+    Ctx::new(model)?.has_continuous(node)
+}
+
+impl Ctx<'_> {
+    fn has_continuous(&mut self, node: &Value) -> Result<bool, CadenceError> {
+        if let Value::Object(map) = node {
+            if self.classify(node)? == Cadence::Continuous {
                 return Ok(true);
             }
+            for c in child_exprs(map) {
+                if self.has_continuous(c)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        } else {
+            Ok(self.seed_leaf(node)? == Cadence::Continuous)
         }
-        Ok(false)
-    } else {
-        Ok(seed_leaf(node, model)? == Cadence::Continuous)
     }
 }
 
@@ -437,28 +416,38 @@ pub fn materialization_frontier(
     model: &Value,
     out: &mut Vec<ExprEdge>,
 ) -> Result<(), CadenceError> {
-    let Value::Object(map) = node else {
-        return Ok(());
-    };
-    let parent = classify(node, model)?;
-    for c in child_exprs(map) {
-        let Value::Object(child_map) = c else {
-            continue;
+    Ctx::new(model)?.materialization_frontier(node, out)
+}
+
+impl Ctx<'_> {
+    fn materialization_frontier(
+        &mut self,
+        node: &Value,
+        out: &mut Vec<ExprEdge>,
+    ) -> Result<(), CadenceError> {
+        let Value::Object(map) = node else {
+            return Ok(());
         };
-        let cc = classify(c, model)?;
-        if cc < parent {
-            out.push(ExprEdge {
-                threshold: format!("{}->{}", cc.as_str(), parent.as_str()),
-                op: child_map
-                    .get("op")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-            });
-        } else {
-            materialization_frontier(c, model, out)?;
+        let parent = self.classify(node)?;
+        for c in child_exprs(map) {
+            let Value::Object(child_map) = c else {
+                continue;
+            };
+            let cc = self.classify(c)?;
+            if cc < parent {
+                out.push(ExprEdge {
+                    threshold: format!("{}->{}", cc.as_str(), parent.as_str()),
+                    op: child_map
+                        .get("op")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                });
+            } else {
+                self.materialization_frontier(c, out)?;
+            }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 // === Guards ===============================================================
@@ -467,6 +456,11 @@ pub fn materialization_frontier(
 /// aggregate) that classifies `CONTINUOUS` is rejected — state-dependent
 /// topology may not run per step in v1.
 pub fn assert_no_continuous_relational(node: &Value, model: &Value) -> Result<(), CadenceError> {
+    Ctx::new(model)?.assert_no_continuous_relational(node)
+}
+
+impl Ctx<'_> {
+    fn assert_no_continuous_relational(&mut self, node: &Value) -> Result<(), CadenceError> {
     let Value::Object(map) = node else {
         return Ok(());
     };
@@ -477,7 +471,7 @@ pub fn assert_no_continuous_relational(node: &Value, model: &Value) -> Result<()
                 .get("distinct")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false));
-    if is_relational && classify(node, model)? == Cadence::Continuous {
+    if is_relational && self.classify(node)? == Cadence::Continuous {
         return Err(err(format!(
             "relational/value-invention node op={op:?} classifies CONTINUOUS — it may \
              not run on the hot path (§5.7 guard 2). A state-dependent \
@@ -485,9 +479,10 @@ pub fn assert_no_continuous_relational(node: &Value, model: &Value) -> Result<()
         )));
     }
     for c in child_exprs(map) {
-        assert_no_continuous_relational(c, model)?;
+        self.assert_no_continuous_relational(c)?;
     }
     Ok(())
+    }
 }
 
 /// §5.7.6 guard 1: the `≤DISCRETE` subgraph must be a DAG. A derived index set
@@ -782,6 +777,35 @@ fn output_label(eq: &Value, rhs: &Map<String, Value>) -> Option<String> {
     args.first().and_then(|v| v.as_str()).map(str::to_string)
 }
 
+/// Does this equation write an ARRAY? A materialization point is a buffer, so a
+/// scalar-valued equation is not one (§5.7.4). The test is the LHS target's
+/// DECLARED shape: an equation writing `edge_exists[e]` over `["edges"]` is a
+/// buffer; one writing the scalar `geom` is a literal fold.
+fn lhs_target_is_arrayed(eq: &Value, model: &Value) -> bool {
+    let Some(lhs) = eq.get("lhs") else {
+        return false;
+    };
+    let target = match lhs {
+        Value::String(name) => Some(name.as_str()),
+        _ => lhs
+            .get("args")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str()),
+    };
+    let Some(target) = target else {
+        // An anonymous / expression LHS: keep the pre-1.0.0 behaviour and treat
+        // the output as a buffer.
+        return true;
+    };
+    model
+        .get("variables")
+        .and_then(|v| v.get(target))
+        .and_then(|v| v.get("shape"))
+        .and_then(|v| v.as_array())
+        .is_some_and(|s| !s.is_empty())
+}
+
 /// Attach the document's top-level `data_sources` and `index_sets` to a model
 /// object so the model-scoped passes see them. The loader-seeded cadence
 /// refinement (§5.7.2) resolves a `discrete` variable's `data_ingest` source
@@ -820,11 +844,15 @@ pub fn partition_model(model: &Value) -> Result<Partition, CadenceError> {
         .and_then(|v| v.as_array())
         .unwrap_or(&empty);
 
+    // ONE context for the whole pass: the §6.3.1 classification, the observed
+    // definitions it resolves through, and the memo those recursions share.
+    let mut ctx = Ctx::new(model)?;
+
     // Guard 3 (author assertions) — collect all mismatches, fail if any.
     let mut problems = Vec::new();
     for eq in equations {
         if let Some(rhs) = eq.get("rhs") {
-            check_expect_cadence(rhs, model, &mut problems)?;
+            ctx.check_expect_cadence(rhs, &mut problems)?;
         }
     }
     if !problems.is_empty() {
@@ -834,7 +862,7 @@ pub fn partition_model(model: &Value) -> Result<Partition, CadenceError> {
     // Guard 2 (no CONTINUOUS relational on the hot path) + guard 1 (acyclic).
     for eq in equations {
         if let Some(rhs) = eq.get("rhs") {
-            assert_no_continuous_relational(rhs, model)?;
+            ctx.assert_no_continuous_relational(rhs)?;
         }
     }
     assert_acyclic_index_sets(model)?;
@@ -849,15 +877,15 @@ pub fn partition_model(model: &Value) -> Result<Partition, CadenceError> {
             continue;
         };
 
-        tally_classes(rhs, model, &mut class_summary)?;
-        if has_continuous(rhs, model)? {
+        ctx.tally_classes(rhs, &mut class_summary)?;
+        if ctx.has_continuous(rhs)? {
             hot_tree_empty = false;
         }
 
         // expr-edge frontier (cadence drops inside the RHS). Empty for a CONST
         // root — there is nothing below `const`.
         let mut edges = Vec::new();
-        materialization_frontier(rhs, model, &mut edges)?;
+        ctx.materialization_frontier(rhs, &mut edges)?;
         for e in edges {
             materialization_points.push(MaterializationPoint {
                 label: e.op.clone(),
@@ -866,41 +894,32 @@ pub fn partition_model(model: &Value) -> Result<Partition, CadenceError> {
             });
         }
 
-        // A top-level CONST equation that produces a BUFFER folds entirely
-        // into the artifact: its output is a `const->artifact` buffer (§5.7.5
-        // output 1). DISCRETE / CONTINUOUS roots are the per-event handler /
-        // hot tree, handled by the expr-edge frontier above.
+        // A top-level CONST equation folds entirely into the artifact: its
+        // output is a `const->artifact` BUFFER (§5.7.5 output 1). DISCRETE /
+        // CONTINUOUS roots are the per-event handler / hot tree, handled by the
+        // expr-edge frontier above.
         //
-        // The buffer test is `output_label`: a named producer node (`id`) or a
-        // per-element `index(var, …)` LHS. A CONST equation with a BARE-name
-        // LHS is a scalar observed definition — `geom ~ dx * dx` — which folds
-        // into whatever reads it rather than becoming an artifact buffer of its
-        // own. Before 1.0.0 such a definition lived in `variables[v].expression`
-        // and never reached this loop at all; now that it is an ordinary
-        // equation, the buffer test has to be explicit.
-        if classify(rhs, model)? == Cadence::Const {
-            if let Some(label) = output_label(eq, rhs_map) {
-                materialization_points.push(MaterializationPoint {
-                    label: Some(label),
-                    kind: "output_buffer",
-                    threshold: "const->artifact".to_string(),
-                });
-            }
+        // A buffer is an ARRAY. A CONST equation defining a SCALAR — a
+        // state-free observed like `geom = dx*dx` — inlines as a literal
+        // instead, exactly as §5.7.4 says a bare scalar-constant leaf does; it
+        // is a fold, not a materialization point.
+        if lhs_target_is_arrayed(eq, model) && ctx.classify(rhs)? == Cadence::Const {
+            materialization_points.push(MaterializationPoint {
+                label: output_label(eq, rhs_map),
+                kind: "output_buffer",
+                threshold: "const->artifact".to_string(),
+            });
         }
     }
 
-    // The per-event handler is empty iff nothing needs recomputing at a
-    // DISCRETE frontier — i.e. there is no `discrete->…` materialization
-    // threshold.
+    // The per-event handler exists to recompute the buffers cut at the DISCRETE
+    // threshold (§5.7.5 output 2), so it is empty iff no materialization point
+    // fires there.
     //
-    // It deliberately does NOT also require `class_summary.discrete == 0`.
-    // `class_summary` counts only the nodes an author ANNOTATED with
-    // `expect_cadence`, which is a property of the fixture, not of the model,
-    // so conjoining it made the derived execution structure depend on how
-    // thoroughly a file was annotated. `observed_leaf_seeds` is the fixture
-    // that separates the two rules: `k_scaled` is a DISCRETE annotated node,
-    // but it is read as a bare LEAF rather than across an operator edge, so
-    // nothing materializes and the handler is genuinely empty.
+    // A DISCRETE-classified node alone is NOT enough. `observed_leaf_seeds`
+    // pins this: its `k_scaled` observed classifies DISCRETE (it reads a
+    // discrete parameter) but never feeds a higher-cadence parent, so there is
+    // no buffer for a handler to refill and nothing for it to do.
     let event_handler_empty = !materialization_points
         .iter()
         .any(|m| m.threshold.starts_with("discrete"));
@@ -1018,9 +1037,8 @@ mod tests {
         // when it is not. The SAME variable declaration; only the loader differs.
         let variables = json!({
             "c": {"type": "unknown", "shape": ["cells"]},
-            "bc": {"type": "parameter", "shape": ["cells"], "default": 0.0,
-                   "update": {"kind": "data", "source": "bc_loader",
-                              "from": {"file_variable": "bc"}}}
+            "bc": {"type": "parameter", "shape": ["cells"],
+                         "update": {"kind": "data", "source": "bc_loader", "from": {"file_variable": "F"}}}
         });
         let bc = json!({"op": "index", "args": ["bc", "i"]});
 

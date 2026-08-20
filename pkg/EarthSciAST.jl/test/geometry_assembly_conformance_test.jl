@@ -73,13 +73,27 @@ const _REP_I, _REP_J = 2, 1   # representative fractional pair: src 2 ∩ tgt 1 
 _asm_raw() = JSON3.read(read(_ASM_FIXTURE, String))
 _asm_vars(raw) = raw["models"]["ConservativeRegridAssembly"]["variables"]
 
-function _const_rings(vars, name)
-    v = vars[name]["expression"]["value"]
+# esm 1.0.0 (§5.4/§6.3.1): a variable carries no `expression`. An observed
+# unknown's definition is the model equation whose LHS is its BARE NAME, so the
+# fixture's defining right-hand sides are read out of `equations`, not off the
+# variable. `_asm_defs` is the raw-JSON twin of `observed_definitions`.
+function _asm_defs(raw)
+    defs = Dict{String,Any}()
+    for eq in raw["models"]["ConservativeRegridAssembly"]["equations"]
+        lhs = eq["lhs"]
+        lhs isa AbstractString || continue
+        haskey(defs, String(lhs)) || (defs[String(lhs)] = eq["rhs"])
+    end
+    return defs
+end
+
+function _const_rings(defs, name)
+    v = defs[name]["value"]
     nv = length(v[1])
     nc = length(v[1][1])
     [[Float64(v[i][k][c]) for k in 1:nv, c in 1:nc] for i in 1:length(v)]
 end
-_const_vec(vars, name) = [Float64(x) for x in vars[name]["expression"]["value"]]
+_const_vec(defs, name) = [Float64(x) for x in defs[name]["value"]]
 _param_default(vars, name) = Float64(vars[name]["default"])
 
 # Collect every expression node with op == `opname` under `node`.
@@ -131,28 +145,31 @@ _native(x) = ESS.Cadence.to_native(x)
 # absent here, so the setup gate skips them (a non-candidate pair has zero overlap
 # regardless — the join is a candidate-set narrowing, not a correctness gate for
 # the geometric area itself).
-function _aij_extract_esm(vars)
+function _aij_extract_esm(defs)
     ix(a...) = Dict{String,Any}("op" => "index", "args" => collect(Any, a))
-    nv = length(vars["src_poly"]["expression"]["value"][1])
-    nc = length(vars["src_poly"]["expression"]["value"][1][1])
-    nS = length(vars["src_poly"]["expression"]["value"])
-    nT = length(vars["tgt_poly"]["expression"]["value"])
+    nv = length(defs["src_poly"]["value"][1])
+    nc = length(defs["src_poly"]["value"][1][1])
+    nS = length(defs["src_poly"]["value"])
+    nT = length(defs["tgt_poly"]["value"])
     agg(oidx, body) = Dict{String,Any}("op" => "aggregate", "output_idx" => collect(Any, oidx),
         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "src_cells"),
                                      "j" => Dict{String,Any}("from" => "tgt_cells")),
         "expr" => body)
+    # esm 1.0.0: src_poly / tgt_poly / A_ij are plain `unknown`s DEFINED by
+    # bare-variable-LHS equations carrying the fixture's own right-hand sides.
     model = Dict{String,Any}("variables" => Dict{String,Any}(
-            "src_poly" => Dict{String,Any}("type" => "observed",
-                "shape" => Any["src_cells", "cell_verts", "coord"],
-                "expression" => _native(vars["src_poly"]["expression"])),
-            "tgt_poly" => Dict{String,Any}("type" => "observed",
-                "shape" => Any["tgt_cells", "cell_verts", "coord"],
-                "expression" => _native(vars["tgt_poly"]["expression"])),
-            "A_ij" => Dict{String,Any}("type" => "observed",
-                "shape" => Any["src_cells", "tgt_cells"],
-                "expression" => _native(vars["A_ij"]["expression"])),
-            "A_ex" => Dict{String,Any}("type" => "state", "shape" => Any["src_cells", "tgt_cells"])),
-        "equations" => Any[Dict{String,Any}(
+            "src_poly" => Dict{String,Any}("type" => "unknown",
+                "shape" => Any["src_cells", "cell_verts", "coord"]),
+            "tgt_poly" => Dict{String,Any}("type" => "unknown",
+                "shape" => Any["tgt_cells", "cell_verts", "coord"]),
+            "A_ij" => Dict{String,Any}("type" => "unknown",
+                "shape" => Any["src_cells", "tgt_cells"]),
+            "A_ex" => Dict{String,Any}("type" => "unknown", "shape" => Any["src_cells", "tgt_cells"])),
+        "equations" => Any[
+            Dict{String,Any}("lhs" => "src_poly", "rhs" => _native(defs["src_poly"])),
+            Dict{String,Any}("lhs" => "tgt_poly", "rhs" => _native(defs["tgt_poly"])),
+            Dict{String,Any}("lhs" => "A_ij", "rhs" => _native(defs["A_ij"])),
+            Dict{String,Any}(
             "lhs" => agg(["i", "j"], Dict{String,Any}("op" => "D", "args" => Any[ix("A_ex", "i", "j")], "wrt" => "t")),
             "rhs" => agg(["i", "j"], ix("A_ij", "i", "j")))])
     Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "aij_extract"),
@@ -169,10 +186,12 @@ end
 # candidate pairs come from the broad-phase bin mirror (used only for the broad-phase
 # candidate-set assertion — the narrow phase is now a single dense aggregate call).
 function _build_Aij_via_evaluator()
-    vars = _asm_vars(_asm_raw())
-    SRC = _const_rings(vars, "src_poly")
-    TGT = _const_rings(vars, "tgt_poly")
-    F_SRC = _const_vec(vars, "F_src")
+    raw = _asm_raw()
+    vars = _asm_vars(raw)
+    defs = _asm_defs(raw)
+    SRC = _const_rings(defs, "src_poly")
+    TGT = _const_rings(defs, "tgt_poly")
+    F_SRC = _const_vec(defs, "F_src")
     dx = _param_default(vars, "dx")
     dy = _param_default(vars, "dy")
     # Binning coords mirror the fixture's inline `min`-reduction over each cell's
@@ -188,7 +207,7 @@ function _build_Aij_via_evaluator()
 
     nS, nT = length(SRC), length(TGT)
     ics = Dict("A_ex[$i,$j]" => 0.0 for i in 1:nS, j in 1:nT)
-    f!, u0, p, _, vmap = build_evaluator(_aij_extract_esm(vars);
+    f!, u0, p, _, vmap = build_evaluator(_aij_extract_esm(defs);
         model_name="AijExtract", initial_conditions=ics)
     du = similar(u0); f!(du, u0, p, 0.0)
     A = [du[vmap["A_ex[$i,$j]"]] for i in 1:nS, j in 1:nT]   # whole-mesh fused-leaf A_ij
@@ -218,9 +237,9 @@ end
 # `polygon_intersection_area` is DEFINED to equal this composition (§8.6.1), so it is
 # a cross-check on the fused-leaf-through-evaluator matrix, not the driver.
 function _build_Aij_standalone_oracle()
-    vars = _asm_vars(_asm_raw())
-    SRC = _const_rings(vars, "src_poly")
-    TGT = _const_rings(vars, "tgt_poly")
+    defs = _asm_defs(_asm_raw())
+    SRC = _const_rings(defs, "src_poly")
+    TGT = _const_rings(defs, "tgt_poly")
     nS, nT = length(SRC), length(TGT)
     A = zeros(Float64, nS, nT)
     for i in 1:nS, j in 1:nT
@@ -255,8 +274,8 @@ function _apply_only_esm()
         "F_src" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
         "dst_areas" => Dict{String,Any}("type" => "parameter", "shape" => Any["tgt_cells"]),
         "atol" => Dict{String,Any}("type" => "parameter", "default" => 1e-12),
-        "A_j" => Dict{String,Any}("type" => "state", "shape" => Any["tgt_cells"]),
-        "F_tgt" => Dict{String,Any}("type" => "state", "shape" => Any["tgt_cells"]))
+        "A_j" => Dict{String,Any}("type" => "unknown", "shape" => Any["tgt_cells"]),
+        "F_tgt" => Dict{String,Any}("type" => "unknown", "shape" => Any["tgt_cells"]))
     Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "apply_only"),
         "index_sets" => Dict{String,Any}(
             "src_cells" => Dict{String,Any}("kind" => "categorical", "members" => Any["b0", "b0", "b1", "b1"]),
@@ -303,16 +322,21 @@ end
     @testset "A_ij is declared INLINE via the fused polygon_intersection_area leaf" begin
         raw = _asm_raw()
         vars = _asm_vars(raw)
+        # esm 1.0.0 (§5.4/§6.3.1): the definitions live in `equations`, keyed by a
+        # bare-variable LHS; the variable entry only declares `unknown` + shape.
+        defs = _asm_defs(raw)
         # geometry is declared in-file as `const` vertex rings / a spatial field.
-        @test vars["src_poly"]["expression"]["op"] == "const"
-        @test vars["tgt_poly"]["expression"]["op"] == "const"
-        @test vars["F_src"]["expression"]["op"] == "const"
-        # A_ij is a geometry-derived observed aggregate, NOT a supplied parameter/const.
-        @test vars["A_ij"]["type"] == "observed"
-        @test vars["A_ij"]["expression"]["op"] == "aggregate"
+        @test defs["src_poly"]["op"] == "const"
+        @test defs["tgt_poly"]["op"] == "const"
+        @test defs["F_src"]["op"] == "const"
+        # A_ij is a geometry-derived OBSERVED aggregate, NOT a supplied parameter/const:
+        # in 1.0.0 "observed" is derived — it is an `unknown` with a defining equation.
+        @test vars["A_ij"]["type"] == "unknown"
+        @test haskey(defs, "A_ij")
+        @test defs["A_ij"]["op"] == "aggregate"
         @test !haskey(vars["A_ij"], "value")
         # the narrow phase is the FUSED leaf: A_ij body = polygon_intersection_area(...).
-        pias = _find_ops(vars["A_ij"]["expression"], "polygon_intersection_area")
+        pias = _find_ops(defs["A_ij"], "polygon_intersection_area")
         @test length(pias) == 1
         @test pias[1]["manifold"] == "planar"
         refs = Set{String}()
@@ -322,16 +346,16 @@ end
         @test "src_poly" in refs && "tgt_poly" in refs
         # the fused leaf hides the ring: NO intersect_polygon / clip ring survives, and
         # the old ragged-clip `clip` observed is gone.
-        @test isempty(_find_ops(vars["A_ij"]["expression"], "intersect_polygon"))
+        @test isempty(_find_ops(defs["A_ij"], "intersect_polygon"))
         @test !haskey(vars, "clip")
         @test !haskey(raw["index_sets"], "clip_ring")
         # A_ij is ranged over the bin-skolem candidate pairs (join.on [[src_bin,tgt_bin]]).
-        @test haskey(vars["A_ij"]["expression"], "join")
-        @test vars["A_ij"]["expression"]["join"][1]["on"][1] == ["src_bin", "tgt_bin"]
+        @test haskey(defs["A_ij"], "join")
+        @test defs["A_ij"]["join"][1]["on"][1] == ["src_bin", "tgt_bin"]
         # the broad-phase bin equi-join also gates the row-sum / apply.
-        @test haskey(vars["A_j"]["expression"], "join")
-        @test vars["A_j"]["expression"]["join"][1]["on"][1] == ["src_bin", "tgt_bin"]
-        @test haskey(vars["A_j"]["expression"], "filter")
+        @test haskey(defs["A_j"], "join")
+        @test defs["A_j"]["join"][1]["on"][1] == ["src_bin", "tgt_bin"]
+        @test haskey(defs["A_j"], "filter")
     end
 
     # The WHOLE-MESH fused-leaf narrow phase (ONE build_evaluator call over the entire

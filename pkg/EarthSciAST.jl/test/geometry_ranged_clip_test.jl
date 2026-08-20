@@ -30,6 +30,11 @@ _arrop(oidx, ranges, body) = Dict{String,Any}(
     "args" => Any[], "expr" => body)
 _D(s, rhs) = Dict{String,Any}(
     "lhs" => Dict{String,Any}("op" => "D", "args" => Any[s], "wrt" => "t"), "rhs" => rhs)
+# esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression` field. An observed
+# unknown is declared as a plain `unknown` (`_U`) and DEFINED by an equation
+# whose LHS is its bare name (`_def`); `observed_definitions` reads it back.
+_U(shape...) = Dict{String,Any}("type" => "unknown", "shape" => collect(Any, shape))
+_def(name, rhs) = Dict{String,Any}("lhs" => name, "rhs" => rhs)
 
 function _ranged_clip_regrid_esm()
     ip = Dict{String,Any}("op" => "intersect_polygon", "id" => "overlap_clip",
@@ -55,17 +60,18 @@ function _ranged_clip_regrid_esm()
             "src_poly" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells", "verts", "coord"]),
             "tgt_poly" => Dict{String,Any}("type" => "parameter", "shape" => Any["tgt_cells", "verts", "coord"]),
             "F_src"    => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
-            "clip"  => Dict{String,Any}("type" => "observed", "shape" => Any["src_cells","tgt_cells","clip_ring","coord"], "expression" => clip),
-            "A_ij"  => Dict{String,Any}("type" => "observed", "shape" => Any["src_cells","tgt_cells"], "expression" => A_ij),
-            "A_j"   => Dict{String,Any}("type" => "observed", "shape" => Any["tgt_cells"], "expression" => A_j),
-            "F_tgt" => Dict{String,Any}("type" => "observed", "shape" => Any["tgt_cells"], "expression" => F_tgt),
-            "A11" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "A12" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "A21" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "A22" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "FT1" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "FT2" => Dict{String,Any}("type" => "state", "shape" => Any[])),
+            "clip"  => _U("src_cells", "tgt_cells", "clip_ring", "coord"),
+            "A_ij"  => _U("src_cells", "tgt_cells"),
+            "A_j"   => _U("tgt_cells"),
+            "F_tgt" => _U("tgt_cells"),
+            "A11" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "A12" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "A21" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "A22" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "FT1" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "FT2" => Dict{String,Any}("type" => "unknown", "shape" => Any[])),
         "equations" => Any[
+            _def("clip", clip), _def("A_ij", A_ij), _def("A_j", A_j), _def("F_tgt", F_tgt),
             _D("A11", _ix("A_ij", 1, 1)), _D("A12", _ix("A_ij", 1, 2)),
             _D("A21", _ix("A_ij", 2, 1)), _D("A22", _ix("A_ij", 2, 2)),
             _D("FT1", _ix("F_tgt", 1)),   _D("FT2", _ix("F_tgt", 2))])
@@ -150,17 +156,18 @@ function _ranged_clip_regrid_esm_aggregate()
             "src_poly" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells", "verts", "coord"]),
             "tgt_poly" => Dict{String,Any}("type" => "parameter", "shape" => Any["tgt_cells", "verts", "coord"]),
             "F_src"    => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
-            "clip"  => Dict{String,Any}("type" => "observed", "shape" => Any["src_cells","tgt_cells","clip_ring","coord"], "expression" => clip),
-            "A_ij"  => Dict{String,Any}("type" => "observed", "shape" => Any["src_cells","tgt_cells"], "expression" => A_ij),
-            "A_j"   => Dict{String,Any}("type" => "observed", "shape" => Any["tgt_cells"], "expression" => A_j),
-            "F_tgt" => Dict{String,Any}("type" => "observed", "shape" => Any["tgt_cells"], "expression" => F_tgt),
-            "A11" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "A12" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "A21" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "A22" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "FT1" => Dict{String,Any}("type" => "state", "shape" => Any[]),
-            "FT2" => Dict{String,Any}("type" => "state", "shape" => Any[])),
+            "clip"  => _U("src_cells", "tgt_cells", "clip_ring", "coord"),
+            "A_ij"  => _U("src_cells", "tgt_cells"),
+            "A_j"   => _U("tgt_cells"),
+            "F_tgt" => _U("tgt_cells"),
+            "A11" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "A12" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "A21" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "A22" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "FT1" => Dict{String,Any}("type" => "unknown", "shape" => Any[]),
+            "FT2" => Dict{String,Any}("type" => "unknown", "shape" => Any[])),
         "equations" => Any[
+            _def("clip", clip), _def("A_ij", A_ij), _def("A_j", A_j), _def("F_tgt", F_tgt),
             _D("A11", _ix("A_ij", 1, 1)), _D("A12", _ix("A_ij", 1, 2)),
             _D("A21", _ix("A_ij", 2, 1)), _D("A22", _ix("A_ij", 2, 2)),
             _D("FT1", _ix("F_tgt", 1)),   _D("FT2", _ix("F_tgt", 2))])
@@ -240,20 +247,22 @@ function _broadphase_regrid_esm()
         Any["A_ij", "F_src", "src_bin", "tgt_bin"])
     F_tgt = _arrop(["j"], ["j" => "tgt_cells"], Dict{String,Any}("op" => "/", "args" => Any[num, _ix("A_j", "j")]))
     P(shape...) = Dict{String,Any}("type" => "parameter", "shape" => collect(Any, shape))
-    O(expr, shape...) = Dict{String,Any}("type" => "observed", "shape" => collect(Any, shape), "expression" => expr)
     model = Dict{String,Any}(
         "variables" => Dict{String,Any}(
             "src_poly" => P("src_cells", "verts", "coord"), "tgt_poly" => P("tgt_cells", "verts", "coord"),
             "src_cx" => P("src_cells"), "tgt_cx" => P("tgt_cells"), "F_src" => P("src_cells"),
             "dx_bin" => Dict{String,Any}("type" => "parameter", "default" => 1.0),
             "atol"   => Dict{String,Any}("type" => "parameter", "default" => 1.0e-9),
-            "src_bin" => O(src_bin, "src_cells"), "tgt_bin" => O(tgt_bin, "tgt_cells"),
-            "clip" => O(clip, "src_cells", "tgt_cells", "clip_ring", "coord"),
-            "A_ij" => O(A_ij, "src_cells", "tgt_cells"), "A_j" => O(A_j, "tgt_cells"),
-            "F_tgt" => O(F_tgt, "tgt_cells"),
-            "AJ1" => Dict{String,Any}("type"=>"state","shape"=>Any[]), "AJ2" => Dict{String,Any}("type"=>"state","shape"=>Any[]),
-            "FT1" => Dict{String,Any}("type"=>"state","shape"=>Any[]), "FT2" => Dict{String,Any}("type"=>"state","shape"=>Any[])),
-        "equations" => Any[_D("AJ1", _ix("A_j", 1)), _D("AJ2", _ix("A_j", 2)),
+            "src_bin" => _U("src_cells"), "tgt_bin" => _U("tgt_cells"),
+            "clip" => _U("src_cells", "tgt_cells", "clip_ring", "coord"),
+            "A_ij" => _U("src_cells", "tgt_cells"), "A_j" => _U("tgt_cells"),
+            "F_tgt" => _U("tgt_cells"),
+            "AJ1" => Dict{String,Any}("type"=>"unknown","shape"=>Any[]), "AJ2" => Dict{String,Any}("type"=>"unknown","shape"=>Any[]),
+            "FT1" => Dict{String,Any}("type"=>"unknown","shape"=>Any[]), "FT2" => Dict{String,Any}("type"=>"unknown","shape"=>Any[])),
+        "equations" => Any[_def("src_bin", src_bin), _def("tgt_bin", tgt_bin),
+                           _def("clip", clip), _def("A_ij", A_ij), _def("A_j", A_j),
+                           _def("F_tgt", F_tgt),
+                           _D("AJ1", _ix("A_j", 1)), _D("AJ2", _ix("A_j", 2)),
                            _D("FT1", _ix("F_tgt", 1)), _D("FT2", _ix("F_tgt", 2))])
     return Dict{String,Any}("esm" => "0.6.0", "metadata" => Dict{String,Any}("name" => "broadphase_regrid"),
         "index_sets" => Dict{String,Any}(
@@ -320,17 +329,20 @@ function _constructed_live_regrid_esm()
         "ranges" => Dict{String,Any}("j" => Dict{String,Any}("from" => "tgt_cells")),
         "expr" => Dict{String,Any}("op" => "D", "args" => Any[_ix("F_tgt", "j")], "wrt" => "t"))
     Pd(d) = Dict{String,Any}("type" => "parameter", "default" => d)
-    O(e, shape...) = Dict{String,Any}("type" => "observed", "shape" => collect(Any, shape), "expression" => e)
     model = Dict{String,Any}(
         "variables" => Dict{String,Any}(
             "x0" => Pd(0.0), "dx_src" => Pd(0.5), "dx_tgt" => Pd(1.0),
             "F_src" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
-            "src_poly" => O(_cell_corners("x0", "dx_src", "src_cells"), "src_cells", "verts", "coord"),
-            "tgt_poly" => O(_cell_corners("x0", "dx_tgt", "tgt_cells"), "tgt_cells", "verts", "coord"),
-            "clip" => O(clip, "src_cells", "tgt_cells", "clip_ring", "coord"),
-            "A_ij" => O(A_ij, "src_cells", "tgt_cells"), "A_j" => O(A_j, "tgt_cells"),
-            "F_tgt" => Dict{String,Any}("type" => "state", "shape" => Any["tgt_cells"])),
-        "equations" => Any[Dict{String,Any}("lhs" => lhs, "rhs" => rhs)])
+            "src_poly" => _U("src_cells", "verts", "coord"),
+            "tgt_poly" => _U("tgt_cells", "verts", "coord"),
+            "clip" => _U("src_cells", "tgt_cells", "clip_ring", "coord"),
+            "A_ij" => _U("src_cells", "tgt_cells"), "A_j" => _U("tgt_cells"),
+            "F_tgt" => Dict{String,Any}("type" => "unknown", "shape" => Any["tgt_cells"])),
+        "equations" => Any[
+            _def("src_poly", _cell_corners("x0", "dx_src", "src_cells")),
+            _def("tgt_poly", _cell_corners("x0", "dx_tgt", "tgt_cells")),
+            _def("clip", clip), _def("A_ij", A_ij), _def("A_j", A_j),
+            Dict{String,Any}("lhs" => lhs, "rhs" => rhs)])
     return Dict{String,Any}("esm" => "0.6.0", "metadata" => Dict{String,Any}("name" => "constructed_live_regrid"),
         "index_sets" => Dict{String,Any}(
             "coord" => Dict{String,Any}("kind"=>"interval","size"=>2), "verts" => Dict{String,Any}("kind"=>"interval","size"=>4),
@@ -387,18 +399,22 @@ function _coupled_bridge_esm()
         "ranges" => Dict{String,Any}("j" => Dict{String,Any}("from" => "tgt_cells")),
         "expr" => Dict{String,Any}("op" => "D", "args" => Any[_ix("u", "j")], "wrt" => "t"))
     Pd(d) = Dict{String,Any}("type" => "parameter", "default" => d)
-    O(e, shape...) = Dict{String,Any}("type" => "observed", "shape" => collect(Any, shape), "expression" => e)
     model = Dict{String,Any}(
         "variables" => Dict{String,Any}(
             "x0" => Pd(0.0), "dx_src" => Pd(0.5), "dx_tgt" => Pd(1.0), "k" => Pd(2.0),
             "F_src" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
-            "src_poly" => O(_cell_corners("x0", "dx_src", "src_cells"), "src_cells", "verts", "coord"),
-            "tgt_poly" => O(_cell_corners("x0", "dx_tgt", "tgt_cells"), "tgt_cells", "verts", "coord"),
-            "clip" => O(clip, "src_cells", "tgt_cells", "clip_ring", "coord"),
-            "A_ij" => O(A_ij, "src_cells", "tgt_cells"), "A_j" => O(A_j, "tgt_cells"),
-            "F_tgt" => O(F_tgt, "tgt_cells"),
-            "u" => Dict{String,Any}("type" => "state", "shape" => Any["tgt_cells"])),
-        "equations" => Any[Dict{String,Any}("lhs" => cons_lhs, "rhs" => cons_rhs)])
+            "src_poly" => _U("src_cells", "verts", "coord"),
+            "tgt_poly" => _U("tgt_cells", "verts", "coord"),
+            "clip" => _U("src_cells", "tgt_cells", "clip_ring", "coord"),
+            "A_ij" => _U("src_cells", "tgt_cells"), "A_j" => _U("tgt_cells"),
+            "F_tgt" => _U("tgt_cells"),
+            "u" => Dict{String,Any}("type" => "unknown", "shape" => Any["tgt_cells"])),
+        "equations" => Any[
+            _def("src_poly", _cell_corners("x0", "dx_src", "src_cells")),
+            _def("tgt_poly", _cell_corners("x0", "dx_tgt", "tgt_cells")),
+            _def("clip", clip), _def("A_ij", A_ij), _def("A_j", A_j),
+            _def("F_tgt", F_tgt),
+            Dict{String,Any}("lhs" => cons_lhs, "rhs" => cons_rhs)])
     return Dict{String,Any}("esm" => "0.6.0", "metadata" => Dict{String,Any}("name" => "coupled_bridge"),
         "index_sets" => Dict{String,Any}(
             "coord" => Dict{String,Any}("kind"=>"interval","size"=>2), "verts" => Dict{String,Any}("kind"=>"interval","size"=>4),
@@ -438,12 +454,15 @@ end
 function _chain_bridge_esm()
     base = _coupled_bridge_esm()
     model = base["models"]["CoupledBridge"]
-    O(e, shape...) = Dict{String,Any}("type" => "observed", "shape" => collect(Any, shape), "expression" => e)
-    # S_n[j] = 1 + F_tgt[j]
+    # S_n[j] = 1 + F_tgt[j] — declared `unknown`, DEFINED by its own equation
+    # (esm 1.0.0: no `expression` field on a variable).
     S_n = _arrop(["j"], ["j" => "tgt_cells"], _eq("+", 1.0, _ix("F_tgt", "j")))
-    model["variables"]["S_n"] = O(S_n, "tgt_cells")
-    # Retarget the consumer to read S_n (one hop past the regrid output).
-    model["equations"][1]["rhs"] =
+    model["variables"]["S_n"] = _U("tgt_cells")
+    push!(model["equations"], _def("S_n", S_n))
+    # Retarget the consumer to read S_n (one hop past the regrid output). The
+    # consumer is the one equation whose LHS is not a bare defining name.
+    cons_i = findfirst(eq -> !(eq["lhs"] isa AbstractString), model["equations"])
+    model["equations"][cons_i]["rhs"] =
         _arrop(["j"], ["j" => "tgt_cells"], _ix("S_n", "j"))
     base["metadata"]["name"] = "chain_bridge"
     base["models"]["ChainBridge"] = model

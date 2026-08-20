@@ -174,16 +174,17 @@ fn run_fixture(fixture_dir: &Path, total_scenarios: &mut usize, total_errors: &m
     assert!(expected.is_file(), "missing {}", expected.display());
 
     // Parser must accept the fixture (i.e. the `fn` op AST is valid under
-    // the v0.3.0 schema).
+    // the current schema).
     let json_str = fs::read_to_string(&canonical).expect("read canonical.esm");
     let file = load(&json_str).unwrap_or_else(|e: earthsci_ast::EsmError| {
         panic!("parse failed for {}: {e}", canonical.display())
     });
     assert_eq!(
         file.esm,
-        "0.3.0",
-        "fixture {} esm version not 0.3.0",
-        canonical.display()
+        earthsci_ast::SCHEMA_VERSION,
+        "fixture {} esm version not {}",
+        canonical.display(),
+        earthsci_ast::SCHEMA_VERSION
     );
 
     let spec_str = fs::read_to_string(&expected).expect("read expected.json");

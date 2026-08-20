@@ -1278,8 +1278,9 @@ function Base.show(io::IO, ::MIME"text/plain", model::Model)
             print(io, " - $(var.description)")
         end
         println(io)
-        if !isnothing(var.expression)
-            println(io, "      expression: $(format_expression_unicode(var.expression))")
+        if !isnothing(var.update)
+            kinds = join((r.kind for r in var.update), ", ")
+            println(io, "      update: $(kinds)")
         end
     end
 
@@ -1367,8 +1368,8 @@ function Base.show(io::IO, ::MIME"text/plain", esm_file::EsmFile)
     if !isnothing(esm_file.reaction_systems) && !isempty(esm_file.reaction_systems)
         push!(components, "$(length(esm_file.reaction_systems)) reaction systems")
     end
-    if !isnothing(esm_file.data_loaders) && !isempty(esm_file.data_loaders)
-        push!(components, "$(length(esm_file.data_loaders)) data loaders")
+    if !isnothing(esm_file.data_sources) && !isempty(esm_file.data_sources)
+        push!(components, "$(length(esm_file.data_sources)) data sources")
     end
 
     if !isempty(components)

@@ -298,21 +298,16 @@ function _lower_broadcast_memoized(expr::ASTExpr,
     return out
 end
 
-# Lower every `broadcast` node in a Model's expression-bearing fields (variable
-# `expression`s, equations, initialization equations, guesses) and, recursively,
-# in its Model subsystems. Returns the SAME model object when nothing changed.
-# Shaped after `_intern_model` (src/intern.jl).
+# Lower every `broadcast` node in a Model's expression-bearing fields
+# (equations, initialization equations, guesses) and, recursively, in its Model
+# subsystems. Returns the SAME model object when nothing changed. Shaped after
+# `_intern_model` (src/intern.jl).
+#
+# esm 1.0.0 removed the variable-level `expression`, so an observed unknown's
+# body is reached through the equations like any other.
 function _lower_broadcast_model(model::Model)::Model
     vars = model.variables
     nvars = vars
-    for (name, v) in vars
-        v.expression === nothing && continue
-        ne = _lower_broadcast(v.expression)
-        if ne !== v.expression
-            nvars === vars && (nvars = copy(vars))
-            nvars[name] = reconstruct(v; expression=ne)
-        end
-    end
     lower_eqs(eqs) = begin
         out = eqs
         for (i, eq) in enumerate(eqs)
@@ -504,9 +499,10 @@ end
 # whole-array derivative lift. Byte-identical (empty fold, same equations vector)
 # for any model with no elementwise array observed.
 function _fold_elementwise_array_observeds(equations::Vector{Equation}, model::Model)
+    observed_here = Set{String}(observed_unknowns(model))
     function is_array_obs(name)
         var = get(model.variables, name, nothing)
-        return var !== nothing && var.type == ObservedVariable &&
+        return var !== nothing && name in observed_here &&
                _is_array_shape(var.shape)
     end
     # A bare `name = rhs` algebraic definition per name (the D(state,t) equation

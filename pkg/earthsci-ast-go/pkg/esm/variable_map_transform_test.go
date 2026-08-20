@@ -341,11 +341,11 @@ func TestFlatten_ExpressionTransformDoesNotError(t *testing.T) {
 	file := &ESMFile{
 		Models: map[string]Model{
 			"Src": {
-				Variables: map[string]ModelVariable{"F": {Type: VarTypeUnknown}},
+				Variables: map[string]ModelVariable{"F": {Type: "unknown"}},
 				Equations: []Equation{},
 			},
 			"Sink": {
-				Variables: map[string]ModelVariable{"offset": {Type: VarTypeParameter}},
+				Variables: map[string]ModelVariable{"offset": {Type: "parameter"}},
 				Equations: []Equation{},
 			},
 		},

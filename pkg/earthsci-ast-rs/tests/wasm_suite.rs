@@ -26,21 +26,47 @@ use earthsci_ast::{
 
 /// Scalar exponential-decay ODE: `dx/dt = k·x`, `k = -1`, `x(0) = 1` ⇒
 /// `x(t) = e^{-t}`. Exercises the pure-ODE (diffsol/Faer) path in wasm.
-const SCALAR_ODE: &str = r#"{
-  "esm": "1.0.0",
-  "metadata": { "name": "decay", "description": "scalar exponential decay" },
-  "models": {
-    "Decay": {
-      "variables": {
-        "x": { "type": "unknown", "default": 1.0 },
-        "k": { "type": "parameter", "default": -1.0 }
+const SCALAR_ODE: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "decay",
+        "description": "scalar exponential decay"
       },
-      "equations": [
-        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "*", "args": ["k", "x"] } }
-      ]
+      "models": {
+        "Decay": {
+          "variables": {
+            "x": {
+              "type": "unknown",
+              "default": 1.0
+            },
+            "k": {
+              "type": "parameter",
+              "default": -1.0
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "x"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "k",
+                  "x"
+                ]
+              }
+            }
+          ]
+        }
+      }
     }
-  }
-}"#;
+    "#;
 
 /// Discretized 1D heat equation (method-of-lines, 4 cells, Dirichlet BCs) — a
 /// geometry-free array PDE. Shared cross-language conformance fixture.

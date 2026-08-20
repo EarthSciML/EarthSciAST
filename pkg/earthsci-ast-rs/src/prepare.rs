@@ -549,12 +549,12 @@ fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareEr
     Ok(ordered)
 }
 
-/// name → DEFINING EQUATION RHS, for every observed unknown of `model`
-/// (esm-spec §6.3.1).
+/// name → defining expression, for every OBSERVED unknown of `model`
+/// (esm-spec §6.3.1). From esm 1.0.0 the definition is the RHS of the equation
+/// whose LHS is the bare variable, not a `variables[v].expression` field.
 fn observed_defs(model: &Model) -> HashMap<String, Expr> {
-    crate::classify::observed_definitions(model)
+    crate::classification::observed_definitions(model)
         .into_iter()
-        .map(|(k, e)| (k.to_string(), e.clone()))
         .collect()
 }
 

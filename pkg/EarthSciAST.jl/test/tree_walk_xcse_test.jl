@@ -91,7 +91,7 @@ function _xc_fastjx(K::Int, N::Int; nshared::Int=2)
     vars = Dict{String,ESM.ModelVariable}()
     eqs = ESM.Equation[]
     for k in 1:K
-        vars["c$k"] = ESM.ModelVariable(ESM.StateVariable)
+        vars["c$k"] = ESM.ModelVariable(ESM.UnknownVariable)
         tbl = k <= nshared ? Any[1.0, 2.0, 4.0] : Any[1.0 + k, 2.0 + k, 4.0 + k]
         body = _op("*", _xc_J(tbl), _idx("c$k", _v("i")))
         push!(eqs, ESM.Equation(_ao1(_Didx("c$k", _v("i")), "i", 1, N),
@@ -213,9 +213,9 @@ end
         N = 8
         tbl = Any[1.0, 2.0, 4.0]
         vars = Dict{String,ESM.ModelVariable}(
-            "a" => ESM.ModelVariable(ESM.StateVariable),
-            "s" => ESM.ModelVariable(ESM.StateVariable; default=2.0),
-            "Jobs" => ESM.ModelVariable(ESM.ObservedVariable))
+            "a" => ESM.ModelVariable(ESM.UnknownVariable),
+            "s" => ESM.ModelVariable(ESM.UnknownVariable; default=2.0),
+            "Jobs" => ESM.ModelVariable(ESM.UnknownVariable))
         eqs = ESM.Equation[
             ESM.Equation(_v("Jobs"), _xc_J(tbl)),
             ESM.Equation(_D("s"), _op("*", _v("Jobs"), _v("s"))),
@@ -247,9 +247,9 @@ end
         N = 8
         tbl = Any[1.0, 2.0, 4.0]
         vars = Dict{String,ESM.ModelVariable}(
-            "a" => ESM.ModelVariable(ESM.StateVariable),
-            "b" => ESM.ModelVariable(ESM.StateVariable),
-            "s" => ESM.ModelVariable(ESM.StateVariable; default=2.0))
+            "a" => ESM.ModelVariable(ESM.UnknownVariable),
+            "b" => ESM.ModelVariable(ESM.UnknownVariable),
+            "s" => ESM.ModelVariable(ESM.UnknownVariable; default=2.0))
         eqs = ESM.Equation[
             ESM.Equation(_ao1(_Didx("a", _v("i")), "i", 1, N),
                          _ao1(_op("*", _xc_J(tbl), _idx("a", _v("i"))), "i", 1, N)),
@@ -314,8 +314,8 @@ end
     @testset "cost gate: shared plain arithmetic is left per-kernel" begin
         N = 8
         vars = Dict{String,ESM.ModelVariable}(
-            "a" => ESM.ModelVariable(ESM.StateVariable),
-            "b" => ESM.ModelVariable(ESM.StateVariable),
+            "a" => ESM.ModelVariable(ESM.UnknownVariable),
+            "b" => ESM.ModelVariable(ESM.UnknownVariable),
             "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
             "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0))
         gh = _op("/", _v("g"), _v("h"))       # invariant, shared, cheap
@@ -345,8 +345,8 @@ end
         N = 8
         tbl = Any[1.0, 2.0, 4.0]
         vars = Dict{String,ESM.ModelVariable}(
-            "a" => ESM.ModelVariable(ESM.StateVariable),
-            "b" => ESM.ModelVariable(ESM.StateVariable))
+            "a" => ESM.ModelVariable(ESM.UnknownVariable),
+            "b" => ESM.ModelVariable(ESM.UnknownVariable))
         guarded(v) = _op("ifelse", _op(">=", _idx(v, _v("i")), _n(0.0)),
                          _op("*", _xc_J(tbl), _idx(v, _v("i"))), _n(0.0))
         eqs = ESM.Equation[

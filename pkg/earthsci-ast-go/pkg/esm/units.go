@@ -1469,7 +1469,20 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 			Message: fmt.Sprintf("could not parse unit: %v", bad[name]),
 		})
 	}
+	// An OBSERVED unknown's defining equation is dimension-checked by
+	// validateObservedVariableUnits instead, so that the finding lands on the
+	// VARIABLE that carries the contradicting declaration
+	// (`/models/M/variables/v`) — the pointer CONFORMANCE_SPEC §7.1.2 pins,
+	// since "a declared unit that contradicts the dimension its own expression
+	// computes belongs at the variable". Checking it here as well would report
+	// the same defect twice, at two pointers.
+	observedDefs := observedDefinitions(model)
 	for i, eq := range model.Equations {
+		if name, ok := eq.LHS.(string); ok {
+			if _, isObserved := observedDefs[name]; isObserved {
+				continue
+			}
+		}
 		eqPath := fmt.Sprintf("%s/equations/%d", basePath, i)
 		if w := ValidateEquationDimensions(&eq, env, eqPath); w != nil {
 			result.UnitWarnings = append(result.UnitWarnings, *w)
@@ -1481,32 +1494,26 @@ func validateModelUnits(modelName string, model *Model, basePath string, file *E
 	checkDefaultUnits(modelName, model, result)
 }
 
-// validateObservedVariableUnits dimension-checks each OBSERVED variable's
+// validateObservedVariableUnits dimension-checks each OBSERVED unknown's
 // defining expression against the variable's own declared units.
 //
-// An observed variable is an equation in every sense that matters here —
-// `invalid_sum: {units: "m", expression: length + mass}` is exactly as wrong as
-// the equation `invalid_sum = length + mass` — but it is stored in the variable
-// table, not in `equations`, so a checker that walks only `model.Equations`
-// (as this one did) is blind to it. That blindness is why Go accepted
+// From esm 1.0.0 that expression is the RHS of the bare-variable-LHS EQUATION
+// that defines the unknown (esm-spec §6.3.1), not a removed `expression` field
+// on the variable — so the definition is read through ObservedDefinition, which
+// is the one place this binding resolves it.
+//
+// The finding is reported at `/models/<M>/variables/<v>` rather than at the
+// equation: a declared unit that contradicts the dimension its own defining
+// expression computes is carried by the DECLARATION (CONFORMANCE_SPEC §7.1.2),
+// and that is the pointer tests/invalid/expected_errors.json pins for
 // units_inconsistent_addition.esm, units_inconsistent_subtraction.esm,
 // units_invalid_exponent.esm, units_invalid_logarithm.esm and
-// units_mixed_dimensional_operations.esm — five fixtures the shared corpus pins
-// as INVALID, each of whose only defect lives in an observed variable.
-//
-// Findings are reported at `/models/<M>/variables/<v>`, the pointer
-// tests/invalid/expected_errors.json pins (and the one TypeScript emits).
+// units_mixed_dimensional_operations.esm.
 func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath string, result *StructuralValidationResult) {
-	// An observed unknown is one recovered by ObservedUnknowns, and its defining
-	// expression is the RHS of its bare-variable-LHS equation -- not a
-	// `variables[v].expression` field, which 1.0.0 removed. The FINDING is still
-	// reported against the variable, because that is the pointer
-	// tests/invalid/expected_errors.json pins and the units being contradicted
-	// are the variable's own.
-	for _, name := range ObservedUnknowns(model) {
+	for _, name := range sortedKeys(model.Variables) {
 		v := model.Variables[name]
-		def, ok := ObservedDefinition(model, name)
-		if !ok {
+		def, isObserved := ObservedDefinition(model, name)
+		if !isObserved || def == nil {
 			continue
 		}
 		path := fmt.Sprintf("%s/variables/%s", basePath, name)
@@ -1666,14 +1673,14 @@ func checkPhysicalConstantUnits(modelName string, model *Model, result *Structur
 		if declaredU.Dim.Equal(canonicalU.Dim) {
 			continue
 		}
-		// Attribute the finding to the observed unknown that READS this constant,
-		// when one does: that is where an author sees the contradiction. The
-		// candidates are enumerated in sorted order so the attribution is stable
-		// when several observeds read the same constant.
+		// Attribute the finding to the observed unknown that USES the constant,
+		// when one does. An observed's defining expression lives in the model's
+		// equations from esm 1.0.0, so the scan runs over those definitions in a
+		// deterministic (sorted) order rather than over a randomized map.
 		usageName := ""
-		for _, otherName := range ObservedUnknowns(model) {
-			otherDef, ok := ObservedDefinition(model, otherName)
-			if !ok {
+		for _, otherName := range sortedKeys(model.Variables) {
+			otherDef, isObserved := ObservedDefinition(model, otherName)
+			if !isObserved || otherDef == nil {
 				continue
 			}
 			if exprReferencesName(otherDef, vname) {
@@ -1700,25 +1707,19 @@ func checkPhysicalConstantUnits(modelName string, model *Model, result *Structur
 }
 
 // exprReferencesName reports whether the expression tree references a variable
-// by exact name (string leaf match).
+// by exact name (string leaf match), descending EVERY Expression-bearing child
+// field rather than `args` alone (esm-spec §4.9.5).
 func exprReferencesName(e Expression, name string) bool {
-	switch v := e.(type) {
-	case string:
+	if v, ok := e.(string); ok {
 		return v == name
-	case ExprNode:
-		for _, a := range v.Args {
-			if exprReferencesName(a, name) {
-				return true
-			}
-		}
-	case *ExprNode:
-		if v == nil {
-			return false
-		}
-		for _, a := range v.Args {
-			if exprReferencesName(a, name) {
-				return true
-			}
+	}
+	node, ok := asExprNode(e)
+	if !ok {
+		return false
+	}
+	for _, child := range exprRefChildren(node) {
+		if exprReferencesName(child.Child, name) {
+			return true
 		}
 	}
 	return false
@@ -1743,10 +1744,10 @@ func checkConversionFactorConsistency(modelName string, model *Model, result *St
 			varUnits[name] = *v.Units
 		}
 	}
-	for _, vname := range ObservedUnknowns(model) {
+	for _, vname := range sortedKeys(model.Variables) {
 		vdef := model.Variables[vname]
-		def, ok := ObservedDefinition(model, vname)
-		if !ok {
+		def, isObserved := ObservedDefinition(model, vname)
+		if !isObserved || def == nil {
 			continue
 		}
 		lhsUnits := ""

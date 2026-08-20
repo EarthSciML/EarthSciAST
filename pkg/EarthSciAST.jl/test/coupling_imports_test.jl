@@ -48,7 +48,7 @@ function assembly(coupling::Vector{CouplingEntry})
         Equation[])
     spread = Model(
         Dict{String,ModelVariable}(
-            "rate" => ModelVariable(StateVariable, default=0.0),
+            "rate" => ModelVariable(UnknownVariable, default=0.0),
             "sigma" => ModelVariable(ParameterVariable, default=0.0, units="1/m"),
             "w0" => ModelVariable(ParameterVariable, default=0.0, units="kg/m^2"),
         ),
@@ -215,7 +215,7 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
                 "esm" => "0.8.0",
                 "metadata" => Dict{String,Any}("name" => "asmn"),
                 "models" => Dict{String,Any}("Parent" => Dict{String,Any}(
-                    "variables" => Dict{String,Any}("x" => Dict{String,Any}("type" => "state")),
+                    "variables" => Dict{String,Any}("x" => Dict{String,Any}("type" => "unknown")),
                     "equations" => Any[],
                     "subsystems" => Dict{String,Any}("Sub" => Dict{String,Any}("ref" => "clib.esm")),
                 )),
@@ -229,7 +229,7 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
                 "metadata" => Dict{String,Any}("name" => "asm2"),
                 "models" => Dict{String,Any}("M" => Dict{String,Any}(
                     "expression_template_imports" => Any[Dict{String,Any}("ref" => "clib.esm")],
-                    "variables" => Dict{String,Any}("x" => Dict{String,Any}("type" => "state")),
+                    "variables" => Dict{String,Any}("x" => Dict{String,Any}("type" => "unknown")),
                     "equations" => Any[],
                 )),
             )))

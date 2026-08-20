@@ -61,7 +61,7 @@ from .error_handling import (
     UNKNOWN_ENUM_SYMBOL,
 )
 from .errors import EarthSciAstError
-from .esm_types import DataLoader, Equation, EsmFile, ExprNode, Model, ReactionSystem
+from .esm_types import Equation, EsmFile, ExprNode, Model, ReactionSystem
 from .expr_walk import iter_children, map_children
 
 # ============================================================
@@ -570,16 +570,46 @@ def lower_enums(file: EsmFile) -> EsmFile:
     return file
 
 
+def _lower_parameter_update(update: Any, enums, memo):
+    """Lower `enum` nodes inside a parameter's update rules (esm-spec §5.4): the
+    `condition`/`crossing` trigger, the `expression` value form, and the `from`
+    binding's `unit_conversion`. Returns ``update`` unchanged when nothing
+    lowered, so an untouched model keeps object identity."""
+    if update is None:
+        return update
+    if isinstance(update, list):
+        lowered = [_lower_parameter_update(rule, enums, memo) for rule in update]
+        return update if all(a is b for a, b in zip(lowered, update)) else lowered
+    changes = {}
+    if update.when is not None:
+        new_when = _lower_expr(update.when, enums, memo)
+        if new_when is not update.when:
+            changes["when"] = new_when
+    if update.expression is not None:
+        new_expr = _lower_expr(update.expression, enums, memo)
+        if new_expr is not update.expression:
+            changes["expression"] = new_expr
+    binding = update.from_source
+    if binding is not None and binding.unit_conversion is not None:
+        new_conv = _lower_expr(binding.unit_conversion, enums, memo)
+        if new_conv is not binding.unit_conversion:
+            changes["from_source"] = replace(binding, unit_conversion=new_conv)
+    return replace(update, **changes) if changes else update
+
+
 def _lower_model(
     model: Model,
     enums: dict[str, dict[str, int]],
     memo: dict[int, tuple[Any, Any]] | None = None,
 ) -> None:
+    # A variable carries no `expression` from 1.0.0; the enum-lowering that used
+    # to walk it is subsumed by the equation walk below, since an observed
+    # unknown's definition IS an equation. The remaining variable-level
+    # expression positions are a parameter's `update` (§5.4), lowered here.
     for vname, var in list(model.variables.items()):
-        if var.expression is not None:
-            new_expr = _lower_expr(var.expression, enums, memo)
-            if new_expr is not var.expression:
-                model.variables[vname] = replace(var, expression=new_expr)
+        new_update = _lower_parameter_update(var.update, enums, memo)
+        if new_update is not var.update:
+            model.variables[vname] = replace(var, update=new_update)
     new_eqs: list[Equation] = []
     for eq in model.equations:
         new_eqs.append(
@@ -601,9 +631,6 @@ def _lower_model(
         )
     model.initialization_equations[:] = new_init
     for sub in model.subsystems.values():
-        # Data-loader subsystems carry no equations/enums to lower.
-        if isinstance(sub, DataLoader):
-            continue
         _lower_model(sub, enums, memo)
 
 

@@ -53,15 +53,11 @@ _expr_has_intersect_polygon(::ASTExpr) = false
 _equations_have_intersect_polygon(eqs) =
     any(eq -> _expr_has_intersect_polygon(eq.lhs) || _expr_has_intersect_polygon(eq.rhs), eqs)
 
-# An intersect_polygon may live in an equation RHS or in an observed variable's
-# `expression` field (the shared geometry fixtures use the latter — the Python
-# evaluator reads `variable.expression` directly).
-function _model_has_intersect_polygon(model::Model)
-    for (_, v) in model.variables
-        v.expression isa ASTExpr && _expr_has_intersect_polygon(v.expression) && return true
-    end
-    return _equations_have_intersect_polygon(model.equations)
-end
+# From esm 1.0.0 an intersect_polygon lives in an equation LHS/RHS and nowhere
+# else: an observed unknown's defining body IS its equation, so the shared
+# geometry fixtures' clip rings are reached by the same walk as everything else.
+_model_has_intersect_polygon(model::Model) =
+    _equations_have_intersect_polygon(model.equations)
 
 # Resolve an intersect_polygon polygon operand to its const-array matrix. The clip
 # runs at setup, so each operand must be a variable name supplied in `const_arrays`.
@@ -159,12 +155,10 @@ function _expr_has_polygon_intersection_area(e::OpExpr, seen::IdDict{OpExpr,Noth
 end
 _expr_has_polygon_intersection_area(::ASTExpr) = false
 
-# An intersection-area leaf may live in an equation LHS/RHS or in an observed
-# variable's `expression` field (the shared fixtures use the latter).
+# An intersection-area leaf lives in an equation LHS/RHS — from esm 1.0.0 an
+# observed unknown's defining body is its equation, so there is nowhere else to
+# look.
 function _model_has_polygon_intersection_area(model::Model, equations)
-    for (_, v) in model.variables
-        v.expression isa ASTExpr && _expr_has_polygon_intersection_area(v.expression) && return true
-    end
     for eq in equations
         (_expr_has_polygon_intersection_area(eq.lhs) ||
          _expr_has_polygon_intersection_area(eq.rhs)) && return true
@@ -862,8 +856,8 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs
     end
-    is_arr_obs(n) = haskey(model.variables, n) &&
-        model.variables[n].type == ObservedVariable &&
+    observed_here = Set{String}(observed_unknowns(model))
+    is_arr_obs(n) = haskey(model.variables, n) && n in observed_here &&
         _is_array_shape(model.variables[n].shape)
     # Live taint (ess-14f.4): a var whose defining expression (transitively)
     # reads a `param_arrays` buffer is a LIVE-FIELD observed — its value changes
@@ -911,8 +905,7 @@ function _geometry_setup_vars(model, equations, geom_ring_vars, state_var_names,
     # pulled into setup by the backward pass below) does NOT block, so pure-geometry
     # regrid chains are unaffected — byte-identical.
     _is_scalar_computed_obs(f) =
-        haskey(model.variables, f) &&
-        model.variables[f].type == ObservedVariable &&
+        haskey(model.variables, f) && f in observed_here &&
         !_is_array_shape(model.variables[f].shape) && haskey(defs, f)
     # The exclusion is TRANSITIVE. An array observed that reads a computed scalar
     # observed is setup-ineligible (above); so is one that GATHERS an ineligible
@@ -1048,10 +1041,11 @@ function _build_setup_env(model, const_arrays_kw;
     for (k, v) in const_arrays_kw
         env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : v
     end
-    for (n, v) in model.variables
-        (v.type == ObservedVariable && _is_array_shape(v.shape) && _is_const_op(v.expression)) || continue
+    for (n, defn) in observed_definitions(model)
+        v = model.variables[n]
+        (_is_array_shape(v.shape) && _is_const_op(defn)) || continue
         haskey(env, n) && continue
-        env[n] = _const_op_to_array((v.expression::OpExpr).value)
+        env[n] = _const_op_to_array((defn::OpExpr).value)
     end
     if const_obs_arrays !== nothing
         for (n, v) in const_obs_arrays
@@ -1175,10 +1169,9 @@ end
 # into `env` and is not a materialization candidate.
 function _agg_array_obs_defs(model, env)
     d = Dict{String,OpExpr}()
-    for (n, v) in model.variables
-        (v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
+    for (n, e) in observed_definitions(model)
+        _is_array_shape(model.variables[n].shape) || continue
         haskey(env, n) && continue
-        e = v.expression
         (e isa OpExpr && _is_aggregate_op(e.op)) || continue
         d[n] = e
     end
@@ -1206,7 +1199,11 @@ function _derive_binning_coords(model, index_sets, const_arrays_kw, param_overri
     # stacks the projection gathers per cell via `index(src_poly, i)`, the
     # kwarg const arrays, and the scalar params/overrides.
     env = _build_setup_env(model, const_arrays_kw; param_overrides=param_overrides)
-    state_names = Set{String}(n for (n, v) in model.variables if v.type == StateVariable)
+    # The LIVE names a build-time derivation may never read: the ODE states plus
+    # the algebraic unknowns (esm-spec §6.3.1). An observed is not live by
+    # declaration — whether it resolves is decided by whether its own factors
+    # are in `env`, which is the test the loop below already makes.
+    state_names = Set{String}(solver_unknowns(model))
     var_shapes = _declared_var_shapes(model)
 
     cand = _agg_array_obs_defs(model, env)   # materializable aggregate array observeds
@@ -1333,9 +1330,6 @@ function _overlap_env_factor_names(model)
         visit(e.expr_body); visit(e.filter); visit(e.lower); visit(e.upper)
         e.values === nothing || for v in e.values; visit(v); end
     end
-    for (_, v) in model.variables
-        visit(v.expression)
-    end
     for eqs in (model.equations, model.initialization_equations)
         eqs === nothing && continue
         for eq in eqs
@@ -1362,7 +1356,8 @@ function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_o
         e === nothing || (derived_extents[String(sname)] = Int(e))
     end
     var_shapes = _declared_var_shapes(model)
-    state_names = Set{String}(n for (n, v) in model.variables if v.type == StateVariable)
+    state_names = Set{String}(solver_unknowns(model))
+    obs_defs = observed_definitions(model)
     # One SATURATING pass so a factor that gathers through another derived factor
     # resolves regardless of name order (the same fixpoint `_derive_binning_coords`
     # uses; monotone over a finite set, so it terminates).
@@ -1370,10 +1365,9 @@ function _derive_overlap_env_factors(model, index_sets, const_arrays_kw, param_o
         changed = false
         for n in todo
             haskey(out, n) && continue
-            v = get(model.variables, n, nothing)
-            (v !== nothing && v.type == ObservedVariable) || continue
+            e = get(obs_defs, n, nothing)
+            e === nothing && continue
             length(get(var_shapes, n, String[])) == 1 || continue
-            e = v.expression
             (e isa OpExpr && _is_aggregate_op(e.op)) || continue
             bound = _agg_bound_syms(e); ok = true
             for r in _referenced_var_names(e)

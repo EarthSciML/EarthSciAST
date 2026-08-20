@@ -56,7 +56,7 @@ _doc(name, vars, eqs; index_sets = nothing) = begin
 end
 _nset(N) = Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => N))
 
-_state(; kw...) = Dict{String,Any}("type" => "state",
+_state(; kw...) = Dict{String,Any}("type" => "unknown",
                                    (String(k) => v for (k, v) in kw)...)
 _param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
 

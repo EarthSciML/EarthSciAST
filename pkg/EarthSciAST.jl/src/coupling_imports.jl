@@ -21,7 +21,7 @@ TypeScript reference `pkg/earthsci-ast-ts/src/coupling-imports.ts`.
 
 # Payload keys a coupling-library file MUST NOT declare (esm-spec §10.9).
 const _COUPLING_LIBRARY_FORBIDDEN_KEYS = (
-    "models", "reaction_systems", "data_loaders", "domain",
+    "models", "reaction_systems", "data_sources", "domain",
     "index_sets", "metaparameters", "expression_templates",
 )
 
@@ -177,17 +177,9 @@ function _rewrite_entry!(entry::AbstractDict, structfn, exprfn)
            haskey(trig, "expression")
             trig["expression"] = _rewrite_expr!(trig["expression"], exprfn)
         end
-        fa = get(entry, "functional_affect", nothing)
-        if fa isa AbstractDict
-            for key in ("read_vars", "read_params", "modified_params")
-                if haskey(fa, key) && fa[key] isa AbstractVector
-                    fa[key] = Any[structfn(x) for x in fa[key]]
-                end
-            end
-        end
-        if haskey(entry, "discrete_parameters") && entry["discrete_parameters"] isa AbstractVector
-            entry["discrete_parameters"] = Any[structfn(x) for x in entry["discrete_parameters"]]
-        end
+        # esm 1.0.0: an event carries neither a `functional_affect` handler
+        # descriptor nor a `discrete_parameters` list — both moved onto the
+        # parameter they write (esm-spec §5.4, §5.5).
     end
     return entry
 end
@@ -266,9 +258,10 @@ _node_subsystems(::Any) = nothing
 """
     _resolves_to_component(file::EsmFile, value::AbstractString) -> Bool
 
-Resolve a `bind` value as a component path (esm-spec §10.10.1) — a system or
-loader node, walking `models`/`reaction_systems`/`data_loaders` then nested
-`subsystems`, never terminating on a variable.
+Resolve a `bind` value as a component path (esm-spec §10.10.1) — a system node,
+walking `models`/`reaction_systems` then nested `subsystems`, never terminating
+on a variable. A data source is a registry entry from 1.0.0, not a component,
+so it can never be bound to a role.
 """
 function _resolves_to_component(file::EsmFile, value::AbstractString)::Bool
     segs = split(value, '.')
@@ -279,8 +272,6 @@ function _resolves_to_component(file::EsmFile, value::AbstractString)::Bool
         node = file.models[top]
     elseif file.reaction_systems !== nothing && haskey(file.reaction_systems, top)
         node = file.reaction_systems[top]
-    elseif file.data_loaders !== nothing && haskey(file.data_loaders, top)
-        node = file.data_loaders[top]
     end
     node === nothing && return false
     for i in 2:length(segs)

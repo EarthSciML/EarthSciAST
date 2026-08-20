@@ -367,7 +367,7 @@ _with_declarations(file::EsmFile, templates, metaparams;
     EsmFile(esm === nothing ? file.esm : esm, file.metadata;
             models=file.models,
             reaction_systems=file.reaction_systems,
-            data_loaders=file.data_loaders,
+            data_sources=file.data_sources,
             coupling=file.coupling,
             domain=file.domain,
             enums=file.enums,
@@ -388,7 +388,7 @@ _with_declarations(file::EsmFile, templates, metaparams;
 # requires a `Model` with `variables`, so the reference is inlined at the
 # raw-JSON level — before schema validation, expression-template lowering, and
 # coercion — and the blocks the model's AST references by name
-# (`function_tables`, `enums`, `data_loaders`) are merged in from the component.
+# (`function_tables`, `enums`, `data_sources`) are merged in from the component.
 # Nested subsystem `{ref}`s inside the component are rewritten to absolute paths
 # so the later `resolve_subsystem_refs!` pass (anchored at the *parent* dir)
 # still finds them. Resolution recurses (a component may itself reference another
@@ -433,7 +433,7 @@ end
 
 Return a native ESM dict with every top-level model `{ref}` stub replaced by the
 referenced component's model (and its `function_tables` / `enums` /
-`data_loaders` merged in), or `nothing` when `raw_data` has no such stub.
+`data_sources` merged in), or `nothing` when `raw_data` has no such stub.
 The stub path copies the document (`_to_ordered`, order-preserving) so the
 in-place worker never mutates the caller's tree; the reaction-system inliner
 composes on the same copy, and `load(::AbstractDict)` resolves stubs exactly
@@ -524,7 +524,7 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             end
             # Merge the by-name blocks the model's AST references; the parent wins
             # on a key clash (its own definitions take precedence).
-            for blk in ("function_tables", "data_loaders", "enums")
+            for blk in ("function_tables", "data_sources", "enums")
                 src = get(comp, blk, nothing)
                 (src isa AbstractDict && !isempty(src)) || continue
                 dst = get!(() -> Dict{String,Any}(), native, blk)
@@ -545,7 +545,7 @@ end
 
 Return a native ESM dict with every top-level reaction_system `{ref}` stub
 replaced by the referenced component's reaction system (and its
-`function_tables` / `enums` / `data_loaders` merged in), or `nothing` when
+`function_tables` / `enums` / `data_sources` merged in), or `nothing` when
 `raw_data` has no such stub. The reaction-system analogue of
 [`_inline_toplevel_model_refs`](@ref) (schema §4.7: a `reaction_systems` entry is
 `oneOf [ReactionSystem, {ref}]`), so an assembly may mount an external
@@ -572,7 +572,7 @@ end
 In-place native-dict worker for [`_inline_toplevel_reaction_system_refs`](@ref).
 Mirrors [`_inline_toplevel_model_refs!`](@ref): loads each stub's referenced file,
 splices in its single top-level reaction system (or the one named by a
-`"reaction_system"` selector), and merges the `function_tables` / `data_loaders`
+`"reaction_system"` selector), and merges the `function_tables` / `data_sources`
 / `enums` blocks the reaction system's AST references (parent wins on a clash).
 Cycle detection is PATH-scoped, so the same single-reaction-system file may be
 mounted under several assembly keys.
@@ -635,7 +635,7 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             end
             # Merge the by-name blocks the reaction system's AST references; the
             # parent wins on a key clash (its own definitions take precedence).
-            for blk in ("function_tables", "data_loaders", "enums")
+            for blk in ("function_tables", "data_sources", "enums")
                 src = get(comp, blk, nothing)
                 (src isa AbstractDict && !isempty(src)) || continue
                 dst = get!(() -> Dict{String,Any}(), native, blk)
@@ -803,8 +803,7 @@ Recursively resolve subsystem references within a Model's subsystems.
 function _resolve_model_refs!(models_dict, name::String,
                               model, base_path::String, visited::Set{String},
                               registry::Dict{String,IndexSet})
-    # Only Model values carry subsystems to walk; DataLoader / SubsystemRef
-    # leaves have none.
+    # Only Model values carry subsystems to walk; a SubsystemRef leaf has none.
     model isa Model || return
     for (sub_name, sub_value) in collect(model.subsystems)
         if sub_value isa SubsystemRef
@@ -823,7 +822,7 @@ function _resolve_model_refs!(models_dict, name::String,
                 throw(_with_mount_site(e, sub_name, name))
             end
         else
-            # Inline Model (recurse into its subsystems) or DataLoader (leaf).
+            # Inline Model — recurse into its own subsystems.
             _resolve_model_refs!(model.subsystems, sub_name, sub_value, base_path,
                                  visited, registry)
         end
@@ -881,11 +880,12 @@ function _merge_subsystem_index_sets!(registry::Dict{String,IndexSet},
 end
 
 """
-    _resolve_subsystem_ref(ref, base_path, visited, registry) -> Union{Model,DataLoader}
+    _resolve_subsystem_ref(ref, base_path, visited, registry) -> Model
 
-Load the ESM file at `ref` and return its single top-level model or data loader
-(esm-spec §4.7). A single-loader file (RFC pure-io-data-loaders §4.4) resolves to
-that loader. Errors unless the file contains exactly one model or data loader.
+Load the ESM file at `ref` and return its single top-level model (esm-spec
+§4.7). Errors unless the file contains exactly one model. From esm 1.0.0 a data
+source is an ingest registry entry rather than a component, so a file whose only
+top-level entry is a `data_sources` block resolves to nothing mountable.
 A `SubsystemRef`'s `bindings` close the referenced document's open
 metaparameters (esm-spec §9.7.6 binding site 3); a `ref` targeting a
 template-library file is rejected with `subsystem_ref_is_template_library`.
@@ -902,9 +902,7 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
                        metaparameters=ref.bindings,
                        injected_imports=ref.expression_template_imports)
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
-    n_loaders = loaded.data_loaders === nothing ? 0 : length(loaded.data_loaders)
-    total = n_models + n_loaders
-    if total != 1
+    if n_models != 1
         throw(SubsystemRefError(
             "Subsystem reference '$(ref.ref)' resolves to a file containing multiple " *
             "top-level systems; exactly one is required";
@@ -915,7 +913,7 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
     # join the importing document's registry, so the importer's variables may
     # be shaped over the mesh file's axes and a disagreement fails loudly.
     _merge_subsystem_index_sets!(registry, loaded, ref.ref)
-    return n_models == 1 ? first(values(loaded.models)) : first(values(loaded.data_loaders))
+    return first(values(loaded.models))
 end
 
 _resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String},

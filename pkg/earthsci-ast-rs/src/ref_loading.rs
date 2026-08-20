@@ -850,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_local_data_source_ref() {
+    fn test_resolve_local_data_loader_ref() {
         // A subsystem ref to a LOADER-ONLY file (top-level `data_sources` with
         // exactly one entry, no `models`) must resolve to the loader object.
         let dir = TempDir::new().unwrap();

@@ -40,14 +40,14 @@ fn geom_json(n: usize) -> String {
      "u": {"type": "unknown", "shape": ["i"]},
      "a_geom": {"type": "parameter", "units": "1", "default": 3.0},
      "b_geom": {"type": "parameter", "units": "1", "default": 0.5},
-     "c": {"type": "observed", "shape": ["i"],
-           "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
+     "c": {"type": "unknown", "shape": ["i"]}
+   },
+   "equations": [
+                {"lhs": "c", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
                "ranges": {"i": [1, __N__]},
                "expr": {"op": "+", "args": [
                  {"op": "cos", "args": [{"op": "*", "args": ["a_geom", "i"]}]},
-                 "b_geom"]}}}
-   },
-   "equations": [
+                 "b_geom"]}}},
     {
      "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
              "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},

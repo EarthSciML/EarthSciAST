@@ -596,7 +596,7 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
     if let Some(obj) = json_value.as_object() {
         check_version_compatibility(obj, &mut errors);
         check_metadata_formats(obj, &mut errors);
-        check_data_source_temporal_durations(obj, &mut errors);
+        check_data_loader_temporal_durations(obj, &mut errors);
         check_model_state_has_derivatives(obj, &mut errors);
         check_coupling_references(obj, &mut errors);
         check_circular_model_dependencies_typed(json_value, &mut errors);
@@ -744,10 +744,10 @@ fn check_metadata_formats(obj: &serde_json::Map<String, Value>, errors: &mut Vec
     }
 }
 
-/// Any duration string inside `data_source.temporal` (`file_period` or
+/// Any duration string inside `data_loader.temporal` (`file_period` or
 /// `frequency`), if present, must be a valid ISO 8601 duration. The schema
 /// types these as `string` but does not enforce the grammar.
-fn check_data_source_temporal_durations(
+fn check_data_loader_temporal_durations(
     obj: &serde_json::Map<String, Value>,
     errors: &mut Vec<String>,
 ) {
@@ -1504,7 +1504,7 @@ mod tests {
         assert!(result.is_ok());
 
         let esm_file = result.unwrap();
-        assert_eq!(esm_file.esm, "0.1.0");
+        assert_eq!(esm_file.esm, "1.0.0");
         assert!(esm_file.models.is_some());
     }
 

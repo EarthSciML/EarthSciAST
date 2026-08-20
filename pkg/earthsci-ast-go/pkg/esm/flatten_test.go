@@ -7,21 +7,19 @@ import (
 )
 
 func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
+	// The role lists are DERIVED from the equations (esm-spec §6.3.1), so `T` is
+	// an ODE state because an equation differentiates it — not because it is
+	// declared one. A declaration alone no longer says.
 	file := &ESMFile{
 		Models: map[string]Model{
 			"Atmos": {
 				Variables: map[string]ModelVariable{
-					"T": {Type: VarTypeUnknown},
-					"k": {Type: VarTypeParameter},
+					"T": {Type: "unknown"},
+					"k": {Type: "parameter"},
 				},
-				// The equation is REQUIRED for T to be an ODE state: in esm 1.0.0
-				// state-ness is derived from the equations, so an unknown with no
-				// equation at all is algebraic (and separately an unbalanced
-				// system). The 0.x version of this fixture could leave `equations`
-				// empty because `"type": "state"` asserted the category directly.
 				Equations: []Equation{{
-					LHS: ExprNode{Op: OpDerivative, Args: []any{"T"}, Wrt: strPtr("t")},
-					RHS: ExprNode{Op: "*", Args: []any{"k", "T"}},
+					LHS: ExprNode{Op: "D", Args: []any{"T"}, Wrt: strPtr("t")},
+					RHS: ExprNode{Op: "-", Args: []any{"k"}},
 				}},
 			},
 		},
@@ -32,8 +30,8 @@ func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 
-	if !contains(flat.ODEStates, "Atmos.T") {
-		t.Errorf("expected Atmos.T in ODE states, got %v", flat.ODEStates)
+	if !contains(flat.StateVariables, "Atmos.T") {
+		t.Errorf("expected Atmos.T in state variables, got %v", flat.StateVariables)
 	}
 	if !contains(flat.Parameters, "Atmos.k") {
 		t.Errorf("expected Atmos.k in parameters, got %v", flat.Parameters)
@@ -63,8 +61,8 @@ func TestFlatten_ReactionSystemNamespacesSpecies(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 
-	if !contains(flat.ODEStates, "Chem.O3") {
-		t.Errorf("expected Chem.O3 in ODE states, got %v", flat.ODEStates)
+	if !contains(flat.StateVariables, "Chem.O3") {
+		t.Errorf("expected Chem.O3 in state variables, got %v", flat.StateVariables)
 	}
 	if !contains(flat.Parameters, "Chem.k1") {
 		t.Errorf("expected Chem.k1 in parameters, got %v", flat.Parameters)
@@ -117,11 +115,11 @@ func TestFlatten_RecordsCouplingRules(t *testing.T) {
 	file := &ESMFile{
 		Models: map[string]Model{
 			"A": {
-				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+				Variables: map[string]ModelVariable{"x": {Type: "unknown"}},
 				Equations: []Equation{},
 			},
 			"B": {
-				Variables: map[string]ModelVariable{"y": {Type: VarTypeParameter}},
+				Variables: map[string]ModelVariable{"y": {Type: "parameter"}},
 				Equations: []Equation{},
 			},
 		},

@@ -95,7 +95,7 @@ end
         # W = (1, 5, 1): W[1] == W[3], so the box corners agree and the old fold
         # replaced the whole lane with 1.0, silently dropping the interior 5.0.
         N, W = 3, [1.0, 5.0, 1.0]
-        vars = Dict("c" => ESM.ModelVariable(ESM.StateVariable))
+        vars = Dict("c" => ESM.ModelVariable(ESM.UnknownVariable))
         body = _op("*", _idx("W", _v("j")), _idx("c", _v("j")))
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("c", _v("j")), "j", 1, N),
                                           _ao1(body, "j", 1, N))])
@@ -119,7 +119,7 @@ end
         body = _op("*", _idx("W", _v("i"), _v("j")), _idx("x", _v("i")))
         rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["j"], expr_body=body,
                          ranges=Dict("j" => [1, 3], "i" => [1, 6]), reduce="+")
-        vars = Dict(v => ESM.ModelVariable(ESM.StateVariable) for v in ("y", "x"))
+        vars = Dict(v => ESM.ModelVariable(ESM.UnknownVariable) for v in ("y", "x"))
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("j")), "j", 1, 3), rhs)])
         ics = merge(Dict("y[$j]" => 0.0 for j in 1:3),
                     Dict("x[$i]" => xs[i] for i in 1:6))
@@ -136,7 +136,7 @@ end
         # of the same trap.
         N = 4
         K = [(i == 1 || i == N || j == 1 || j == N) ? 1.0 : 4.0 for i in 1:N, j in 1:N]
-        vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j"]))
+        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
         body = _op("*", _idx("K", _v("i"), _v("j")), _idx("u", _v("i"), _v("j")))
         lhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
             expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))

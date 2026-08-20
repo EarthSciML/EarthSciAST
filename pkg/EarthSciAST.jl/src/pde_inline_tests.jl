@@ -472,7 +472,7 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     model = get(file.models, String(mname), nothing)
     model === nothing && return nothing
     v = get(model.variables, String(variable), nothing)
-    (v !== nothing && v.type == ObservedVariable) || return nothing
+    (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
     # A SHAPELESS observed is rank 0, not unreadable: `E_NOx = Σ_r annual[r]·…`
     # contracts its only axis away and is a single number, which the Rust
     # `Prepared::observed_field` returns and this refused to. One empty cell
@@ -590,9 +590,10 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
     # binning is shaped on `emis_src_cells`, whose size value invention
     # discovers, and an interval-only lookup would skip exactly the observed
     # that matters most. `nothing` ⇒ not materializable (scalar / unsized axis).
+    observed_here = Set{String}(observed_unknowns(model))
     function extents(n)
         v = get(model.variables, n, nothing)
-        (v !== nothing && v.type == ObservedVariable &&
+        (v !== nothing && n in observed_here &&
          v.shape !== nothing && !isempty(v.shape)) || return nothing
         ex = Int[]
         for s in v.shape

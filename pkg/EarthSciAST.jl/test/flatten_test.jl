@@ -77,7 +77,7 @@ end
 
     @testset "2. Mixed equations + reactions (disjoint species)" begin
         vars = Dict{String, ModelVariable}(
-            "T" => ModelVariable(StateVariable, default=300.0),
+            "T" => ModelVariable(UnknownVariable, default=300.0),
             "k" => ModelVariable(ParameterVariable, default=0.1),
         )
         eqs = [Equation(_deriv("T"), _op("*", _V("k"), _V("T")))]
@@ -184,7 +184,7 @@ end
     @testset "5. ConflictingDerivativeError for explicit D + reaction on same species" begin
         # Model with explicit D(O3)/dt = ...
         mvars = Dict{String, ModelVariable}(
-            "O3" => ModelVariable(StateVariable, default=1e-6),
+            "O3" => ModelVariable(UnknownVariable, default=1e-6),
             "k" => ModelVariable(ParameterVariable, default=0.1),
         )
         meqs = [Equation(_deriv("O3"), _op("-", _op("*", _V("k"), _V("O3"))))]
@@ -223,14 +223,14 @@ end
     @testset "6. operator_compose across two models (summed RHS)" begin
         # Two models both declaring T with D(T)/dt; compose them.
         vars1 = Dict{String, ModelVariable}(
-            "T" => ModelVariable(StateVariable),
+            "T" => ModelVariable(UnknownVariable),
             "k" => ModelVariable(ParameterVariable, default=0.1),
         )
         eqs1 = [Equation(_deriv("T"), _op("*", _V("k"), _V("T")))]
         m1 = Model(vars1, eqs1)
 
         vars2 = Dict{String, ModelVariable}(
-            "T" => ModelVariable(StateVariable),
+            "T" => ModelVariable(UnknownVariable),
             "j" => ModelVariable(ParameterVariable, default=0.05),
         )
         eqs2 = [Equation(_deriv("T"), _op("*", _V("j"), _V("T")))]
@@ -265,7 +265,7 @@ end
 
     @testset "7. variable_map param_to_var substitutes and removes parameter" begin
         vars = Dict{String, ModelVariable}(
-            "T" => ModelVariable(StateVariable),
+            "T" => ModelVariable(UnknownVariable),
             "k" => ModelVariable(ParameterVariable, default=0.1),
             "external" => ModelVariable(ParameterVariable, default=1.0),
         )
@@ -274,7 +274,7 @@ end
         model = Model(vars, eqs)
 
         source_vars = Dict{String, ModelVariable}(
-            "value" => ModelVariable(StateVariable, default=0.5),
+            "value" => ModelVariable(UnknownVariable, default=0.5),
         )
         source_model = Model(source_vars, Equation[])
 
@@ -298,7 +298,7 @@ end
     @testset "7b. variable_map expression transform makes target an observed (esm-spec §10.4)" begin
         # Sink: parameter F_in (target), parameter offset, state u with du/dt = F_in.
         sink_vars = Dict{String, ModelVariable}(
-            "u" => ModelVariable(StateVariable, default=0.0),
+            "u" => ModelVariable(UnknownVariable, default=0.0),
             "offset" => ModelVariable(ParameterVariable, default=1.5, units="1"),
             "F_in" => ModelVariable(ParameterVariable, units="1",
                                     description="receiving target"),
@@ -341,7 +341,7 @@ end
 
     @testset "7c. variable_map expression transform must reference `from`" begin
         sink_vars = Dict{String, ModelVariable}(
-            "u" => ModelVariable(StateVariable, default=0.0),
+            "u" => ModelVariable(UnknownVariable, default=0.0),
             "F_in" => ModelVariable(ParameterVariable, units="1"),
         )
         sink = Model(sink_vars, [Equation(_deriv("u"), _V("F_in"))])
@@ -365,9 +365,9 @@ end
     end
 
     @testset "8. couple with connector equations" begin
-        v1 = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable))
+        v1 = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable))
         m1 = Model(v1, Equation[Equation(_deriv("x"), _V("x"))])
-        v2 = Dict{String, ModelVariable}("y" => ModelVariable(StateVariable))
+        v2 = Dict{String, ModelVariable}("y" => ModelVariable(UnknownVariable))
         m2 = Model(v2, Equation[Equation(_deriv("y"), _V("y"))])
 
         # Connector equation structured as an already-parsed Equation object.
@@ -510,9 +510,9 @@ end
     end
 
     @testset "9. Nested subsystems produce full dot paths" begin
-        inner_v = Dict{String, ModelVariable}("v" => ModelVariable(StateVariable))
+        inner_v = Dict{String, ModelVariable}("v" => ModelVariable(UnknownVariable))
         inner = Model(inner_v, Equation[])
-        outer_v = Dict{String, ModelVariable}("u" => ModelVariable(StateVariable))
+        outer_v = Dict{String, ModelVariable}("u" => ModelVariable(UnknownVariable))
         outer = Model(outer_v, Equation[],
             subsystems=Dict{String, Model}("Child" => inner))
 
@@ -531,7 +531,7 @@ end
         # `<parent_prefix>.Sub.x`, not leave it as `Sub.x` (which would fail
         # to resolve against the flat dictionary).
         sub_vars = Dict{String, ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0))
+            "x" => ModelVariable(UnknownVariable; default=1.0))
         sub = Model(sub_vars, Equation[])
 
         parent_vars = Dict{String, ModelVariable}(
@@ -555,7 +555,7 @@ end
         # A variable_map with transform="identity" between two variables
         # carrying DIFFERENT declared units MUST raise DomainUnitMismatchError.
         vars_a = Dict{String, ModelVariable}(
-            "T" => ModelVariable(StateVariable; units="K"),
+            "T" => ModelVariable(UnknownVariable; units="K"),
         )
         m_a = Model(vars_a, Equation[Equation(_deriv("T"), _V("T"))])
         vars_b = Dict{String, ModelVariable}(
@@ -589,7 +589,7 @@ end
     end
 
     @testset "flatten(::Model) convenience" begin
-        vars = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable))
+        vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable))
         eqs = [Equation(_deriv("x"), _V("x"))]
         m = Model(vars, eqs)
         flat = flatten(m)
@@ -614,9 +614,9 @@ end
     end
 
     @testset "FlattenedSystem metadata provenance" begin
-        v1 = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable))
+        v1 = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable))
         m1 = Model(v1, Equation[])
-        v2 = Dict{String, ModelVariable}("y" => ModelVariable(StateVariable))
+        v2 = Dict{String, ModelVariable}("y" => ModelVariable(UnknownVariable))
         m2 = Model(v2, Equation[])
         coupling = CouplingEntry[
             CouplingOperatorApply("my_op"),
@@ -635,9 +635,9 @@ end
     end
 
     @testset "couple: unparsed dict connector equation goes to opaque refs" begin
-        v1 = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable))
+        v1 = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable))
         m1 = Model(v1, Equation[Equation(_deriv("x"), _V("x"))])
-        v2 = Dict{String, ModelVariable}("y" => ModelVariable(StateVariable))
+        v2 = Dict{String, ModelVariable}("y" => ModelVariable(UnknownVariable))
         m2 = Model(v2, Equation[Equation(_deriv("y"), _V("y"))])
         # Dict-shaped connector equation whose lhs/rhs are NOT parsed Exprs.
         connector = Dict{String, Any}("equations" =>
@@ -689,7 +689,7 @@ end
             PeriodicTrigger(1.0),
             [AffectEquation("x", _N(0.0))];
             description="periodic reset", functional_affect=fa)
-        vars = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable, default=1.0))
+        vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default=1.0))
         model = Model(vars, [Equation(_deriv("x"), _V("x"))]; discrete_events=[ev])
         flat = flatten(model; name="M")
         @test length(flat.discrete_events) == 1
@@ -699,7 +699,7 @@ end
 
     @testset "current-format version defaults (ESM_FORMAT_VERSION)" begin
         E = EarthSciAST
-        vars = Dict{String, ModelVariable}("x" => ModelVariable(StateVariable, default=1.0))
+        vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default=1.0))
         model = Model(vars, [Equation(_deriv("x"), _V("x"))])
         flat = flatten(model; name="V")
         @test flat isa FlattenedSystem

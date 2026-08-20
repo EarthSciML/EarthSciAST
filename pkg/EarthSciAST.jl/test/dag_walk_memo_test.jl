@@ -52,9 +52,9 @@ end
 # b = 2^depth · a = 2^(depth+1) · psi, so the RHS value is exactly checkable.
 function _elemwise_array_chain_model(depth::Int)
     vars = Dict{String,ModelVariable}(
-        "psi" => ModelVariable(StateVariable; shape=["c"]),
-        "a"   => ModelVariable(ObservedVariable; shape=["c"]),
-        "b"   => ModelVariable(ObservedVariable; shape=["c"]),
+        "psi" => ModelVariable(UnknownVariable; shape=["c"]),
+        "a"   => ModelVariable(UnknownVariable; shape=["c"]),
+        "b"   => ModelVariable(UnknownVariable; shape=["c"]),
     )
     eqs = ESM.Equation[
         ESM.Equation(_v("a"), _op("+", _v("psi"), _v("psi"))),
@@ -115,14 +115,14 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # so the RHS value is exactly checkable.
         depth = 32
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0))
+            "x" => ModelVariable(UnknownVariable; default=1.0))
         eqs = ESM.Equation[ESM.Equation(_v("o1"), _op("+", _v("x"), _v("x")))]
         for k in 2:depth
             push!(eqs, ESM.Equation(_v("o$k"),
                 _op("+", _v("o$(k - 1)"), _v("o$(k - 1)"))))
         end
         for k in 1:depth
-            vars["o$k"] = ModelVariable(ObservedVariable)
+            vars["o$k"] = ModelVariable(UnknownVariable)
         end
         push!(eqs, ESM.Equation(_D("x"), _v("o$depth")))
 
@@ -281,9 +281,9 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # broader pin; this one drives the SHARED shape specifically).
         S = _op("+", _v("g"), _v("g"))     # one object, shared below
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=0.5),
+            "x" => ModelVariable(UnknownVariable; default=0.5),
             "k" => ModelVariable(ParameterVariable; default=2.0),
-            "g" => ModelVariable(ObservedVariable),
+            "g" => ModelVariable(UnknownVariable),
         )
         eqs = ESM.Equation[
             ESM.Equation(_v("g"), _op("*", _v("x"), _v("k"))),
@@ -300,7 +300,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # One additional UNCONDITIONAL reader through the SAME shared subtree
         # flips it to a slot (unconditional multiplicity ≥ 1).
         vars2 = copy(vars)
-        vars2["y"] = ModelVariable(StateVariable; default=1.0)
+        vars2["y"] = ModelVariable(UnknownVariable; default=1.0)
         eqs2 = ESM.Equation[
             ESM.Equation(_v("g"), _op("*", _v("x"), _v("k"))),
             ESM.Equation(_D("x"),

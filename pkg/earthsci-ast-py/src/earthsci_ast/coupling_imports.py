@@ -45,7 +45,7 @@ from .json_walk import (
 _LIBRARY_FORBIDDEN_KEYS = (
     "models",
     "reaction_systems",
-    "data_loaders",
+    "data_sources",
     "domain",
     "index_sets",
     "metaparameters",
@@ -284,18 +284,20 @@ def _child_subsystem(node: Any, name: str) -> Any:
 
 def _resolves_to_component(esm_file: Any, value: str) -> bool:
     """Resolve a ``bind`` value as a component path (esm-spec §10.10.1) — a
-    system or loader node, walking ``models`` / ``reaction_systems`` /
-    ``data_loaders`` then nested ``subsystems``, never terminating on a
-    variable."""
+    system node, walking ``models`` / ``reaction_systems`` then nested
+    ``subsystems``, never terminating on a variable.
+
+    A data source is NOT a component from 1.0.0, so ``data_sources`` is not
+    searched: binding a coupling role to one is `coupling_import_bind_not_a_component`.
+    """
     if not isinstance(value, str) or not value:
         return False
     segs = value.split(".")
     top = segs[0]
     models = getattr(esm_file, "models", None) or {}
     reaction_systems = getattr(esm_file, "reaction_systems", None) or {}
-    data_loaders = getattr(esm_file, "data_loaders", None) or {}
     node: Any = None
-    for table in (models, reaction_systems, data_loaders):
+    for table in (models, reaction_systems):
         if isinstance(table, dict) and top in table:
             node = table[top]
             break

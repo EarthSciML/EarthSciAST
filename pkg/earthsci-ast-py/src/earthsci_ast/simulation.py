@@ -142,18 +142,18 @@ def simulate(
     provider_factory:
         Optional factory ``(LoaderField, window) -> Provider`` building one
         cadence-aware
-        :class:`~earthsci_ast.data_loaders.provider.Provider` per loader
+        :class:`~earthsci_ast.data_sources.provider.Provider` per loader
         field (the EarthSciIO Provider contract: ``materialize`` / ``refresh`` /
         ``refresh_times``). When omitted (and no ``loader_provider`` is given)
         the in-tree
-        :func:`~earthsci_ast.data_loaders.provider.build_default_provider`
+        :func:`~earthsci_ast.data_sources.provider.build_default_provider`
         is used, so the default path GETs + REFRESHes loader arrays through the
         provider and takes its segment boundaries from ``refresh_times()``.
         Inject a real EarthSciIO provider here. Ignored for systems without data
         loaders, and superseded by ``loader_provider`` when both are given.
     providers:
         Optional ``{"<Loader>.<var>": provider}`` map — the loaded-data injection
-        seam for TOP-LEVEL ``data_loaders`` bound through ``variable_map`` /
+        seam for TOP-LEVEL ``data_sources`` bound through ``variable_map`` /
         scoped-reference ``ic`` (DESIGN pde_simulation_pipeline §2). Each provider
         is either a callable ``(t) -> array_like`` or an object exposing
         ``sample(t)`` / ``provider_sample(t)``; it is sampled ONCE at build time
@@ -220,7 +220,7 @@ def simulate(
     if not SCIPY_AVAILABLE:
         return _failure_result("SciPy is required for simulation but not available.")
 
-    # Provider injection for top-level ``data_loaders`` bound through
+    # Provider injection for top-level ``data_sources`` bound through
     # ``variable_map`` / scoped-reference ``ic`` (DESIGN pde_simulation_pipeline
     # §2). Loaded fields enter ONLY through the data-Provider seam, keyed by their
     # declared ``<Loader>.<var>`` name — never as raw arrays keyed by an internal

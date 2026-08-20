@@ -9,7 +9,7 @@ use crate::aggregate::{effective_reduce_kind, is_aggregate_op, resolve_aggregate
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::OpError;
 use crate::simulate::{CompileError, SimulateError};
-use crate::types::{Equation, EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
+use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use crate::value_invention::{
     ValueInventionResult, materialize_value_invention, rewrite_derived_index_sets,
 };
@@ -253,10 +253,12 @@ pub(super) fn mount_subsystems(
                     ),
                 });
             }
-            // An observed's defining expression is an ordinary equation since
-            // 1.0.0, so the `sub_model.equations` loop below renames it; the
-            // variable itself carries no expression to rewrite.
-            model.variables.insert(mounted, var.clone());
+            let mut var = var.clone();
+            // A parameter `update`'s Expressions are the only ones a variable
+            // still carries (esm 1.0.0); an unknown's definition is an equation,
+            // renamed with the rest below.
+            var.for_each_expression_mut(&mut |expr| *expr = rename_all(expr));
+            model.variables.insert(mounted, var);
         }
         for eq in &sub_model.equations {
             model.equations.push(crate::types::Equation {
@@ -469,9 +471,11 @@ impl ArrayCompiled {
         for (name, var) in &flat.brownian_variables {
             variables.insert(name.clone(), var.clone());
         }
-        // Discrete parameters too, so `classify_variables` sees their `update`
-        // and can tell a provider-fed `data` channel from a refresh kind this
-        // backend cannot run (rather than the name silently disappearing).
+        // DISCRETE parameters too: a `data`-kind update is the provider forcing
+        // seam and IS supported here (`classify_variables` routes it), and any
+        // other update kind must reach `from_model` so it surfaces the explicit
+        // "no refresh machinery" rejection rather than being silently dropped —
+        // which is what leaving this bucket out did.
         for (name, var) in &flat.discrete_variables {
             variables.insert(name.clone(), var.clone());
         }
@@ -619,11 +623,10 @@ impl ArrayCompiled {
         // an out-of-range index by its declared boundary policy instead of the
         // state gather's zero ghost, which §5.5.5 says is never a const array's.
         let const_scope = Rc::new(ConstArrayScope::from_names(
-            crate::classify::observed_definitions(&model_owned)
+            observed_bodies(&model_owned)
                 .into_iter()
-                .filter(|(_, rhs)| matches!(rhs, Expr::Operator(n) if n.op == "const"))
-                .map(|(name, _)| name.to_string())
-                .collect::<Vec<_>>(),
+                .filter(|(_, body)| matches!(body, Expr::Operator(n) if n.op == "const"))
+                .map(|(n, _)| n),
         ));
         // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
         // aggregate range still carries its `{ "from": <index set> }` linkage so
@@ -755,6 +758,19 @@ fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
         check_no_spatial_ops(&eq.lhs)?;
         check_no_spatial_ops(&eq.rhs)?;
     }
+    for var in model.variables.values() {
+        let mut failure = None;
+        var.for_each_expression(&mut |expr| {
+            if failure.is_none()
+                && let Err(e) = check_no_spatial_ops(expr)
+            {
+                failure = Some(e);
+            }
+        });
+        if let Some(e) = failure {
+            return Err(e);
+        }
+    }
     Ok(())
 }
 
@@ -841,6 +857,12 @@ fn check_free_variables(
         collect_index_head_names(&eq.lhs, &mut bound);
         collect_index_head_names(&eq.rhs, &mut bound);
     }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| {
+            collect_dim_symbols(expr, &mut bound);
+            collect_index_head_names(expr, &mut bound);
+        });
+    }
 
     // ---- Check every equation (skipping `ic`) and observed expression. -------
     for eq in &model.equations {
@@ -853,22 +875,22 @@ fn check_free_variables(
         check_expr_free_vars(&eq.lhs, &scope)?;
         check_expr_free_vars(&eq.rhs, &scope)?;
     }
-    Ok(())
-}
-
-/// The name an equation DEFINES when its LHS is a bare variable (optionally
-/// indexed) — the 1.0.0 home of what 0.x kept in `variables[v].expression`.
-/// Returns `None` for a derivative LHS, an `ic` LHS, or a compound expression
-/// LHS (an implicit algebraic constraint).
-fn observed_defining_name(lhs: &Expr) -> Option<&str> {
-    match lhs {
-        Expr::Variable(name) => Some(name.as_str()),
-        Expr::Operator(node) if node.op == "index" => match node.args.first() {
-            Some(Expr::Variable(name)) => Some(name.as_str()),
-            _ => None,
-        },
-        _ => None,
+    for var in model.variables.values() {
+        let mut failure = None;
+        var.for_each_expression(&mut |expr| {
+            let mut scope = bound.clone();
+            collect_binders(expr, &mut scope);
+            if failure.is_none()
+                && let Err(e) = check_expr_free_vars(expr, &scope)
+            {
+                failure = Some(e);
+            }
+        });
+        if let Some(e) = failure {
+            return Err(e);
+        }
     }
+    Ok(())
 }
 
 /// Is this LHS an initial-condition marker (`{"op": "ic", …}`)?
@@ -1040,12 +1062,13 @@ fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), Comp
 }
 
 /// (1) Collect state / parameter / observed variables (sorted by name for a
-/// deterministic build). A Brownian parameter is an explicit
-/// unsupported-feature error, never a silent drop.
+/// deterministic build).
 ///
-/// The categories are DERIVED (esm-spec §6.3.1), so they come from
-/// [`crate::classify`] rather than from the declared type, which since 1.0.0
-/// only separates `unknown` from `parameter`.
+/// Every category is DERIVED (esm-spec §6.3.1), never read off a declared type:
+/// an unknown is an ODE state or an observed according to the equation that
+/// defines it, and a parameter is Brownian or discrete according to its
+/// `update`. A Brownian parameter is an explicit unsupported-feature error,
+/// never a silent drop, and so is a discrete one.
 fn classify_variables(
     model: &Model,
 ) -> Result<(Vec<&String>, Vec<&String>, Vec<(&String, &ModelVariable)>), CompileError> {
@@ -1053,74 +1076,63 @@ fn classify_variables(
     let mut param_vars: Vec<&String> = Vec::new();
     let mut observed_vars: Vec<(&String, &ModelVariable)> = Vec::new();
 
-    let observed: HashSet<String> = crate::classify::observed_unknowns(model)
-        .into_iter()
-        .collect();
-    let brownian: HashSet<String> = crate::classify::brownian_parameters(model)
-        .into_iter()
-        .collect();
-    let discrete: HashSet<String> = crate::classify::discrete_parameters(model)
-        .into_iter()
-        .collect();
+    let class = crate::classification::Classification::of(model);
 
     let mut var_keys: Vec<&String> = model.variables.keys().collect();
     var_keys.sort();
     for name in var_keys {
         let var = &model.variables[name];
         match var.var_type {
-            // An ODE state and an ALGEBRAIC unknown are both carried and
-            // solved for; only an observed is eliminable.
-            VariableType::Unknown if observed.contains(name.as_str()) => {
-                observed_vars.push((name, var))
-            }
-            VariableType::Unknown => state_vars.push(name),
-
-            VariableType::Parameter if brownian.contains(name.as_str()) => {
-                return Err(CompileError::UnsupportedFeatureError {
-                    feature: "brownian".to_string(),
-                    message: format!(
-                        "Rust simulation backend does not support SDE (brownian) models; parameter '{name}' has a wiener update"
-                    ),
-                });
-            }
-            VariableType::Parameter if discrete.contains(name.as_str()) => {
-                // A `data` update is an external input bound once at build
-                // time through the provider seam — the 1.0.0 spelling of what
-                // 0.x mounted as a loader subsystem — so it binds like a
-                // parameter. Every OTHER update kind needs refresh machinery
-                // the array backend does not have; binning such a parameter as
-                // a state (integrated) or a plain parameter (frozen) would both
-                // be WRONG, and silently so. Fail loudly instead: the document
-                // still VALIDATES, it just cannot be simulated by this backend.
-                let all_data = var
-                    .update
-                    .as_ref()
-                    .is_some_and(|u| u.rules().iter().all(|r| r.source().is_some()));
-                if all_data {
-                    // Deliberately in NO list. Its value arrives through the
-                    // provider forcing buffer, which `lookup_variable` consults
-                    // LAST — after state, observeds and params — so binding it
-                    // as a param would shadow the provider with the
-                    // placeholder `default` and silently produce the wrong
-                    // trajectory. Leaving it unbound is what makes the forcing
-                    // seam reachable, and is exactly how 0.x treated the
-                    // loader observeds this construct replaces.
+            // An ALGEBRAIC unknown joins the states: it is solved for rather
+            // than eliminated, exactly as it was before 1.0.0 when it was
+            // declared `state` and pinned by an expression-LHS equation.
+            VariableType::Unknown => {
+                if class.is_observed(name) {
+                    observed_vars.push((name, var));
                 } else {
-                    let kinds: Vec<&str> = var
-                        .update
-                        .as_ref()
-                        .map(|u| u.rules().iter().map(|r| r.kind()).collect())
-                        .unwrap_or_default();
+                    state_vars.push(name);
+                }
+            }
+            VariableType::Parameter => {
+                if class.is_brownian(name) {
                     return Err(CompileError::UnsupportedFeatureError {
-                        feature: "discrete".to_string(),
+                        feature: "brownian".to_string(),
                         message: format!(
-                            "Rust array simulation backend does not yet support discrete (piecewise-constant) parameters; parameter '{name}' has update kind(s) {}",
-                            kinds.join(", ")
+                            "Rust simulation backend does not support SDE models; parameter '{name}' carries a wiener update"
                         ),
                     });
                 }
+                if class.is_discrete_parameter(name) {
+                    // A parameter refreshed from OUTSIDE the model — a `from`
+                    // binding to a data source, or a registered `handler` — IS
+                    // the forcing seam: its value is written into the forcing
+                    // buffer between segments (by `crate::provider`'s refresh
+                    // executor, or by the host through `forcing_handle`) and
+                    // read back at the RHS. That is exactly the slot an
+                    // observed with no defining rule occupies, so it goes
+                    // there: `build_observed_rules` lowers only observeds that
+                    // HAVE a definition, and `lookup_variable`'s forcing arm
+                    // resolves the name at evaluation time.
+                    if externally_refreshed(var) {
+                        observed_vars.push((name, var));
+                        continue;
+                    }
+                    // What is left is a parameter that recomputes itself from a
+                    // symbolic `expression` at each refresh, which needs event
+                    // machinery this backend does not have. Binning it as a
+                    // state (integrated) or a plain parameter (frozen) would
+                    // both be WRONG — and silently so. Fail loudly instead; the
+                    // document still VALIDATES, it just cannot be simulated by
+                    // this backend yet.
+                    return Err(CompileError::UnsupportedFeatureError {
+                        feature: "discrete".to_string(),
+                        message: format!(
+                            "Rust array simulation backend does not yet support a discrete parameter that recomputes itself symbolically; parameter '{name}' carries an `expression` update"
+                        ),
+                    });
+                }
+                param_vars.push(name);
             }
-            VariableType::Parameter => param_vars.push(name),
         }
     }
     Ok((state_vars, param_vars, observed_vars))
@@ -1300,7 +1312,7 @@ fn build_observed_rules(
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
 
-    // Observed unknowns and their DEFINING EQUATIONS. An array-shaped
+    // Declared observed variables with an `expression` field. An array-shaped
     // observed — a discretization-agnostic PDE leaf's `psi_x`, `grad_mag`,
     // `U_n`, `S_n`, a `const`-op field, a keyed-factor alias — is evaluated
     // WHOLESALE here: `eval` looks each array-valued observed reference up in
@@ -1309,31 +1321,25 @@ fn build_observed_rules(
     // rules are dependency-ordered below, so `grad_mag` materializes before
     // `U_n`/`S_n` read it.
     //
-    // Since 1.0.0 the body is the RHS of the equation whose LHS is the bare
-    // observed name, so the defining equations are DRAINED out of the
-    // (compile-private) model here: they become algebraic rules, and leaving
-    // them in `model.equations` would double-count them as state ODEs
-    // downstream. Draining also preserves the 0.x memory behaviour — for a
-    // large expanded discretization the observed bodies are the model's
-    // dominant allocation, and they are moved rather than cloned.
-    // `observed_names` fixes the sorted order `classify_variables` produced, so
-    // the rule order — and the stable dependency ordering below — is unchanged.
-    let observed_set: HashSet<&str> = observed_names.iter().map(String::as_str).collect();
-    let mut bodies: HashMap<String, Expr> = HashMap::new();
-    let mut kept: Vec<Equation> = Vec::with_capacity(model.equations.len());
-    for eq in std::mem::take(&mut model.equations) {
-        match observed_defining_name(&eq.lhs) {
-            Some(name) if observed_set.contains(name) && !bodies.contains_key(name) => {
-                bodies.insert(name.to_string(), eq.rhs);
-            }
-            _ => kept.push(eq),
-        }
-    }
-    model.equations = kept;
-
+    // The body is the RHS of the equation whose LHS is the bare variable —
+    // esm 1.0.0 states an unknown's behaviour in `equations` and nowhere else,
+    // so this reads `Classification::observed_definitions` rather than the
+    // removed `variables[..].expression` field. Cloning the body is O(1) for an
+    // operator tree (`Expr::Operator` holds an `Arc`), so moving it out of the
+    // model buys nothing now. `observed_names` preserves the sorted order
+    // `classify_variables` produced, so the rule order — and the stable
+    // dependency ordering below — is unchanged.
+    let observed_defs =
+        crate::classification::Classification::from_parts(&model.variables, &model.equations)
+            .observed_definitions;
     for name in observed_names {
-        if let Some(expr) = bodies.remove(name.as_str()) {
-            observed_rules.push(lower_algebraic_body(name, expr, &array_axes, index_sets)?);
+        if let Some(expr) = observed_defs.get(name) {
+            observed_rules.push(lower_algebraic_body(
+                name,
+                expr.clone(),
+                &array_axes,
+                index_sets,
+            )?);
         }
     }
 
@@ -1350,9 +1356,13 @@ fn build_observed_rules(
             });
             continue;
         }
-        // Also handle scalar algebraic: `var = rhs` (plain Variable LHS).
+        // Also handle scalar algebraic: `var = rhs` (plain Variable LHS). An
+        // OBSERVED unknown's own defining equation has that same shape and was
+        // already lowered above, so it is skipped here rather than emitted
+        // twice.
         if let Expr::Variable(name) = &eq.lhs
             && eliminated.contains(name)
+            && !observed_defs.contains_key(name)
         {
             observed_rules.push(lower_algebraic_body(
                 name,
@@ -1949,6 +1959,12 @@ pub(super) fn strip_value_invention(
     for eq in &model.equations {
         collect_geometry_producer_ids(&eq.rhs, &mut geom_ids);
     }
+    // An observed unknown's defining body is one of those equation RHSs from
+    // esm 1.0.0, so the loop above already covers it; what is left on a
+    // variable is a parameter `update`'s expressions.
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| collect_geometry_producer_ids(expr, &mut geom_ids));
+    }
     // (a) A variable shaped over a `kind: "derived"` index set whose FAQ producer
     //     is NOT a geometry ring producer — a relational membership / candidate
     //     set the dense runtime does not enumerate.
@@ -2002,6 +2018,9 @@ pub(super) fn strip_value_invention(
         strip_vi_joins(&mut eq.lhs, &vi_cols);
         strip_vi_joins(&mut eq.rhs, &vi_cols);
     }
+    for var in model.variables.values_mut() {
+        var.for_each_expression_mut(&mut |expr| strip_vi_joins(expr, &vi_cols));
+    }
     Ok(())
 }
 
@@ -2027,34 +2046,69 @@ fn expr_contains_arg_witness(expr: &Expr) -> bool {
 }
 
 fn model_contains_arg_witness(model: &Model) -> bool {
-    // An observed's defining expression is an ordinary equation RHS since
-    // 1.0.0, so scanning the equations covers it.
     model
         .equations
         .iter()
         .any(|eq| expr_contains_arg_witness(&eq.lhs) || expr_contains_arg_witness(&eq.rhs))
+        || model.variables.values().any(|v| {
+            let mut found = false;
+            v.for_each_expression(&mut |e| found |= expr_contains_arg_witness(e));
+            found
+        })
 }
 
 /// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
-/// (`index(gx, g)` etc.): every observed unknown DEFINED BY a `const` op (the
+/// (`index(gx, g)` etc.): every variable whose `expression` is a `const` op (the
 /// established self-contained build-time array channel — see the geometry
 /// `src_poly`/`tgt_poly` fixtures). Each is evaluated once, with no state /
 /// params / `t` (a `const` literal needs none), into its dense `ArrayD`. This is
 /// the Rust analogue of the Julia reference's `const_arrays` registry and the
 /// Python interpreter's join-free const-observed pre-materialization.
+/// Is this parameter refreshed from OUTSIDE the model — every update rule
+/// reading either a data source (`from`) or a registered handler?
+///
+/// Both are the FORCING seam: the value arrives from the runtime between
+/// segments rather than being computed by the model, which is what lets this
+/// backend serve it out of the forcing buffer with no event machinery of its
+/// own (CONFORMANCE_SPEC §5.10.1, §5.13.2). A rule with an `expression` value
+/// form is the opposite case — the model computes it, and something has to run
+/// that computation on each refresh.
+fn externally_refreshed(var: &ModelVariable) -> bool {
+    let Some(spec) = &var.update else {
+        return false;
+    };
+    spec.rules().iter().all(|rule| {
+        rule.value()
+            .is_some_and(|v| v.from.is_some() || v.handler.is_some())
+    })
+}
+
+/// name → defining RHS for every OBSERVED unknown of `model`
+/// (esm-spec §6.3.1).
+///
+/// The one place this pipeline asks "what defines this observed?" — from esm
+/// 1.0.0 the answer is the equation whose LHS is the bare variable, never a
+/// `variables[v].expression` field. Sorted by name (a `BTreeMap`), so every
+/// consumer iterates deterministically.
+fn observed_bodies(model: &Model) -> std::collections::BTreeMap<String, Expr> {
+    crate::classification::Classification::from_parts(&model.variables, &model.equations)
+        .observed_definitions
+}
+
 fn collect_const_factor_arrays(model: &Model) -> HashMap<String, ArrayD<f64>> {
     let mut out: HashMap<String, ArrayD<f64>> = HashMap::new();
-    for (name, expr) in crate::classify::observed_definitions(model) {
+    for (name, body) in observed_bodies(model) {
+        let expr = &body;
         let Expr::Operator(node) = expr else { continue };
         if node.op != "const" {
             continue;
         }
         match eval_expression(expr, &HashMap::new(), &[], &[], 0.0) {
             Ok(Value::Array(a)) => {
-                out.insert(name.to_string(), *a);
+                out.insert(name.clone(), *a);
             }
             Ok(Value::Scalar(s)) => {
-                out.insert(name.to_string(), ArrayD::from_elem(IxDyn(&[]), s));
+                out.insert(name.clone(), ArrayD::from_elem(IxDyn(&[]), s));
             }
             Err(_) => {}
         }
@@ -2141,10 +2195,11 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
             replaced = true;
         }
     }
+    // No equation defines `name` yet: esm 1.0.0 states an unknown's behaviour
+    // in `equations`, so the folded const becomes a new bare-LHS equation
+    // rather than a `variables[name].expression` field.
     if !replaced && model.variables.contains_key(name) {
-        // No defining equation yet: since 1.0.0 a variable carries no
-        // expression, so the materialized constant is introduced AS one.
-        model.equations.push(Equation {
+        model.equations.push(crate::types::Equation {
             lhs: Expr::Variable(name.to_string()),
             rhs: const_node,
         });
@@ -3093,9 +3148,9 @@ mod subsystem_ragged_and_inspection_tests {
                             "w": {"type": "unknown", "shape": ["edges"]}
                         },
                         "equations": [
-                    {"lhs": "w", "rhs": {"op": "const", "value": [10.0, 20.0, 30.0], "args": []}},
-                    {"lhs": "edgesOnCell", "rhs": {"op": "const", "value": [[1, 2, 0], [1, 2, 3]], "args": []}},
-                    {"lhs": "nEdgesOnCell", "rhs": {"op": "const", "value": [2, 3], "args": []}}]
+                {"lhs": "nEdgesOnCell", "rhs": {"op": "const", "value": [2, 3], "args": []}},
+                {"lhs": "edgesOnCell", "rhs": {"op": "const", "value": [[1, 2, 0], [1, 2, 3]], "args": []}},
+                {"lhs": "w", "rhs": {"op": "const", "value": [10.0, 20.0, 30.0], "args": []}}]
                     }}
                 }},
                 "variables": {
@@ -3105,7 +3160,9 @@ mod subsystem_ragged_and_inspection_tests {
                     "s": {"type": "unknown", "shape": ["cells"]}
                 },
                 "equations": [
-                    {"lhs": "s", "rhs": {
+                {"lhs": "nEdgesOnCell", "rhs": "mesh.nEdgesOnCell"},
+                {"lhs": "edgesOnCell", "rhs": "mesh.edgesOnCell"},
+                {"lhs": "s", "rhs": {
                         "op": "aggregate", "args": ["edgesOnCell", "mesh.w"],
                         "output_idx": ["i"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "cells"},
@@ -3113,8 +3170,6 @@ mod subsystem_ragged_and_inspection_tests {
                         "expr": {"op": "index", "args": ["mesh.w",
                                  {"op": "index", "args": ["edgesOnCell", "i", "k"]}]}
                     }},
-                    {"lhs": "edgesOnCell", "rhs": "mesh.edgesOnCell"},
-                    {"lhs": "nEdgesOnCell", "rhs": "mesh.nEdgesOnCell"},
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
                     {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "s"}
                 ]
@@ -3215,7 +3270,7 @@ mod subsystem_ragged_and_inspection_tests {
     }
 
     fn obs_var() -> ModelVariable {
-        serde_json::from_value(json!({"type": "observed"})).expect("variable parses")
+        serde_json::from_value(json!({"type": "unknown"})).expect("variable parses")
     }
 
     /// `_factor_scope` semantics: an exact-name variable wins (registry
@@ -3320,7 +3375,26 @@ mod subsystem_ragged_and_inspection_tests {
                     "W_ij": {"type": "unknown"}
                 },
                 "equations": [
-                    {"lhs": "W_ij", "rhs": {
+                {"lhs": "src_poly", "rhs": {"op": "const", "args": [], "value": [
+                            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]]}},
+                {"lhs": "tgt_poly", "rhs": {"op": "const", "args": [], "value": [
+                            [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]}},
+                {"lhs": "A_ij", "rhs": {
+                        "op": "aggregate", "args": ["src_poly", "tgt_poly"],
+                        "output_idx": ["i", "j"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
+                        "expr": {"op": "polygon_intersection_area", "manifold": "planar",
+                                 "args": [{"op": "index", "args": ["src_poly", "i"]},
+                                          {"op": "index", "args": ["tgt_poly", "j"]}]}}},
+                {"lhs": "A_j", "rhs": {
+                        "op": "aggregate", "args": ["A_ij"],
+                        "output_idx": ["j"], "semiring": "sum_product",
+                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
+                        "filter": {"op": ">", "args": [
+                            {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
+                        "expr": {"op": "index", "args": ["A_ij", "i", "j"]}}},
+                {"lhs": "W_ij", "rhs": {
                         "op": "aggregate", "args": ["A_ij", "A_j"],
                         "output_idx": ["i", "j"], "semiring": "sum_product",
                         "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
@@ -3329,25 +3403,6 @@ mod subsystem_ragged_and_inspection_tests {
                         "expr": {"op": "/", "args": [
                             {"op": "index", "args": ["A_ij", "i", "j"]},
                             {"op": "index", "args": ["A_j", "j"]}]}}},
-                    {"lhs": "A_j", "rhs": {
-                        "op": "aggregate", "args": ["A_ij"],
-                        "output_idx": ["j"], "semiring": "sum_product",
-                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
-                        "filter": {"op": ">", "args": [
-                            {"op": "index", "args": ["A_ij", "i", "j"]}, "atol"]},
-                        "expr": {"op": "index", "args": ["A_ij", "i", "j"]}}},
-                    {"lhs": "A_ij", "rhs": {
-                        "op": "aggregate", "args": ["src_poly", "tgt_poly"],
-                        "output_idx": ["i", "j"], "semiring": "sum_product",
-                        "ranges": {"i": {"from": "src_cells"}, "j": {"from": "tgt_cells"}},
-                        "expr": {"op": "polygon_intersection_area", "manifold": "planar",
-                                 "args": [{"op": "index", "args": ["src_poly", "i"]},
-                                          {"op": "index", "args": ["tgt_poly", "j"]}]}}},
-                    {"lhs": "tgt_poly", "rhs": {"op": "const", "args": [], "value": [
-                            [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]]}},
-                    {"lhs": "src_poly", "rhs": {"op": "const", "args": [], "value": [
-                            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                            [[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]]}},
                     {"lhs": {"op": "D", "args": ["q"], "wrt": "t"}, "rhs": 0.0}
                 ]
             }}

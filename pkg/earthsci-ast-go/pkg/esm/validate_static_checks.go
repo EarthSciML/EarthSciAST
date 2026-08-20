@@ -59,12 +59,16 @@ const opAggregate = "aggregate"
 // (`.../equations/i/lhs` or `.../rhs`), never at the leaf position — the same
 // granularity §7.1.2 and the shared corpus pin.
 func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, model *Model, basePath string) {
-	// The relational-node-in-continuous check asks whether an aggregate reads a
-	// CONTINUOUS quantity, and the continuous unknowns are the ODE states --
-	// derived from the equations now, not read off a declared type
-	// (esm-spec 6.3.1).
+	// "Reads a STATE" is the cadence question, and from esm 1.0.0 it is DERIVED:
+	// an ODE state is an unknown under D(·,t) on some equation LHS (esm-spec
+	// §6.3.1). An ALGEBRAIC unknown seeds CONTINUOUS too (CONFORMANCE_SPEC
+	// §5.7.2), so both count here; an OBSERVED unknown does not, because its
+	// class is the class of its defining RHS and may well be CONST.
 	stateVars := make(map[string]bool)
-	for _, varName := range ODEStatesIn(s.file, model) {
+	for _, varName := range ODEStates(model) {
+		stateVars[varName] = true
+	}
+	for _, varName := range AlgebraicUnknowns(model) {
 		stateVars[varName] = true
 	}
 

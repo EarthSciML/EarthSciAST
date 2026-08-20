@@ -727,10 +727,10 @@ fn ab_observed_chain_and_broadcast() {
                 "s": {"type": "unknown"}
             },
             "equations": [
-                    {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
-                    {"lhs": "c", "rhs": {"op": "aggregate", "args": [], "output_idx": ["j"],
+                {"lhs": "c", "rhs": {"op": "aggregate", "args": [], "output_idx": ["j"],
                           "ranges": {"j": [1, nj]},
                           "expr": {"op": "cos", "args": [{"op": "*", "args": [0.3, "j"]}]}}},
+                {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                  "rhs": {"op": "*", "args": [{"op": "neg", "args": ["s"]}, "x"]}},
                 {
@@ -785,8 +785,8 @@ fn ab_fallback_rule_interop() {
                 "a": {"type": "unknown", "shape": ["c"]}
             },
             "equations": [
-                    {"lhs": "a", "rhs": {"op": "+", "args": ["psi", "k"]}},
-                    {"lhs": "k", "rhs": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
+                {"lhs": "k", "rhs": {"op": "const", "value": [1.0, 2.0, 3.0], "args": []}},
+                {"lhs": "a", "rhs": {"op": "+", "args": ["psi", "k"]}},
                 {"lhs": {"op": "ic", "args": ["psi"]}, "rhs": 0.0},
                 {"lhs": {"op": "D", "args": ["psi"], "wrt": "t"},
                  "rhs": {"op": "-", "args": ["a"]}}
@@ -1036,7 +1036,7 @@ fn exports_materialize_as_observed_arrays() {
                 "s": {"type": "unknown"}
             },
             "equations": [
-                    {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
+                {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                  "rhs": {"op": "neg", "args": ["s"]}}
             ]
@@ -1085,8 +1085,8 @@ fn ab_prefix_scan_observeds() {
                 "Q": {"type": "unknown", "shape": ["i", "k"]}
             },
             "equations": [
-                    {"lhs": "Q", "rhs": scan_obs("<")},
-                    {"lhs": "P", "rhs": scan_obs("<=")},
+                {"lhs": "P", "rhs": scan_obs("<=")},
+                {"lhs": "Q", "rhs": scan_obs("<")},
                 {
                     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i", "k"],
                             "expr": {"op": "D", "args": [
@@ -1143,14 +1143,14 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
                 "h": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                    {"lhs": "h", "rhs": {"op": "+", "args": [
-                          {"op": "*", "args": [2.0, "u"]}, "g", "q"]}},
-                    {"lhs": "q", "rhs": {"op": "makearray", "args": [],
-                          "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
-                          "values": [interior, 1.5, top]}},
-                    {"lhs": "g", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                {"lhs": "g", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
                           "ranges": {"i": [1, n]},
                           "expr": {"op": "sin", "args": [{"op": "*", "args": [0.5, "i"]}]}}},
+                {"lhs": "q", "rhs": {"op": "makearray", "args": [],
+                          "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
+                          "values": [interior, 1.5, top]}},
+                {"lhs": "h", "rhs": {"op": "+", "args": [
+                          {"op": "*", "args": [2.0, "u"]}, "g", "q"]}},
                 d_eq("u", n, agg(n, json!({"op": "neg", "args": [
                     {"op": "index", "args": ["h", "i"]}]})))
             ]
@@ -1304,7 +1304,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
                 "s": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                    {"lhs": "s", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
+                {"lhs": "s", "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
                           "ranges": {"i": [1, ni]},
                           "expr": {"op": "*", "args": [0.5,
                               {"op": "index", "args": ["w", "i", 3]}]}}},
@@ -1357,7 +1357,7 @@ fn export_demotion_skips_unread_publishes() {
                 "s": {"type": "unknown"}
             },
             "equations": [
-                    {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
+                {"lhs": "s", "rhs": {"op": "*", "args": [2.0, "x"]}},
                 {"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                  "rhs": {"op": "neg", "args": ["s"]}}
             ]
@@ -1567,7 +1567,10 @@ fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
                 "s": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                    {"lhs": "s", "rhs": agg(n, json!({"op": "*", "args": [0.5, idx("u", json!("i"))]}))},d_eq("u", n, agg(n, rhs))]
+                {"lhs": "s",
+                 "rhs": agg(n, json!({"op": "*", "args": [0.5, idx("u", json!("i"))]}))},
+                d_eq("u", n, agg(n, rhs))
+            ]
         }}
     })
 }

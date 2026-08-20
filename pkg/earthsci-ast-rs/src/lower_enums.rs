@@ -231,11 +231,10 @@ mod tests {
                 "M": {
                     "variables": {
                         "s": {
-                            "type": "unknown"
-                        }
+                            "type": "unknown"}
                     },
                     "equations": [
-                    {"lhs": "s", "rhs": {
+                {"lhs": "s", "rhs": {
                                 "op": "enum",
                                 "args": ["season", "summer"]
                             }}]
@@ -243,7 +242,7 @@ mod tests {
             }
         });
         let out = lowered(input);
-        let expr = &out["models"]["M"]["variables"]["s"]["expression"];
+        let expr = &(*crate::classification::observed_definition_json(&out["models"]["M"], "s").expect("s defining equation"));
         assert_eq!(expr["op"], "const");
         assert_eq!(expr["value"], 3);
         assert_eq!(expr["args"], json!([]));
@@ -260,11 +259,10 @@ mod tests {
                 "M": {
                     "variables": {
                         "r": {
-                            "type": "unknown"
-                        }
+                            "type": "unknown"}
                     },
                     "equations": [
-                    {"lhs": "r", "rhs": {
+                {"lhs": "r", "rhs": {
                                 "op": "index",
                                 "args": [
                                     {"op": "const", "args": [], "value": [[1, 2, 3]]},
@@ -276,7 +274,7 @@ mod tests {
             }
         });
         let out = lowered(input);
-        let expr = &out["models"]["M"]["variables"]["r"]["expression"];
+        let expr = &(*crate::classification::observed_definition_json(&out["models"]["M"], "r").expect("r defining equation"));
         assert_eq!(expr["op"], "index");
         assert_eq!(expr["args"][1]["op"], "const");
         assert_eq!(expr["args"][1]["value"], 3);
@@ -290,10 +288,9 @@ mod tests {
             "enums": {"season": {"summer": 3}},
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "unknown"
-                }},
+                    "type": "unknown"}},
                 "equations": [
-                    {"lhs": "x", "rhs": {"op": "enum", "args": ["weekday", "monday"]}}]
+                {"lhs": "x", "rhs": {"op": "enum", "args": ["weekday", "monday"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -307,10 +304,9 @@ mod tests {
             "enums": {"season": {"summer": 3}},
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "unknown"
-                }},
+                    "type": "unknown"}},
                 "equations": [
-                    {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "winter"]}}]
+                {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "winter"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -324,10 +320,9 @@ mod tests {
         let mut v = json!({
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "unknown"
-                }},
+                    "type": "unknown"}},
                 "equations": [
-                    {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "summer"]}}]
+                {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "summer"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -340,10 +335,9 @@ mod tests {
             "enums": {"season": {"summer": 3}},
             "models": {"M": {
                 "variables": {"x": {
-                    "type": "unknown"
-                }},
+                    "type": "unknown"}},
                 "equations": [
-                    {"lhs": "x", "rhs": {"op": "enum", "args": ["season"]}}]
+                {"lhs": "x", "rhs": {"op": "enum", "args": ["season"]}}]
             }}
         });
         let err = lower_enums(&mut v).unwrap_err();
@@ -402,16 +396,15 @@ mod tests {
                 "subsystems": {
                     "Inner": {
                         "variables": {"y": {
-                            "type": "unknown"
-                        }},
+                            "type": "unknown"}},
                         "equations": [
-                    {"lhs": "y", "rhs": {"op": "enum", "args": ["season", "summer"]}}]
+                {"lhs": "y", "rhs": {"op": "enum", "args": ["season", "summer"]}}]
                     }
                 }
             }}
         });
         let out = lowered(input);
-        let expr = &out["models"]["Outer"]["subsystems"]["Inner"]["variables"]["y"]["expression"];
+        let expr = &(*crate::classification::observed_definition_json(&out["models"]["Outer"]["subsystems"]["Inner"], "y").expect("y defining equation"));
         assert_eq!(expr["op"], "const");
         assert_eq!(expr["value"], 3);
     }

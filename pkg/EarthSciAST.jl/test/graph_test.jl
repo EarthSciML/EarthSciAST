@@ -12,7 +12,7 @@ const ESSG = EarthSciAST
 
 _graph_model() = Model(
     Dict(
-        "x" => ModelVariable(StateVariable, default=1.0),
+        "x" => ModelVariable(UnknownVariable, default=1.0),
         "k" => ModelVariable(ParameterVariable, default=0.5),
     ),
     [Equation(
@@ -136,8 +136,8 @@ _graph_rsys() = ReactionSystem(
                     "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
                 "variables" => Dict{String,Any}(
                     "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
-                    "y" => Dict{String,Any}("type" => "state", "default" => 1.0),
-                    "z" => Dict{String,Any}("type" => "state", "default" => 2.0)),
+                    "y" => Dict{String,Any}("type" => "unknown", "default" => 1.0),
+                    "z" => Dict{String,Any}("type" => "unknown", "default" => 2.0)),
                 "equations" => Any[
                     Dict{String,Any}(
                         "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),

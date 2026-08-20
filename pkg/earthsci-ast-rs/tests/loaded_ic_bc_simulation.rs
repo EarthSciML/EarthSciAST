@@ -49,31 +49,31 @@ fn line(v: &[f64]) -> ArrayD<f64> {
 fn manifest_inputs() -> HashMap<String, ArrayD<f64>> {
     let mut m = HashMap::new();
     m.insert(
-        "InitialConditions.O3_init".to_string(),
+        "ChemistryICs.O3_init".to_string(),
         grid(&[[38.0, 42.0], [39.0, 43.0], [41.0, 45.0], [43.0, 47.0]]),
     );
     m.insert(
-        "InitialConditions.NO_init".to_string(),
+        "ChemistryICs.NO_init".to_string(),
         grid(&[[0.10, 0.12], [0.11, 0.13], [0.09, 0.14], [0.12, 0.15]]),
     );
     m.insert(
-        "InitialConditions.NO2_init".to_string(),
+        "ChemistryICs.NO2_init".to_string(),
         grid(&[[1.0, 1.2], [1.1, 1.3], [0.9, 1.4], [1.2, 1.5]]),
     );
     m.insert(
-        "Meteorology.u_wind".to_string(),
+        "Advection.u_wind".to_string(),
         grid(&[[2.0, 2.2], [2.1, 2.3], [2.2, 2.4], [2.3, 2.5]]),
     );
     m.insert(
-        "BoundaryConditions.O3_inflow".to_string(),
+        "Advection.O3_inflow".to_string(),
         line(&[35.0, 36.0]),
     );
     m.insert(
-        "BoundaryConditions.NO_inflow".to_string(),
+        "Advection.NO_inflow".to_string(),
         line(&[0.20, 0.25]),
     );
     m.insert(
-        "BoundaryConditions.NO2_inflow".to_string(),
+        "Advection.NO2_inflow".to_string(),
         line(&[1.5, 1.6]),
     );
     m
@@ -140,7 +140,10 @@ fn loaded_ic_bc_simulation_provider_injection() {
     let compiled = ArrayCompiled::from_flattened(&flat).expect("compile coupled array system");
 
     // ---- Install the static stub provider and materialize its CONST fields ---
-    // Every loaded field enters through the provider seam, keyed `<Loader>.<var>`.
+    // Every loaded field enters through the provider seam. From esm 1.0.0 the
+    // loaded field IS a model parameter carrying a `data` update, so the seam
+    // is keyed by that parameter's FLATTENED name (`<Model>.<param>`) rather
+    // than by the old `<Loader>.<var>` pair.
     let mut provider = StubProvider {
         fields: manifest_inputs(),
     };

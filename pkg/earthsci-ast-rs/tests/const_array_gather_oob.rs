@@ -114,11 +114,10 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
                 "M": {"type": "parameter", "shape": ["k"]},
                 "shifted": {
                     "type": "unknown",
-                    "shape": ["k"]
-                }
+                    "shape": ["k"]}
             },
             "equations": [
-                    {"lhs": "shifted", "rhs": {
+                {"lhs": "shifted", "rhs": {
                         "op": "aggregate",
                         "output_idx": ["i"],
                         "ranges": {"i": {"from": "k"}},

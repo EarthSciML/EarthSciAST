@@ -60,7 +60,7 @@ func TestSaveCompact(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -117,7 +117,7 @@ func TestSaveToFile(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -153,7 +153,7 @@ func TestSaveCompactToFile(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -301,18 +301,16 @@ func TestRoundTripSerialization(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    VarTypeUnknown,
+						Type:    "unknown",
 						Units:   strPtr("m"),
 						Default: 1.0,
 					},
+					// `y` is an OBSERVED unknown: its definition is the
+					// bare-variable-LHS equation below, not a field here.
 					"y": {
-						Type: VarTypeUnknown,
+						Type: "unknown",
 					},
 				},
-				// `y` is an OBSERVED unknown, stated by its bare-variable-LHS
-				// equation. In 0.x this was a `"type": "observed"` variable carrying
-				// an `expression`; 1.0.0 removed the field, so the definition is an
-				// equation like any other.
 				Equations: []Equation{
 					{
 						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},

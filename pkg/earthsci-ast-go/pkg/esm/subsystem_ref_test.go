@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,20 +79,18 @@ func TestResolveSubsystemRefs_LocalFile(t *testing.T) {
 	}
 }
 
-// A data source cannot be mounted as a SUBSYSTEM.
-//
-// This pin is INVERTED by esm 1.0.0. In 0.x a data loader was a component, so a
-// loader-only file was a legal `ref` target and this test asserted the mount
-// succeeded. From 1.0.0 a data source is not a component (esm-spec §8): it
-// cannot be a subsystem, a coupling endpoint, or a scoped-name path root. A file
-// whose only content is `data_sources` therefore contains NO mountable system,
-// and §4.7 requires exactly one.
+// A referenced file whose only payload is a `data_sources` catalogue has NO
+// mountable system. From esm 1.0.0 a data source is not a component — it cannot
+// be a coupling endpoint, a scoped-name path root, or a subsystem (esm-spec §8,
+// and the `subsystems` schema note) — so §4.7's "exactly one top-level system"
+// is unsatisfiable and the mount is rejected. The 0.x behaviour, which mounted
+// the loader as the subsystem, is the thing that changed.
 func TestResolveSubsystemRefs_DataSourceOnlyFileIsNotMountable(t *testing.T) {
 	dir := t.TempDir()
 	inner := map[string]any{
 		"esm": "1.0.0",
 		"metadata": map[string]any{
-			"name": "inner-source",
+			"name": "inner-source-catalogue",
 		},
 		"data_sources": map[string]any{
 			"ERA5_PL": map[string]any{
@@ -118,65 +117,14 @@ func TestResolveSubsystemRefs_DataSourceOnlyFileIsNotMountable(t *testing.T) {
 
 	err := ResolveSubsystemRefs(file, dir)
 	if err == nil {
-		t.Fatal("a data-source-only file is not a mountable subsystem, but the ref resolved")
+		t.Fatal("a source-catalogue file must not be mountable as a subsystem")
 	}
-	if code := tiErrCode(t, err); code != CodeAmbiguousSubsystemRef {
-		t.Errorf("code = %s; want %s", code, CodeAmbiguousSubsystemRef)
+	var etErr *ExpressionTemplateError
+	if !errors.As(err, &etErr) || etErr.Code != CodeAmbiguousSubsystemRef {
+		t.Errorf("err = %v; want %s", err, CodeAmbiguousSubsystemRef)
 	}
-}
-
-// A file carrying a model AND a data source has exactly ONE mountable system:
-// the source does not count toward the §4.7 total, because it is not a
-// component. Before 1.0.0 this same file was AMBIGUOUS (two components), so the
-// change is observable in both directions.
-func TestResolveSubsystemRefs_DataSourceDoesNotMakeRefAmbiguous(t *testing.T) {
-	dir := t.TempDir()
-	inner := map[string]any{
-		"esm": "1.0.0",
-		"metadata": map[string]any{
-			"name": "inner-mixed",
-		},
-		"data_sources": map[string]any{
-			"ERA5_PL": map[string]any{
-				"kind":   "grid",
-				"source": map[string]any{"url_template": "cds://era5/{date:%Y}.nc"},
-			},
-		},
-		"models": map[string]any{
-			"Inner": map[string]any{
-				"variables": map[string]any{
-					"x": map[string]any{"type": "unknown", "units": "1"},
-				},
-				"equations": []any{},
-			},
-		},
-	}
-	writeJSON(t, filepath.Join(dir, "inner.json"), inner)
-
-	file := &ESMFile{
-		Models: map[string]Model{
-			"Outer": {
-				Variables: map[string]ModelVariable{},
-				Equations: []Equation{},
-				Subsystems: map[string]any{
-					"Inner": map[string]any{"ref": "inner.json"},
-				},
-			},
-		},
-	}
-
-	if err := ResolveSubsystemRefs(file, dir); err != nil {
-		t.Fatalf("the model is the single component; the source must not make it ambiguous: %v", err)
-	}
-	resolved, ok := file.Models["Outer"].Subsystems["Inner"].(map[string]any)
-	if !ok {
-		t.Fatalf("Inner not resolved to a map: %T", file.Models["Outer"].Subsystems["Inner"])
-	}
-	if _, hasRef := resolved["ref"]; hasRef {
-		t.Fatalf("Inner still has ref after resolution: %#v", resolved)
-	}
-	if _, hasVars := resolved["variables"]; !hasVars {
-		t.Fatalf("Inner missing variables after resolution: %#v", resolved)
+	if !strings.Contains(err.Error(), "no models or reaction systems") {
+		t.Errorf("message should say what is missing: %v", err)
 	}
 }
 

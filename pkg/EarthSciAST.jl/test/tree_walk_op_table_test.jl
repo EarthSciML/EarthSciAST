@@ -195,8 +195,8 @@ end
         # (vectorized) path, const arrays, and an ic equation — the code paths
         # that receive the shared sentinels as defaults.
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
-            "u" => ModelVariable(StateVariable),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
+            "u" => ModelVariable(UnknownVariable),
             "k" => ModelVariable(ParameterVariable; default=2.0),
         )
         _v(n) = VarExpr(n)

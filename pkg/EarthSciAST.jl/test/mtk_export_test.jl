@@ -22,9 +22,9 @@ function _toy_ode_system(name::Symbol=:ToyDecay)
     # as the existing real_mtk_integration_test and simulate_e2e_test. MTK
     # v11 doesn't accept the short `System(eqs, iv; defaults=...)` path.
     vars = Dict{String,ESM.ModelVariable}(
-        "x" => ESM.ModelVariable(ESM.StateVariable; default=1.0),
-        "y" => ESM.ModelVariable(ESM.StateVariable; default=0.0),
-        "z" => ESM.ModelVariable(ESM.StateVariable; default=0.0),
+        "x" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
+        "y" => ESM.ModelVariable(ESM.UnknownVariable; default=0.0),
+        "z" => ESM.ModelVariable(ESM.UnknownVariable; default=0.0),
         "k1" => ESM.ModelVariable(ESM.ParameterVariable; default=0.5),
         "k2" => ESM.ModelVariable(ESM.ParameterVariable; default=0.3),
         "k3" => ESM.ModelVariable(ESM.ParameterVariable; default=0.1),
@@ -90,7 +90,7 @@ end
     @test haskey(vars, "k2")
     @test haskey(vars, "k3")
 
-    @test vars["x"]["type"] == "state"
+    @test vars["x"]["type"] == "unknown"   # esm 1.0.0 has two declared types
     @test vars["k1"]["type"] == "parameter"
     @test vars["x"]["default"] == 1.0
     @test vars["k1"]["default"] == 0.5
@@ -188,7 +188,7 @@ end
     # And confirm the full mtk2esm emits TODO_GAP in reference.notes when
     # a brownian-declared system is exported (uses the SDESystem path gap).
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable; default=1.0),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
         "k" => ESM.ModelVariable(ESM.ParameterVariable; default=0.5),
     )
     eqs = ESM.Equation[
@@ -312,7 +312,7 @@ end
 @testset "mtk2esm: min/max operators round-trip" begin
     # Build a system with min/max clamping equations
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable; default=0.5),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default=0.5),
         "k" => ESM.ModelVariable(ESM.ParameterVariable; default=0.1),
     )
     # D(u) ~ -k * min(max(u, 0.0), 1.0)  — clamped decay
@@ -376,9 +376,9 @@ end
 @testset "mtk2esm: n-ary min/max (nested)" begin
     # Test that min(a, b, c) is represented as nested min(a, min(b, c))
     vars = Dict{String,ESM.ModelVariable}(
-        "x" => ESM.ModelVariable(ESM.StateVariable; default=1.0),
-        "y" => ESM.ModelVariable(ESM.StateVariable; default=2.0),
-        "z" => ESM.ModelVariable(ESM.StateVariable; default=3.0),
+        "x" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
+        "y" => ESM.ModelVariable(ESM.UnknownVariable; default=2.0),
+        "z" => ESM.ModelVariable(ESM.UnknownVariable; default=3.0),
     )
     # D(x) ~ -min(x, y, z) — nested min
     eqs = ESM.Equation[

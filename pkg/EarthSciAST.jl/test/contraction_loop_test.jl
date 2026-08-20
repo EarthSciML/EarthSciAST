@@ -30,8 +30,8 @@ _cl_doc(M::Int) = Dict{String,Any}(
     "esm" => "0.8.0",
     "metadata" => Dict("name" => "contraction_loop_repro"),
     "models" => Dict("Repro" => Dict{String,Any}(
-        "variables" => Dict("x" => Dict("type" => "state"),
-                            "s" => Dict("type" => "state")),
+        "variables" => Dict("x" => Dict("type" => "unknown"),
+                            "s" => Dict("type" => "unknown")),
         "equations" => Any[
             Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
                  "rhs" => 0.0),
@@ -51,8 +51,8 @@ _cl_doc_weighted(W::Vector{Float64}) = Dict{String,Any}(
     "esm" => "0.8.0",
     "metadata" => Dict("name" => "contraction_loop_weighted"),
     "models" => Dict("Repro" => Dict{String,Any}(
-        "variables" => Dict("x" => Dict("type" => "state"),
-                            "s" => Dict("type" => "state")),
+        "variables" => Dict("x" => Dict("type" => "unknown"),
+                            "s" => Dict("type" => "unknown")),
         "equations" => Any[
             Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
                  "rhs" => 0.0),
@@ -163,7 +163,7 @@ function _cl_doc2d_weighted(M::Int)
             Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>F),"k","l"])]))
     Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_einsum2d_w"),
       "models"=>Dict("R"=>Dict{String,Any}(
-        "variables"=>Dict("out"=>Dict("type"=>"state","shape"=>Any["i","j"])),
+        "variables"=>Dict("out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[Dict(
           "lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
                       "ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2]),
@@ -186,8 +186,8 @@ function _cl_doc2d_arith(M::Int)
             Dict("op"=>"index","args"=>Any["x","i","j"])]))
     Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_einsum2d_a"),
       "models"=>Dict("R"=>Dict{String,Any}(
-        "variables"=>Dict("x"=>Dict("type"=>"state","shape"=>Any["i","j"]),
-                          "out"=>Dict("type"=>"state","shape"=>Any["i","j"])),
+        "variables"=>Dict("x"=>Dict("type"=>"unknown","shape"=>Any["i","j"]),
+                          "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[
           Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["i","j"],
                  "ranges"=>Dict("i"=>Any[1,2],"j"=>Any[1,2]),
@@ -272,8 +272,8 @@ end
                 Dict("op"=>"index","args"=>Any["src","k","l"])]))
         doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_state_src"),
           "models"=>Dict("R"=>Dict{String,Any}(
-            "variables"=>Dict("src"=>Dict("type"=>"state","shape"=>Any["k","l"]),
-                              "out"=>Dict("type"=>"state","shape"=>Any["i","j"])),
+            "variables"=>Dict("src"=>Dict("type"=>"unknown","shape"=>Any["k","l"]),
+                              "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
             "equations"=>Any[
               Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["k","l"],
                      "ranges"=>Dict("k"=>Any[1,N],"l"=>Any[1,N]),
@@ -317,8 +317,8 @@ function _cl_halo(M::Int; ghost::Bool=false)
             Dict("op"=>"index","args"=>Any["q", donor("i","k"), donor("j","l")])]))
     doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"cl_halo"),
       "models"=>Dict("R"=>Dict{String,Any}(
-        "variables"=>Dict("q"=>Dict("type"=>"state","shape"=>Any["a","b"]),
-                          "out"=>Dict("type"=>"state","shape"=>Any["i","j"])),
+        "variables"=>Dict("q"=>Dict("type"=>"unknown","shape"=>Any["a","b"]),
+                          "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[
           Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
                  "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),

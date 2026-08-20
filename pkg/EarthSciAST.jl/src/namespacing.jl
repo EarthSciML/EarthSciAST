@@ -161,6 +161,32 @@ end
 # ========================================
 
 """
+    _namespace_variable_update(var, _ns) -> ModelVariable
+
+Rewrite the expression-bearing fields of a parameter's `update` rules (§5.4)
+through the namespacing map `_ns`, returning `var` unchanged when it declares
+no update. `when` and `expression` are ordinary expression positions whose free
+names resolve in the DECLARING component's scope, so they must follow the same
+renaming every equation does — otherwise a condition-triggered parameter stops
+seeing the state it watches once its model is flattened under a prefix.
+"""
+function _namespace_variable_update(var::ModelVariable, _ns)::ModelVariable
+    var.update === nothing && return var
+    rules = ParameterUpdate[]
+    changed = false
+    for r in var.update
+        nw = r.when === nothing ? nothing : _ns(r.when)
+        ne = r.expression === nothing ? nothing : _ns(r.expression)
+        (nw !== r.when || ne !== r.expression) && (changed = true)
+        push!(rules, ParameterUpdate(r.kind; times=r.times, interval=r.interval,
+            initial_offset=r.initial_offset, when=nw, direction=r.direction,
+            source=r.source, hook=r.hook, expression=ne, from=r.from,
+            handler=r.handler))
+    end
+    return changed ? reconstruct(var; update=rules) : var
+end
+
+"""
 Collect a Model's variables and equations into the flattener accumulators,
 recursing through subsystems. All names are rewritten to `prefix.local_name`.
 Index sets (RFC §5.2) are document-scoped as of esm-spec v0.8.0 — a single
@@ -206,65 +232,36 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     # names and must NOT be rewritten to a `<prefix>.` form; only ordinary
     # variable references are namespaced.
 
+    # Which bucket each variable lands in is DERIVED, not declared (esm-spec
+    # §6.3.1): an unknown defined by a bare-variable LHS is observed and
+    # everything else the solver solves for is a state, while every parameter —
+    # constant, sampled, or discrete-cadence — partitions with the parameters,
+    # because a parameter is never differentiated. A discrete-cadence one is the
+    # forcing buffer the update machinery writes; its `update` block travels
+    # with it, so `flattened_to_esm` re-emits it losslessly.
+    _observed_here = Set(observed_unknowns(model))
     for (name, var) in model.variables
         namespaced = "$(prefix).$(name)"
-        v = var
-        # Namespace the defining `expression` body, consistent with the
-        # namespaced key and the synthesized observed equation below.
-        # An observed's array-aggregate / const body otherwise keeps UNQUALIFIED
-        # intra-model references (e.g. an aggregate body `index(rg_src_poly, …)`)
-        # even though
-        # its own key became `<prefix>.rg_src_lon`. The geometry / value-invention
-        # front-door (RFC §6.1 / §8.6.1) reads this `expression` DIRECTLY (see
-        # `flattened_to_esm`), so an unqualified ref can no longer resolve against
-        # the prefixed variable keys — rewrite it here so the flattened observed
-        # is self-consistent with its key, shape, and equation form.
-        if v.expression !== nothing
-            v = reconstruct(v; expression=_ns(v.expression))
-        end
-        if v.type == StateVariable
-            states[namespaced] = v
-        elseif v.type == ParameterVariable || v.type == DiscreteVariable
-            # A DISCRETE variable is piecewise-constant between refreshes — the
-            # solver never differentiates it — so it partitions with the
-            # parameters (it is the loader/forcing buffer the refresh machinery
-            # writes; see `ModelVariableType`). The bucket is only a partition:
-            # `v` keeps `type == DiscreteVariable`, so `flattened_to_esm`
-            # re-emits it as `"discrete"` and the round-trip is lossless. Routing
-            # it nowhere (the pre-`DiscreteVariable` behaviour) silently DROPPED
-            # the declaration from the flattened model, degrading a declared
-            # forcing back into a bare undeclared name.
+        v = _namespace_variable_update(var, _ns)
+        if v.type == ParameterVariable
             params[namespaced] = v
-        elseif v.type == ObservedVariable
+        elseif name in _observed_here
             observeds[namespaced] = v
+        else
+            states[namespaced] = v
         end
     end
 
-    explicit_lhs_names = Set{String}()
     for eq in model.equations
         lhs = _ns(eq.lhs)
         rhs = _ns(eq.rhs)
         push!(equations, Equation(lhs, rhs; _comment=eq._comment))
-        if lhs isa VarExpr
-            push!(explicit_lhs_names, lhs.name)
-        end
     end
 
-    # Observed variables carry their defining expression in `expression`
-    # (per esm-spec §6.2: "must include an `expression` field"). Emit
-    # `obs ~ expression` as a flattened equation so the enclosing System
-    # is well-determined (one equation per observed var). Skip when an
-    # explicit `equations` entry already provides the definition — some
-    # fixtures use a sentinel `expression: 0.0` plus an explicit equation.
-    for (name, var) in model.variables
-        var.type == ObservedVariable || continue
-        var.expression === nothing && continue
-        namespaced = "$(prefix).$(name)"
-        namespaced in explicit_lhs_names && continue
-        lhs = VarExpr(namespaced)
-        rhs = _ns(var.expression)
-        push!(equations, Equation(lhs, rhs))
-    end
+    # esm 1.0.0: an observed unknown's defining equation is an ORDINARY entry of
+    # `model.equations`, already namespaced and pushed above. There is nothing
+    # left to synthesize from a variable-level `expression`, which no longer
+    # exists (esm-spec §6.3).
 
     for ev in model.continuous_events
         new_conds = ASTExpr[_ns(c) for c in ev.conditions]
@@ -290,34 +287,16 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
             ev.trigger
         end
         push!(discrete_events,
-              DiscreteEvent(new_trigger, new_affects; description=ev.description,
-                            functional_affect=ev.functional_affect))
+              DiscreteEvent(new_trigger, new_affects; description=ev.description))
     end
 
     for (sub_name, sub_model) in model.subsystems
-        # A DataLoader subsystem (RFC pure-io-data-loaders §4.3) exposes its
-        # variables to the owning model under the dot-path `<owner>.<subkey>.<var>`.
-        # Lower each loader variable to an observed of that name — with NO defining
-        # equation (its value is a pure-I/O external input injected at the RHS
-        # boundary by the provider seam, not computed) — so the flattened system is
-        # structurally complete and its name is materialized, exactly as the Python
-        # binding does (earthsci_ast `flatten.py` §4.3: a `FlattenedVariable`
-        # of type "observed" named `<owner>.<subkey>.<var>` + a LoaderField). The
-        # bound value reaches the RHS through `const_arrays` keyed by this same name
-        # (a CONST provider materialised at build time by `simulate`, or a discrete
-        # refresh buffer): a gather `index(<owner>.<subkey>.<var>, …)` resolves it
-        # via `_resolve_indices`, and a bare scalar reference const-folds against
-        # the same registry (`_resolve_indices(::VarExpr)`). Julia carries no
-        # separate `loader_fields` descriptor (unlike Python) — the const-array key
-        # is the whole contract — so no equation is synthesized here.
-        if sub_model isa DataLoader
-            for (var_name, loader_var) in sub_model.variables
-                namespaced = "$(prefix).$(sub_name).$(var_name)"
-                observeds[namespaced] = ModelVariable(ObservedVariable;
-                    units=loader_var.units, description=loader_var.description)
-            end
-            continue
-        end
+        # esm 1.0.0: a data source is a document-scoped registry entry, not a
+        # subsystem, so there is no loader arm here any more. A model that reads
+        # external data declares an ordinary PARAMETER whose `update` names the
+        # source (esm-spec §8.5); it is collected into `params` above under its
+        # own namespaced key, and the bound value reaches the RHS through the
+        # const/refresh array registry keyed by that same name.
         sub_model isa Model || continue
         _collect_model!(states, params, observeds, equations,
                         continuous_events, discrete_events,
@@ -360,7 +339,7 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
         namespaced = "$(prefix).$(sp.name)"
         target = sp.constant === true ? params : states
         target[namespaced] = ModelVariable(
-            sp.constant === true ? ParameterVariable : StateVariable;
+            sp.constant === true ? ParameterVariable : UnknownVariable;
             default=sp.default, description=sp.description, units=sp.units)
     end
     for p in rsys.parameters

@@ -198,7 +198,7 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
 
     @testset "additive: no references -> empty graph" begin
         model = Dict{String,Any}(
-            "variables" => Dict("u" => Dict("type" => "state")),
+            "variables" => Dict("u" => Dict("type" => "unknown")),
             "equations" => [eqn(Dict{String,Any}("op" => "D", "args" => ["u"], "wrt" => "t"), -1)])
         g = build_reference_graph(model, "M")
         @test isempty(g.edges)

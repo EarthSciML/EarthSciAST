@@ -47,9 +47,12 @@ function lifted_consumer_doc()
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
           "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "j"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","f",2)),
-          "s"=>Dict{String,Any}("type"=>"state","shape"=>Any["c"])),
-        "equations"=>Any[Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
+          # esm 1.0.0 §6.3: `j` is an `unknown` DEFINED by its bare-LHS equation.
+          "j"=>Dict{String,Any}("type"=>"unknown"),
+          "s"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"j", "rhs"=>op("*","f",2)),
+          Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
 end
 
 # First aggregate RHS among the equations (the lifted species ODE).
@@ -115,9 +118,11 @@ end
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
           "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "j"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","f",2)),
-          "z"=>Dict{String,Any}("type"=>"state")),
-        "equations"=>Any[Dict{String,Any}(
+          "j"=>Dict{String,Any}("type"=>"unknown"),
+          "z"=>Dict{String,Any}("type"=>"unknown")),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"j", "rhs"=>op("*","f",2)),
+          Dict{String,Any}(
           "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),
           "rhs"=>red)])))
     prom = E.promote_downstream_shapes(roundtrip(d))
@@ -147,9 +152,11 @@ end
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
           "g"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["d","c"]),
-          "jj"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","g",2)),
-          "s2"=>Dict{String,Any}("type"=>"state","shape"=>Any["c","d"])),
-        "equations"=>Any[Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
+          "jj"=>Dict{String,Any}("type"=>"unknown"),
+          "s2"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c","d"])),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"jj", "rhs"=>op("*","g",2)),
+          Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
     prom = E.promote_downstream_shapes(roundtrip(d))
     @test prom.observed_variables["M.jj"].shape == ["d","c"]
     body = consumer_rhs(prom).expr_body
@@ -170,9 +177,11 @@ end
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
           "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "j"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","f",2)),
-          "psi"=>Dict{String,Any}("type"=>"state","shape"=>Any["c"])),
-        "equations"=>Any[Dict{String,Any}(
+          "j"=>Dict{String,Any}("type"=>"unknown"),
+          "psi"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
+        "equations"=>Any[
+          Dict{String,Any}("lhs"=>"j", "rhs"=>op("*","f",2)),
+          Dict{String,Any}(
           "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["psi"],"wrt"=>"t"),
           "rhs"=>op("-","j"))])))
     prom = E.promote_downstream_shapes(roundtrip(d))
@@ -191,10 +200,13 @@ end
       "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
         "variables"=>Dict{String,Any}(
             "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-            "a"=>Dict{String,Any}("type"=>"observed","expression"=>op("*","f",2)),
-            "b"=>Dict{String,Any}("type"=>"observed","expression"=>op("+","a","f")),
-            "s"=>Dict{String,Any}("type"=>"state")),
-        "equations"=>Any[Dict{String,Any}(
+            "a"=>Dict{String,Any}("type"=>"unknown"),
+            "b"=>Dict{String,Any}("type"=>"unknown"),
+            "s"=>Dict{String,Any}("type"=>"unknown")),
+        "equations"=>Any[
+            Dict{String,Any}("lhs"=>"a","rhs"=>op("*","f",2)),
+            Dict{String,Any}("lhs"=>"b","rhs"=>op("+","a","f")),
+            Dict{String,Any}(
             "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),"rhs"=>aggd)])))
     flat = roundtrip(d)
     prom_on  = E.promote_downstream_shapes(flat)

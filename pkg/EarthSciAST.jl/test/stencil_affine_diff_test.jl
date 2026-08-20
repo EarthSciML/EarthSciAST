@@ -13,7 +13,7 @@ const ESM = EarthSciAST
 # four edges. Exercises multi-dim boxes (interior + 4 edges + 4 corners) and the
 # row-major state layout the affine map must DERIVE (stride_i=N, stride_j=1).
 function _stencil2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
     body = _op("+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
@@ -32,7 +32,7 @@ end
 # per-cell/per-branch over-split. The affine build must cut at the region
 # boundaries and emit ONE box per region (no ghosts: each region stays in bounds).
 function _makearray_region_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     fwd = _op("-", _idx("u", _op("+", _v("i"), _i(1))), _idx("u", _v("i")))
     ctr = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
@@ -49,7 +49,7 @@ end
 # K a const array. Exercises `_AccConstBox` (the per-cell coefficient addressed by
 # the loop multi-index) alongside boundary-ghost boxes.
 function _const_coef_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))
@@ -65,7 +65,7 @@ end
 # the same lazy semantics, so the two must be bit-identical. A neighbour term
 # keeps it on the stencil/affine path (interior + 2 boundary boxes).
 function _guarded_stencil_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     ui = _idx("u", _v("i"))
     # ifelse(u[i] > 0, log(u[i]), -1) + ifelse(u[i] >= 0.25, sqrt(u[i]-0.25), 0)
     guarded = _op("+",

@@ -675,37 +675,38 @@ fn test_model_allocator_large_allocations() {
 #[test]
 fn test_fast_parse_complete_esm_file() {
     let complex_json = r#"
-    {
-        "esm": "1.0.0",
-        "metadata": {
+        {
+          "esm": "1.0.0",
+          "metadata": {
             "name": "complex_model",
             "description": "A complex test model"
-        },
-        "models": {
+          },
+          "models": {
             "chemistry": {
-                "variables": {
-                    "temperature": {
-                        "type": "unknown",
-                        "units": "K",
-                        "description": "Temperature"
-                    }
-                },
-                "equations": [
-                    {
-                        "lhs": "d(temperature)/dt",
-                        "rhs": "heating_rate"
-                    }
-                ],
-                "parameters": {
-                    "heating_rate": {
-                        "type": "parameter",
-                        "units": "K/s",
-                        "description": "Heating rate"
-                    }
+              "variables": {
+                "temperature": {
+                  "type": "unknown",
+                  "units": "K",
+                  "description": "Temperature"
                 }
+              },
+              "equations": [
+                {
+                  "lhs": "d(temperature)/dt",
+                  "rhs": "heating_rate"
+                }
+              ],
+              "parameters": {
+                "heating_rate": {
+                  "type": "parameter",
+                  "units": "K/s",
+                  "description": "Heating rate"
+                }
+              }
             }
+          }
         }
-    }"#;
+        "#;
 
     let result = fast_parse(complex_json).unwrap();
 

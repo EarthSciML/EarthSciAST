@@ -380,14 +380,9 @@ end
 function _intern_model(model::Model, ctx::_InternCtx)::Model
     vars = model.variables
     nvars = vars
-    for (name, v) in vars
-        v.expression === nothing && continue
-        ne = _intern_expr(v.expression, ctx)
-        if ne !== v.expression
-            nvars === vars && (nvars = copy(vars))
-            nvars[name] = reconstruct(v; expression=ne)
-        end
-    end
+    # esm 1.0.0: a variable carries no `expression` — an observed unknown's
+    # defining right-hand side is an ordinary equation, interned below with
+    # every other equation, so there is nothing per-variable left to intern.
     eqs = _intern_equations(model.equations, ctx)
     ieqs = _intern_equations(model.initialization_equations, ctx)
     guesses = model.guesses

@@ -652,10 +652,10 @@ mod tests {
             units: Some("mol/L".to_string()),
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         };
 
         let result = add_variable(&model, "test_var", variable);
@@ -676,10 +676,10 @@ mod tests {
                 units: None,
                 default: None,
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -689,10 +689,10 @@ mod tests {
             units: Some("mol/L".to_string()),
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         };
 
         let result = add_variable(&model, "existing_var", variable);
@@ -778,6 +778,8 @@ mod tests {
                 lhs: "state_var".to_string(),
                 rhs: Expr::Number(1.0),
             }]),
+            functional_affect: None,
+            discrete_parameters: None,
             reinitialize: None,
             description: None,
         };
@@ -808,6 +810,8 @@ mod tests {
                 lhs: "state_var".to_string(),
                 rhs: Expr::Number(1.0),
             }]),
+            functional_affect: None,
+            discrete_parameters: None,
             reinitialize: None,
             description: None,
         }]);
@@ -846,6 +850,7 @@ mod tests {
             affect_neg: None,
             root_find: None,
             reinitialize: None,
+            discrete_parameters: None,
             priority: None,
             description: None,
         };
@@ -877,6 +882,7 @@ mod tests {
             affect_neg: None,
             root_find: None,
             reinitialize: None,
+            discrete_parameters: None,
             priority: None,
             description: None,
         }]);
@@ -912,6 +918,8 @@ mod tests {
                 expression: Expr::Variable("x".to_string()),
             },
             affects: None,
+            functional_affect: None,
+            discrete_parameters: None,
             reinitialize: None,
             description: None,
         };
@@ -926,6 +934,8 @@ mod tests {
                 lhs: "y".to_string(),
                 rhs: Expr::Number(5.0),
             }]),
+            functional_affect: None,
+            discrete_parameters: None,
             reinitialize: Some(true),
             description: Some("Periodic event".to_string()),
         };

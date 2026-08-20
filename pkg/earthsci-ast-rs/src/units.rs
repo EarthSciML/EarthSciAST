@@ -2816,10 +2816,10 @@ mod tests {
             units: units.map(str::to_string),
             default: None,
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         }
     }
 

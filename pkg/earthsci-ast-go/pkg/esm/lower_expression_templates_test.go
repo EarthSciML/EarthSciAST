@@ -302,38 +302,20 @@ func scalarFieldParamDoc(templates, bindings, name string) string {
         "variables": {
           "pa": {"type": "parameter"},
           "pb": {"type": "parameter"},
-          "area": {"type": "unknown"}
+          "area": {"type": "unknown",
+            "expression": {"op": "apply_expression_template", "args": [],
+              "name": "` + name + `",
+              "bindings": ` + bindings + `}}
         },
-        "equations": [
-          {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
-            "name": "` + name + `",
-            "bindings": ` + bindings + `}}
-        ],
+        "equations": [],
         "expression_templates": ` + templates + `
       }}
     }`
 }
 
-// scalarFieldAreaExpr returns the lowered definition of the `area` unknown.
-//
-// It reads the DEFINING EQUATION rather than a `variables/area/expression`
-// field: 1.0.0 removed that field, so a template application that used to sit on
-// the variable is now the RHS of the equation whose LHS is `area`.
 func scalarFieldAreaExpr(t *testing.T, v map[string]any) map[string]any {
 	t.Helper()
-	model := v["models"].(map[string]any)["M"].(map[string]any)
-	for _, raw := range model["equations"].([]any) {
-		eq := raw.(map[string]any)
-		if lhs, ok := eq["lhs"].(string); ok && lhs == "area" {
-			expr, ok := eq["rhs"].(map[string]any)
-			if !ok {
-				t.Fatalf("area RHS is %T; want an operator node", eq["rhs"])
-			}
-			return expr
-		}
-	}
-	t.Fatal("no defining equation for area")
-	return nil
+	return v["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["area"].(map[string]any)["expression"].(map[string]any)
 }
 
 // A parameter name appearing as the string value of a scalar Expression-node
@@ -462,16 +444,28 @@ func TestExpressionTemplates_ScalarFieldParamConformanceFixture(t *testing.T) {
 	if got != want {
 		t.Errorf("models diverge from expanded.esm:\n got=%s\nwant=%s", got, want)
 	}
-	// Each area's lowered node is the RHS of its defining equation; 1.0.0 has no
-	// `variables/<v>/expression` for a template application to sit in.
-	rhsFor := modelEquationRHS(t, v["models"].(map[string]any)["Overlap"].(map[string]any))
-	planar, ok := rhsFor["area_planar"].(map[string]any)
-	if !ok {
-		t.Fatalf("area_planar definition is %T; want an operator node", rhsFor["area_planar"])
+	// The two substitution sites are the DEFINING EQUATIONS of the two observed
+	// unknowns; esm 1.0.0 has no `expression` field on a variable to read them
+	// from. The equations are keyed by their bare-variable LHS.
+	eqs, _ := v["models"].(map[string]any)["Overlap"].(map[string]any)["equations"].([]any)
+	rhsByLHS := map[string]map[string]any{}
+	for _, e := range eqs {
+		eq, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		lhs, ok := eq["lhs"].(string)
+		if !ok {
+			continue
+		}
+		if rhs, ok := eq["rhs"].(map[string]any); ok {
+			rhsByLHS[lhs] = rhs
+		}
 	}
-	spherical, ok := rhsFor["area_spherical"].(map[string]any)
-	if !ok {
-		t.Fatalf("area_spherical definition is %T; want an operator node", rhsFor["area_spherical"])
+	planar, hasPlanar := rhsByLHS["area_planar"]
+	spherical, hasSpherical := rhsByLHS["area_spherical"]
+	if !hasPlanar || !hasSpherical {
+		t.Fatalf("expected defining equations for area_planar and area_spherical, got %v", rhsByLHS)
 	}
 	if planar["manifold"] != "planar" || spherical["manifold"] != "spherical" {
 		t.Errorf("manifolds = %v / %v; want planar / spherical", planar["manifold"], spherical["manifold"])

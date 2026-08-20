@@ -1159,15 +1159,23 @@ function lower_enums!(file::EsmFile)::EsmFile
 end
 
 function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
+    # esm 1.0.0: a variable carries no defining expression, so the only
+    # per-variable expression positions left are a parameter update's `when`
+    # trigger and its `expression` value form (esm-spec §5.4).
     for (name, var) in model.variables
-        if var.expression !== nothing
-            # ModelVariable.expression is read-only after construction, so we
-            # rebuild the dict entry with the lowered expression.
-            lowered = _lower_expr_enums(var.expression, enums)
-            if lowered !== var.expression
-                _replace_var_expression!(model.variables, name, var, lowered)
-            end
+        var.update === nothing && continue
+        rules = ParameterUpdate[]
+        changed = false
+        for r in var.update
+            nw = r.when === nothing ? nothing : _lower_expr_enums(r.when, enums)
+            ne = r.expression === nothing ? nothing : _lower_expr_enums(r.expression, enums)
+            (nw !== r.when || ne !== r.expression) && (changed = true)
+            push!(rules, ParameterUpdate(r.kind; times=r.times, interval=r.interval,
+                initial_offset=r.initial_offset, when=nw, direction=r.direction,
+                source=r.source, hook=r.hook, expression=ne, from=r.from,
+                handler=r.handler))
         end
+        changed && (model.variables[name] = reconstruct(var; update=rules))
     end
     new_eqs = Equation[]
     for eq in model.equations
@@ -1188,22 +1196,10 @@ function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
     append!(model.initialization_equations, new_init_eqs)
 
     for (_, sub) in model.subsystems
-        # DataLoader / SubsystemRef subsystems carry no enums to lower.
+        # An unresolved SubsystemRef carries no enums to lower.
         sub isa Model || continue
         _lower_model_enums!(sub, enums)
     end
-end
-
-function _replace_var_expression!(vars::Dict{String,ModelVariable}, name::String,
-                                  var::ModelVariable, new_expr::ASTExpr)
-    # ModelVariable is immutable; rebuild it with the new expression and
-    # update the dictionary entry (`name` is the caller's iteration key;
-    # assigning an existing key during iteration is safe — no rehash).
-    vars[name] = ModelVariable(var.type;
-        default=var.default, description=var.description,
-        expression=new_expr, units=var.units, default_units=var.default_units,
-        shape=var.shape, location=var.location,
-        noise_kind=var.noise_kind, correlation_group=var.correlation_group)
 end
 
 function _lower_reaction_system_enums!(rs::ReactionSystem,

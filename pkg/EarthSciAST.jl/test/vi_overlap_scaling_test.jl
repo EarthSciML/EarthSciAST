@@ -113,7 +113,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                 "S" => Dict("type" => "parameter", "shape" => ["cells"]),
                 "E" => Dict("type" => "parameter", "shape" => ["cells"]),
                 "N" => Dict("type" => "parameter", "shape" => ["cells"]),
-                "cell_present" => Dict("type" => "state", "shape" => ["present_cells"])),
+                "cell_present" => Dict("type" => "unknown", "shape" => ["present_cells"])),
             "equations" => [Dict(
                 "lhs" => _ix("cell_present", "m"),
                 "rhs" => Dict(
@@ -224,7 +224,7 @@ end
                              "cells"  => Dict("kind" => "interval", "size" => nc)),
         "models" => Dict("Mirror" => Dict(
             "variables" => merge(_rectvars,
-                Dict("P" => Dict("type" => "state", "shape" => ["points"]))),
+                Dict("P" => Dict("type" => "unknown", "shape" => ["points"]))),
             "equations" => [Dict(
                 "lhs" => Dict("op" => "aggregate", "args" => [], "output_idx" => ["p"],
                     "expr" => Dict("op" => "D", "args" => [_ix("P", "p")], "wrt" => "t"),

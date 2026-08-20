@@ -21,7 +21,7 @@ function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
     for name in fv
         name == "t" && continue
         if haskey(u_vals, name)
-            vars[name] = ModelVariable(StateVariable; default=u_vals[name])
+            vars[name] = ModelVariable(UnknownVariable; default=u_vals[name])
         elseif haskey(p_vals, name)
             vars[name] = ModelVariable(ParameterVariable; default=p_vals[name])
         else
@@ -36,7 +36,7 @@ function _eval1(expr::ESM.ASTExpr; u_vals=Dict{String,Float64}(),
     # the `import ModelingToolkit` at the top of this file, and earlier in
     # the suite by mtk_catalyst_test.jl), and its `Equation` export shadows
     # ESM's at the Main namespace level under MTK 11.
-    vars["_probe"] = ModelVariable(StateVariable; default=0.0)
+    vars["_probe"] = ModelVariable(UnknownVariable; default=0.0)
     eq = ESM.Equation(_D("_probe"), expr)
     model = ESM.Model(vars, [eq])
     f!, u0, p, _tspan, var_map = build_evaluator(model;
@@ -205,9 +205,9 @@ end
     # ========================================================
     @testset "Observed variable inlining" begin
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=0.5),
-            "y" => ModelVariable(ObservedVariable),
+            "y" => ModelVariable(UnknownVariable),
         )
         # y = 2*k; D(x) = -y*x
         eqs = [
@@ -234,11 +234,11 @@ end
         # regardless of the order the equations are declared in (the Dict/loop
         # order is not the dependency order).
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=2.0),
-            "a" => ModelVariable(ObservedVariable),
-            "b" => ModelVariable(ObservedVariable),
-            "c" => ModelVariable(ObservedVariable),
+            "a" => ModelVariable(UnknownVariable),
+            "b" => ModelVariable(UnknownVariable),
+            "c" => ModelVariable(UnknownVariable),
         )
         # c = b + 1; b = a * a; a = k;  D(x) = c * x  →  (2*2 + 1) * 1 = 5
         eqs = [
@@ -254,9 +254,9 @@ end
 
         # Cyclic: a = b + 1; b = a + 1. Must throw, not hang.
         cyc_vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
-            "a" => ModelVariable(ObservedVariable),
-            "b" => ModelVariable(ObservedVariable),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
+            "a" => ModelVariable(UnknownVariable),
+            "b" => ModelVariable(UnknownVariable),
         )
         cyc_eqs = [
             ESM.Equation(_v("a"), _op("+", _v("b"), _n(1.0))),
@@ -278,7 +278,7 @@ end
     # ========================================================
     @testset "Exponential decay solve" begin
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
@@ -295,7 +295,7 @@ end
     # ========================================================
     @testset "tspan picked from tests block" begin
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = ESM.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))
@@ -320,7 +320,7 @@ end
             name = "u_$i"
             # Initial: sin(π x_i). Interior i=1..N, x_i = i*dx.
             u0_i = sinpi(i * dx)
-            vars[name] = ModelVariable(StateVariable; default=u0_i)
+            vars[name] = ModelVariable(UnknownVariable; default=u0_i)
         end
         vars["alpha"] = ModelVariable(ParameterVariable; default=α)
         # Build centered-difference RHS equations. Left/right neighbours
@@ -361,7 +361,7 @@ end
         vars = Dict{String,ModelVariable}()
         eqs = ESM.Equation[]
         for i in 1:N
-            vars["u_$i"] = ModelVariable(StateVariable; default=sinpi(i * dx))
+            vars["u_$i"] = ModelVariable(UnknownVariable; default=sinpi(i * dx))
         end
         vars["alpha"] = ModelVariable(ParameterVariable; default=α)
         for i in 1:N
@@ -436,7 +436,7 @@ end
             "models" => Dict(
                 "Decay" => Dict(
                     "variables" => Dict(
-                        "N" => Dict("type" => "state", "default" => 100.0),
+                        "N" => Dict("type" => "unknown", "default" => 100.0),
                         "lambda" => Dict("type" => "parameter", "default" => 0.1),
                     ),
                     "equations" => [Dict(
@@ -471,7 +471,7 @@ end
             x = (i - 0.5) * dx
             y = (j - 0.5) * dy
             u0 = exp(-((x - 0.5)^2 + (y - 0.5)^2) / 0.02)
-            vars["u_$(i)_$(j)"] = ModelVariable(StateVariable; default=u0)
+            vars["u_$(i)_$(j)"] = ModelVariable(UnknownVariable; default=u0)
         end
         vars["vx"] = ModelVariable(ParameterVariable; default=vx)
         vars["vy"] = ModelVariable(ParameterVariable; default=vy)
@@ -528,7 +528,7 @@ end
         vars = Dict{String,ModelVariable}()
         eqs = ESM.Equation[]
         for i in 1:N
-            vars["u_$i"] = ModelVariable(StateVariable; default=0.1)
+            vars["u_$i"] = ModelVariable(UnknownVariable; default=0.1)
         end
         vars["alpha"] = ModelVariable(ParameterVariable; default=1.0)
         for i in 1:N

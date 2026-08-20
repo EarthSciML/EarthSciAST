@@ -44,6 +44,32 @@ function model_nodes(model)
 end
 
 """
+    definition_nodes(model) -> IdSet-like Set of RHS roots that DEFINE an observed
+
+From esm 1.0.0 an observed unknown's defining right-hand side is an ordinary
+entry of `equations`, reached by the leaf-seed rule (§5.7.2) rather than being
+an output of its own. It is still CLASSIFIED (its `expect_cadence` annotations
+are checked and counted), but it is NOT an output-buffer materialization point:
+its value folds into whatever reads it, which is exactly what the leaf seed
+expresses. Treating it as an output would report a materialization frontier —
+and a non-empty per-event handler — for a model whose golden has neither.
+"""
+function definition_nodes(model)
+    variables = get(model, "variables", Dict{String,Any}())
+    out = Base.IdSet{Any}()
+    for eq in get(model, "equations", Any[])
+        isa(eq, AbstractDict) || continue
+        lhs = get(eq, "lhs", nothing)
+        isa(lhs, AbstractString) || continue
+        v = get(variables, lhs, nothing)
+        (isa(v, AbstractDict) && get(v, "type", nothing) == "unknown") || continue
+        rhs = get(eq, "rhs", nothing)
+        isa(rhs, AbstractDict) && push!(out, rhs)
+    end
+    return out
+end
+
+"""
     partition_model(model::AbstractDict) -> NamedTuple
 
 Run the §5.7 partition over one model (a raw-JSON model dict). Returns:
@@ -66,6 +92,7 @@ function partition_model(model::AbstractDict)
     problems = String[]
     points = Any[]
     rhss = model_nodes(model)
+    definitions = definition_nodes(model)
     # One shared memo across every walker: each node's class is derived once
     # per pass (see Cadence.ClassMemo).
     memo = C.ClassMemo()
@@ -74,9 +101,12 @@ function partition_model(model::AbstractDict)
         C.tally_classes!(rhs, model, counts, memo)
         C.materialization_frontier!(rhs, model, points, memo)
         # Output-buffer cut: an equation whose RHS classifies below `continuous`
-        # folds out of the per-step hot path entirely (the observed-variable
-        # elimination) — into the artifact (`const`) or the per-event handler
-        # (`discrete`). That whole RHS is a materialization point.
+        # folds out of the per-step hot path entirely — into the artifact
+        # (`const`) or the per-event handler (`discrete`). That whole RHS is a
+        # materialization point. An observed unknown's DEFINITION is exempt: it
+        # is a leaf definition the seed rule folds into its readers, not an
+        # output of its own (see `definition_nodes`).
+        rhs in definitions && continue
         rc = C.classify(rhs, model, memo)
         if C.CLASS_RANK[rc] < C.CLASS_RANK["continuous"]
             push!(points, Dict{String,Any}(

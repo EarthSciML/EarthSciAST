@@ -107,7 +107,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                     "metadata": {"name": "coupled", "authors": ["Test"]},
                     "models": {"Extra": {
                         "variables": {
-                            "A": {"type": "state", "units": "mol/m^3", "default": 1.0},
+                            "A": {"type": "unknown", "units": "mol/m^3", "default": 1.0},
                             "j": {"type": "parameter", "units": "1/s", "default": 0.05}
                         },
                         "equations": [{"lhs": {"op": "D", "args": ["A"], "wrt": "t"},
@@ -191,7 +191,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
             write(joinpath(tmp, "modelonly.esm"), """{
                 "esm": "0.8.0",
                 "metadata": {"name": "modelonly", "authors": ["Test"]},
-                "models": {"M": {"variables": {"u": {"type": "state", "default": 1.0}},
+                "models": {"M": {"variables": {"u": {"type": "unknown", "default": 1.0}},
                                  "equations": []}}
             }""")
             main_path = joinpath(tmp, "main.esm")

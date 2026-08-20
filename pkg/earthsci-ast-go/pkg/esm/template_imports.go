@@ -43,5 +43,5 @@ var templateComponentKinds = []string{"models", "reaction_systems"}
 
 // A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
 var libraryForbiddenKeys = []string{
-	"models", "reaction_systems", "data_loaders", "coupling", "domain",
+	"models", "reaction_systems", "data_sources", "coupling", "domain",
 }

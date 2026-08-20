@@ -17,7 +17,7 @@
 #   * `observed_field(prep, insp, name)` reads the results back through the
 #     prepared document's own graph.
 #
-# The fixture mirrors isrm.esm's structure: data_loaders + variable_map
+# The fixture mirrors isrm.esm's structure: data_sources + variable_map
 # coupling + a clean model with in-model LCC projection observeds, at the
 # reusable 9-cell L1 scale with the L1 oracle numerics.
 
@@ -224,12 +224,12 @@ end
         "fact"=>scal(FACT), "pop_scale"=>scal(POP_SCALE), "mort_scale"=>scal(MORT_SCALE),
         "rr_K"=>scal(RR_K), "rr_L"=>scal(RR_L))
 
-    # data_loaders: the SR loader declares a NATIVE-axes gated_select template
+    # data_sources: the SR loader declares a NATIVE-axes gated_select template
     # (fixed layer + a STALE gated_by name the record must override); the point
     # loader has none. `esio_format` is absent — providers are mocks here, so
     # nothing consults it (providers_from_document is the EarthSciIO ext's job).
     loader_var(fv) = Dict{String,Any}("file_variable" => fv, "units" => "1")
-    data_loaders = Dict{String,Any}(
+    data_sources = Dict{String,Any}(
         "MockSR" => Dict{String,Any}(
             "kind" => "static",
             "source" => Dict{String,Any}("url_template" => "mock://sr"),
@@ -270,7 +270,7 @@ end
             "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),
             "rcv_cells"    => Dict("kind"=>"interval", "size"=>N_RCV),
             "emis_records" => Dict("kind"=>"interval", "size"=>N_REC)),
-        "data_loaders" => data_loaders,
+        "data_sources" => data_sources,
         "coupling" => coupling,
         "models" => Dict{String,Any}("ISRM" =>
             Dict{String,Any}("variables"=>variables, "equations"=>Any[])))

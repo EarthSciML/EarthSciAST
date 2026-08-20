@@ -32,10 +32,10 @@ fn test_component_graph_generation() {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
 
@@ -229,10 +229,10 @@ fn test_model_expression_graph() {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
     variables.insert(
@@ -243,10 +243,10 @@ fn test_model_expression_graph() {
             units: None,
             default: Some(0.1),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
 
@@ -532,10 +532,10 @@ fn test_expected_graph_outputs() {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
 

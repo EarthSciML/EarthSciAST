@@ -1669,14 +1669,21 @@ def _reconstruct_model_json(flat: FlattenedSystem) -> dict[str, Any]:
     becomes a ``{type, shape?, default?}`` entry and every flattened equation is
     serialized back to raw JSON via :func:`serialize._serialize_expression` (an
     observed's defining expression already rides the equation list as
-    ``name = <body>``). The document index-set registry is threaded verbatim."""
+    ``name = <body>``). The document index-set registry is threaded verbatim.
+
+    ``FlattenedVariable.type`` is the DERIVED role (state / observed /
+    parameter / species), so it is mapped back to the two DECLARED types a
+    document has (esm-spec §6.3): everything but a parameter is an ``unknown``.
+    The finer role is then re-derived from these equations by
+    :mod:`earthsci_ast.classification`, which is the point -- one derivation,
+    not a role smuggled through as a type a 1.0.0 document cannot carry."""
     variables: dict[str, Any] = {}
     for name, v in (
         list(flat.state_variables.items())
         + list(flat.parameters.items())
         + list(flat.observed_variables.items())
     ):
-        entry: dict[str, Any] = {"type": v.type}
+        entry: dict[str, Any] = {"type": "parameter" if v.type == "parameter" else "unknown"}
         if v.shape:
             entry["shape"] = list(v.shape)
         if v.default is not None:

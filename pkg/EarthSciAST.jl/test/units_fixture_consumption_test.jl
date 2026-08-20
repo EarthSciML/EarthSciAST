@@ -26,24 +26,29 @@ function _resolve_tol_uf(model_tol, test_tol, assertion_tol)
     return (1.0e-6, 0.0)
 end
 
-# Resolve every observed variable to a Float64 by iterated substitution.
-# The bindings dict starts with parameters and states; each pass tries to
-# evaluate any observed whose expression no longer has unbound leaves.
-# `UnboundVariableError` is the signal "dependencies not yet resolved" and
-# is swallowed; any other error propagates. Cycle-free fixtures converge
-# in at most one pass per observed variable. Evaluation is routed through
-# the official tree-walk evaluator (`evaluate_expr`), so this fixture
-# consumer shares the production runner's dispatch table and lives on the
+# Resolve every observed unknown to a Float64 by iterated substitution.
+#
+# esm 1.0.0 (§6.3.1): "observed" is no longer a declared variable type and a
+# variable carries no `expression`. An observed unknown is the one DEFINED by a
+# bare-variable-LHS equation, and its defining right-hand side is read from
+# `observed_definitions(model)` — the derivation replacing the 0.x
+# `var.type == ObservedVariable` test plus `var.expression`.
+#
+# The bindings dict starts with parameters and non-observed unknowns; each pass
+# tries to evaluate any observed whose defining RHS no longer has unbound
+# leaves. `UnboundVariableError` is the signal "dependencies not yet resolved"
+# and is swallowed; any other error propagates. Cycle-free fixtures converge in
+# at most one pass per observed variable. Evaluation is routed through the
+# official tree-walk evaluator (`evaluate_expr`), so this fixture consumer
+# shares the production runner's dispatch table and lives on the
 # `.esm → AST → official runner` simulation pathway.
-function _resolve_observed!(model, bindings::Dict{String,Float64})
+function _resolve_observed!(model, defs::AbstractDict, bindings::Dict{String,Float64})
     for _ in 1:(length(model.variables) + 1)
         progress = false
-        for (vname, var) in model.variables
-            var.type == _ESM_UF.ObservedVariable || continue
+        for (vname, rhs) in defs
             haskey(bindings, vname) && continue
-            var.expression === nothing && continue
             try
-                bindings[vname] = _ESM_UF.evaluate_expr(var.expression, bindings)
+                bindings[vname] = _ESM_UF.evaluate_expr(rhs, bindings)
                 progress = true
             catch err
                 err isa _ESM_UF.UnboundVariableError || rethrow(err)
@@ -54,10 +59,15 @@ function _resolve_observed!(model, bindings::Dict{String,Float64})
 end
 
 function _run_units_test(mname::AbstractString, model, t::_ESM_UF.InlineTest)
+    defs = _ESM_UF.observed_definitions(model)
     bindings = Dict{String,Float64}()
     for (vname, var) in model.variables
         (var.type == _ESM_UF.ParameterVariable ||
-         var.type == _ESM_UF.StateVariable) || continue
+         var.type == _ESM_UF.UnknownVariable) || continue
+        # An observed unknown's value comes from its defining equation, never
+        # from a `default` seed — seeding it would mask the very computation
+        # these fixtures assert.
+        haskey(defs, vname) && continue
         var.default === nothing && continue
         bindings[vname] = Float64(var.default)
     end
@@ -68,7 +78,7 @@ function _run_units_test(mname::AbstractString, model, t::_ESM_UF.InlineTest)
         bindings[name] = Float64(val)
     end
 
-    _resolve_observed!(model, bindings)
+    _resolve_observed!(model, defs, bindings)
 
     for a in t.assertions
         rel, abs_ = _resolve_tol_uf(model.tolerance, t.tolerance, a.tolerance)

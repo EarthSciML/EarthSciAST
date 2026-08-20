@@ -23,7 +23,7 @@ import Symbolics
 
     @testset "ModelingToolkit.System(::Model) builds a real System" begin
         vars = Dict(
-            "x" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=0.5),
         )
         eq = Equation(
@@ -55,7 +55,7 @@ import Symbolics
         # scalar field carried on the operator nodes (esm-spec §4.9.1(ii)) — by
         # field, not by op name; the `grad` sugar has no privilege (§4.2).
         vars = Dict{String,ModelVariable}(
-            "u" => ModelVariable(StateVariable; default=1.0),
+            "u" => ModelVariable(UnknownVariable; default=1.0),
             "D" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
@@ -77,7 +77,7 @@ import Symbolics
 
     @testset "ModelingToolkit.PDESystem(::FlattenedSystem) errors on pure-ODE input" begin
         vars = Dict(
-            "x" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=0.5),
         )
         eq = Equation(
@@ -93,7 +93,7 @@ import Symbolics
 
     @testset "Round-trip: Model → System → Model" begin
         vars = Dict(
-            "x" => ModelVariable(StateVariable; default=2.0),
+            "x" => ModelVariable(UnknownVariable; default=2.0),
             "k" => ModelVariable(ParameterVariable; default=0.3),
         )
         eq = Equation(
@@ -110,7 +110,7 @@ import Symbolics
         # After round-trip, the variables carry the namespaced name from
         # flatten (e.g. `RT_x`, `RT_k` after sanitization for symbol use).
         state_vars = [v for (n, v) in recovered.variables
-                      if v.type == StateVariable]
+                      if v.type == UnknownVariable]
         param_vars = [v for (n, v) in recovered.variables
                       if v.type == ParameterVariable]
         @test length(state_vars) == 1
@@ -124,8 +124,8 @@ import Symbolics
         # diffusive PDE at z=0.
         ivs = Symbol[:t, :z]
         svars = OrderedDict{String, ModelVariable}(
-            "VertDiff.C" => ModelVariable(StateVariable; default=1.0),
-            "VertDiff.C.at_z" => ModelVariable(StateVariable; default=1.0),
+            "VertDiff.C" => ModelVariable(UnknownVariable; default=1.0),
+            "VertDiff.C.at_z" => ModelVariable(UnknownVariable; default=1.0),
         )
         ps = OrderedDict{String, ModelVariable}(
             "VertDiff.D" => ModelVariable(ParameterVariable; default=0.1),
@@ -207,8 +207,8 @@ import Symbolics
                     "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
                 "variables" => Dict{String,Any}(
                     "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
-                    "y" => Dict{String,Any}("type" => "state", "default" => 1.0),
-                    "z" => Dict{String,Any}("type" => "state", "default" => 2.0)),
+                    "y" => Dict{String,Any}("type" => "unknown", "default" => 1.0),
+                    "z" => Dict{String,Any}("type" => "unknown", "default" => 2.0)),
                 "equations" => Any[
                     Dict{String,Any}(
                         "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),

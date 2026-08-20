@@ -392,8 +392,14 @@ func anyPathMatches(got []string, want string) bool {
 	return false
 }
 
-// sortedSet now lives in classification.go, where the same helper renders the
-// classification partitions; the identical test-local copy is gone.
+func sortedSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // loadErrHasCode reports whether a Load error carries the given stable
 // diagnostic code. The subsystem resolver embeds its code in the message as a

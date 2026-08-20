@@ -63,13 +63,24 @@ fn test_invalid_enum_values_schema_error() {
     assert!(result.is_err());
 }
 
-/// Test that empty required arrays fail schema validation
+/// `empty_required_arrays.esm` is a STRUCTURAL defect, not a schema one: an
+/// empty `authors` array is valid and so is an empty `equations` array, but a
+/// model declaring an unknown with no defining equation is unbalanced
+/// (esm-spec §4.9.4).
 #[test]
-fn test_empty_required_arrays_schema_error() {
+fn test_empty_required_arrays_is_an_unbalanced_system() {
     let fixture = include_str!("../../../tests/invalid/empty_required_arrays.esm");
 
-    let result = load(fixture);
-    assert!(result.is_err());
+    let r = earthsci_ast::validate_complete(fixture, None);
+    assert!(r.schema_errors.is_empty(), "{:?}", r.schema_errors);
+    assert!(
+        r.structural_errors.iter().any(|e| matches!(
+            e.code,
+            earthsci_ast::StructuralErrorCode::EquationCountMismatch
+        )),
+        "expected equation_count_mismatch, got {:?}",
+        r.structural_errors
+    );
 }
 
 /// Test various metadata validation errors
@@ -116,13 +127,13 @@ fn test_metadata_validation_errors() {
     }
 }
 
-/// Test data SOURCE validation errors.
+/// Test data SOURCE validation errors (esm 1.0.0: `data_loaders` became
+/// `data_sources`, a source declares no variables, and the consuming parameter
+/// carries the `update` that names it).
 ///
-/// The 1.0.0 fixture set differs from the 0.x `data_loader_*` one, not just in
-/// name: a source no longer declares the fields it provides, so the
-/// `missing_provides` / `provides_missing_units` / `provides_missing_description`
-/// cases are gone, and the required keys are now `kind` and `source`. The
-/// binding-side defects moved onto the consuming parameter's `update`.
+/// `data_source_undefined_reference.esm` is deliberately NOT here: from 1.0.0
+/// it is schema-VALID and reaches structural validation, where
+/// `structural_validation.rs` asserts its `data_source_undefined` finding.
 #[test]
 fn test_data_source_validation_errors() {
     let fixtures = [
@@ -135,14 +146,6 @@ fn test_data_source_validation_errors() {
             include_str!("../../../tests/invalid/data_source_missing_source.esm"),
         ),
         (
-            "invalid_type",
-            include_str!("../../../tests/invalid/data_source_invalid_type.esm"),
-        ),
-        (
-            "config_schema_violation",
-            include_str!("../../../tests/invalid/data_source_config_schema_violation.esm"),
-        ),
-        (
             "legacy_variables",
             include_str!("../../../tests/invalid/data_source_legacy_variables.esm"),
         ),
@@ -151,12 +154,20 @@ fn test_data_source_validation_errors() {
             include_str!("../../../tests/invalid/data_source_legacy_spatial.esm"),
         ),
         (
-            "binding_missing_file_variable",
-            include_str!("../../../tests/invalid/data_source_binding_missing_file_variable.esm"),
+            "invalid_type",
+            include_str!("../../../tests/invalid/data_source_invalid_type.esm"),
+        ),
+        (
+            "config_schema_violation",
+            include_str!("../../../tests/invalid/data_source_config_schema_violation.esm"),
         ),
         (
             "update_missing_shape",
             include_str!("../../../tests/invalid/data_source_update_missing_shape.esm"),
+        ),
+        (
+            "binding_missing_file_variable",
+            include_str!("../../../tests/invalid/data_source_binding_missing_file_variable.esm"),
         ),
     ];
 
@@ -164,7 +175,7 @@ fn test_data_source_validation_errors() {
         let result = load(fixture);
         assert!(
             result.is_err(),
-            "Expected data source {name} to fail schema validation"
+            "Expected data loader {name} to fail validation"
         );
     }
 }
@@ -201,14 +212,23 @@ fn test_version_compatibility_validation_errors() {
     }
 }
 
-/// Test that major version rejection works
+/// A document whose MAJOR version this library does not implement is rejected
+/// (esm-libraries-spec §8).
+///
+/// Built inline rather than read from
+/// `tests/version_compatibility/version_2_5_1_major_rejection.esm`: that shared
+/// fixture was rewritten to `"esm": "1.0.0"` along with the rest of the corpus,
+/// so it no longer carries a rejectable major version and cannot pin this rule.
+/// See the SHARED FILE CHANGES NEEDED note in the port report.
 #[test]
 fn test_major_version_rejection() {
-    let fixture =
-        include_str!("../../../tests/version_compatibility/version_2_5_1_major_rejection.esm");
+    let fixture = r#"{
+        "esm": "2.5.1",
+        "metadata": { "name": "FutureMajor" },
+        "models": { "M": { "variables": {}, "equations": [] } }
+    }"#;
 
     let result = load(fixture);
-    // Major version 2.x.x should be rejected by 0.1.0 implementation
     assert!(
         result.is_err(),
         "Expected major version 2.x.x to be rejected"
@@ -238,36 +258,33 @@ fn test_coupling_validation_errors() {
     }
 }
 
-/// Test that a loader-only document (top-level `data_sources` as the sole
-/// component, no `models`/`reaction_systems`) validates and loads.
+/// Test that a source-catalog document (top-level `data_sources` as the sole
+/// block, no `models`/`reaction_systems`) validates and loads.
+///
+/// From esm 1.0.0 a source declares NO variables: the consuming parameter binds
+/// a `file_variable` and owns the units, so the catalog is pure I/O.
 #[test]
-fn test_loader_only_document_loads() {
+fn test_source_catalog_document_loads() {
     let fixture = r#"{
         "esm": "1.0.0",
-        "metadata": { "name": "loader-only" },
+        "metadata": { "name": "source-catalog" },
         "data_sources": {
             "MetData": {
                 "kind": "grid",
                 "source": {
                     "url_template": "https://example.org/data/{date:%Y%m%d}.nc"
                 },
-                "variables": {
-                    "T": {
-                        "file_variable": "temperature",
-                        "units": "K",
-                        "description": "Air temperature"
-                    }
-                }
+                "temporal": { "frequency": "PT1H", "file_period": "P1D" }
             }
         }
     }"#;
 
     let result = load(fixture);
-    let esm = result.expect("loader-only document should validate and load");
+    let esm = result.expect("source-catalog document should validate and load");
     let loaders = esm
         .data_sources
         .as_ref()
-        .expect("loader-only document must expose data_sources");
+        .expect("source-catalog document must expose data_sources");
     assert_eq!(loaders.len(), 1);
     assert!(loaders.contains_key("MetData"));
     assert!(

@@ -39,6 +39,7 @@ from typing import Any
 
 from jsonschema import ValidationError as JsonSchemaValidationError
 
+from .classification import observed_definitions, observed_unknowns, ode_states
 from .error_handling import ErrorCode
 from .esm_types import EsmFile
 from .parse import SchemaValidationError, SubsystemRefError, load
@@ -328,13 +329,13 @@ def _validate_content_presence(
     esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
     """
-    Validate that at least one of models, reaction_systems, or data_loaders is
+    Validate that at least one of models, reaction_systems, or data_sources is
     present and non-empty.
 
     This ensures that the ESM file contains actual computational content rather than
-    being empty or containing only metadata. A loader-only file (sole component
-    `data_loaders`) is valid — it is referenceable as a loader subsystem
-    (RFC pure-io-data-loaders §4.4 / esm-spec §4.7).
+    being empty or containing only metadata. A source-only file (sole component
+    `data_sources`) is valid — it is a document-scoped ingest registry another
+    document imports rather than mounts (esm-spec §8).
 
     A TEMPLATE-LIBRARY file (esm-spec §9.7.1) is likewise valid with no component
     at all: it carries only `expression_templates` and exists to be IMPORTED. It
@@ -346,27 +347,27 @@ def _validate_content_presence(
     """
     has_models = bool(esm_file.models)
     has_reaction_systems = bool(esm_file.reaction_systems)
-    has_data_loaders = bool(esm_file.data_loaders)
+    has_data_sources = bool(esm_file.data_sources)
     is_library = bool(getattr(esm_file, "expression_templates", None))
 
-    if not has_models and not has_reaction_systems and not has_data_loaders and not is_library:
+    if not has_models and not has_reaction_systems and not has_data_sources and not is_library:
         structural_errors.append(
             ValidationError(
                 path="",
-                message="ESM file must contain at least one model, reaction system, or data loader. Empty files are not valid.",
+                message="ESM file must contain at least one model, reaction system, or data source. Empty files are not valid.",
                 code=ErrorCode.MISSING_REQUIRED_FIELD.value,
                 details={
                     "models_count": len(esm_file.models) if esm_file.models else 0,
                     "reaction_systems_count": len(esm_file.reaction_systems)
                     if esm_file.reaction_systems
                     else 0,
-                    "data_loaders_count": len(esm_file.data_loaders)
-                    if esm_file.data_loaders
+                    "data_sources_count": len(esm_file.data_sources)
+                    if esm_file.data_sources
                     else 0,
                     "fix_suggestions": [
                         "Add a model with variables and equations",
                         "Add a reaction system with species and reactions",
-                        "Add a data loader",
+                        "Add a data source",
                         "Import content from existing ESM files",
                     ],
                 },
@@ -410,54 +411,74 @@ def _is_operator_style(model) -> bool:
 def _validate_equation_balance_enhanced(
     esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
-    """Enhanced equation-unknown balance validation with detailed suggestions.
+    """esm-spec §4.9.4: the balance is UNKNOWNS vs EQUATIONS.
 
-    Equation balance is a property of a system solved on its OWN. It is skipped
-    for two shapes that are balanced only after composition, matching the Go
-    reference (which reaches 82/82 on the valid corpus):
+    Since 1.0.0 this is also the only thing it *could* be: ``unknown`` is the
+    declared type, and ODE-state-ness is derived from the very equations being
+    counted (§6.3.1). So every declared unknown counts, and every governing
+    equation counts whichever LHS form it takes — derivative, bare-variable, or
+    expression.
 
-    * a COUPLED document — a model's states may be driven by equations
-      contributed at the coupling edge, so the model's own equation count is not
-      the whole story;
+    ``missing_equations_for`` names the unknowns no equation defines. It is what
+    preserves the discriminating power of the RETIRED ``missing_observed_expr``
+    code: an observed unknown with nothing defining it is no longer a malformed
+    declaration but an unbalanced system, and this key names exactly the
+    variables that code used to name.
+
+    Balance is a property of a system solved on its OWN, so it is skipped for two
+    shapes that only balance after composition (this matches the Go reference,
+    which reaches 82/82 on the valid corpus):
+
+    * a COUPLED document — a model's unknowns may be driven by equations
+      contributed at the coupling edge;
     * an OPERATOR-style model (§6.4) — see :func:`_is_operator_style`.
-
-    Counting either against its locally declared states produced a false
-    ``equation_count_mismatch`` on 8 valid fixtures.
     """
     is_coupled = bool(getattr(esm_file, "coupling", None))
     for _i, model in enumerate(esm_file.models.values()):
         if is_coupled or _is_operator_style(model):
             continue
 
-        # Count state variables (unknowns)
-        state_vars = [name for name, var in model.variables.items() if var.type == "state"]
-        num_unknowns = len(state_vars)
+        # DECLARATION order, not sorted: the cross-binding contract in
+        # tests/invalid/expected_errors.json pins `unknowns` as the order the
+        # document declares them in, which Python's dict preserves for free.
+        unknown_names = [name for name, var in model.variables.items() if var.type == "unknown"]
+        num_unknowns = len(unknown_names)
 
         # Count governing equations only — `ic` equations pin initial conditions,
         # not unknowns, so they do not participate in the balance (see
         # `_is_initial_condition_equation`).
         num_equations = sum(1 for eq in model.equations if not _is_initial_condition_equation(eq))
 
-        if num_equations != num_unknowns:
-            structural_errors.append(
-                ValidationError(
-                    # A JSON Pointer to the offending model (CONFORMANCE_SPEC
-                    # §7.1.2; pinned as `/models/<name>`).
-                    path=f"/models/{model.name}",
-                    message=(
-                        f"Equation-unknown balance error in model '{model.name}': "
-                        f"{num_equations} equations for {num_unknowns} unknowns "
-                        f"(state variables: {', '.join(state_vars)})"
-                    ),
-                    code=ErrorCode.EQUATION_COUNT_MISMATCH.value,
-                    details={
-                        "model_name": model.name,
-                        "num_equations": num_equations,
-                        "num_unknowns": num_unknowns,
-                        "state_variables": state_vars,
-                    },
-                )
+        if num_equations == num_unknowns:
+            continue
+
+        # An unknown is CREDITED by an equation that names it on the LHS — a
+        # derivative (ODE state) or a bare/indexed reference (observed). One
+        # constrained only implicitly, by an expression LHS, has no equation of
+        # its own to point at, so it is reported alongside the genuinely
+        # undefined ones only when the counts already disagree.
+        defined = set(ode_states(model)) | set(observed_unknowns(model))
+        missing = [name for name in unknown_names if name not in defined]
+
+        details: dict[str, Any] = {
+            "unknowns": unknown_names,
+            "equations": num_equations,
+        }
+        if missing:
+            details["missing_equations_for"] = missing
+        structural_errors.append(
+            ValidationError(
+                # A JSON Pointer to the offending model (CONFORMANCE_SPEC
+                # §7.1.2; pinned as `/models/<name>`).
+                path=f"/models/{model.name}",
+                message=(
+                    f"Number of equations ({num_equations}) does not match "
+                    f"number of unknowns ({num_unknowns})"
+                ),
+                code=ErrorCode.EQUATION_COUNT_MISMATCH.value,
+                details=details,
             )
+        )
 
 
 def _validate_stoich(
@@ -944,85 +965,12 @@ def _power_factor(s: str, n: int) -> str:
     return f"{s}^{n}"
 
 
-def _validate_functional_affect(
-    affect,
-    affect_path: str,
-    all_variables: set[str],
-    all_parameters: set[str],
-    all_operators: set[str],
-    param_label: str,
-    structural_errors: list[ValidationError],
-) -> None:
-    """
-    Validate a ``FunctionalAffect``'s ``handler_id``, ``read_vars``,
-    ``read_params``, and ``modified_params`` references.
-
-    Shared by the ``affects`` and ``affect_neg`` branches of
-    :func:`_validate_event_consistency`. ``param_label`` distinguishes the
-    read/modified-parameter error messages (``"Functional affect"`` for
-    ``affects`` vs ``"Affect_neg functional affect"`` for ``affect_neg``); the
-    emitted errors are otherwise identical to the previously inlined checks.
-    """
-    # A `handler_id` is NOT required to name an entry in the document's
-    # `operators` block: a FunctionalAffect's handler may be supplied by the HOST
-    # (a `callback` handler registered by the runtime), and `full_coupled.esm`
-    # — a valid fixture — declares no `operators` block at all. Requiring
-    # `handler_id in operators` rejected it. The Go reference accepts it; a
-    # handler the host does not register is a run-time error, not a structural
-    # one, so nothing is checked here.
-
-    # Validate read_vars exist
-    for var_idx, read_var in enumerate(affect.read_vars):
-        if not _is_operator_placeholder(read_var) and read_var not in all_variables:
-            structural_errors.append(
-                ValidationError(
-                    path=f"{affect_path}/read_vars/{var_idx}",
-                    message=f"Variable '{read_var}' in event affects/conditions is not declared",
-                    code=ErrorCode.EVENT_VAR_UNDECLARED.value,
-                    details={
-                        "variable": read_var,
-                        "available_variables": sorted(all_variables),
-                    },
-                )
-            )
-
-    # Validate read_params exist
-    for param_idx, read_param in enumerate(affect.read_params):
-        if read_param not in all_parameters:
-            structural_errors.append(
-                ValidationError(
-                    path=f"{affect_path}/read_params/{param_idx}",
-                    message=f"{param_label} read parameter '{read_param}' not declared",
-                    code=ErrorCode.UNDECLARED_READ_PARAMETER.value,
-                    details={
-                        "parameter": read_param,
-                        "available_parameters": sorted(all_parameters),
-                    },
-                )
-            )
-
-    # Validate modified_params exist
-    for param_idx, mod_param in enumerate(affect.modified_params):
-        if mod_param not in all_parameters:
-            structural_errors.append(
-                ValidationError(
-                    path=f"{affect_path}/modified_params/{param_idx}",
-                    message=f"{param_label} modified parameter '{mod_param}' not declared",
-                    code=ErrorCode.UNDECLARED_MODIFIED_PARAMETER.value,
-                    details={
-                        "parameter": mod_param,
-                        "available_parameters": sorted(all_parameters),
-                    },
-                )
-            )
-
-
 def _validate_observed_dimensions(
     esm_file: EsmFile, structural_errors: list[ValidationError]
 ) -> None:
-    """esm-spec §4.8.4: an observed variable whose DECLARED units disagree with
-    the dimension its EXPRESSION computes is a *provable* dimensional mismatch,
-    and therefore a hard error (``unit_inconsistency``).
+    """esm-spec §4.8.4: an observed unknown whose DECLARED units disagree with
+    the dimension its DEFINING EQUATION's RHS computes is a *provable*
+    dimensional mismatch, and therefore a hard error (``unit_inconsistency``).
 
     This is the check the whole §4.8 dimensional apparatus exists to make, and
     it was missing: ``units.UnitValidator`` could type an expression (each op
@@ -1071,8 +1019,14 @@ def _validate_observed_dimensions(
         validator = UnitValidator()
         validator.known_units = known
 
-        for vname, var in model.variables.items():
-            if var.type != "observed" or var.expression is None or not var.units:
+        # An observed unknown's DEFINING EXPRESSION now lives in the equations,
+        # as the RHS of its bare-variable-LHS equation (esm-spec §6.3.1). The
+        # check is otherwise unchanged: it compares the declared units of the
+        # variable against the dimension that expression computes.
+        definitions = observed_definitions(model)
+        for vname, definition in definitions.items():
+            var = model.variables[vname]
+            if not var.units:
                 continue
             if vname not in known:
                 continue  # its own declared unit is unparseable — already reported
@@ -1080,7 +1034,7 @@ def _validate_observed_dimensions(
             declared = known[vname].dimensionality
             path = f"/models/{model.name}/variables/{vname}"
             try:
-                computed = validator._get_expression_dimension(var.expression)
+                computed = validator._get_expression_dimension(definition)
             except DimensionalMismatchError as exc:
                 # A provable inconsistency INSIDE the expression (adding metres
                 # to kilograms, a transcendental with a dimensional argument).
@@ -1145,8 +1099,13 @@ def _validate_event_consistency(
     - Discrete event conditions produce boolean values
     - Variables in affects are declared
     - Variables in affect_neg (direction-dependent affects) are declared
-    - Functional affect references are valid (handler_id, read_vars, read_params, modified_params)
-    - discrete_parameters in coupling entries are valid
+
+    From 1.0.0 an event affects UNKNOWNS ONLY, so there is no functional-affect
+    branch and no `discrete_parameters` list: a handler and a scheduled parameter
+    rewrite both live on the parameter, as its own `update`. An affects LHS that
+    names a parameter is `event_affects_parameter`, raised by
+    :mod:`earthsci_ast.structural_checks` where the model-scoped JSON Pointer the
+    cross-binding contract pins is available.
 
     The reserved `_var` placeholder is never an undeclared variable — see
     :data:`_OPERATOR_PLACEHOLDER`.
@@ -1174,11 +1133,6 @@ def _validate_event_consistency(
             all_parameters.add(param.name)
             all_parameters.add(f"{rs.name}.{param.name}")
 
-    # Build operator/handler lookup for functional affects
-    all_operators = set()
-    for operator in esm_file.operators:
-        all_operators.add(operator.operator_id)
-
     for event_idx, event in enumerate(esm_file.events):
         event_path = f"/events/{event_idx}"
 
@@ -1199,16 +1153,6 @@ def _validate_event_consistency(
                             },
                         )
                     )
-            elif hasattr(affect, "handler_id"):  # FunctionalAffect
-                _validate_functional_affect(
-                    affect,
-                    affect_path,
-                    all_variables,
-                    all_parameters,
-                    all_operators,
-                    "Functional affect",
-                    structural_errors,
-                )
 
         # Validate affect_neg (direction-dependent affects) if present
         if hasattr(event, "affect_neg") and event.affect_neg is not None:
@@ -1228,39 +1172,6 @@ def _validate_event_consistency(
                                 },
                             )
                         )
-                elif hasattr(affect, "handler_id"):  # FunctionalAffect
-                    # Same validation as regular affects
-                    _validate_functional_affect(
-                        affect,
-                        affect_path,
-                        all_variables,
-                        all_parameters,
-                        all_operators,
-                        "Affect_neg functional affect",
-                        structural_errors,
-                    )
-
-    # Validate discrete_parameters in coupling entries
-    for coupling_idx, coupling in enumerate(esm_file.coupling):
-        coupling_path = f"/coupling/{coupling_idx}"
-
-        # Check if this coupling entry has discrete_parameters
-        if hasattr(coupling, "discrete_parameters") and coupling.discrete_parameters is not None:
-            for param_idx, discrete_param in enumerate(coupling.discrete_parameters):
-                param_path = f"{coupling_path}/discrete_parameters/{param_idx}"
-
-                if discrete_param not in all_parameters:
-                    structural_errors.append(
-                        ValidationError(
-                            path=param_path,
-                            message=f"Discrete parameter '{discrete_param}' does not match a declared parameter",
-                            code=ErrorCode.INVALID_DISCRETE_PARAM.value,
-                            details={
-                                "parameter": discrete_param,
-                                "available_parameters": sorted(all_parameters),
-                            },
-                        )
-                    )
 
 
 def _validate_coupling_units(

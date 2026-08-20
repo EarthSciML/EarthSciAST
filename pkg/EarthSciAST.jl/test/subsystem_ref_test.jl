@@ -16,7 +16,7 @@
 
     @testset "resolve_subsystem_refs! on file with models but no refs" begin
         vars = Dict{String, ModelVariable}(
-            "T" => ModelVariable(StateVariable, default=300.0)
+            "T" => ModelVariable(UnknownVariable, default=300.0)
         )
         model = Model(vars, Equation[])
         models = Dict{String, Model}("Atm" => model)
@@ -40,12 +40,12 @@
 
     @testset "resolve_subsystem_refs! on file with nested subsystems (no refs)" begin
         inner_vars = Dict{String, ModelVariable}(
-            "x" => ModelVariable(StateVariable, default=1.0)
+            "x" => ModelVariable(UnknownVariable, default=1.0)
         )
         inner = Model(inner_vars, Equation[])
 
         outer_vars = Dict{String, ModelVariable}(
-            "y" => ModelVariable(StateVariable, default=2.0)
+            "y" => ModelVariable(UnknownVariable, default=2.0)
         )
         outer = Model(outer_vars, Equation[], subsystems=Dict{String, Model}("Inner" => inner))
 
@@ -100,7 +100,7 @@
             "models": {
                 "SubModel": {
                     "variables": {
-                        "x": {"type": "state", "default": 1.0}
+                        "x": {"type": "unknown", "default": 1.0}
                     },
                     "equations": []
                 }
@@ -135,7 +135,7 @@
             "models": {
                 "SimpleModel": {
                     "variables": {
-                        "T": {"type": "state", "default": 300.0}
+                        "T": {"type": "unknown", "default": 300.0}
                     },
                     "equations": []
                 }
@@ -157,36 +157,46 @@
         end
     end
 
-    # --- Data loaders as model subsystems (RFC pure-io-data-loaders §4.3/§4.4) ---
+    # --- Data sources: a document-scoped INGEST REGISTRY, not components ---
+    #
+    # esm 1.0.0 (esm-spec §8): a source exposes no variables of its own, cannot
+    # be a subsystem, a coupling endpoint, or a scoped-name path root. The
+    # binding lives on the CONSUMING PARAMETER, which owns the units.
 
-    # A minimal schema-valid pure-I/O data loader, reused below.
+    # A minimal schema-valid pure-I/O data source, reused below. It declares no
+    # `variables` — that map is exactly what moved onto the consumer.
     loader_json = """{
         "kind": "grid",
-        "source": {"url_template": "file:///data/{date:%Y%m%d}.nc"},
-        "variables": {"emis": {"file_variable": "EMIS", "units": "kg/m^2/s"}}
+        "source": {"url_template": "file:///data/{date:%Y%m%d}.nc"}
     }"""
 
-    @testset "loader-only file is a valid document" begin
+    @testset "source-only file is a valid document" begin
         tmp_dir = mktempdir()
         try
             path = joinpath(tmp_dir, "loader_only.esm")
             write(path, """{
                 "esm": "0.1.0",
                 "metadata": {"name": "loader only", "authors": ["Test"]},
-                "data_loaders": {"Met": $loader_json}
+                "data_sources": {"Met": $loader_json}
             }""")
             loaded = EarthSciAST.load(path)
             @test loaded isa EsmFile
-            @test loaded.data_loaders !== nothing
-            @test haskey(loaded.data_loaders, "Met")
-            @test loaded.data_loaders["Met"] isa DataLoader
+            @test loaded.data_sources !== nothing
+            @test haskey(loaded.data_sources, "Met")
+            @test loaded.data_sources["Met"] isa DataSource
             @test loaded.models === nothing || isempty(loaded.models)
+            # The registry entry declares no variables of its own.
+            @test !hasproperty(loaded.data_sources["Met"], :variables)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
     end
 
-    @testset "inline data-loader subsystem parses as a DataLoader" begin
+    @testset "a data source may NOT be a model subsystem" begin
+        # The 0.x shape mounted a loader under `models.<M>.subsystems.<key>`.
+        # From 1.0.0 the subsystems union is [Model, SubsystemRef] only, so the
+        # loader-shaped entry is no longer a legal subsystem and the document is
+        # rejected rather than silently reinterpreted.
         tmp_dir = mktempdir()
         try
             path = joinpath(tmp_dir, "main.esm")
@@ -199,27 +209,69 @@
                     "subsystems": {"Met": $loader_json}
                 }}
             }""")
-            loaded = EarthSciAST.load(path)
-            met = loaded.models["Regridder"].subsystems["Met"]
-            @test met isa DataLoader
-            @test met.kind == "grid"
-            # Round-trips back to a loader-shaped subsystem (not an empty model).
-            roundtrip = EarthSciAST.serialize_esm_file(loaded)
-            sub = roundtrip["models"]["Regridder"]["subsystems"]["Met"]
-            @test sub["kind"] == "grid"
-            @test haskey(sub, "source")
+            @test_throws Exception EarthSciAST.load(path)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
     end
 
-    @testset "single-loader-file reference resolves as a subsystem" begin
+    @testset "a model consumes a source through a parameter update" begin
+        # The replacement for the 0.x loader-as-subsystem split: the source is a
+        # top-level registry entry, and the field the model reads is one of its
+        # OWN parameters (esm-spec §8.5).
+        tmp_dir = mktempdir()
+        try
+            path = joinpath(tmp_dir, "main.esm")
+            write(path, """{
+                "esm": "0.1.0",
+                "metadata": {"name": "main", "authors": ["Test"]},
+                "data_sources": {"Met": $loader_json},
+                "models": {"Regridder": {
+                    "variables": {
+                        "emis": {
+                            "type": "parameter", "units": "kg/m^2/s", "shape": [],
+                            "update": {"kind": "data", "source": "Met",
+                                       "from": {"file_variable": "EMIS"}}
+                        }
+                    },
+                    "equations": []
+                }}
+            }""")
+            loaded = EarthSciAST.load(path)
+            m = loaded.models["Regridder"]
+            @test isempty(m.subsystems)
+            @test discrete_parameters(m) == ["emis"]
+            rule = m.variables["emis"].update[1]
+            @test rule.kind == "data"
+            @test rule.source == "Met"
+            @test rule.from.file_variable == "EMIS"
+            # The units are the CONSUMER's, declared once.
+            @test m.variables["emis"].units == "kg/m^2/s"
+
+            # Round-trips: one rule emits as the OBJECT form, and the source
+            # keeps its registry shape.
+            rt = EarthSciAST.serialize_esm_file(loaded)
+            v = rt["models"]["Regridder"]["variables"]["emis"]
+            @test v["update"]["kind"] == "data"
+            @test v["update"]["from"]["file_variable"] == "EMIS"
+            @test haskey(rt["data_sources"]["Met"], "source")
+            @test !haskey(rt["data_sources"]["Met"], "variables")
+        finally
+            rm(tmp_dir, recursive=true, force=true)
+        end
+    end
+
+    @testset "a source-only file cannot be mounted as a subsystem ref" begin
+        # A `{"ref": ...}` subsystem resolves to the referenced file's single
+        # top-level MODEL. From 1.0.0 a file whose only top-level entry is a
+        # `data_sources` block has no mountable component, so the ref fails
+        # loudly instead of resolving to a pseudo-component.
         tmp_dir = mktempdir()
         try
             write(joinpath(tmp_dir, "loader.esm"), """{
                 "esm": "0.1.0",
                 "metadata": {"name": "loader", "authors": ["Test"]},
-                "data_loaders": {"GEOSFP": $loader_json}
+                "data_sources": {"GEOSFP": $loader_json}
             }""")
             main_path = joinpath(tmp_dir, "main.esm")
             write(main_path, """{
@@ -231,12 +283,7 @@
                     "subsystems": {"Met": {"ref": "./loader.esm"}}
                 }}
             }""")
-            loaded = EarthSciAST.load(main_path)
-            met = loaded.models["Regridder"].subsystems["Met"]
-            # Named by the parent subsystem key; the ref placeholder is gone.
-            @test met isa DataLoader
-            @test !(met isa SubsystemRef)
-            @test haskey(met.variables, "emis")
+            @test_throws SubsystemRefError EarthSciAST.load(main_path)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -249,7 +296,7 @@
             write(joinpath(tmp_dir, "two_loaders.esm"), """{
                 "esm": "0.1.0",
                 "metadata": {"name": "two loaders", "authors": ["Test"]},
-                "data_loaders": {"A": $loader_json, "B": $loader_json}
+                "data_sources": {"A": $loader_json, "B": $loader_json}
             }""")
             main_path = joinpath(tmp_dir, "main.esm")
             write(main_path, """{
@@ -276,7 +323,7 @@
                 "esm": "0.1.0",
                 "metadata": {"name": "child", "authors": ["Test"]},
                 "models": {"Inner": {
-                    "variables": {"u": {"type": "state", "default": 1.0}},
+                    "variables": {"u": {"type": "unknown", "default": 1.0}},
                     "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                                    "rhs": {"op": "*", "args": ["u", 0.0]}}]
                 }}
@@ -311,7 +358,7 @@
                     "data": [1.0, 2.0, 3.0, 4.0]
                 }},
                 "models": {"Inner": {
-                    "variables": {"k": {"type": "state", "default": 0.0}},
+                    "variables": {"k": {"type": "unknown", "default": 0.0}},
                     "equations": [{"lhs": {"op": "D", "args": ["k"], "wrt": "t"},
                                    "rhs": {"op": "table_lookup", "table": "sig",
                                            "axes": {"i": 2}, "args": []}}]
@@ -335,15 +382,18 @@
     @testset "top-level model ref anchors the component's nested subsystem refs" begin
         tmp_dir = mktempdir()
         try
-            # The component lives in a subdir and references its loader RELATIVE to
-            # itself; without re-anchoring, the loader ref would break once the
-            # model is spliced into the parent (a different directory).
+            # The component lives in a subdir and references its NESTED MODEL
+            # relative to itself; without re-anchoring, that ref would break once
+            # the component is spliced into the parent (a different directory).
             comp_dir = joinpath(tmp_dir, "components")
             mkpath(comp_dir)
-            write(joinpath(comp_dir, "loader.esm"), """{
+            write(joinpath(comp_dir, "leaf.esm"), """{
                 "esm": "0.1.0",
-                "metadata": {"name": "loader", "authors": ["Test"]},
-                "data_loaders": {"Met": $loader_json}
+                "metadata": {"name": "leaf", "authors": ["Test"]},
+                "models": {"Leaf": {
+                    "variables": {"q": {"type": "parameter", "units": "1", "default": 1.0}},
+                    "equations": []
+                }}
             }""")
             write(joinpath(comp_dir, "comp.esm"), """{
                 "esm": "0.1.0",
@@ -351,7 +401,7 @@
                 "models": {"Inner": {
                     "variables": {},
                     "equations": [],
-                    "subsystems": {"Met": {"ref": "./loader.esm"}}
+                    "subsystems": {"Met": {"ref": "./leaf.esm"}}
                 }}
             }""")
             main_path = joinpath(tmp_dir, "main.esm")
@@ -362,9 +412,9 @@
             }""")
             loaded = EarthSciAST.load(main_path)
             met = loaded.models["Comp"].subsystems["Met"]
-            @test met isa DataLoader
+            @test met isa Model
             @test !(met isa SubsystemRef)
-            @test haskey(met.variables, "emis")
+            @test haskey(met.variables, "q")
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -377,8 +427,8 @@
                 "esm": "0.1.0",
                 "metadata": {"name": "two models", "authors": ["Test"]},
                 "models": {
-                    "A": {"variables": {"x": {"type": "state", "default": 1.0}}, "equations": []},
-                    "B": {"variables": {"y": {"type": "state", "default": 2.0}}, "equations": []}
+                    "A": {"variables": {"x": {"type": "unknown", "default": 1.0}}, "equations": []},
+                    "B": {"variables": {"y": {"type": "unknown", "default": 2.0}}, "equations": []}
                 }
             }""")
             main_path = joinpath(tmp_dir, "main.esm")
@@ -419,8 +469,8 @@
                 "esm": "0.1.0",
                 "metadata": {"name": "lib", "authors": ["Test"]},
                 "models": {
-                    "KernelA": {"variables": {"a": {"type": "state", "default": 1.0}}, "equations": []},
-                    "KernelB": {"variables": {"b": {"type": "state", "default": 2.0}}, "equations": []}
+                    "KernelA": {"variables": {"a": {"type": "unknown", "default": 1.0}}, "equations": []},
+                    "KernelB": {"variables": {"b": {"type": "unknown", "default": 2.0}}, "equations": []}
                 }
             }""")
             main_path = joinpath(tmp_dir, "main.esm")
@@ -452,7 +502,7 @@
             write(joinpath(tmp_dir, "child.esm"), """{
                 "esm": "0.1.0",
                 "metadata": {"name": "child", "authors": ["Test"]},
-                "models": {"Inner": {"variables": {"u": {"type": "state", "default": 1.0}}, "equations": []}}
+                "models": {"Inner": {"variables": {"u": {"type": "unknown", "default": 1.0}}, "equations": []}}
             }""")
             main_path = joinpath(tmp_dir, "main.esm")
             write(main_path, """{
@@ -494,7 +544,7 @@
                 "gy": {"kind": "interval", "size": "NY"}
             },
             "models": {"Regrid": {
-                "variables": {"u": {"type": "state", "units": "1", "default": 0.0}},
+                "variables": {"u": {"type": "unknown", "units": "1", "default": 0.0}},
                 "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
                                "rhs": {"op": "*", "args": [-0.5, "u"]}}]
             }}

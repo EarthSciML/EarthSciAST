@@ -39,7 +39,7 @@ const ESMJ = EarthSciAST
                        join=nothing, filter=nothing, index_sets, const_arrays=Dict{String,Vector{Float64}}())
         rhs = _op("aggregate"; output_idx=Any[], semiring=semiring, reduce=reduce,
                   expr_body=body, ranges=ranges, join=join, filter=filter)
-        model = ESMJ.Model(Dict("u" => ModelVariable(StateVariable)),
+        model = ESMJ.Model(Dict("u" => ModelVariable(UnknownVariable)),
                            [ESMJ.Equation(_op("D", _v("u"); wrt="t"), rhs)])
         f!, u0, p, _, vmap = build_evaluator(model; index_sets=index_sets,
                                              const_arrays=const_arrays)
@@ -150,7 +150,7 @@ const ESMJ = EarthSciAST
                   expr_body=_idx("v", "i", "k"),
                   ranges=Dict("i" => _R("out"), "k" => _R("k")),
                   join=Any[[("i", "k")]])
-        model = ESMJ.Model(Dict("o" => ModelVariable(StateVariable)),
+        model = ESMJ.Model(Dict("o" => ModelVariable(UnknownVariable)),
                            [ESMJ.Equation(lhs, rhs)])
         f!, u0, p, _, vmap = build_evaluator(model; index_sets=isets,
                                              const_arrays=Dict("v" => [5.0 7.0; 8.0 9.0]))
@@ -279,7 +279,7 @@ const ESMJ = EarthSciAST
         ca    = Dict("w" => [1.0 2.0; 3.0 4.0])
         common = (; output_idx=Any[], semiring="sum_product", expr_body=_idx("w", "i", "j"),
                   ranges=Dict("i" => _R("county"), "j" => _R("county")), join=Any[[("i", "j")]])
-        mk(tag) = ESMJ.Model(Dict("u" => ModelVariable(StateVariable)),
+        mk(tag) = ESMJ.Model(Dict("u" => ModelVariable(UnknownVariable)),
                              [ESMJ.Equation(_op("D", _v("u"); wrt="t"), _op(tag; common...))])
         run1(m) = (r = build_evaluator(m; index_sets=isets, const_arrays=ca); du = similar(r[2]); r[1](du, r[2], r[3], 0.0); du[r[5]["u"]])
         @test run1(mk("arrayop")) == run1(mk("aggregate")) == 1.0 + 4.0

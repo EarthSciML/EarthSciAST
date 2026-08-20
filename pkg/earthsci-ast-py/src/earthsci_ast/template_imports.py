@@ -50,7 +50,6 @@ from .error_handling import (
     TEMPLATE_IMPORT_UNKNOWN_NAME,
     TEMPLATE_IMPORT_UNRESOLVED,
     TEMPLATE_IMPORT_VERSION_TOO_OLD,
-    TEMPLATE_INJECT_TARGET_IS_LOADER,
     TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
     TEMPLATE_INJECT_TARGET_UNKNOWN,
 )
@@ -91,7 +90,7 @@ _COMPONENT_KINDS = ("models", "reaction_systems")
 _LIBRARY_FORBIDDEN_KEYS = (
     "models",
     "reaction_systems",
-    "data_loaders",
+    "data_sources",
     "coupling",
     "domain",
 )
@@ -1737,7 +1736,7 @@ def _apply_coupling_injections(root: dict[str, Any]) -> dict[str, Any]:
     Diagnostics (esm-spec §9.6.6): a key naming no system the entry references
     is ``template_inject_target_unknown``; a key resolving to a data loader is
     ``template_inject_target_is_loader``; a key resolving to neither model,
-    reaction system, nor loader is ``template_inject_target_not_component``.
+    reaction system is ``template_inject_target_not_component``.
     Only top-level system targets are resolved by this binding — a nested
     ``Parent.Child`` key is out of scope and reported as
     ``template_inject_target_not_component``."""
@@ -1746,7 +1745,6 @@ def _apply_coupling_injections(root: dict[str, Any]) -> dict[str, Any]:
         return root
     models = root.get("models")
     rsystems = root.get("reaction_systems")
-    loaders = root.get("data_loaders")
 
     def _is_top(d: Any, k: str) -> bool:
         return _is_object(d) and k in d
@@ -1779,20 +1777,16 @@ def _apply_coupling_injections(root: dict[str, Any]) -> dict[str, Any]:
                 comp = models[tname]
             elif _is_top(rsystems, tname):
                 comp = rsystems[tname]
-            elif _is_top(loaders, tname):
-                raise ExpressionTemplateError(
-                    TEMPLATE_INJECT_TARGET_IS_LOADER,
-                    f"coupling entry `expression_template_imports` key '{tname}' "
-                    "resolves to a data loader, which is pure I/O with no "
-                    "expression positions to rewrite (esm-spec §9.7.10 / §14).",
-                )
             else:
+                # `template_inject_target_is_loader` is RETIRED in 1.0.0: a data
+                # source is not a component, so it can no longer be an injection
+                # target at all and needs no diagnostic of its own.
                 raise ExpressionTemplateError(
                     TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
                     f"coupling entry `expression_template_imports` key '{tname}' "
-                    "resolves to neither a top-level model, reaction system, nor "
-                    "data loader (esm-spec §9.7.10). Nested `Parent.Child` "
-                    "targets are out of scope.",
+                    "resolves to neither a top-level model nor a reaction system "
+                    "(esm-spec §9.7.10). Nested `Parent.Child` targets are out of "
+                    "scope.",
                 )
             if not _is_object(comp):
                 raise ExpressionTemplateError(

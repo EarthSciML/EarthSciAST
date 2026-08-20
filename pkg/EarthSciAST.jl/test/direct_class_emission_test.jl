@@ -80,7 +80,7 @@ function _dce_percell_model(vals::Vector{ESM.ASTExpr}, N::Int)
         expr_body=_op("*", _op("index", mk, _v("i")), _v("k")),
         ranges=Dict("i" => [1, N], "k" => Any[_i(1), _dce_khi()]), reduce="+")
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
         "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
         "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0))
     ESM.Model(vars, [ESM.Equation(lhs, rhs)])

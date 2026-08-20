@@ -258,23 +258,52 @@ pub struct VariableNode {
     pub system: String,
 }
 
-/// Type/kind of variable
+/// Type/kind of variable, as the graph renders it.
+///
+/// These are the esm-spec §6.3.1 DERIVED categories, not declared types — esm
+/// 1.0.0 declares only `unknown` and `parameter`. The mapping is fixed by
+/// [`variable_kind`].
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VariableKind {
-    /// State variable
+    /// An unknown the solver solves for: an ODE state, or an unknown pinned
+    /// only by an implicit algebraic constraint.
     State,
-    /// Parameter (constant)
+    /// A constant or sampled parameter.
     Parameter,
-    /// Observed quantity (computed)
+    /// An unknown defined by a bare-variable equation — eliminable.
     Observed,
-    /// Brownian (Wiener) noise source — any present promotes model to SDE
+    /// A parameter whose update is `wiener` — any present promotes the model
+    /// to an SDE.
     Brownian,
-    /// Discrete variable: piecewise-constant between refreshes, never
-    /// differentiated by the solver.
+    /// A parameter carrying any other update: piecewise-constant between
+    /// refreshes, never differentiated by the solver.
     Discrete,
     /// Chemical species
     Species,
+}
+
+/// The graph kind of one variable, derived through [`crate::classification`]
+/// (esm-spec §6.3.1) rather than read off a declared type.
+///
+/// `algebraic_unknowns` render as [`VariableKind::State`]: the graph's `state`
+/// has always meant "a quantity the solver solves for", which is exactly what
+/// an implicitly-constrained unknown is, and the distinction from an ODE state
+/// is a solver concern rather than a dependency-graph one.
+fn variable_kind(class: &crate::classification::Classification, name: &str) -> VariableKind {
+    if class.is_observed(name) {
+        VariableKind::Observed
+    } else if class.is_brownian(name) {
+        VariableKind::Brownian
+    } else if class.is_discrete_parameter(name) {
+        VariableKind::Discrete
+    } else if class.ode_states.iter().any(|s| s == name)
+        || class.algebraic_unknowns.iter().any(|s| s == name)
+    {
+        VariableKind::State
+    } else {
+        VariableKind::Parameter
+    }
 }
 
 /// Edge representing dependencies between variables in an expression graph
@@ -435,35 +464,12 @@ fn extract_from_model(
     let mut edges = Vec::new();
 
     // Add variable declarations as nodes with proper types (sorted so node
-    // order is deterministic).
-    // The graph's variable kinds are DERIVED categories (esm-spec §6.3.1), so
-    // they are seeded from `crate::classify` rather than from the declared
-    // type, which since 1.0.0 only separates `unknown` from `parameter`.
-    let observed: std::collections::HashSet<String> =
-        crate::classify::observed_unknowns(model).into_iter().collect();
-    let brownian: std::collections::HashSet<String> = crate::classify::brownian_parameters(model)
-        .into_iter()
-        .collect();
-    let discrete: std::collections::HashSet<String> = crate::classify::discrete_parameters(model)
-        .into_iter()
-        .collect();
-
+    // order is deterministic). The kind is DERIVED (esm-spec §6.3.1), once per
+    // model, never read off the declared type.
+    let class = crate::classification::Classification::of(model);
     for var_name in sorted_keys(&model.variables) {
         let var_def = &model.variables[var_name];
-        let kind = match var_def.var_type {
-            // An ODE state and an algebraic unknown are both carried states.
-            crate::VariableType::Unknown if observed.contains(var_name.as_str()) => {
-                VariableKind::Observed
-            }
-            crate::VariableType::Unknown => VariableKind::State,
-            crate::VariableType::Parameter if brownian.contains(var_name.as_str()) => {
-                VariableKind::Brownian
-            }
-            crate::VariableType::Parameter if discrete.contains(var_name.as_str()) => {
-                VariableKind::Discrete
-            }
-            crate::VariableType::Parameter => VariableKind::Parameter,
-        };
+        let kind = variable_kind(&class, var_name);
 
         nodes.push(VariableNode {
             name: var_name.clone(),

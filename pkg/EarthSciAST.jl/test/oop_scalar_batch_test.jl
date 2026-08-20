@@ -45,8 +45,8 @@ function _ob_halo(M::Int; ghost::Bool=false)
             Dict("op"=>"index","args"=>Any["q", donor("i","k"), donor("j","l")])]))
     doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"ob_halo"),
       "models"=>Dict("R"=>Dict{String,Any}(
-        "variables"=>Dict("q"=>Dict("type"=>"state","shape"=>Any["a","b"]),
-                          "out"=>Dict("type"=>"state","shape"=>Any["i","j"])),
+        "variables"=>Dict("q"=>Dict("type"=>"unknown","shape"=>Any["a","b"]),
+                          "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
         "equations"=>Any[
           Dict("lhs"=>Dict("op"=>"aggregate","args"=>Any[],"output_idx"=>Any["a","b"],
                  "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),
@@ -131,9 +131,11 @@ _ob_build(doc, ics; form=:inplace, loop=true, batch=true) =
         isets = Dict("x" => _OB_ESS.IndexSet("interval"; size = N),
                      "y" => _OB_ESS.IndexSet("interval"; size = M))
         vars = Dict(
-            "q" => _OB_ESS.ModelVariable(_OB_ESS.StateVariable; shape = ["x", "y"]),
-            "v" => _OB_ESS.ModelVariable(_OB_ESS.StateVariable; shape = ["x"]),
-            "S" => _OB_ESS.ModelVariable(_OB_ESS.ObservedVariable; shape = ["x"]),
+            "q" => _OB_ESS.ModelVariable(_OB_ESS.UnknownVariable; shape = ["x", "y"]),
+            "v" => _OB_ESS.ModelVariable(_OB_ESS.UnknownVariable; shape = ["x"]),
+            # esm 1.0.0 (§5.4/§6.3.1): `S` is a plain `unknown`; the `S ~ Sdef`
+            # equation below is what makes it OBSERVED.
+            "S" => _OB_ESS.ModelVariable(_OB_ESS.UnknownVariable; shape = ["x"]),
         )
         rng_i  = Dict{String,Any}("i" => _OB_ESS.IndexSetRef("x"))
         rng_ik = Dict{String,Any}("i" => _OB_ESS.IndexSetRef("x"),
@@ -214,9 +216,9 @@ _ob_build(doc, ics; form=:inplace, loop=true, batch=true) =
     @testset "pow exponent is pinned in the group key" begin
         doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"ob_pow"),
           "models"=>Dict("P"=>Dict{String,Any}(
-            "variables"=>Dict("x"=>Dict("type"=>"state"),"y"=>Dict("type"=>"state"),
-                              "a"=>Dict("type"=>"state"),"b"=>Dict("type"=>"state"),
-                              "c"=>Dict("type"=>"state")),
+            "variables"=>Dict("x"=>Dict("type"=>"unknown"),"y"=>Dict("type"=>"unknown"),
+                              "a"=>Dict("type"=>"unknown"),"b"=>Dict("type"=>"unknown"),
+                              "c"=>Dict("type"=>"unknown")),
             "equations"=>Any[
               Dict("lhs"=>Dict("op"=>"D","args"=>Any["x"],"wrt"=>"t"),"rhs"=>0.0),
               Dict("lhs"=>Dict("op"=>"D","args"=>Any["y"],"wrt"=>"t"),"rhs"=>0.0),

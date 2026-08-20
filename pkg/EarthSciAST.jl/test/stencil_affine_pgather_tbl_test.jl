@@ -49,7 +49,7 @@ _clamp_hi(e, N) = _op("min", e, _i(N))
 # (1) D(u[i]) = forcing[max(i-1,1)] + forcing[min(i+1,N)] — the reduced
 # column-wall clamp pattern; pure forcing so the pgather lane is isolated.
 function _pgt_clamped_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("+",
         _idx("forcing", _clamp_lo(_op("-", _v("i"), _i(1)))),
         _idx("forcing", _clamp_hi(_op("+", _v("i"), _i(1)), N)))
@@ -63,7 +63,7 @@ end
 # cannot absorb it (a width-1 clamp lands exactly on the [1,1]|[2,N-1] ghost
 # cut and stays affine per box, defeating the differential).
 function _pgt_mixed_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))
@@ -86,13 +86,16 @@ function _pgt_obschain_model(N)
     Mbody = ed(_v("e"))
     M = ESM.OpExpr("aggregate", ESM.ASTExpr[]; output_idx=Any["e"],
                    expr_body=Mbody, ranges=Dict{String,Any}("e" => Any[1, N + 1]))
+    # esm 1.0.0 (§5.4/§6.3.1): `M` is a plain `unknown`; what made it OBSERVED —
+    # its defining expression — is now the bare-variable-LHS equation `M ~ …`.
     vars = Dict(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
-        "M" => ESM.ModelVariable(ESM.ObservedVariable; shape=["e"], expression=M))
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "M" => ESM.ModelVariable(ESM.UnknownVariable; shape=["e"]))
     body = _op("+",
         _op("-", _idx("M", _op("+", _v("i"), _i(1))), _idx("M", _v("i"))),
         _op("*", _idx("u", _v("i")), _n(-0.1)))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
+    ESM.Model(vars, [ESM.Equation(ESM.VarExpr("M"), M),
+                     ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                   _ao1(body, "i", 1, N))])
 end
 

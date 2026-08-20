@@ -27,7 +27,7 @@ const ESM = EarthSciAST
     @testset "A. value gather honors clamp / periodic / throw" begin
         N = 4
         M = [10.0, 20.0, 30.0, 40.0]
-        vars = Dict("y" => ModelVariable(StateVariable))
+        vars = Dict("y" => ModelVariable(UnknownVariable))
         lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
         rhs = _arrayop1d(_idx("M", _op("+", _v("i"), _i(1))), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
@@ -67,8 +67,8 @@ const ESM = EarthSciAST
     @testset "B. index-position gather honors clamp / periodic / throw" begin
         N = 4
         conn = [2.0, 3.0, 4.0, 1.0]    # permutation of valid u indices
-        vars = Dict("y" => ModelVariable(StateVariable),
-                    "u" => ModelVariable(StateVariable))
+        vars = Dict("y" => ModelVariable(UnknownVariable),
+                    "u" => ModelVariable(UnknownVariable))
         lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
         rhs = _arrayop1d(_idx("u", _idx("conn", _op("+", _v("i"), _i(1)))), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
@@ -142,7 +142,7 @@ const ESM = EarthSciAST
     @testset "D. boundary-spec validation errors" begin
         N = 3
         M = [1.0, 2.0, 3.0]
-        vars = Dict("y" => ModelVariable(StateVariable))
+        vars = Dict("y" => ModelVariable(UnknownVariable))
         lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
         rhs = _arrayop1d(_idx("M", _v("i")), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])

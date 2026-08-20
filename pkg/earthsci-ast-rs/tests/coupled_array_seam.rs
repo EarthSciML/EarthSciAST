@@ -35,34 +35,142 @@ use std::collections::HashMap;
 ///
 /// Closed form with `u(0) = [1, 2, 3]`, `w(0) = 0`:
 ///   `u[i](t) = u0[i]·e^{-t}`,  `w[i](t) = u0[i]·(1 - e^{-t})`.
-const COUPLED_ARRAY_JSON: &str = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "coupled_array_seam"},
- "models": {
-  "Src": {
-   "variables": {"u": {"type": "unknown", "shape": ["i"]}},
-   "equations": [
+const COUPLED_ARRAY_JSON: &str = r#"
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "*", "args": [-1, {"op": "index", "args": ["u", "i"]}]}}
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "coupled_array_seam"
+      },
+      "models": {
+        "Src": {
+          "variables": {
+            "u": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    -1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "Snk": {
+          "variables": {
+            "w": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "w",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "Src.u",
+                    "i"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
     }
-   ]
-  },
-  "Snk": {
-   "variables": {"w": {"type": "unknown", "shape": ["i"]}},
-   "equations": [
-    {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["w", "i"]}], "wrt": "t"}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "index", "args": ["Src.u", "i"]}}
-    }
-   ]
-  }
- }
-}"#;
+    "#;
 
 fn fast_opts(final_t: f64) -> SimulateOptions {
     SimulateOptions {
@@ -269,23 +377,82 @@ fn coupled_array_evaluates_via_top_level_dispatcher() {
 fn single_model_array_path_unchanged() {
     // A single-model array file keeps the byte-identical `from_file` path: the
     // dispatcher's `model_count > 1` guard leaves it on the raw entry point.
-    let json = r#"{
-     "esm": "1.0.0",
-     "metadata": {"name": "single_array_decay"},
-     "models": {
-      "Only": {
-       "variables": {"u": {"type": "unknown", "shape": ["i"]}},
-       "equations": [
+    let json = r#"
         {
-         "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-                 "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"}},
-         "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-                 "expr": {"op": "*", "args": [-1, {"op": "index", "args": ["u", "i"]}]}}
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "single_array_decay"
+          },
+          "models": {
+            "Only": {
+              "variables": {
+                "u": {
+                  "type": "unknown",
+                  "shape": [
+                    "i"
+                  ]
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": [
+                        1,
+                        3
+                      ]
+                    },
+                    "expr": {
+                      "op": "D",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ],
+                      "wrt": "t"
+                    }
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": [
+                        1,
+                        3
+                      ]
+                    },
+                    "expr": {
+                      "op": "*",
+                      "args": [
+                        -1,
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
         }
-       ]
-      }
-     }
-    }"#;
+        "#;
     let file = load(json).expect("load single-model array file");
 
     // The single-model file is NOT namespaced (one component) and builds via

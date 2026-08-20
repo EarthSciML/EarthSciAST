@@ -32,7 +32,7 @@ end
 
 function _make_model()
     vars = Dict{String,ModelVariable}(
-        "x" => ModelVariable(StateVariable, default=1.0),
+        "x" => ModelVariable(UnknownVariable, default=1.0),
         "k" => ModelVariable(ParameterVariable, default=0.5),
     )
     eqs = Equation[_make_eq("x", 2.0)]
@@ -53,7 +53,7 @@ end
         # the edit (initialization_equations, guesses, system_kind, enums,
         # index_sets, …) must survive the rebuild instead of being reset.
         vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(StateVariable, default=1.0),
+            "x" => ModelVariable(UnknownVariable, default=1.0),
         )
         init_eqs = Equation[Equation(VarExpr("x"), NumExpr(1.0))]
         m = Model(vars, Equation[_make_eq("x", 2.0)];
@@ -61,7 +61,7 @@ end
                   guesses=Dict{String,Union{Float64,ESS.ASTExpr}}("x" => 0.5),
                   system_kind="ode")
 
-        m2 = add_variable(m, "y", ModelVariable(StateVariable, default=0.0))
+        m2 = add_variable(m, "y", ModelVariable(UnknownVariable, default=0.0))
         @test m2.initialization_equations == init_eqs
         @test m2.guesses["x"] == 0.5
         @test m2.system_kind == "ode"
@@ -83,7 +83,7 @@ end
         m = _make_model()
         @test length(m.variables) == 2
 
-        new_var = ModelVariable(StateVariable, default=5.0, description="new state")
+        new_var = ModelVariable(UnknownVariable, default=5.0, description="new state")
         m2 = add_variable(m, "y", new_var)
 
         @test length(m2.variables) == 3
@@ -100,7 +100,7 @@ end
     @testset "remove_variable" begin
         m = _make_model()
         # Add a second state variable that has no equation dependency
-        m = add_variable(m, "y", ModelVariable(StateVariable, default=0.0))
+        m = add_variable(m, "y", ModelVariable(UnknownVariable, default=0.0))
         @test haskey(m.variables, "y")
 
         m2 = remove_variable(m, "y")
@@ -404,8 +404,8 @@ end
     end
 
     @testset "merge combines two ESM files" begin
-        model_a = Model(Dict("x" => ModelVariable(StateVariable, default=1.0)), Equation[])
-        model_b = Model(Dict("y" => ModelVariable(StateVariable, default=2.0)), Equation[])
+        model_a = Model(Dict("x" => ModelVariable(UnknownVariable, default=1.0)), Equation[])
+        model_b = Model(Dict("y" => ModelVariable(UnknownVariable, default=2.0)), Equation[])
 
         file_a = EsmFile("0.1.0", Metadata("a");
                          models=Dict("A" => model_a),
@@ -424,8 +424,8 @@ end
     end
 
     @testset "merge prefers file_b on key conflicts" begin
-        m1 = Model(Dict("x" => ModelVariable(StateVariable, default=1.0)), Equation[])
-        m2 = Model(Dict("x" => ModelVariable(StateVariable, default=999.0)), Equation[])
+        m1 = Model(Dict("x" => ModelVariable(UnknownVariable, default=1.0)), Equation[])
+        m2 = Model(Dict("x" => ModelVariable(UnknownVariable, default=999.0)), Equation[])
 
         fa = EsmFile("0.1.0", Metadata("a"); models=Dict("Shared" => m1))
         fb = EsmFile("0.1.0", Metadata("b"); models=Dict("Shared" => m2))
@@ -437,9 +437,9 @@ end
     end
 
     @testset "extract top-level component" begin
-        model_a = Model(Dict("x" => ModelVariable(StateVariable)), Equation[])
-        model_b = Model(Dict("y" => ModelVariable(StateVariable)), Equation[])
-        model_c = Model(Dict("z" => ModelVariable(StateVariable)), Equation[])
+        model_a = Model(Dict("x" => ModelVariable(UnknownVariable)), Equation[])
+        model_b = Model(Dict("y" => ModelVariable(UnknownVariable)), Equation[])
+        model_c = Model(Dict("z" => ModelVariable(UnknownVariable)), Equation[])
 
         compose_entry = CouplingOperatorCompose(["A", "C"])
         map_entry = CouplingVariableMap("A.x", "B.y", "identity")
@@ -507,7 +507,7 @@ end
                 # a minimal model. The LHS references a state variable the
                 # bindings won't touch so we can isolate RHS substitution.
                 vars = Dict{String,ModelVariable}(
-                    "out" => ModelVariable(StateVariable, default=0.0),
+                    "out" => ModelVariable(UnknownVariable, default=0.0),
                 )
                 eq = Equation(VarExpr("out"), input_expr)
                 model = Model(vars, Equation[eq])
@@ -523,7 +523,7 @@ end
 
         @testset "substitute_in_equations preserves variable metadata" begin
             vars = Dict{String,ModelVariable}(
-                "x" => ModelVariable(StateVariable,
+                "x" => ModelVariable(UnknownVariable,
                                      default=1.0,
                                      description="state var",
                                      units="kg"),
@@ -547,7 +547,7 @@ end
             # preservation analog of Python's test_substitute_in_model_with_metadata)
             @test result.variables == model.variables
             x = result.variables["x"]
-            @test x.type == StateVariable
+            @test x.type == UnknownVariable
             @test x.default == 1.0
             @test x.description == "state var"
             @test x.units == "kg"
@@ -564,7 +564,7 @@ end
 
         @testset "substitute_in_equations on empty-equations model" begin
             vars = Dict{String,ModelVariable}(
-                "x" => ModelVariable(StateVariable, default=1.0),
+                "x" => ModelVariable(UnknownVariable, default=1.0),
             )
             model = Model(vars, Equation[])
 
@@ -577,7 +577,7 @@ end
             # Model with two equations that both reference the variable being
             # renamed, plus a parameter that should survive untouched.
             vars = Dict{String,ModelVariable}(
-                "C" => ModelVariable(StateVariable,
+                "C" => ModelVariable(UnknownVariable,
                                      default=1.0,
                                      description="concentration",
                                      units="mol/m^3"),
@@ -599,7 +599,7 @@ end
             @test !haskey(renamed.variables, "C")
             @test haskey(renamed.variables, "O3")
             o3 = renamed.variables["O3"]
-            @test o3.type == StateVariable
+            @test o3.type == UnknownVariable
             @test o3.default == 1.0
             @test o3.description == "concentration"
             @test o3.units == "mol/m^3"

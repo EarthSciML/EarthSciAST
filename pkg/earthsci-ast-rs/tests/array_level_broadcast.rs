@@ -337,13 +337,21 @@ fn array_shaped_observed_broadcasts_by_name() {
     let model = models.values_mut().next().expect("one model");
 
     // Hoist `w2 * z1` into a declared [lon,lat,lev] observed and drive `dp`
-    // from that instead. The trajectory must not change.
+    // from that instead. The trajectory must not change. From esm 1.0.0 the
+    // observed is declared `unknown` and DEFINED by a bare-variable-LHS
+    // equation (esm-spec §6.3.1).
     model["variables"]["p3"] = serde_json::json!({
-        "type": "observed",
+        "type": "unknown",
         "units": "1",
-        "shape": ["lon", "lat", "lev"],
-        "expression": {"op": "*", "args": ["w2", "z1"]}
+        "shape": ["lon", "lat", "lev"]
     });
+    model["equations"]
+        .as_array_mut()
+        .expect("equations")
+        .push(serde_json::json!({
+            "lhs": "p3",
+            "rhs": {"op": "*", "args": ["w2", "z1"]}
+        }));
     model["equations"][0]["rhs"] = serde_json::json!("p3");
 
     let hoisted = load(&doc.to_string()).expect("hoisted document loads");
@@ -363,9 +371,11 @@ fn array_shaped_observed_broadcasts_by_name() {
     }
 }
 
-/// Every shared fixture is a single-model document whose one equation is the
+/// Every shared fixture is a single-model document whose FIRST equation is the
 /// bare array-level form the rule governs — a guard against the fixtures
-/// drifting into a shape that no longer exercises it.
+/// drifting into a shape that no longer exercises it. (Its remaining equations
+/// are the definitions of the observed operands, which esm 1.0.0 moved out of
+/// `variables[..].expression` and into `equations`.)
 #[test]
 fn shared_fixtures_are_bare_array_level_equations() {
     for name in [
@@ -379,7 +389,7 @@ fn shared_fixtures_are_bare_array_level_equations() {
         let models = file.models.as_ref().expect("models");
         assert_eq!(models.len(), 1, "{name}");
         let model: &Model = models.values().next().unwrap();
-        assert_eq!(model.equations.len(), 1, "{name}");
+        assert!(!model.equations.is_empty(), "{name}");
         // A bare `D(dp)` LHS: no `index`, no `aggregate` — the whole array.
         let earthsci_ast::Expr::Operator(lhs) = &model.equations[0].lhs else {
             panic!("{name}: LHS is not an operator")

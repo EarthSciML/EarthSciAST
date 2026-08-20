@@ -54,7 +54,7 @@ using EarthSciAST
 
         # Create a simple model with one variable
         variables = Dict(
-            "O3" => ModelVariable(StateVariable, default=0.0, description="Ozone concentration", units="ppbv")
+            "O3" => ModelVariable(UnknownVariable, default=0.0, description="Ozone concentration", units="ppbv")
         )
         equations = [Equation(VarExpr("D(O3, t)"), NumExpr(0.0))]
         simple_model = Model(variables, equations)
@@ -88,8 +88,8 @@ using EarthSciAST
 
         # Inner-most subsystem (GasPhase)
         gas_phase_vars = Dict(
-            "O3" => ModelVariable(StateVariable, default=0.0, description="Ozone", units="ppbv"),
-            "NO2" => ModelVariable(StateVariable, default=0.0, description="Nitrogen dioxide", units="ppbv")
+            "O3" => ModelVariable(UnknownVariable, default=0.0, description="Ozone", units="ppbv"),
+            "NO2" => ModelVariable(UnknownVariable, default=0.0, description="Nitrogen dioxide", units="ppbv")
         )
         gas_phase_eqs = [
             Equation(VarExpr("D(O3, t)"), NumExpr(0.1)),
@@ -208,11 +208,11 @@ using EarthSciAST
     end
 
     @testset "Reference Resolution - Mixed System Types" begin
-        # Test with models, reaction_systems, data_loaders, and operators
+        # Test with models, reaction_systems, data_sources, and operators
         metadata = Metadata("MixedSystemTest")
 
         # Model
-        model_vars = Dict("temperature" => ModelVariable(StateVariable, default=298.15, units="K"))
+        model_vars = Dict("temperature" => ModelVariable(UnknownVariable, default=298.15, units="K"))
         model_eqs = [Equation(VarExpr("D(temperature, t)"), NumExpr(0.0))]
         model = Model(model_vars, model_eqs)
 
@@ -222,15 +222,16 @@ using EarthSciAST
         params = [Parameter("k_loss", 1.0e-5, units="1/s")]
         reaction_system = ReactionSystem(species, reactions, parameters=params)
 
-        # DataLoader (doesn't have variables, but should be findable)
-        dl_source = DataLoaderSource("file:///path/to/data_{date:%Y%m%d}.nc")
-        dl_vars = Dict("met_data" => DataLoaderVariable("met_data", "K"))
-        data_loader = DataLoader("grid", dl_source, dl_vars)
+        # DataSource — an INGEST REGISTRY ENTRY from esm 1.0.0, not a component:
+        # it exposes no variables of its own and can never be the root of a
+        # scoped reference (esm-spec §8).
+        dl_source = DataSourceLocation("file:///path/to/data_{date:%Y%m%d}.nc")
+        data_loader = DataSource("grid", dl_source)
 
         esm_file = EsmFile("0.1.0", metadata,
                           models=Dict("Meteorology" => model),
                           reaction_systems=Dict("Chemistry" => reaction_system),
-                          data_loaders=Dict("MetData" => data_loader))
+                          data_sources=Dict("MetData" => data_loader))
 
         # Test model variable
         result = resolve_qualified_reference(esm_file, "Meteorology.temperature")
@@ -247,51 +248,56 @@ using EarthSciAST
         @test result.system_type == :reaction_system
         @test result.variable_name == "k_loss"
 
-        # Test that data_loaders are found but don't have variables
+        # A data source is NOT a scoped-reference path root: naming one is an
+        # unresolvable reference, not a component with no variables.
         @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "MetData.some_var")
+        @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "MetData.met_data")
     end
 
-    @testset "DataLoader as a Model subsystem (loader+regridding-model split)" begin
-        # The pure-io-data-loaders RFC splits a data component into a pure-I/O
-        # DataLoader declared as a SUBSYSTEM of its regridding Model, with couplings
-        # naming loader fields THROUGH the parent — `GEOSFP.GEOSFP_I3.PS`,
-        # `ERA5.sl.t2m`. `Model.subsystems` is a `Dict{String,Any}` precisely so it
-        # can hold one.
-        #
-        # Regression: `find_subsystem(::Model, ::String)` was annotated
-        # `::Union{Model,Nothing}`, so traversing INTO a loader subsystem threw
-        # `MethodError: Cannot convert DataLoader to Model` — from the conversion the
-        # annotation itself forces. `validate()` CRASHED outright on every assembly
-        # using the split, the wildlandfire.esm reference assembly included. The
-        # top-level half of this defect was already fixed in
-        # `variable_exists_in_system(::DataLoader, …)`; this is the traversal half.
-        metadata = Metadata("LoaderSubsystemTest")
+    @testset "A data source is not a subsystem: the consumer declares a parameter" begin
+        # The 0.x pure-io-data-loaders split mounted a loader as a SUBSYSTEM of
+        # its regridding model and named its fields through the parent
+        # (`GEOSFP.I3.PS`). esm 1.0.0 removes that shape entirely: a data source
+        # is a document-scoped registry entry, so the field the model consumes is
+        # one of the MODEL's own parameters, carrying the `update` that names the
+        # source and binds a `file_variable` (esm-spec §8.5). The reference is
+        # `GEOSFP.PS` — one segment shorter, and resolving against the model
+        # rather than through a mounted component.
+        metadata = Metadata("SourceConsumerTest")
 
-        dl_source = DataLoaderSource("file:///GEOSFP.{date:%Y%m%d}.I3.4x5.nc")
-        dl_vars = Dict("PS" => DataLoaderVariable("PS", "Pa"))
-        loader = DataLoader("grid", dl_source, dl_vars)
+        source = DataSource("grid",
+            DataSourceLocation("file:///GEOSFP.{date:%Y%m%d}.I3.4x5.nc"))
 
-        # The regridding model: its own variable, plus the loader mounted as `I3`.
-        parent = Model(Dict("w_time" => ModelVariable(StateVariable, units="1")),
-                       Equation[])
-        parent.subsystems["I3"] = loader
+        parent = Model(Dict(
+                "w_time" => ModelVariable(UnknownVariable, units="1"),
+                "PS" => ModelVariable(ParameterVariable; units="Pa", shape=String[],
+                    update=ParameterUpdate("data"; source="I3",
+                                           from=DataSourceBinding("PS")))),
+            Equation[])
 
-        esm_file = EsmFile("0.1.0", metadata, models=Dict("GEOSFP" => parent))
+        esm_file = EsmFile("0.1.0", metadata, models=Dict("GEOSFP" => parent),
+                           data_sources=Dict("I3" => source))
 
-        # The reference that used to crash: traverse the model into its loader
-        # subsystem and land on a loader-exposed field.
-        result = resolve_qualified_reference(esm_file, "GEOSFP.I3.PS")
+        # The loaded field resolves as an ordinary variable of its consumer.
+        result = resolve_qualified_reference(esm_file, "GEOSFP.PS")
         @test result.variable_name == "PS"
-        @test result.resolved_system === loader
+        @test result.resolved_system === parent
+        @test result.system_type == :model
 
-        # The parent's own variables still resolve alongside it.
+        # The consumer's own variables resolve alongside it.
         result = resolve_qualified_reference(esm_file, "GEOSFP.w_time")
         @test result.variable_name == "w_time"
 
-        # A field the loader does not expose stays a clean error, not a crash.
-        @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.I3.NOPE")
-        # Loaders have no subsystems, so traversing PAST one terminates cleanly.
-        @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.I3.deeper.PS")
+        # A name the model does not declare stays a clean error.
+        @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.NOPE")
+        # The 0.x through-the-loader path no longer resolves at all: there is no
+        # `I3` subsystem to traverse, because a source cannot be one.
+        @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.I3.PS")
+
+        # The binding travels with the consuming parameter, and the derived
+        # classification calls it a discrete-cadence parameter (esm-spec §6.3.1).
+        @test discrete_parameters(parent) == ["PS"]
+        @test parent.variables["PS"].update[1].from.file_variable == "PS"
     end
 
     @testset "Error Handling and Edge Cases" begin
@@ -309,7 +315,7 @@ using EarthSciAST
         @test_throws QualifiedReferenceError resolve_qualified_reference(esm_with_empty, "AnySystem.var")
 
         # Test malformed references
-        valid_model = Model(Dict("var" => ModelVariable(StateVariable)), Equation[])
+        valid_model = Model(Dict("var" => ModelVariable(UnknownVariable)), Equation[])
         valid_esm = EsmFile("0.1.0", metadata, models=Dict("System" => valid_model))
 
         @test_throws QualifiedReferenceError resolve_qualified_reference(valid_esm, "")

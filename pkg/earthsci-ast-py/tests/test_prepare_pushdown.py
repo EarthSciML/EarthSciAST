@@ -225,17 +225,17 @@ def test_prepare_pushdown_record_gate_end_to_end(oracle):
     providers = {
         "MockSR.TotalPop": MockConst(oracle["total_pop"]),
         "MockSR.MortalityRate": MockConst(oracle["mortality"]),
-        "MockPts.lon": MockConst(oracle["lon"]),
-        "MockPts.lat": MockConst(oracle["lat"]),
-        "MockPts.annual": MockConst(oracle["emis_annual"]),
-        "MockPts.vVOC": MockConst(oracle["masks"]["SOA"]),
-        "MockPts.vNOx": MockConst(oracle["masks"]["pNO3"]),
-        "MockPts.vNH3": MockConst(oracle["masks"]["pNH4"]),
-        "MockPts.vSOx": MockConst(oracle["masks"]["pSO4"]),
-        "MockPts.vPM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+        "MockPts.emis_lon": MockConst(oracle["lon"]),
+        "MockPts.emis_lat": MockConst(oracle["lat"]),
+        "MockPts.emis_annual": MockConst(oracle["emis_annual"]),
+        "MockPts.is_VOC": MockConst(oracle["masks"]["SOA"]),
+        "MockPts.is_NOx": MockConst(oracle["masks"]["pNO3"]),
+        "MockPts.is_NH3": MockConst(oracle["masks"]["pNH4"]),
+        "MockPts.is_SOx": MockConst(oracle["masks"]["pSO4"]),
+        "MockPts.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
     }
     for v in LVARS:
-        providers[f"MockSR.{v}"] = gmocks[v]
+        providers[f"MockSR.SR_{v}"] = gmocks[v]
 
     # src rects ride const_arrays under their BARE authored names (the alias
     # injection must surface them under the flattened spelling).
@@ -309,17 +309,17 @@ def test_prepare_pushdown_single_member_support_set(oracle):
     providers = {
         "MockSR.TotalPop": MockConst(oracle["total_pop"]),
         "MockSR.MortalityRate": MockConst(oracle["mortality"]),
-        "MockPts.lon": MockConst(lon),
-        "MockPts.lat": MockConst(lat),
-        "MockPts.annual": MockConst(oracle["emis_annual"]),
-        "MockPts.vVOC": MockConst(oracle["masks"]["SOA"]),
-        "MockPts.vNOx": MockConst(oracle["masks"]["pNO3"]),
-        "MockPts.vNH3": MockConst(oracle["masks"]["pNH4"]),
-        "MockPts.vSOx": MockConst(oracle["masks"]["pSO4"]),
-        "MockPts.vPM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+        "MockPts.emis_lon": MockConst(lon),
+        "MockPts.emis_lat": MockConst(lat),
+        "MockPts.emis_annual": MockConst(oracle["emis_annual"]),
+        "MockPts.is_VOC": MockConst(oracle["masks"]["SOA"]),
+        "MockPts.is_NOx": MockConst(oracle["masks"]["pNO3"]),
+        "MockPts.is_NH3": MockConst(oracle["masks"]["pNH4"]),
+        "MockPts.is_SOx": MockConst(oracle["masks"]["pSO4"]),
+        "MockPts.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
     }
     for v in LVARS:
-        providers[f"MockSR.{v}"] = gmocks[v]
+        providers[f"MockSR.SR_{v}"] = gmocks[v]
     ca = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
 
     insp = BuildInspection()
@@ -373,14 +373,14 @@ def test_observed_field_reports_hoist_skip_root_cause(oracle):
     and the name the caller reads is usually far downstream of the defect."""
     doc = json.loads(_FIXTURE.read_text())
     providers = {
-        "MockPts.lon": MockConst(oracle["lon"]),
-        "MockPts.lat": MockConst(oracle["lat"]),
-        "MockPts.annual": MockConst(oracle["emis_annual"]),
-        "MockPts.vVOC": MockConst(oracle["masks"]["SOA"]),
-        "MockPts.vNOx": MockConst(oracle["masks"]["pNO3"]),
-        "MockPts.vNH3": MockConst(oracle["masks"]["pNH4"]),
-        "MockPts.vSOx": MockConst(oracle["masks"]["pSO4"]),
-        "MockPts.vPM25": MockConst(oracle["masks"]["PrimaryPM25"]),
+        "MockPts.emis_lon": MockConst(oracle["lon"]),
+        "MockPts.emis_lat": MockConst(oracle["lat"]),
+        "MockPts.emis_annual": MockConst(oracle["emis_annual"]),
+        "MockPts.is_VOC": MockConst(oracle["masks"]["SOA"]),
+        "MockPts.is_NOx": MockConst(oracle["masks"]["pNO3"]),
+        "MockPts.is_NH3": MockConst(oracle["masks"]["pNH4"]),
+        "MockPts.is_SOx": MockConst(oracle["masks"]["pSO4"]),
+        "MockPts.is_PM25": MockConst(oracle["masks"]["PrimaryPM25"]),
         # MortalityRate / TotalPop / the gated SR providers are intentionally
         # ABSENT: everything downstream of them is dropped by the hoist.
     }

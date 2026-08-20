@@ -29,10 +29,10 @@ fn test_analysis_features_integration() {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
     variables.insert(
@@ -43,10 +43,10 @@ fn test_analysis_features_integration() {
             units: None,
             default: Some(0.1),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
 
@@ -246,10 +246,10 @@ fn test_editing_operations() {
         units: Some("s^-1".to_string()),
         default: Some(0.1),
         description: Some("Test rate constant".to_string()),
-        distribution: None,
-        update: None,
         shape: None,
         location: None,
+        distribution: None,
+        update: None,
     };
 
     let updated_model = add_variable(&model, "test_k", new_var).expect("Failed to add variable");

@@ -249,9 +249,24 @@ pub fn resolve_aggregate_ranges_with_extents(
             resolve_expr_ranges_with_extents(&mut eq.rhs, index_sets, derived_extents)?;
         }
     }
-    // (An observed's defining expression is an ordinary equation since 1.0.0,
-    // so the equation walk above already reached it.)
-    Ok(())
+    // An unknown's defining expression is an EQUATION from esm 1.0.0, already
+    // walked above. What is still carried ON a variable is a parameter's
+    // `update` — its trigger, its value expression, and a `from` binding's
+    // unit conversion — so those are resolved here.
+    let mut failure = None;
+    for var in model.variables.values_mut() {
+        var.for_each_expression_mut(&mut |expr| {
+            if failure.is_none()
+                && let Err(e) = resolve_expr_ranges_with_extents(expr, index_sets, derived_extents)
+            {
+                failure = Some(e);
+            }
+        });
+    }
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Recursively resolve `{from}` range references on a node and all its children.

@@ -1413,25 +1413,77 @@ mod forcing_channel_tests {
     /// block — it is a loader-fed field that resolves through the forcing buffer
     /// (the new lowest-precedence binding), precisely the channel PR-1 adds.
     fn forced_model() -> ArrayCompiled {
-        let json = r#"{
-         "esm": "1.0.0",
-         "metadata": {"name": "forcing_channel"},
-         "models": {
-          "Forced": {
-           "variables": {"u": {"type": "unknown", "shape": ["i"], "default": 0.0}},
-           "equations": [
+        let json = r#"
             {
-             "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-                     "ranges": {"i": [1, 3]}},
-             "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "ranges": {"i": [1, 3]},
-                     "expr": {"op": "index", "args": ["w", "i"]}}
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "forcing_channel"
+              },
+              "models": {
+                "Forced": {
+                  "variables": {
+                    "u": {
+                      "type": "unknown",
+                      "shape": [
+                        "i"
+                      ],
+                      "default": 0.0
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "expr": {
+                          "op": "D",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i"
+                              ]
+                            }
+                          ],
+                          "wrt": "t"
+                        },
+                        "ranges": {
+                          "i": [
+                            1,
+                            3
+                          ]
+                        }
+                      },
+                      "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "ranges": {
+                          "i": [
+                            1,
+                            3
+                          ]
+                        },
+                        "expr": {
+                          "op": "index",
+                          "args": [
+                            "w",
+                            "i"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
             }
-           ]
-          }
-         }
-        }"#;
+            "#;
         let file = load(json).expect("parse forcing model");
         ArrayCompiled::from_file(&file).expect("compile forcing model")
     }
@@ -1513,28 +1565,85 @@ mod forcing_channel_tests {
         // With an empty buffer the parameter/state path is byte-identical; and an
         // *unrelated* forcing entry does not perturb it, because forcing is
         // resolved last and only fills otherwise-unbound names.
-        let json = r#"{
-         "esm": "1.0.0",
-         "metadata": {"name": "param_path"},
-         "models": {
-          "P": {
-           "variables": {
-             "u": {"type": "unknown", "shape": ["i"]},
-             "k": {"type": "parameter"}
-           },
-           "equations": [
+        let json = r#"
             {
-             "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-                     "ranges": {"i": [1, 2]}},
-             "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "ranges": {"i": [1, 2]},
-                     "expr": {"op": "*", "args": ["k", {"op": "index", "args": ["u", "i"]}]}}
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "param_path"
+              },
+              "models": {
+                "P": {
+                  "variables": {
+                    "u": {
+                      "type": "unknown",
+                      "shape": [
+                        "i"
+                      ]
+                    },
+                    "k": {
+                      "type": "parameter"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "expr": {
+                          "op": "D",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i"
+                              ]
+                            }
+                          ],
+                          "wrt": "t"
+                        },
+                        "ranges": {
+                          "i": [
+                            1,
+                            2
+                          ]
+                        }
+                      },
+                      "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "ranges": {
+                          "i": [
+                            1,
+                            2
+                          ]
+                        },
+                        "expr": {
+                          "op": "*",
+                          "args": [
+                            "k",
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
             }
-           ]
-          }
-         }
-        }"#;
+            "#;
         let file = load(json).expect("parse param model");
         let compiled = ArrayCompiled::from_file(&file).expect("compile param model");
         let mut params = HashMap::new();
@@ -1568,33 +1677,108 @@ mod forcing_channel_tests {
         // state: D(u[i]) = looked_up. Before the `fn` arm existed, the observed
         // NaN-ed out and poisoned the whole RHS. At code = 2.0 the lookup is
         // the exact knot 40.0, so both cells' derivative must be 40.0.
-        let json = r#"{
-         "esm": "1.0.0",
-         "metadata": {"name": "fn_array_path"},
-         "models": {
-          "F": {
-           "variables": {
-             "u": {"type": "unknown", "shape": ["i"]},
-             "code": {"type": "parameter"},
-             "looked_up": {"type": "observed", "expression": {
-                "op": "fn", "name": "interp.linear", "args": [
-                   {"op": "const", "value": [10.0, 20.0, 40.0, 80.0, 160.0], "args": []},
-                   {"op": "const", "value": [0.0, 1.0, 2.0, 3.0, 4.0], "args": []},
-                   "code"]}}
-           },
-           "equations": [
+        let json = r#"
             {
-             "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-                     "ranges": {"i": [1, 2]}},
-             "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "ranges": {"i": [1, 2]},
-                     "expr": "looked_up"}
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "fn_array_path"
+              },
+              "models": {
+                "F": {
+                  "variables": {
+                    "u": {
+                      "type": "unknown",
+                      "shape": [
+                        "i"
+                      ]
+                    },
+                    "code": {
+                      "type": "parameter"
+                    },
+                    "looked_up": {
+                      "type": "unknown"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "expr": {
+                          "op": "D",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i"
+                              ]
+                            }
+                          ],
+                          "wrt": "t"
+                        },
+                        "ranges": {
+                          "i": [
+                            1,
+                            2
+                          ]
+                        }
+                      },
+                      "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "ranges": {
+                          "i": [
+                            1,
+                            2
+                          ]
+                        },
+                        "expr": "looked_up"
+                      }
+                    },
+                    {
+                      "lhs": "looked_up",
+                      "rhs": {
+                        "op": "fn",
+                        "name": "interp.linear",
+                        "args": [
+                          {
+                            "op": "const",
+                            "value": [
+                              10.0,
+                              20.0,
+                              40.0,
+                              80.0,
+                              160.0
+                            ],
+                            "args": []
+                          },
+                          {
+                            "op": "const",
+                            "value": [
+                              0.0,
+                              1.0,
+                              2.0,
+                              3.0,
+                              4.0
+                            ],
+                            "args": []
+                          },
+                          "code"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
             }
-           ]
-          }
-         }
-        }"#;
+            "#;
         let file = load(json).expect("parse fn model");
         let compiled = ArrayCompiled::from_file(&file).expect("compile fn model");
         let mut params = HashMap::new();

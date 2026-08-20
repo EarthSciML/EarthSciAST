@@ -181,7 +181,7 @@ using EarthSciAST
 
     @testset "Model and ReactionSystem Display" begin
         variables = Dict(
-            "x" => ModelVariable(StateVariable, default=1.0),
+            "x" => ModelVariable(UnknownVariable, default=1.0),
             "k" => ModelVariable(ParameterVariable, default=0.5),
         )
         equations = [Equation(

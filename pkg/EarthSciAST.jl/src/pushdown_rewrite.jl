@@ -99,7 +99,7 @@ function _pd_analyze(esm::AbstractDict, model_name)
     mname = _pd_model_name(file, model_name)
     mname === nothing && return nothing
     reg = _pd_registry(file, mname)
-    plan, diags = _pd_detect(_pd_detection_vars(m, reg), file.index_sets)
+    plan, diags = _pd_detect(m, _pd_detection_defs(m, reg), file.index_sets)
     return (plan = plan, diagnostics = diags, mname = mname, registry = reg)
 end
 
@@ -177,41 +177,43 @@ function _pd_first_apply_name(e)
 end
 
 """
-    _pd_detection_vars(model, reg) -> Dict{String,ModelVariable}
+    _pd_detection_defs(model, reg) -> Dict{String,ASTExpr}
 
-`model.variables` with every surviving `apply_expression_template` reference in
-a variable's `expression` EXPANDED against `reg` — the `Expand(tree)` view the
-pattern matcher must see (§9.6.4 rule 2). Returns `model.variables` ITSELF
-(no copy, no allocation) when there is no registry or no reference to expand, so
-a template-free document takes the byte-identical pre-existing path.
+[`observed_definitions`](@ref) with every surviving `apply_expression_template`
+reference EXPANDED against `reg` — the `Expand(tree)` view the pattern matcher
+must see (§9.6.4 rule 2). From esm 1.0.0 an observed unknown's body is its
+defining EQUATION's right-hand side, so this — not the variable table — is what
+the detector matches against; `_pd_detect` still reads `model.variables` for the
+shapes and types beside it. Returns the definition map UNCHANGED (no copy) when
+there is no registry or no reference to expand, so a template-free document
+takes the byte-identical pre-existing path.
 
-Expansion is DETECTION-ONLY: the returned variables are never emitted. A
-reference that fails to expand (an unresolvable template — `desugar_pushdown` is
-callable on a raw document that never went through `load`'s §9.6.9 call-site
-checks) is left in place rather than raised: the pass's contract is to leave a
-document it cannot recognise unchanged, and the surviving reference is then
-reported by `_pd_binning_refusal` if the variable is join-shaped.
+Expansion is DETECTION-ONLY: the returned bodies are never emitted. A reference
+that fails to expand (an unresolvable template — `desugar_pushdown` is callable
+on a raw document that never went through `load`'s §9.6.9 call-site checks) is
+left in place rather than raised: the pass's contract is to leave a document it
+cannot recognise unchanged, and the surviving reference is then reported by
+`_pd_binning_refusal` if the definition is join-shaped.
 """
-function _pd_detection_vars(model::Model, reg)
-    reg === nothing && return model.variables
-    any(v -> v.expression !== nothing && _pd_has_apply(v.expression),
-        values(model.variables)) || return model.variables
-    out = Dict{String,ModelVariable}(model.variables)
+function _pd_detection_defs(model::Model, reg)
+    defs = observed_definitions(model)
+    reg === nothing && return defs
+    any(_pd_has_apply, values(defs)) || return defs
+    out = Dict{String,ASTExpr}(defs)
     # Shared expansion memo: two sites with the same (template, bindings) reuse
     # one expansion. Rule 2 requires exactly that they be structurally identical
     # with bit-equal constants, and this walk is read-only, so the sharing is
     # unobservable — the same guarantee `_expand_model_refs!` relies on.
     memo = _expand_memo_disabled() ? nothing : Dict{Tuple{String,String},OpExpr}()
-    for (name, var) in model.variables
-        ex = var.expression
-        (ex === nothing || !_pd_has_apply(ex)) && continue
+    for (name, ex) in defs
+        _pd_has_apply(ex) || continue
         lowered = try
             _expand_expr_refs(ex, reg, nothing, memo)
         catch err
             err isa ExpressionTemplateError || rethrow()
             continue
         end
-        lowered === ex || _replace_var_expression!(out, name, var, lowered)
+        lowered === ex || (out[name] = lowered)
     end
     return out
 end
@@ -348,10 +350,13 @@ end
 # and which is the record (the two point coordinates).
 #
 # Returns `(c_sym, r_sym, C, R, out_is_cell, src_env, tgt_env)` or `nothing`.
-function _pd_detect_binning(ev::ModelVariable, out_set::AbstractString)
-    ev.type == ObservedVariable || return nothing
+# `agg` is the observed unknown's DEFINING EQUATION RHS (esm-spec §6.3.1),
+# supplied by the caller from `observed_definitions`: from esm 1.0.0 a variable
+# carries no expression of its own, so a non-observed variable simply has no
+# definition to pass and never reaches here.
+function _pd_detect_binning(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
+                            out_set::AbstractString)
     (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
-    agg = ev.expression
     (agg isa OpExpr && _is_aggregate_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing              # SEMIRING GUARD
@@ -418,11 +423,14 @@ const _PD_UNGATED_CONSEQUENCE =
     "is produced and no gate is emitted"
 
 """
-    _pd_binning_refusal(ev, out_set) -> Union{Nothing,Tuple{String,Union{Nothing,String}}}
+    _pd_binning_refusal(ev, agg, out_set) -> Union{Nothing,Tuple{String,Union{Nothing,String}}}
 
 Why [`_pd_detect_binning`](@ref) refused `ev`, for a caller that has ALREADY
 established `ev` sits in the join position (it is the rank-1 factor of a
-`+`-semiring mat-vec against a provider-backed `[out_set, …]` array).
+`+`-semiring mat-vec against a provider-backed `[out_set, …]` array). `agg` is
+`ev`'s DEFINING EQUATION RHS from the detection view, exactly as
+`_pd_detect_binning` received it; `nothing` (a variable that is not an observed
+unknown, so has no definition) is never join-shaped.
 
 `nothing` means `ev` is simply not join-shaped — no diagnostic is warranted.
 Otherwise `(reason, template)`:
@@ -433,10 +441,9 @@ Otherwise `(reason, template)`:
   * `("predicate_unparsed", nothing)` — a containment `ifelse` was found but it
     did not read as a rectangle containment in EITHER orientation.
 """
-function _pd_binning_refusal(ev::ModelVariable, out_set::AbstractString)
-    ev.type == ObservedVariable || return nothing
+function _pd_binning_refusal(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
+                             out_set::AbstractString)
     (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
-    agg = ev.expression
     (agg isa OpExpr && _is_aggregate_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing
@@ -491,29 +498,33 @@ end
 # A mirror needs NOTHING but the gate — see the note on the mirrored arm in
 # `_pd_apply`. Its cell axis stays the FULL `C`, so its envelope factors are the
 # document's own const-array rects, unrewritten.
-function _pd_mirror_specs(vars::AbstractDict, C::AbstractString, R::AbstractString,
-                          forward_names)
+function _pd_mirror_specs(model::Model, obs_defs::AbstractDict,
+                          C::AbstractString, R::AbstractString, forward_names)
     out = Tuple{String,Vector{String},Vector{String}}[]
-    for (name, v) in vars
+    for (name, defn) in obs_defs
         name in forward_names && continue
-        bind = _pd_detect_binning(v, R)
+        v = model.variables[name]
+        bind = _pd_detect_binning(v, defn, R)
         bind === nothing && continue
         (!bind.out_is_cell && bind.C == C && bind.R == R) || continue
         # Never stack a second gate on an aggregate that already declares a join.
-        (v.expression isa OpExpr && (v.expression::OpExpr).join !== nothing) && continue
+        (defn isa OpExpr && (defn::OpExpr).join !== nothing) && continue
         push!(out, (name, bind.src_env, bind.tgt_env))
     end
     sort!(out; by = t -> t[1])
     return out
 end
 
-# Detect the pushdown pattern across a model's observeds. `vars` is the
-# DETECTION view (`_pd_detection_vars`): the model's variables with surviving
+# Detect the pushdown pattern across a model's observeds. `obs_defs` is the
+# DETECTION view (`_pd_detection_defs`): the observed definitions with surviving
 # template references expanded, so a binning body factored through a template
-# matches exactly as its expansion would. Returns `(plan, diagnostics)` — `plan`
-# `nothing` when nothing matches / the semiring guard fails, `diagnostics` the
-# residual "a join I could not read" records (see `_pd_binning_refusal`).
-function _pd_detect(vars::AbstractDict, index_sets::AbstractDict)
+# matches exactly as its expansion would. `model` supplies the declarations
+# beside it — shapes and types, which no expansion touches. Returns
+# `(plan, diagnostics)` — `plan` `nothing` when nothing matches / the semiring
+# guard fails, `diagnostics` the residual "a join I could not read" records
+# (see `_pd_binning_refusal`).
+function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDict)
+    vars = model.variables
     diags = Dict{String,Any}[]
     conc_specs = Tuple{String,String}[]        # (conc name, reduction symbol)
     A_names = String[]                          # provider-backed arrays to gate
@@ -523,9 +534,7 @@ function _pd_detect(vars::AbstractDict, index_sets::AbstractDict)
     src_env = nothing; tgt_env = nothing
     rep_ename = nothing; rep_csym = nothing; rep_rsym = nothing
 
-    for (cname, cv) in vars
-        cv.type == ObservedVariable || continue
-        agg = cv.expression
+    for (cname, agg) in obs_defs
         (agg isa OpExpr && _is_aggregate_op(agg.op)) || continue
         oz = _pd_oplus(agg); oz === nothing && continue
         (oz[1] == "+" && oz[2] == 0.0) || continue                # SEMIRING GUARD
@@ -547,14 +556,15 @@ function _pd_detect(vars::AbstractDict, index_sets::AbstractDict)
         (av !== nothing && av.type == ParameterVariable && av.shape !== nothing &&
          length(av.shape) == 2 && av.shape[1] == c_set && av.shape[2] == r_set) || continue
         ev = get(vars, Ename, nothing); ev === nothing && continue
-        bind = _pd_detect_binning(ev, c_set)
+        edef = get(obs_defs, Ename, nothing)
+        bind = _pd_detect_binning(ev, edef, c_set)
         if bind === nothing || !bind.out_is_cell                  # FORWARD arm only
             # `ev` is the rank-1 factor of a `+`-mat-vec against a
             # provider-backed `[c_set, r_set]` array: the join position. If it is
             # ALSO binning-shaped but unreadable, say so — silence here is the
             # 330 GB fetch that surfaces hours later as a memory failure.
             if bind === nothing
-                why = _pd_binning_refusal(ev, String(c_set))
+                why = _pd_binning_refusal(ev, edef, String(c_set))
                 why === nothing || push!(diags, Dict{String,Any}(
                     "code" => "pushdown_join_unrecognised",
                     "variable" => String(Ename), "consumer" => String(cname),
@@ -594,7 +604,8 @@ function _pd_detect(vars::AbstractDict, index_sets::AbstractDict)
     # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
     # cell/record sets. They are collected only once the forward pattern has
     # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
-    mirror_specs = _pd_mirror_specs(vars, C, R, Set{String}(e[1] for e in E_specs))
+    mirror_specs = _pd_mirror_specs(model, obs_defs, C, R,
+                                    Set{String}(e[1] for e in E_specs))
     return ((C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
              A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
              src_env = src_env, tgt_env = tgt_env,
@@ -881,7 +892,7 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     # Stashed under `metadata.x_esd` — the spec's free-form extension point
     # (esm-spec §3) — so the transformed document still round-trips `load`'s
     # schema validation (a top-level key would not). The `gated_select` mirrors
-    # the `data_loaders.<name>.metadata.x_esd.gated_select` a real gated
+    # the `data_sources.<name>.metadata.x_esd.gated_select` a real gated
     # provider is built from (see `provider_gate_spec`): the runtime gate for
     # this model's provider-backed arrays, gating the cell axis by the derived
     # support set.
@@ -915,19 +926,20 @@ end
 Provider-key ⇒ engine gate, derived from `doc`'s rewrite record
 (`metadata.x_esd.pushdown.gated_select`).
 
-A provider is GATED when its key names a `data_loaders` variable (`"<Loader>"`
-or `"<Loader>.<var>"`) that a coupling `variable_map` routes onto one of the
-record's `applies_to` model arrays. The gate's per-NATIVE-axis `axes` come from
-the loader's own `metadata.x_esd.gated_select.axes` template when it declares
-one (the record's GENERATED set name — `pd_support__*` — replacing whatever set
-the template names, since the template predates the rewrite), else from the
-model array's rank with `gated_by` at the record's `gated_axis`. `applies_to`
-carries the LOADER-variable tails, whose `_const_factor_aliases` expansion
-covers the post-flatten `"<Loader>.<var>"` spelling the run equations gather.
+A provider is GATED when its key names a PARAMETER that a `data` update binds to
+a source and whose local name is one of the record's `applies_to` model arrays.
+From esm 1.0.0 that is a direct match: a source is not a coupling endpoint, so a
+provider is keyed by the consuming parameter's own flattened name
+(`"<ModelPath>.<param>"`, see `providers_from_document`) and there is no
+`variable_map` indirection to follow. The gate's per-NATIVE-axis `axes` come
+from the bound SOURCE's `metadata.x_esd.gated_select.axes` template when it
+declares one (the record's GENERATED set name — `pd_support__*` — replacing
+whatever set the template names, since the template predates the rewrite), else
+from the model array's rank with `gated_by` at the record's `gated_axis`.
 
-Empty when `doc` carries no record, no coupling routes a provider onto a gated
-array, or `providers === nothing` — record-derived gating is a coupling-scoped
-mechanism; a provider outside it falls back to `provider_gate_spec`.
+Empty when `doc` carries no record, no provider key names a gated array, or
+`providers === nothing` — record-derived gating is a rewrite-scoped mechanism; a
+provider outside it falls back to `provider_gate_spec`.
 """
 function _pushdown_provider_gates(doc::AbstractDict, providers)
     gates = Dict{String,Any}()
@@ -941,40 +953,57 @@ function _pushdown_provider_gates(doc::AbstractDict, providers)
     gaxis = Int(get(gs, "gated_axis", 0))
     (isempty(applies) || isempty(gset)) && return gates
 
-    # coupling: "<Loader>.<var>" => the gated model array's LOCAL (tail) name.
-    fed = Dict{String,String}()
-    cp = get(doc, "coupling", nothing)
-    if cp isa AbstractVector
-        for c in cp
-            (c isa AbstractDict && get(c, "type", nothing) == "variable_map") || continue
-            frm = String(get(c, "from", "")); to = String(get(c, "to", ""))
-            (isempty(frm) || isempty(to) || !occursin('.', frm)) && continue
-            String(split(to, '.')[end]) in applies && (fed[frm] = to)
-        end
-    end
-    isempty(fed) && return gates
+    # Flattened parameter name ⇒ the `data_sources` key its update names.
+    bound = _pushdown_data_bindings(doc)
+    isempty(bound) && return gates
 
     mrank = _pushdown_gated_rank(doc, applies)
     for k0 in keys(providers)
         k = String(k0)
-        if haskey(fed, k)                              # "<Loader>.<var>" provider
-            loader = String(split(k, '.'; limit=2)[1])
-            lvars = String[String(split(k, '.'; limit=2)[2])]
-        else                                           # whole-loader provider?
-            loader = k
-            lvars = sort!(String[String(split(f, '.'; limit=2)[2])
-                                 for f in keys(fed)
-                                 if String(split(f, '.'; limit=2)[1]) == k])
-            isempty(lvars) && continue
-        end
-        axes = _pushdown_gate_axes(doc, loader, gset, gaxis, mrank)
-        gates[k] = Dict{String,Any}("axes" => axes, "applies_to" => Any[lvars...])
+        haskey(bound, k) || continue
+        local_name = String(split(k, '.')[end])
+        local_name in applies || continue
+        axes = _pushdown_gate_axes(doc, bound[k], gset, gaxis, mrank)
+        gates[k] = Dict{String,Any}("axes" => axes, "applies_to" => Any[local_name])
     end
     return gates
 end
 
+# Flattened parameter name ⇒ the `data_sources` key its `update` names
+# (esm-spec §8.5). Walks `models` and their `subsystems` under the same dotted
+# prefixes `flatten` builds.
+function _pushdown_data_bindings(doc::AbstractDict)
+    out = Dict{String,String}()
+    function walk(models, prefix::String)
+        models isa AbstractDict || return
+        for (mname0, m) in models
+            m isa AbstractDict || continue
+            path = isempty(prefix) ? String(mname0) : "$(prefix).$(String(mname0))"
+            vars = get(m, "variables", nothing)
+            if vars isa AbstractDict
+                for (vname0, vd) in vars
+                    vd isa AbstractDict || continue
+                    u = get(vd, "update", nothing)
+                    rules = u isa AbstractVector ? u : (u isa AbstractDict ? Any[u] : Any[])
+                    for r in rules
+                        (r isa AbstractDict && get(r, "kind", nothing) == "data") || continue
+                        src = get(r, "source", nothing)
+                        src isa AbstractString || continue
+                        out["$(path).$(String(vname0))"] = String(src)
+                        break
+                    end
+                end
+            end
+            walk(get(m, "subsystems", nothing), path)
+        end
+        return
+    end
+    walk(get(doc, "models", nothing), "")
+    return out
+end
+
 # Rank of the (rewritten) gated model arrays — the fallback native rank when a
-# loader declares no axes template. After `_pd_apply` every applies_to array is
+# source declares no axes template. After `_pd_apply` every applies_to array is
 # `[<derived set>, <rcv>]`, so this is 2 for the ISRM shape; read it from the
 # document rather than hard-coding.
 function _pushdown_gated_rank(doc::AbstractDict, applies::Vector{String})
@@ -994,7 +1023,7 @@ function _pushdown_gated_rank(doc::AbstractDict, applies::Vector{String})
     return 2
 end
 
-# Per-NATIVE-axis gate `axes` for `loader`: the loader's declared
+# Per-NATIVE-axis gate `axes` for the data source `loader`: its declared
 # `metadata.x_esd.gated_select.axes` template with the GENERATED set name
 # substituted into its `gated_by` slot (validated: the gated axis must sit at
 # `gaxis` among the non-fixed axes, or the record and template disagree about
@@ -1003,7 +1032,7 @@ end
 function _pushdown_gate_axes(doc::AbstractDict, loader::AbstractString,
                              gset::AbstractString, gaxis::Int, mrank::Int)
     tpl = nothing
-    loaders = get(doc, "data_loaders", nothing)
+    loaders = get(doc, "data_sources", nothing)
     if loaders isa AbstractDict
         ld = get(loaders, String(loader), nothing)
         if ld isa AbstractDict
@@ -1032,7 +1061,7 @@ function _pushdown_gate_axes(doc::AbstractDict, loader::AbstractString,
             end
         end
         gpos == gaxis || throw(RefreshError(
-            "data_loaders.$loader gated_select template puts the gated axis at " *
+            "data_sources.$loader gated_select template puts the gated axis at " *
             "non-fixed position $gpos, but the rewrite record gates model axis " *
             "$gaxis — the loader template and the rewritten arrays disagree"))
         return axes

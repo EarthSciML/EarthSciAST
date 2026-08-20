@@ -41,11 +41,11 @@ class TestStructuralValidation:
         """Test detection of undefined variable references."""
         # Create a test case with undefined variable reference
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [
                         {"lhs": "x", "rhs": "undefined_var"}
                     ],  # Reference to undefined variable
@@ -72,12 +72,12 @@ class TestStructuralValidation:
         position. Regression test for the false
         ``undefined variable reference '_var'`` structural error."""
         advection = {
-            "esm": "0.2.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Advection"},
             "models": {
                 "Advection": {
                     "variables": {
-                        "c": {"type": "state", "units": "kg/m^3", "default": 0.0},
+                        "c": {"type": "unknown", "units": "kg/m^3", "default": 0.0},
                         "u": {"type": "parameter", "units": "m/s", "default": 1.0},
                     },
                     "equations": [
@@ -115,12 +115,12 @@ class TestStructuralValidation:
         a genuinely misspelled variable nested in the same operator position is
         STILL reported as an undefined variable reference."""
         bad = {
-            "esm": "0.2.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Advection"},
             "models": {
                 "Advection": {
                     "variables": {
-                        "c": {"type": "state", "units": "kg/m^3", "default": 0.0},
+                        "c": {"type": "unknown", "units": "kg/m^3", "default": 0.0},
                         "u": {"type": "parameter", "units": "m/s", "default": 1.0},
                     },
                     "equations": [
@@ -149,13 +149,13 @@ class TestStructuralValidation:
     def test_type_mismatch_in_expressions(self, fixtures_dir):
         """Test type consistency in expressions."""
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
                     "variables": {
-                        "x": {"type": "state", "units": "kg"},
-                        "y": {"type": "state", "units": "m"},
+                        "x": {"type": "unknown", "units": "kg"},
+                        "y": {"type": "unknown", "units": "m"},
                     },
                     "equations": [
                         {"lhs": "x", "rhs": {"op": "+", "args": ["x", "y"]}}  # Unit mismatch
@@ -194,7 +194,7 @@ class TestStructuralValidation:
         """Test reaction system mass balance validation."""
         # Create reaction system with mass imbalance
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "reaction_systems": {
                 "test_rs": {
@@ -232,7 +232,7 @@ class TestStructuralValidation:
     def test_domain_boundary_consistency(self, fixtures_dir):
         """Test domain and boundary condition consistency."""
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {"test": {"variables": {}, "equations": []}},
             "domains": {
@@ -278,12 +278,12 @@ class TestStructuralValidation:
         """Test scope resolution validation."""
         # Create nested scope with ambiguous references
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
-                "model1": {"variables": {"x": {"type": "state"}}, "equations": []},
+                "model1": {"variables": {"x": {"type": "unknown"}}, "equations": []},
                 "model2": {
-                    "variables": {"x": {"type": "state"}},  # Same name as model1.x
+                    "variables": {"x": {"type": "unknown"}},  # Same name as model1.x
                     "equations": [{"lhs": "x", "rhs": "model1.x"}],  # Reference should be clear
                 },
             },
@@ -312,11 +312,11 @@ class TestStructuralValidation:
         it keeps this test testing what it was written to test.
         """
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [
                         {
                             "lhs": "x",
@@ -344,11 +344,11 @@ class TestStructuralValidation:
         """
         for op in ("+", "*"):
             doc = {
-                "esm": "0.1.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "Test"},
                 "models": {
                     "test_model": {
-                        "variables": {"x": {"type": "state"}},
+                        "variables": {"x": {"type": "unknown"}},
                         "equations": [{"lhs": "x", "rhs": {"op": op, "args": [1]}}],
                     }
                 },
@@ -358,11 +358,11 @@ class TestStructuralValidation:
     def test_placeholder_expansion_errors(self, fixtures_dir):
         """Test placeholder expansion validation."""
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [
                         {
                             "lhs": "x",
@@ -395,12 +395,12 @@ class TestErrorCodeSpecificity:
         """Test that validation errors have specific error codes."""
         invalid_cases = [
             # Missing required field
-            ('{"esm": "0.1.0"}', "required"),
+            ('{"esm": "1.0.0"}', "required"),
             # Wrong type
             ('{"esm": 123, "metadata": {"name": "Test"}}', "type"),
             # Invalid enum value
             (
-                '{"esm": "0.1.0", "metadata": {"name": "Test"}, "models": {"m": {"variables": {"x": {"type": "invalid"}}, "equations": []}}}',
+                '{"esm": "1.0.0", "metadata": {"name": "Test"}, "models": {"m": {"variables": {"x": {"type": "invalid"}}, "equations": []}}}',
                 "enum",
             ),
         ]
@@ -416,11 +416,11 @@ class TestErrorCodeSpecificity:
         """Test that structural errors are reported with context."""
         # Test with a complex invalid structure
         invalid_esm = {
-            "esm": "0.1.0",
+            "esm": "1.0.0",
             "metadata": {"name": "Test"},
             "models": {
                 "test_model": {
-                    "variables": {"x": {"type": "state"}},
+                    "variables": {"x": {"type": "unknown"}},
                     "equations": [
                         {
                             "lhs": "x",
@@ -576,7 +576,7 @@ class TestValidationWithFixtures:
         trip the ic_in_reaction_system diagnostic (no false positives)."""
         content = json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "ok", "authors": ["t"], "created": "2026-07-01T00:00:00Z"},
                 "reaction_systems": {
                     "Chemistry": {
@@ -643,7 +643,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
     @staticmethod
     def _doc(**over):
         doc = {
-            "esm": "0.8.0",
+            "esm": "1.0.0",
             "metadata": {
                 "name": "t",
                 "authors": ["a"],
@@ -664,7 +664,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
             models={
                 "M": {
                     "variables": {
-                        "u": {"type": "state", "units": "1", "default": 0.0},
+                        "u": {"type": "unknown", "units": "1", "default": 0.0},
                         "k": {"type": "parameter", "units": "1/s", "default": 1.0},
                     },
                     "equations": [
@@ -687,7 +687,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
             models={
                 "M": {
                     "variables": {
-                        "u": {"type": "state", "units": "1", "shape": ["depth"], "default": 0.0}
+                        "u": {"type": "unknown", "units": "1", "shape": ["depth"], "default": 0.0}
                     },
                     "equations": [
                         {
@@ -741,7 +741,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
         tables = {
             "models": {"A": {"x": {}}},
             "reaction_systems": {},
-            "data_loaders": {},
+            "data_sources": {},
             "all_systems": {"A"},
             "ref_systems": set(),
             "global_symbols": set(),
@@ -795,8 +795,8 @@ class TestSpecSanctionedConstructsAreNotRejected:
         LHS. A missing equation must still be caught."""
         base = {
             "variables": {
-                "H": {"type": "state", "units": "M", "default": 1e-7},
-                "SO4": {"type": "state", "units": "M", "default": 1e-5},
+                "H": {"type": "unknown", "units": "M", "default": 1e-7},
+                "SO4": {"type": "unknown", "units": "M", "default": 1e-5},
                 "Ksp": {"type": "parameter", "units": "1", "default": 1.0},
             },
             "system_kind": "nonlinear",
@@ -828,7 +828,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
                     "M": {
                         "variables": {
                             "u": {
-                                "type": "state",
+                                "type": "unknown",
                                 "units": "1",
                                 "shape": ["cells"],
                                 "default": 0.0,
@@ -865,20 +865,21 @@ class TestUnitFindingCodesAreDistinct:
 
     @staticmethod
     def _model(units, expression=None, extra=None):
+        # `c` is an UNKNOWN defined by the bare-variable-LHS equation below --
+        # esm 1.0.0 has no `expression` field on a variable, so the definition
+        # the dimensional check reads is an equation like any other.
         variables = {
             "T": {"type": "parameter", "units": "K", "default": 300.0},
-            "c": dict(
-                {"type": "observed", "units": units},
-                **({"expression": expression} if expression else {}),
-            ),
+            "c": {"type": "unknown", "units": units},
         }
         if extra:
             variables.update(extra)
+        equations = [{"lhs": "c", "rhs": expression}] if expression else []
         return json.dumps(
             {
-                "esm": "0.8.0",
+                "esm": "1.0.0",
                 "metadata": {"name": "t", "authors": ["a"], "created": "2026-01-01T00:00:00Z"},
-                "models": {"M": {"variables": variables, "equations": []}},
+                "models": {"M": {"variables": variables, "equations": equations}},
             }
         )
 
@@ -914,6 +915,26 @@ class TestReferenceIntegrityEveryExpressionBearingField:
     single site fails loudly and names the site.
     """
 
+    #: Shared pins in ``tests/invalid/expected_errors.json`` that the esm 1.0.0
+    #: fixture conversion made stale. ``undefined_variable_in_observed_expression``
+    #: still names ``/models/TestModel/variables/z/expression`` and the phrase
+    #: "observed variable expression", but the fixture's definition moved INTO
+    #: the equations, so the only place the undefined name can be reported is the
+    #: equation that carries it. The defect the fixture pins is unchanged; only
+    #: the pointer is. Tracked for a central fix to the shared file.
+    _STALE_PINS = {
+        "undefined_variable_in_observed_expression.esm": {
+            "path": "/models/TestModel/equations/1/rhs",
+            "code": "undefined_variable",
+            "message": "Variable 'undefined_xyz' referenced in equation is not declared",
+            "details": {
+                "variable": "undefined_xyz",
+                "equation_index": 1,
+                "expected_in": "variables",
+            },
+        },
+    }
+
     @pytest.mark.parametrize(
         "fixture_name",
         [
@@ -946,7 +967,9 @@ class TestReferenceIntegrityEveryExpressionBearingField:
     def test_undefined_name_is_caught_at_every_site(self, fixture_name):
         fixtures_dir = FIXTURES_ROOT
         pins = json.loads((fixtures_dir / "invalid" / "expected_errors.json").read_text())
-        expected = pins[fixture_name]["structural_errors"][0]
+        expected = self._STALE_PINS.get(
+            fixture_name, pins[fixture_name]["structural_errors"][0]
+        )
 
         content = (fixtures_dir / "invalid" / fixture_name).read_text()
         result = validate(content)

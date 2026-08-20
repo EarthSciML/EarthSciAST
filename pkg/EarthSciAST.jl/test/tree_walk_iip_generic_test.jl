@@ -51,7 +51,7 @@ _gi_fn(nm, a...) = Dict{String,Any}("op" => "fn", "name" => nm, "args" => Any[a.
 _gi_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
-_gi_state(; kw...) = Dict{String,Any}("type" => "state",
+_gi_state(; kw...) = Dict{String,Any}("type" => "unknown",
                                       (String(k) => v for (k, v) in kw)...)
 _gi_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
 

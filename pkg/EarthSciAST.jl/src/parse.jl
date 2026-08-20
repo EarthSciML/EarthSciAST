@@ -542,8 +542,8 @@ function coerce_esm_file(data::Any)::EsmFile
         Dict{String,ReactionSystem}(string(k) => coerce_reaction_system(v) for (k, v) in pairs(rs))
     end
 
-    data_loaders = _maybe(_get_field(data, :data_loaders, nothing)) do dl
-        Dict{String,DataLoader}(string(k) => coerce_data_loader(v) for (k, v) in pairs(dl))
+    data_sources = _maybe(_get_field(data, :data_sources, nothing)) do dl
+        Dict{String,DataSource}(string(k) => coerce_data_source(v) for (k, v) in pairs(dl))
     end
 
     # esm-spec v0.3.0 (§9 closure) removed the top-level `operators` block:
@@ -635,7 +635,7 @@ function coerce_esm_file(data::Any)::EsmFile
     file = EsmFile(esm, metadata,
                   models=models,
                   reaction_systems=reaction_systems,
-                  data_loaders=data_loaders,
+                  data_sources=data_sources,
                   coupling=coupling,
                   domain=domain,
                   enums=enums,
@@ -760,14 +760,16 @@ end
 
 
 """
-    _coerce_subsystem_entry(name::String, v) -> Union{Model,DataLoader,SubsystemRef}
+    _coerce_subsystem_entry(name::String, v) -> Union{Model,SubsystemRef}
 
-Coerce one `subsystems` entry (schema §4.7, oneOf [Model, DataLoader,
-SubsystemRef]): a child Model, a pure-I/O DataLoader (RFC pure-io-data-loaders
-§4.3), or a `{"ref": "..."}` reference. Inline Model / DataLoader entries are
-coerced recursively; ref entries become a `SubsystemRef` placeholder that
+Coerce one `subsystems` entry (schema §4.7, oneOf [Model, SubsystemRef]): a
+child Model, or a `{"ref": "..."}` reference. Inline Model entries are coerced
+recursively; ref entries become a `SubsystemRef` placeholder that
 `resolve_subsystem_refs!` replaces in place with the loaded component. `name`
 is the subsystem key, used only in metaparameter-binding diagnostics.
+
+From esm 1.0.0 a data source is an ingest registry entry rather than a
+component, so it can no longer appear here (esm-spec §8).
 """
 function _coerce_subsystem_entry(name::String, v)
     if _get_field(v, :ref, nothing) !== nothing
@@ -809,10 +811,6 @@ function _coerce_subsystem_entry(name::String, v)
             injected = Any[_to_native_json(e) for e in imports_raw]
         end
         return SubsystemRef(string(v["ref"]), bindings, injected)
-    elseif haskey(v, "kind") && haskey(v, "source")
-        # Loader-required fields (kind + source) discriminate an inline
-        # data loader from a Model, which carries equations instead.
-        return coerce_data_loader(v)
     else
         return coerce_model(v)
     end
@@ -991,9 +989,9 @@ function _coerce_model_guesses(v)
     return guesses
 end
 
-# Model `subsystems` (schema §4.7): each entry is oneOf [Model, DataLoader,
-# SubsystemRef], sniffed per entry by `_coerce_subsystem_entry` (the key is
-# threaded in for metaparameter-binding diagnostics).
+# Model `subsystems` (schema §4.7): each entry is oneOf [Model, SubsystemRef],
+# sniffed per entry by `_coerce_subsystem_entry` (the key is threaded in for
+# metaparameter-binding diagnostics).
 _coerce_model_subsystems(v) = Dict{String,SubsystemNode}(
     string(k) => _coerce_subsystem_entry(string(k), x) for (k, x) in pairs(v))
 
@@ -1009,6 +1007,79 @@ function _coerce_discrete_affects(v)
         push!(affects, coerce_affect_equation(a))
     end
     return affects
+end
+
+"""
+    coerce_distribution(data) -> Distribution
+
+Coerce a schema `Distribution` object (esm-spec §6.3). The three kinds spell
+their location and scale differently on the wire — `normal` uses `mean`/`std`,
+`lognormal` uses `mu`/`sigma`, `uniform` uses `low`/`high` — so the parse maps
+each onto the struct's role-named fields and `_emit_distribution` restores the
+wire names. `kind` is closed: anything outside the three is rejected here
+rather than carried as an opaque string a downstream sampler cannot honour.
+"""
+function coerce_distribution(data)
+    data isa AbstractDict ||
+        throw(ParseError("distribution must be an object"))
+    kind = _get_field(data, :kind, nothing)
+    kind === nothing && throw(ParseError("distribution requires a 'kind' field"))
+    kind = string(kind)
+    num_or_vec(v) = v isa AbstractVector ? Float64[Float64(x) for x in v] : Float64(v)
+    cov = let c = _get_field(data, :cov, nothing)
+        c === nothing ? nothing :
+        Vector{Float64}[Float64[Float64(x) for x in row] for row in c]
+    end
+    if kind == "normal"
+        loc = _get_field(data, :mean, nothing)
+        loc === nothing && throw(ParseError("normal distribution requires 'mean'"))
+        sc = _get_field(data, :std, nothing)
+        return Distribution("normal"; location=num_or_vec(loc),
+                            scale=(sc === nothing ? nothing : num_or_vec(sc)), cov=cov)
+    elseif kind == "lognormal"
+        loc = _get_field(data, :mu, nothing)
+        loc === nothing && throw(ParseError("lognormal distribution requires 'mu'"))
+        sc = _get_field(data, :sigma, nothing)
+        return Distribution("lognormal"; location=num_or_vec(loc),
+                            scale=(sc === nothing ? nothing : num_or_vec(sc)), cov=cov)
+    elseif kind == "uniform"
+        lo = _get_field(data, :low, nothing)
+        hi = _get_field(data, :high, nothing)
+        (lo === nothing || hi === nothing) &&
+            throw(ParseError("uniform distribution requires 'low' and 'high'"))
+        return Distribution("uniform"; low=num_or_vec(lo), high=num_or_vec(hi))
+    end
+    throw(ParseError("Invalid distribution kind: $(kind) " *
+                     "(expected one of normal, lognormal, uniform)"))
+end
+
+"""
+    _coerce_parameter_update_spec(v) -> Vector{ParameterUpdate}
+
+Coerce a schema `ParameterUpdateSpec` (esm-spec §5.4): EITHER one rule object
+OR an ordered array of two or more. Both spellings become a vector, so every
+consumer iterates one shape; the emitted spelling is recovered from the length.
+
+The two array constraints are enforced here because they are what makes the
+representation unique — a one-element array and a `wiener` rule inside an array
+are both invalid, so neither can be normalised into the vector and silently
+re-emitted as the legal form.
+"""
+function _coerce_parameter_update_spec(v)
+    if v isa AbstractVector
+        length(v) >= 2 || throw(ParseError(
+            "parameter `update` array requires at least two rules; a single " *
+            "rule MUST be written as the object form (esm-spec 5.4)"))
+        rules = ParameterUpdate[coerce_parameter_update(x) for x in v]
+        for r in rules
+            r.kind == "wiener" && throw(ParseError(
+                "parameter `update` array may not contain a `wiener` rule: a " *
+                "driving noise process is the parameter's whole value " *
+                "(esm-spec 5.4)"))
+        end
+        return rules
+    end
+    return ParameterUpdate[coerce_parameter_update(v)]
 end
 
 # Assertion `reference` (spec §6.6.5): the from_file shape is a JSON object
@@ -1077,6 +1148,8 @@ function _record_parse_expr(row, v)
         :(ASTExpr[parse_expression(x) for x in $v])
     elseif kind === :string_vec
         :([string(x) for x in $v])
+    elseif kind === :float_vec
+        :(Float64[Float64(x) for x in $v])
     elseif kind === :string_vec_strict
         :(Vector{String}($v))
     elseif kind === :float_map

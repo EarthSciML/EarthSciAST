@@ -90,7 +90,7 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                 "S" => Dict("type" => "parameter", "shape" => ["cells"]),
                 "E" => Dict("type" => "parameter", "shape" => ["cells"]),
                 "N" => Dict("type" => "parameter", "shape" => ["cells"]),
-                "cell_present" => Dict("type" => "state", "shape" => ["present_cells"])),
+                "cell_present" => Dict("type" => "unknown", "shape" => ["present_cells"])),
             "equations" => [Dict(
                 "lhs" => _ix("cell_present", "m"),
                 "rhs" => Dict(
@@ -196,8 +196,8 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
                 "tgt_S" => Dict("type" => "parameter", "shape" => ["tgt_cells"]),
                 "tgt_E" => Dict("type" => "parameter", "shape" => ["tgt_cells"]),
                 "tgt_N" => Dict("type" => "parameter", "shape" => ["tgt_cells"]),
-                "A_j" => Dict("type" => "state", "shape" => ["tgt_cells"]),
-                "F_tgt" => Dict("type" => "state", "shape" => ["tgt_cells"])),
+                "A_j" => Dict("type" => "unknown", "shape" => ["tgt_cells"]),
+                "F_tgt" => Dict("type" => "unknown", "shape" => ["tgt_cells"])),
             "equations" => [
                 Dict(
                     "lhs" => Dict("op" => "aggregate", "args" => [], "output_idx" => ["j"],

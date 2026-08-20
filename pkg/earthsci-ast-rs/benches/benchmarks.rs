@@ -45,15 +45,14 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
             variables.insert(
                 var_name.clone(),
                 earthsci_ast::ModelVariable {
-                    var_type: earthsci_ast::VariableType::State,
+                    var_type: earthsci_ast::VariableType::Unknown,
                     units: Some("m/s".to_string()),
                     default: Some(1.0),
                     description: None,
-                    expression: None,
                     shape: None,
                     location: None,
-                    noise_kind: None,
-                    correlation_group: None,
+                    distribution: None,
+                    update: None,
                 },
             );
         }

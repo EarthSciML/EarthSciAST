@@ -29,9 +29,6 @@ import (
 var couplingLibraryForbiddenKeys = []string{
 	"models",
 	"reaction_systems",
-	// `data_sources` is a document-scoped ingest registry, not a component
-	// namespace, but it is still a top-level document key a coupling library
-	// file may not carry.
 	"data_sources",
 	"domain",
 	"index_sets",
@@ -248,16 +245,11 @@ func rewriteEntryInPlace(entry map[string]any, structFn, exprFn refFn) {
 				}
 			}
 		}
-		if fa, ok := entry["functional_affect"].(map[string]any); ok {
-			for _, key := range []string{"read_vars", "read_params", "modified_params"} {
-				if lst, ok := fa[key]; ok {
-					fa[key] = mapStringArrayRaw(lst, structFn)
-				}
-			}
-		}
-		if dp, ok := entry["discrete_parameters"]; ok {
-			entry["discrete_parameters"] = mapStringArrayRaw(dp, structFn)
-		}
+		// esm 1.0.0 removes the event `functional_affect` and its
+		// `discrete_parameters` list: a coupling event affects UNKNOWNS only, and
+		// a handler now lives on the parameter it writes (`update.handler`), where
+		// it needs no write list at all. There is nothing left on an event entry
+		// to role-substitute beyond its conditions, trigger and affects.
 	}
 }
 
@@ -437,8 +429,10 @@ func rawEdgeToCouplingEntry(edge map[string]any) (CouplingEntry, error) {
 }
 
 // resolvesToComponent resolves a `bind` value as a component path (esm-spec
-// §10.10.1) — a system or loader node, walking models/reaction_systems/
-// models/reaction_systems then nested `subsystems`, never terminating on a variable.
+// §10.10.1), walking models/reaction_systems then nested `subsystems`, never
+// terminating on a variable. A `data_sources` entry is NOT a component from esm
+// 1.0.0 and is deliberately not consulted: it cannot be a coupling endpoint, so
+// binding a role to one must fail.
 func resolvesToComponent(file *ESMFile, value string) bool {
 	if file == nil {
 		return false
@@ -455,9 +449,6 @@ func resolvesToComponent(file *ESMFile, value string) bool {
 		found = true
 		subs = rs.Subsystems
 	}
-	// A data source is NOT a component from 1.0.0 (esm-spec 8): it can be neither
-	// a subsystem nor a scoped-name path root, so it is not consulted here. A
-	// path rooted at one resolves to nothing, which is the intended answer.
 	if !found {
 		return false
 	}

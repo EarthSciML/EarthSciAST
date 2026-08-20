@@ -370,35 +370,137 @@ fn shared_invalid_undeclared_from_fixture_is_rejected() {
 /// Rust port of the Python reference `test_ragged_index_set_dynamic_per_parent_bound`.
 #[test]
 fn ragged_index_set_drives_dynamic_reduction_bound() {
-    let model = r#"{
-      "esm": "1.0.0",
-      "metadata": { "name": "ragged_dynamic_bound" },
-      "index_sets": {
-        "cells": { "kind": "interval", "size": 2 },
-        "edges_of_cell": { "kind": "ragged", "of": ["cells"],
-                           "offsets": "nedges", "values": "nedges" }
-      },
-      "models": { "M": {
-        "variables": {
-          "y": { "type": "unknown", "shape": ["i"] },
-          "nedges": { "type": "unknown", "shape": ["i"] }
-        },
-        "equations": [
-          { "lhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
-                     "expr": { "op": "D", "args": [{ "op": "index", "args": ["y", "i"] }], "wrt": "t" },
-                     "ranges": { "i": { "from": "cells" } } },
-            "rhs": { "op": "aggregate", "args": [], "output_idx": ["i"], "semiring": "sum_product",
-                     "expr": "k",
-                     "ranges": { "i": { "from": "cells" },
-                                 "k": { "from": "edges_of_cell", "of": ["i"] } } } },
-          { "lhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
-                     "expr": { "op": "D", "args": [{ "op": "index", "args": ["nedges", "i"] }], "wrt": "t" },
-                     "ranges": { "i": [1, 2] } },
-            "rhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
-                     "expr": 0, "ranges": { "i": [1, 2] } } }
-        ]
-      } }
-    }"#;
+    let model = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "ragged_dynamic_bound"
+          },
+          "index_sets": {
+            "cells": {
+              "kind": "interval",
+              "size": 2
+            },
+            "edges_of_cell": {
+              "kind": "ragged",
+              "of": [
+                "cells"
+              ],
+              "offsets": "nedges",
+              "values": "nedges"
+            }
+          },
+          "models": {
+            "M": {
+              "variables": {
+                "y": {
+                  "type": "unknown",
+                  "shape": [
+                    "i"
+                  ]
+                },
+                "nedges": {
+                  "type": "unknown",
+                  "shape": [
+                    "i"
+                  ]
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "expr": {
+                      "op": "D",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "y",
+                            "i"
+                          ]
+                        }
+                      ],
+                      "wrt": "t"
+                    },
+                    "ranges": {
+                      "i": {
+                        "from": "cells"
+                      }
+                    }
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "semiring": "sum_product",
+                    "expr": "k",
+                    "ranges": {
+                      "i": {
+                        "from": "cells"
+                      },
+                      "k": {
+                        "from": "edges_of_cell",
+                        "of": [
+                          "i"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "lhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "expr": {
+                      "op": "D",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "nedges",
+                            "i"
+                          ]
+                        }
+                      ],
+                      "wrt": "t"
+                    },
+                    "ranges": {
+                      "i": [
+                        1,
+                        2
+                      ]
+                    }
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "expr": 0,
+                    "ranges": {
+                      "i": [
+                        1,
+                        2
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+        "#;
     let file = load(model).unwrap_or_else(|e| panic!("load ragged model: {e}"));
     let opts = SimulateOptions {
         solver: SolverChoice::Bdf,

@@ -46,7 +46,7 @@ function EarthSciAST.Model(sys::ModelingToolkit.AbstractSystem)
 
     for state in ModelingToolkit.unknowns(sys)
         var_name = _strip_time(string(ModelingToolkit.getname(state)))
-        variables[var_name] = ModelVariable(StateVariable;
+        variables[var_name] = ModelVariable(UnknownVariable;
             default=_lookup_default(state, sys_defaults))
     end
 
@@ -56,16 +56,23 @@ function EarthSciAST.Model(sys::ModelingToolkit.AbstractSystem)
             default=_lookup_default(param, sys_defaults))
     end
 
+    # An MTK observed exports as an `unknown` DECLARATION plus a
+    # bare-variable-LHS EQUATION: from esm 1.0.0 the equation is what makes it
+    # observed (esm-spec §6.3.1), and a variable carries no expression.
     for obs in obs_eqs
         oname = _strip_time(string(ModelingToolkit.getname(obs.lhs)))
-        variables[oname] = ModelVariable(ObservedVariable;
-            expression=_symbolic_to_esm_export(obs.rhs, known_vars))
+        variables[oname] = ModelVariable(UnknownVariable)
     end
 
     equations = Equation[]
     for eq in ModelingToolkit.equations(sys)
         push!(equations, Equation(_symbolic_to_esm_export(eq.lhs, known_vars),
                                   _symbolic_to_esm_export(eq.rhs, known_vars)))
+    end
+    for obs in obs_eqs
+        oname = _strip_time(string(ModelingToolkit.getname(obs.lhs)))
+        push!(equations, Equation(VarExpr(oname),
+                                  _symbolic_to_esm_export(obs.rhs, known_vars)))
     end
 
     return Model(variables, equations)
@@ -228,9 +235,13 @@ end
 # Export states / parameters / observed / brownian variables from `sys` into
 # `esm_vars`, registering every exported name in `known_vars` (used by the
 # expression walk to disambiguate callable-symbolic states from op calls).
+# `observed_eqs` receives one `oname ~ rhs` equation per MTK observed: from esm
+# 1.0.0 the bare-variable-LHS equation is what MAKES a variable observed
+# (esm-spec §6.3.1), so the export has to emit it alongside the declaration.
 function _export_variables!(esm_vars::Dict{String,ModelVariable},
                             known_vars::Set{String}, gaps::Vector{GapReport},
-                            sys, strip_ns::Function)
+                            sys, strip_ns::Function,
+                            observed_eqs::Vector{Equation}=Equation[])
     # System-level defaults dict — variables declared via `defaults=Dict(...)`
     # on System construction surface here rather than on the symbolic
     # metadata. We look up both and prefer the system-level value.
@@ -244,7 +255,7 @@ function _export_variables!(esm_vars::Dict{String,ModelVariable},
     for state in ModelingToolkit.unknowns(sys)
         var_name = strip_ns(_strip_time(string(ModelingToolkit.getname(state))))
         push!(known_vars, var_name)
-        esm_vars[var_name] = ModelVariable(StateVariable;
+        esm_vars[var_name] = ModelVariable(UnknownVariable;
             default=_lookup_default(state, sys_defaults),
             units=_get_units_str(state),
             description=_get_description_str(state))
@@ -270,8 +281,10 @@ function _export_variables!(esm_vars::Dict{String,ModelVariable},
         push!(known_vars, oname)
         rhs_esm = _symbolic_to_esm_with_gaps(obs.rhs, known_vars, gaps,
             "observed[$oname].rhs"; strip_ns=strip_ns)
-        esm_vars[oname] = ModelVariable(ObservedVariable;
-            expression=rhs_esm)
+        # Declaration + defining equation: the bare-variable LHS is what makes
+        # it observed from esm 1.0.0 (esm-spec §6.3.1).
+        esm_vars[oname] = ModelVariable(UnknownVariable)
+        push!(observed_eqs, Equation(VarExpr(oname), rhs_esm))
     end
 
     # Brownian variables (SDE noise sources) — gt-kuxo gate.
@@ -281,10 +294,15 @@ function _export_variables!(esm_vars::Dict{String,ModelVariable},
             "system has $(length(brownians)) brownian variable(s); " *
             "SDE noise serialization requires gt-kuxo to land first",
             "system.brownians"))
+        # A Brownian noise source is a PARAMETER with a unit-normal
+        # distribution and a `wiener` update from esm 1.0.0 (esm-spec §5.4);
+        # `brownian_parameters` derives it back, and its presence is what makes
+        # `system_kind` "sde".
         for b in brownians
             bname = string(ModelingToolkit.getname(b))
-            esm_vars[bname] = ModelVariable(BrownianVariable;
-                noise_kind="wiener")
+            esm_vars[bname] = ModelVariable(ParameterVariable;
+                distribution=Distribution("normal"; location=0.0, scale=1.0),
+                update=ParameterUpdate("wiener"))
         end
     end
 
@@ -333,10 +351,12 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
     # 1. Variables -----------------------------------------------------------
     esm_vars = Dict{String,ModelVariable}()
     known_vars = Set{String}()
-    _export_variables!(esm_vars, known_vars, gaps, sys, strip_ns)
+    observed_eqs = Equation[]
+    _export_variables!(esm_vars, known_vars, gaps, sys, strip_ns, observed_eqs)
 
     # 2. Equations -----------------------------------------------------------
     esm_equations = _export_equations(sys, known_vars, gaps, strip_ns)
+    append!(esm_equations, observed_eqs)
 
     # registered symbolic functions (gt-p3ep gate): detected by scanning the
     # symbolic AST for unknown `iscall` operations whose operation has a

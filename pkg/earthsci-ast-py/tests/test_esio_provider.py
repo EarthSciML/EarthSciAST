@@ -11,28 +11,28 @@ import pytest
 
 esio = pytest.importorskip("earthsciio")
 
-from earthsci_ast.data_loaders.esio_provider import (  # noqa: E402
+from earthsci_ast.data_sources.esio_provider import (  # noqa: E402
     esio_provider_factory,
     to_esio_loader,
     _esio_format,
 )
 from earthsci_ast.esm_types import (  # noqa: E402
-    DataLoader,
-    DataLoaderKind,
-    DataLoaderSource,
-    DataLoaderTemporal,
-    DataLoaderVariable,
+    DataSource,
+    DataSourceKind,
+    DataSourceLocation,
+    DataSourceTemporal,
+    DataSourceBinding,
 )
 from earthsci_ast.flatten import LoaderField  # noqa: E402
 
 
 def _field(url, *, temporal=None, fmt_meta=None, variables=("u",), name="ERA5.pl", file_vars=None):
     file_vars = file_vars or {v: v for v in variables}
-    dl = DataLoader(
+    dl = DataSource(
         name=name,
-        kind=DataLoaderKind.GRID,
-        source=DataLoaderSource(url_template=url),
-        variables={v: DataLoaderVariable(file_variable=file_vars[v], units="1") for v in variables},
+        kind=DataSourceKind.GRID,
+        source=DataSourceLocation(url_template=url),
+        variables={v: DataSourceBinding(file_variable=file_vars[v], units="1") for v in variables},
         temporal=temporal,
         metadata=fmt_meta or {},
     )
@@ -76,7 +76,7 @@ def test_format_inferred_from_url_suffix():
 
 
 def test_to_esio_loader_maps_url_vars_and_temporal():
-    t = DataLoaderTemporal(
+    t = DataSourceTemporal(
         start="2018-11-08T00:00:00Z", frequency="PT1H", file_period="P1M", time_variable="time"
     )
     edl = to_esio_loader(
@@ -93,7 +93,7 @@ def test_to_esio_loader_maps_url_vars_and_temporal():
 
 
 def test_factory_builds_a_real_esio_provider():
-    t = DataLoaderTemporal(start="2018-11-08T00:00:00Z", frequency="PT1H", file_period="P1M")
+    t = DataSourceTemporal(start="2018-11-08T00:00:00Z", frequency="PT1H", file_period="P1M")
     field = _field("https://x/era5_{date:%Y}_{date:%m}.nc", temporal=t)
     window = (_dt.datetime(2018, 11, 8), _dt.datetime(2018, 11, 9))
     prov = esio_provider_factory(field, window)
@@ -141,7 +141,7 @@ def test_cds_loader_builds_era5_request_url(monkeypatch):
     (area from the domain, short→long variable names, trimmed pressure levels)."""
     from earthsciio.era5 import era5_area_from_bbox
 
-    t = DataLoaderTemporal(
+    t = DataSourceTemporal(
         start="2018-11-08T00:00:00Z",
         frequency="PT1H",
         file_period="P1M",
@@ -186,7 +186,7 @@ def test_cds_loader_window_trims_to_calendar_month_and_days():
     provider anchor (ERA5's P1M file period, approximated as fixed seconds from
     the 1940 availability start, can resolve a November time to an October
     anchor; the window's calendar month must win)."""
-    t = DataLoaderTemporal(
+    t = DataSourceTemporal(
         start="1940-01-01T00:00:00Z",
         frequency="PT1H",
         file_period="P1M",
@@ -218,7 +218,7 @@ def test_cds_loader_needs_a_target():
     meta = {"cds": {"dataset": "reanalysis-era5-pressure-levels"}}
     field = _field(
         "https://x/era5_{date:%Y}_{date:%m}.nc",
-        temporal=DataLoaderTemporal(
+        temporal=DataSourceTemporal(
             start="2018-11-08T00:00:00Z", frequency="PT1H", file_period="P1M"
         ),
         fmt_meta=meta,

@@ -100,7 +100,7 @@ fn scope_to_component(
 }
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
 use crate::types::{
-    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, Model, Tolerance, VariableType,
+    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, Model, Tolerance,
 };
 
 /// esm-spec §6.6.4: the default relative tolerance when neither the
@@ -435,17 +435,10 @@ fn observed_field(
     insp: &BuildInspection,
     index_sets: &HashMap<String, IndexSet>,
 ) -> Option<(Vec<f64>, Vec<Vec<i64>>)> {
-    let v = file
-        .models
-        .as_ref()?
-        .get(model_name)?
-        .variables
-        .get(variable)?;
-    if v.var_type != VariableType::Unknown
-        || !crate::classify::observed_unknowns(file.models.as_ref()?.get(model_name)?)
-            .iter()
-            .any(|n| n == variable)
-    {
+    let model = file.models.as_ref()?.get(model_name)?;
+    let v = model.variables.get(variable)?;
+    // OBSERVED is derived from the equations (esm-spec §6.3.1), not declared.
+    if !crate::classification::Classification::of(model).is_observed(variable) {
         return None;
     }
     let shape = v.shape.as_ref()?;
@@ -1370,8 +1363,8 @@ mod tests {
                     "h": {"type": "unknown", "units": "1", "shape": ["x"]},
                 },
                 "equations": [
-                    {"lhs": "h", "rhs": h},
-                    {"lhs": "g", "rhs": g},
+                {"lhs": "g", "rhs": g},
+                {"lhs": "h", "rhs": h},
                     {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
                     {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0},
                 ],
@@ -1751,7 +1744,7 @@ mod tests {
                     "k": {"type": "unknown", "units": "1"},
                 },
                 "equations": [
-                    {"lhs": "k", "rhs": {"op": "*", "args": ["a", "T"]}},
+                {"lhs": "k", "rhs": {"op": "*", "args": ["a", "T"]}},
                     {"lhs": {"op": "ic", "args": ["x"]}, "rhs": 0.0},
                     {"lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
                              "ranges": {"i": [1, 1]},

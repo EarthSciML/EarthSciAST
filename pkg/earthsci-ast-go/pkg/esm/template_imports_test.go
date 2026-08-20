@@ -154,12 +154,13 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 // fixtures through the raw §9.7 pipeline and asserts the lowered
 // models.m.variables subtree is byte-identical to the committed Julia goldens
 // (the goldens carry golden-specific metadata, so the comparison is scoped to
-// the rewritten EQUATIONS exactly as the reference testset does -- in 0.x this
-// compared `variables`, because a rewrite target sat in an observed's
-// `expression`; in 1.0.0 every definition is an equation, so that is where the
-// lowering result shows up).
+// the rewritten variables exactly as the reference testset does).
 func TestMatchScoping_ConformanceGoldens(t *testing.T) {
-	modelMEqs := func(doc string) any {
+	// The lowered subtree to compare is the model's EQUATIONS, not its
+	// `variables`: esm 1.0.0 moved every rewritable expression out of the
+	// variable declarations and into the equation list, so `variables` now holds
+	// only declarations that no rewrite rule can touch.
+	modelMEquations := func(doc string) any {
 		var v map[string]any
 		if err := json.Unmarshal([]byte(doc), &v); err != nil {
 			t.Fatalf("decode: %v", err)
@@ -177,8 +178,8 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v", err)
 			}
-			got := tiCanonJSON(t, modelMEqs(gotDoc))
-			want := tiCanonJSON(t, modelMEqs(string(wantBytes)))
+			got := tiCanonJSON(t, modelMEquations(gotDoc))
+			want := tiCanonJSON(t, modelMEquations(string(wantBytes)))
 			if got != want {
 				t.Errorf("%s: lowered equations diverge from golden:\n got=%s\nwant=%s", group, got, want)
 			}
@@ -197,11 +198,19 @@ func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(doc), &v); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	rhsFor := modelEquationRHS(t, v["models"].(map[string]any)["TwoGrids"].(map[string]any))
+	// Each `div_*` is an observed unknown, so the lowered node is the RHS of its
+	// defining equation.
+	defs := map[string]any{}
+	for _, e := range v["models"].(map[string]any)["TwoGrids"].(map[string]any)["equations"].([]any) {
+		eq := e.(map[string]any)
+		if lhs, ok := eq["lhs"].(string); ok {
+			defs[lhs] = eq["rhs"]
+		}
+	}
 	for name, wantN := range map[string]float64{"div_A": 16, "div_B": 8} {
-		expr, ok := rhsFor[name].(map[string]any)
+		expr, ok := defs[name].(map[string]any)
 		if !ok {
-			t.Fatalf("%s: no defining equation (got %T)", name, rhsFor[name])
+			t.Fatalf("%s: no defining equation", name)
 		}
 		if expr["op"] != "*" {
 			t.Errorf("%s: op = %v; want * (div node not lowered)", name, expr["op"])
@@ -343,12 +352,12 @@ func TestTemplateImports_ValidSuiteMinimalConsumer(t *testing.T) {
 	if m.IndexSets["cells"].Size == nil || *m.IndexSets["cells"].Size != 8 {
 		t.Errorf("cells size = %v; want 8 (§9.7.5 merge into consumer)", m.IndexSets["cells"].Size)
 	}
-	// `y` is an observed unknown, so its expanded definition is the RHS of its
-	// bare-variable-LHS equation, not a removed `expression` field.
+	// `y` is an observed unknown, so its (template-expanded) definition is the
+	// RHS of its defining EQUATION, not a field on the variable.
 	model := m.Models["M"]
-	yDef, found := ObservedDefinition(&model, "y")
-	if !found {
-		t.Fatalf("no defining equation for y")
+	yDef, has := ObservedDefinition(&model, "y")
+	if !has {
+		t.Fatal("y has no defining equation")
 	}
 	y, ok := yDef.(ExprNode)
 	if !ok {
@@ -384,23 +393,36 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 			if !ok {
 				t.Fatalf("Problem subsystem is %T; want map", f.Models["Sweep"].Subsystems["Problem"])
 			}
-			// The metaparameter substitution now lands in the subsystem's
-			// EQUATIONS, since that is where an observed unknown's definition
-			// lives. Index the RHS by the equation's bare-variable LHS.
-			rhsFor := subsystemEquationRHS(t, sub)
+			// The Expression positions are the DEFINING EQUATIONS of the three
+			// observed unknowns; a variable carries no `expression` field in esm
+			// 1.0.0.
+			defs := map[string]any{}
+			eqs, _ := sub["equations"].([]any)
+			for _, e := range eqs {
+				eq, ok := e.(map[string]any)
+				if !ok {
+					continue
+				}
+				if lhs, ok := eq["lhs"].(string); ok {
+					defs[lhs] = eq["rhs"]
+				}
+			}
 			// Expression position: bare "N" substituted as an integer literal.
-			nptsJSON := mustJSON(t, rhsFor["npts"])
+			nptsJSON := mustJSON(t, defs["npts"])
 			if nptsJSON != fmt.Sprintf("%d", tc.n) {
 				t.Errorf("npts definition = %s; want %d", nptsJSON, tc.n)
 			}
 			// Expression-position division stays an AST division (no folding).
-			halfJSON := mustJSON(t, rhsFor["half"])
+			halfJSON := mustJSON(t, defs["half"])
 			wantHalf := fmt.Sprintf(`{"args":[%d,2],"op":"/"}`, tc.n)
 			if halfJSON != wantHalf {
 				t.Errorf("half definition = %s; want %s", halfJSON, wantHalf)
 			}
 			// Structural site: the aggregate dense range folded exactly.
-			ramp := rhsFor["ramp"].(map[string]any)
+			ramp, ok := defs["ramp"].(map[string]any)
+			if !ok {
+				t.Fatalf("ramp definition is %T; want an aggregate node", defs["ramp"])
+			}
 			rangesJSON := mustJSON(t, ramp["ranges"])
 			wantRanges := fmt.Sprintf(`{"i":[1,%d]}`, tc.n/2)
 			if rangesJSON != wantRanges {
@@ -439,24 +461,25 @@ func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(problem): %v", err)
 	}
-	pdef := fdef.Models["Problem"]
-	nptsDefault, found := ObservedDefinition(&pdef, "npts")
-	if !found {
-		t.Fatalf("no defining equation for npts")
+	// `npts` is an observed unknown defined by `npts ~ N`; the folded
+	// metaparameter shows up in its defining EQUATION.
+	nptsDef := func(f *ESMFile) Expression {
+		t.Helper()
+		model := f.Models["Problem"]
+		def, ok := ObservedDefinition(&model, "npts")
+		if !ok {
+			t.Fatal("npts has no defining equation")
+		}
+		return def
 	}
-	if got := mustJSON(t, nptsDefault); got != "2" {
+	if got := mustJSON(t, nptsDef(fdef)); got != "2" {
 		t.Errorf("default npts = %s; want 2", got)
 	}
 	fapi, err := Load(problem, WithMetaparameters(map[string]int64{"N": 6}))
 	if err != nil {
 		t.Fatalf("Load(problem, N=6): %v", err)
 	}
-	papi := fapi.Models["Problem"]
-	nptsAPI, found := ObservedDefinition(&papi, "npts")
-	if !found {
-		t.Fatalf("no defining equation for npts under the API binding")
-	}
-	if got := mustJSON(t, nptsAPI); got != "6" {
+	if got := mustJSON(t, nptsDef(fapi)); got != "6" {
 		t.Errorf("API npts = %s; want 6 (API > default)", got)
 	}
 	// Binding a name the document does not declare is an error.
@@ -726,12 +749,12 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
                          "rhs": {"op": "-", "args": ["x"]}},
                         {"lhs": "agg",
                          "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
-                                 "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
-                                 "expr": {"op": "*", "args": ["x", "i"]}}},
+                           "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
+                           "expr": {"op": "*", "args": ["x", "i"]}}},
                         {"lhs": "ma",
                          "rhs": {"op": "makearray", "args": [],
-                                 "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
-                                 "values": [1.5]}}]
+                           "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
+                           "values": [1.5]}}]
         }
       }
     }`)
@@ -750,12 +773,11 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
 	if got := mustJSON(t, doc["index_sets"]); got != `{"cells":{"kind":"interval","size":12}}` {
 		t.Errorf("index_sets = %s; want cells size 12", got)
 	}
-	rhsFor := modelEquationRHS(t, doc["models"].(map[string]any)["M"].(map[string]any))
-	agg := rhsFor["agg"].(map[string]any)
+	agg := tiDefinition(t, doc, "M", "agg").(map[string]any)
 	if got := mustJSON(t, agg["ranges"]); got != `{"i":[1,5]}` {
 		t.Errorf("agg ranges = %s; want {\"i\":[1,5]}", got)
 	}
-	ma := rhsFor["ma"].(map[string]any)
+	ma := tiDefinition(t, doc, "M", "ma").(map[string]any)
 	if got := mustJSON(t, ma["regions"]); got != `[[[3,6]]]` {
 		t.Errorf("ma regions = %s; want [[[3,6]]]", got)
 	}
@@ -790,7 +812,7 @@ func TestTemplateImports_ExpressionPositionSubstitutionNeverFolds(t *testing.T) 
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	dlon := modelEquationRHS(t, doc["models"].(map[string]any)["M"].(map[string]any))["dlon"]
+	dlon := tiDefinition(t, doc, "M", "dlon")
 	if got := mustJSON(t, dlon); got != `{"args":[360,144],"op":"/"}` {
 		t.Errorf("dlon = %s; want the un-folded AST division {\"args\":[360,144],\"op\":\"/\"}", got)
 	}
@@ -832,15 +854,13 @@ func TestTemplateImports_BodyCompositionDepthBoundIsExact(t *testing.T) {
                       "y": {"type": "unknown", "units": "1"}},
         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
                        "rhs": {"op": "-", "args": ["x"]}},
-                      {"lhs": "y",
-                       "rhs": {"op": "apply_expression_template",
-                               "args": [], "name": "c1", "bindings": {}}}]}}}`
+                      {"lhs": "y", "rhs": {"op": "apply_expression_template",
+                                           "args": [], "name": "c1", "bindings": {}}}]}}}`
 	v := decodeFixture(t, src)
 	if err := LowerExpressionTemplates(v); err != nil {
 		t.Fatalf("lowering failed: %v", err)
 	}
-	y := modelEquationRHS(t, v["models"].(map[string]any)["M"].(map[string]any))
-	if got := mustJSON(t, y["y"]); got != `{"args":[1,{"args":[2,3],"op":"+"}],"op":"+"}` {
+	if got := mustJSON(t, tiDefinition(t, v, "M", "y")); got != `{"args":[1,{"args":[2,3],"op":"+"}],"op":"+"}` {
 		t.Errorf("composed y = %s", got)
 	}
 
@@ -979,10 +999,10 @@ func TestTemplateImports_EffectiveOrderBeatsSortedNameFallback(t *testing.T) {
         "expression_template_imports": [
           {"ref": "./lib_first.esm"}, {"ref": "./lib_second.esm"}],
         "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5},
-                      "y": {"type": "unknown", "units": "1"}},
+                      "y": {"type": "unknown", "units": "1",
+                            "expression": {"op": "lowerme", "args": ["x"]}}},
         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                       "rhs": {"op": "-", "args": ["x"]}},
-                      {"lhs": "y", "rhs": {"op": "lowerme", "args": ["x"]}}]}}}`)
+                       "rhs": {"op": "-", "args": ["x"]}}]}}}`)
 	data, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -995,8 +1015,8 @@ func TestTemplateImports_EffectiveOrderBeatsSortedNameFallback(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	y := modelEquationRHS(t, doc["models"].(map[string]any)["M"].(map[string]any))
-	if got := mustJSON(t, y["y"]); got != `{"args":[2,"x"],"op":"*"}` {
+	y := doc["models"].(map[string]any)["M"].(map[string]any)["variables"].(map[string]any)["y"].(map[string]any)
+	if got := mustJSON(t, y["expression"]); got != `{"args":[2,"x"],"op":"*"}` {
 		t.Errorf("y = %s; want the FIRST import's rule to win the tie (2*x)", got)
 	}
 }
@@ -1009,7 +1029,7 @@ func TestTemplateImports_ZeroParameterTemplatesAreLegal(t *testing.T) {
       "models": {"M": {
         "expression_templates": {"two": {"params": [], "body": 2}},
         "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
-                      "y": {"type": "observed", "units": "1",
+                      "y": {"type": "unknown", "units": "1",
                             "expression": {"op": "apply_expression_template",
                                            "args": [], "name": "two", "bindings": {}}}},
         "equations": []}}}`
@@ -1023,43 +1043,26 @@ func TestTemplateImports_ZeroParameterTemplatesAreLegal(t *testing.T) {
 	}
 }
 
-// subsystemEquationRHS indexes a raw subsystem view's `equations` by the
-// bare-variable LHS each one defines, so a test can look up an observed
-// unknown's definition by name.
-//
-// A subsystem is held as an untyped map (Model.Subsystems is map[string]any),
-// so this walks the raw JSON shape rather than the decoded one.
-func subsystemEquationRHS(t *testing.T, sub map[string]any) map[string]any {
+// tiDefinition returns the RHS of the equation whose LHS is the bare name `v` in
+// a RAW document view — the defining expression of an observed unknown. esm
+// 1.0.0 removed the variable `expression` field, so every rewrite/substitution
+// site that used to live there is now an equation.
+func tiDefinition(t *testing.T, doc map[string]any, comp, v string) any {
 	t.Helper()
-	out := map[string]any{}
-	eqs, _ := sub["equations"].([]any)
-	for _, raw := range eqs {
-		eq, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if lhs, ok := eq["lhs"].(string); ok {
-			out[lhs] = eq["rhs"]
-		}
+	model, ok := doc["models"].(map[string]any)[comp].(map[string]any)
+	if !ok {
+		t.Fatalf("model %q not found", comp)
 	}
-	return out
-}
-
-// modelEquationRHS indexes a raw model view's `equations` by the bare-variable
-// LHS each one defines. Every observed unknown's definition is an equation in
-// esm 1.0.0, so a test that used to read `variables[v].expression` reads here.
-func modelEquationRHS(t *testing.T, model map[string]any) map[string]any {
-	t.Helper()
-	out := map[string]any{}
 	eqs, _ := model["equations"].([]any)
-	for _, raw := range eqs {
-		eq, ok := raw.(map[string]any)
+	for _, e := range eqs {
+		eq, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
-		if lhs, ok := eq["lhs"].(string); ok {
-			out[lhs] = eq["rhs"]
+		if lhs, ok := eq["lhs"].(string); ok && lhs == v {
+			return eq["rhs"]
 		}
 	}
-	return out
+	t.Fatalf("no defining equation for %s.%s", comp, v)
+	return nil
 }

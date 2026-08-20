@@ -70,7 +70,7 @@ end
 function _xeq_two_eq_fixture(fix::AbstractString)
     raw = JSON3.read(read(fix, String), Dict{String,Any})
     m = raw["models"]["Transport"]
-    m["variables"]["r"] = Dict("type" => "state", "units" => "1",
+    m["variables"]["r"] = Dict("type" => "unknown", "units" => "1",
                                "shape" => ["x", "y", "z"], "default" => 0.25)
     adv = m["equations"][1]["rhs"]
     m["equations"] = Any[m["equations"][1],
@@ -88,19 +88,21 @@ end
 # `resolved_obs` bodies, and the hoist must not change a bit.
 function _xeq_observed_arrayop_model(N)
     kuv = _op("*", _v("k0"), _op("+", _idx("u", _v("i")), _idx("v", _v("i"))))
-    w = ESM.ModelVariable(ESM.ObservedVariable;
-        expression=ESM.OpExpr("makearray", ESM.ASTExpr[];
-            regions=[[[1, N]]], values=ESM.ASTExpr[kuv]))
+    # esm 1.0.0 (esm-spec §6.3.1): `w` is a plain unknown; its `makearray` body
+    # is the bare-variable-LHS equation spliced in below.
+    wdef = ESM.OpExpr("makearray", ESM.ASTExpr[];
+        regions=[[[1, N]]], values=ESM.ASTExpr[kuv])
     vars = Dict(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
-        "v" => ESM.ModelVariable(ESM.StateVariable),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "v" => ESM.ModelVariable(ESM.UnknownVariable),
         "k0" => ESM.ModelVariable(ESM.ParameterVariable; default=2.0),
-        "w" => w)
+        "w" => ESM.ModelVariable(ESM.UnknownVariable))
     lap(x) = _op("+", _idx(x, _op("-", _v("i"), _i(1))),
                  _op("*", _n(-2.0), _idx(x, _v("i"))),
                  _idx(x, _op("+", _v("i"), _i(1))))
     wref = _op("index", _v("w"), _v("i"))
-    eqs = [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
+    eqs = [ESM.Equation(_v("w"), wdef),
+           ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                         _ao1(_op("+", lap("u"), wref), "i", 1, N)),
            ESM.Equation(_ao1(_Didx("v", _v("i")), "i", 1, N),
                         _ao1(_op("-", lap("v"), wref), "i", 1, N))]

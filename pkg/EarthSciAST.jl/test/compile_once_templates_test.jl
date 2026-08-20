@@ -204,7 +204,7 @@ end
                     ),
                 ),
                 "variables" => Dict(
-                    "q" => Dict("type" => "state", "units" => "1",
+                    "q" => Dict("type" => "unknown", "units" => "1",
                                 "shape" => ["x"], "default" => 1.5)),
                 "equations" => [Dict(
                     "lhs" => Dict("op" => "D", "args" => ["q"], "wrt" => "t"),
@@ -244,7 +244,7 @@ end
             "metadata" => Dict("name" => "orphan_ref"),
             "models" => Dict("T" => Dict(
                 "variables" => Dict(
-                    "a" => Dict("type" => "state", "units" => "1", "default" => 1.5)),
+                    "a" => Dict("type" => "unknown", "units" => "1", "default" => 1.5)),
                 "equations" => [Dict(
                     "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
                     "rhs" => Dict("op" => "apply_expression_template", "args" => [],
@@ -346,7 +346,7 @@ end
                     "variables" => Dict(
                         "T" => Dict("type" => "parameter", "units" => "K",
                                     "default" => 300.0),
-                        "a" => Dict("type" => "state", "units" => "1",
+                        "a" => Dict("type" => "unknown", "units" => "1",
                                     "default" => 1.0)),
                     "equations" => [Dict(
                         "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),

@@ -73,8 +73,10 @@ const _I_BODIES = [
 
 function _i_doc(N, M)
     vars = Dict{String,Any}(
-        "g" => Dict{String,Any}("type" => "observed", "shape" => Any["n"]),
-        "v" => Dict{String,Any}("type" => "observed", "shape" => Any["n"]),
+        # esm 1.0.0 (§5.4/§6.3.1): only `unknown` / `parameter` are declared; `g`
+        # and `v` are OBSERVED by virtue of their bare-LHS equations below.
+        "g" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"]),
+        "v" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"]),
         "k" => Dict{String,Any}("type" => "parameter", "default" => 0.25))
     eqs = Any[
         Dict{String,Any}("lhs" => "g",
@@ -84,7 +86,7 @@ function _i_doc(N, M)
     ]
     for m in 1:M
         nm = "c$m"
-        vars[nm] = Dict{String,Any}("type" => "state", "shape" => Any["n"])
+        vars[nm] = Dict{String,Any}("type" => "unknown", "shape" => Any["n"])
         body = _I_BODIES[m](_i_ix("g", "i"), _i_ix("v", "i"))
         push!(eqs, Dict{String,Any}(
             "lhs" => _i_ao(_i_Dt(_i_ix(nm, "i"))),

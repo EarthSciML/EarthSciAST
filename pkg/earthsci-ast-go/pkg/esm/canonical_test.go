@@ -75,7 +75,7 @@ func TestSaveEmitsIntegerFormForIntegralFloat(t *testing.T) {
 		Models: map[string]Model{
 			"m": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{LHS: "x", RHS: float64(1.0)}, // integral float → "1"
@@ -187,7 +187,7 @@ func TestSaveTypedFloatFields(t *testing.T) {
 		},
 		Models: map[string]Model{
 			"m": {
-				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+				Variables: map[string]ModelVariable{"x": {Type: "unknown"}},
 				Equations: []Equation{{LHS: "x", RHS: int64(0)}},
 			},
 		},
@@ -216,7 +216,7 @@ func TestSaveRejectsNonFiniteFloat(t *testing.T) {
 		},
 		Models: map[string]Model{
 			"m": {
-				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+				Variables: map[string]ModelVariable{"x": {Type: "unknown"}},
 				Equations: []Equation{{LHS: "x", RHS: math.NaN()}},
 			},
 		},

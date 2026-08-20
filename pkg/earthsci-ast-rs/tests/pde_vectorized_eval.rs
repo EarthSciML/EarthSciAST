@@ -771,37 +771,125 @@ fn vectorized_matches_oracle_on_every_legal_arity() {
 /// The `mask = [1, 0, 1]` / `filter: mask > 0.5` / `body = 10` document from
 /// audit finding R4, with a body that vectorizes.
 fn array_filter_json() -> String {
-    r#"{
- "esm": "1.0.0",
- "metadata": {"name": "array_filter"},
- "models": {
-  "ArrayFilter": {
-   "variables": {
-     "u":    {"type": "unknown", "shape": ["i"]},
-     "mask": {"type": "unknown", "shape": ["i"]}
-   },
-   "equations": [
-    {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-             "ranges": {"i": [1, 3]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "ranges": {"i": [1, 3]},
-             "filter": {"op": ">", "args": ["mask", 0.5]},
-             "expr": 10}
-    },
-    {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["mask", "i"]}], "wrt": "t"},
-             "ranges": {"i": [1, 3]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "ranges": {"i": [1, 3]},
-             "expr": 0}
-    }
-   ]
-  }
- }
-}"#
+    r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "array_filter"
+          },
+          "models": {
+            "ArrayFilter": {
+              "variables": {
+                "u": {
+                  "type": "unknown",
+                  "shape": [
+                    "i"
+                  ]
+                },
+                "mask": {
+                  "type": "unknown",
+                  "shape": [
+                    "i"
+                  ]
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "expr": {
+                      "op": "D",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ],
+                      "wrt": "t"
+                    },
+                    "ranges": {
+                      "i": [
+                        1,
+                        3
+                      ]
+                    }
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": [
+                        1,
+                        3
+                      ]
+                    },
+                    "filter": {
+                      "op": ">",
+                      "args": [
+                        "mask",
+                        0.5
+                      ]
+                    },
+                    "expr": 10
+                  }
+                },
+                {
+                  "lhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "expr": {
+                      "op": "D",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "mask",
+                            "i"
+                          ]
+                        }
+                      ],
+                      "wrt": "t"
+                    },
+                    "ranges": {
+                      "i": [
+                        1,
+                        3
+                      ]
+                    }
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": [
+                        1,
+                        3
+                      ]
+                    },
+                    "expr": 0
+                  }
+                }
+              ]
+            }
+          }
+        }
+        "#
     .to_string()
 }
 

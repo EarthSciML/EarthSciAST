@@ -5,35 +5,41 @@ use earthsci_ast::{load, validate};
 fn main() {
     // Test data with dimensional inconsistency
     let test_data_inconsistent = r#"
-    {
-        "esm": "1.0.0",
-        "metadata": {
+        {
+          "esm": "1.0.0",
+          "metadata": {
             "name": "Unit Validation Test - Inconsistent"
-        },
-        "models": {
+          },
+          "models": {
             "test_model": {
-                "variables": {
-                    "x": {
-                        "type": "unknown",
-                        "units": "m",
-                        "default": 1.0
-                    },
-                    "k": {
-                        "type": "parameter",
-                        "units": "kg",
-                        "default": 0.5
-                    }
+              "variables": {
+                "x": {
+                  "type": "unknown",
+                  "units": "m",
+                  "default": 1.0
                 },
-                "equations": [
-                    {
-                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                        "rhs": "k"
-                    }
-                ]
+                "k": {
+                  "type": "parameter",
+                  "units": "kg",
+                  "default": 0.5
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "x"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": "k"
+                }
+              ]
             }
+          }
         }
-    }
-    "#;
+        "#;
 
     println!("Testing dimensionally inconsistent model...");
     let esm_file = load(test_data_inconsistent).expect("Should parse successfully");
@@ -56,35 +62,47 @@ fn main() {
 
     // Test data with dimensional consistency
     let test_data_consistent = r#"
-    {
-        "esm": "1.0.0",
-        "metadata": {
+        {
+          "esm": "1.0.0",
+          "metadata": {
             "name": "Unit Validation Test - Consistent"
-        },
-        "models": {
+          },
+          "models": {
             "test_model": {
-                "variables": {
-                    "x": {
-                        "type": "unknown",
-                        "units": "m",
-                        "default": 1.0
-                    },
-                    "k": {
-                        "type": "parameter",
-                        "units": "1/s",
-                        "default": 0.5
-                    }
+              "variables": {
+                "x": {
+                  "type": "unknown",
+                  "units": "m",
+                  "default": 1.0
                 },
-                "equations": [
-                    {
-                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                        "rhs": {"op": "*", "args": ["k", "x"]}
-                    }
-                ]
+                "k": {
+                  "type": "parameter",
+                  "units": "1/s",
+                  "default": 0.5
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "x"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      "k",
+                      "x"
+                    ]
+                  }
+                }
+              ]
             }
+          }
         }
-    }
-    "#;
+        "#;
 
     println!("Testing dimensionally consistent model...");
     let esm_file = load(test_data_consistent).expect("Should parse successfully");

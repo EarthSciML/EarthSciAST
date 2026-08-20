@@ -22,7 +22,7 @@ from .esm_types import (
     ContinuousEvent,
     CouplingCouple,
     CouplingEntry,
-    DataLoader,
+    DataSource,
     DiscreteEvent,
     Domain,
     EsmFile,
@@ -34,6 +34,7 @@ from .esm_types import (
     ReactionSystem,
     VariableMapCoupling,
 )
+from .classification import inlined_unknowns
 from .expr_walk import any_child, iter_children, map_children, walk
 
 # ``_expand_range`` moved to the dependency-free leaf :mod:`.index_ranges` (so
@@ -134,6 +135,10 @@ class FlattenedVariable:
     """A single variable in the flattened system."""
 
     name: str  # dot-namespaced
+    # The DERIVED role (esm-spec §6.3.1), not a declared type: "state" (an ODE
+    # state or an algebraic unknown -- both are solved for), "observed" (an
+    # unknown a bare-variable-LHS equation defines, eliminable), "parameter", or
+    # "species" (a reaction-system state).
     type: str  # "state" | "parameter" | "observed" | "species"
     units: str | None = None
     default: Any = None
@@ -149,31 +154,34 @@ class FlattenedVariable:
 
 @dataclass
 class LoaderField:
-    """A data-loader variable lowered to a flattened observed array.
+    """A data-fed PARAMETER lowered to a flattened array input (esm-spec §8.5).
 
-    A ``DataLoader`` mounted as a model subsystem (RFC pure-io-data-loaders §4.3)
-    exposes its variables to the owning model under the dot-path
-    ``<owner>.<subkey>.<var>`` (e.g. ``ERA5.pl.u`` — owner model ``ERA5``,
-    subsystem key ``pl``, loader variable ``u``). Flatten lowers each such
-    variable to an ``observed`` :class:`FlattenedVariable` of that name AND
-    records this descriptor so the simulator can execute the loader at its
-    cadence and bind the resulting array into the RHS as a read-only input —
-    the loader symbol then resolves wherever a coupling edge substituted it
-    into a consumer's equation. Loader fields carry no defining equation
-    (their value is injected, not computed).
+    From 1.0.0 a data source is not a component: there is no loader subsystem
+    and no coupling edge. A model consumes a source by declaring a PARAMETER
+    whose ``update`` is ``{kind: "data", source: <key>, from: {file_variable}}``
+    — the parameter IS the loaded field, and it owns the units. Flatten records
+    this descriptor per such parameter so the simulator can execute the source at
+    its cadence and bind the resulting array into the RHS as a read-only input,
+    keyed by the parameter's namespaced name. A data-fed parameter carries no
+    defining equation: its value is injected, not computed.
 
-    ``cadence`` follows the loader-seeded refinement (§5.7.2, cadence.py): a
-    loader WITH a ``temporal`` block is time-varying → ``"discrete"`` (updated
-    in a discrete solver callback at its cadence); a loader WITHOUT ``temporal``
-    is static → ``"const"`` (loaded once before integration).
+    ``cadence`` follows the source-seeded refinement (CONFORMANCE_SPEC §5.7.2,
+    cadence.py): a source WITH a ``temporal`` block is time-varying →
+    ``"discrete"`` (refreshed in a discrete solver callback at its cadence); a
+    source WITHOUT ``temporal`` is non-time-varying → ``"const"`` (read once
+    before integration).
     """
 
-    name: str  # "ERA5.pl.u" — the observed-array symbol
-    owner: str  # "ERA5" — the owning model's namespaced prefix
-    subkey: str  # "pl" — the subsystem key the loader mounts under
-    var: str  # "u" — the loader variable name
-    loader: DataLoader  # the source loader (carries source/temporal)
+    name: str  # "Plume.wind" — the namespaced parameter symbol
+    owner: str  # "Plume" — the owning model's namespaced prefix
+    subkey: str  # "pl" — the `data_sources` key the parameter's update names
+    var: str  # "U" — the source-file variable the binding names
+    data_source: DataSource  # the source entry (carries kind/source/temporal)
     cadence: str  # "const" | "discrete"
+    # The binding's declared `unit_conversion` (§8.5), applied by the provider
+    # path when producing values in the parameter's declared units. None when the
+    # document declares none, which must cost nothing.
+    unit_conversion: Expr | None = None
 
 
 @dataclass
@@ -763,64 +771,112 @@ def _namespace_equations(
         )
 
 
-def _collect_model(name: str, model: Model, prefix: str | None = None) -> _ComponentSystem:
+def _data_source_fields(
+    model: Model, full_prefix: str, data_sources: dict[str, DataSource] | None
+) -> list[LoaderField]:
+    """Every data-fed parameter of ``model``, as a :class:`LoaderField`.
+
+    A parameter whose ``update`` is ``kind: "data"`` reads one ``file_variable``
+    of the named document-scoped source (esm-spec §8.5). Its cadence follows the
+    SOURCE, not its own declaration (CONFORMANCE_SPEC §5.7.2): a source WITH a
+    ``temporal`` block refreshes per record (``discrete``); one without is read
+    once (``const``). An unresolvable source keeps the ``discrete`` seed —
+    `data_source_undefined` is the validator's finding, not flatten's.
+    """
+    sources = data_sources or {}
+    fields: list[LoaderField] = []
+    for var_name, var in model.variables.items():
+        if var.type != "parameter" or var.update is None:
+            continue
+        rules = var.update if isinstance(var.update, list) else [var.update]
+        for rule in rules:
+            if rule.kind != "data" or rule.from_source is None:
+                continue
+            source = sources.get(rule.source)
+            if source is None:
+                continue
+            fields.append(
+                LoaderField(
+                    name=f"{full_prefix}.{var_name}",
+                    owner=full_prefix,
+                    subkey=rule.source,
+                    var=rule.from_source.file_variable,
+                    data_source=source,
+                    cadence="discrete" if source.temporal is not None else "const",
+                    unit_conversion=rule.from_source.unit_conversion,
+                )
+            )
+    return fields
+
+
+def _collect_model(
+    name: str,
+    model: Model,
+    prefix: str | None = None,
+    data_sources: dict[str, DataSource] | None = None,
+) -> _ComponentSystem:
     """Collect a Model (recursively, including subsystems) into a _ComponentSystem."""
     full_prefix = prefix or name
     component = _ComponentSystem(name=full_prefix)
 
+    # The variable's role comes from the §6.3.1 classification, NOT from a
+    # declared type. `observed` is the INLINED form specifically -- an unknown a
+    # bare-variable LHS defines, which is substituted into its consumers. Every
+    # other unknown is SOLVED FOR and lands in `state_vars`: an ODE state, an
+    # algebraic unknown, and an ARRAYED definition (`y[i] ~ f(i)`) alike. The
+    # arrayed one is observed by §6.3.1 and its cadence resolves through its RHS,
+    # but it materializes into a buffer its consumers index rather than being
+    # inlined -- exactly the 0.x `state` + index-LHS shape.
+    observed = set(inlined_unknowns(model))
+
     for var_name, var in model.variables.items():
         namespaced = f"{full_prefix}.{var_name}"
+        if var.type == "parameter":
+            role = "parameter"
+        elif var.type != "unknown":
+            # Fail closed on a retired 0.x type rather than silently filing it
+            # with the unknowns: `state` / `observed` / `brownian` / `discrete`
+            # are gone (esm-spec §6.3), and a document still carrying one is a
+            # document this binding must not pretend to understand.
+            raise FlattenError(
+                f"variable '{full_prefix}.{var_name}' declares type "
+                f"'{var.type}', which esm 1.0.0 removed; the declared types are "
+                f"'unknown' and 'parameter' (esm-spec §6.3)"
+            )
+        elif var_name in observed:
+            role = "observed"
+        else:
+            role = "state"
         flat_var = FlattenedVariable(
             name=namespaced,
-            type=var.type,
+            type=role,
             units=var.units,
             default=var.default,
             description=var.description,
             source_system=full_prefix,
             shape=list(var.shape) if var.shape else None,
         )
-        if var.type == "state":
+        if role == "state":
             component.state_vars[namespaced] = flat_var
-        elif var.type == "parameter":
+        elif role == "parameter":
             component.parameters[namespaced] = flat_var
-        elif var.type == "observed":
+        else:
             component.observed[namespaced] = flat_var
 
     # _var is a placeholder used by operator_compose; never namespace it.
     leave_alone = {"t", "_var"}
-    # Subsystem keys mounted on this model (data loaders like `raw`, or nested
-    # models): references rooted at one of these (`raw.fuel_model`) are
-    # subsystem-LOCAL and must be qualified with the model prefix to match the
-    # lowered LoaderField / subsystem name (see _namespace_expr).
+    # Subsystem keys mounted on this model (nested models): references rooted at
+    # one of these are subsystem-LOCAL and must be qualified with the model
+    # prefix to match the lowered subsystem name (see _namespace_expr).
     sub_keys = set(model.subsystems.keys())
     # The component's own declared names — the gate for namespacing the
     # plain-string references a ``join`` clause carries (§5.5.6). Mirrors Julia
     # ``_collect_model!``'s ``local_names`` and Rust ``build_model_block``'s
     # ``locals``.
     locals_ = set(model.variables.keys()) | sub_keys
-    # Observed variables that carry an explicit `expression` define an
-    # algebraic relation `name = expression`. Emit them as namespaced
-    # equations so simulate() and codegen can inline them. Without this
-    # step the body is dropped at flatten time, leaving any reference to
-    # the observed name as an unbound free symbol downstream.
-    for var_name, var in model.variables.items():
-        if var.type != "observed" or var.expression is None:
-            continue
-        namespaced = f"{full_prefix}.{var_name}"
-        ns_rhs = _namespace_expr(
-            var.expression,
-            full_prefix,
-            leave_alone=leave_alone,
-            subsystem_keys=sub_keys,
-            locals_=locals_,
-        )
-        component.equations.append(
-            FlattenedEquation(
-                lhs=namespaced,
-                rhs=ns_rhs,
-                source_system=full_prefix,
-            )
-        )
+    # An observed unknown's defining relation is now an ORDINARY equation with a
+    # bare-variable LHS, so the separate `variables[v].expression` lowering that
+    # used to run here is gone: `_namespace_equations` below carries it.
     _namespace_equations(
         model.equations,
         component,
@@ -830,41 +886,13 @@ def _collect_model(name: str, model: Model, prefix: str | None = None) -> _Compo
         locals_=locals_,
     )
 
+    # Data-fed parameters (esm-spec §8.5): the simulator executes each source at
+    # its cadence and binds the array under the parameter's namespaced name.
+    component.loader_fields.extend(_data_source_fields(model, full_prefix, data_sources))
+
     for sub_name, sub_model in model.subsystems.items():
-        # A data-loader subsystem (RFC pure-io-data-loaders §4.3) exposes its
-        # variables to the owning model under the dot-path
-        # ``<owner>.<subkey>.<var>``. Lower each loader variable to an observed
-        # ARRAY of that name and record a LoaderField descriptor; the loader has
-        # no defining equation (its array value is injected at the RHS boundary
-        # by the simulator, executed at the loader's cadence), so the observed
-        # placeholder resolves wherever a coupling edge substituted the producer
-        # symbol into a consumer equation. ESS has no array-valued parameter
-        # path, so the observed-as-array vehicle is how loader outputs reach a
-        # consumer (LANDFIRE / USGS3DEP close the same way via re-exposure).
-        if isinstance(sub_model, DataLoader):
-            cadence = "discrete" if sub_model.temporal is not None else "const"
-            for var_name, loader_var in sub_model.variables.items():
-                namespaced = f"{full_prefix}.{sub_name}.{var_name}"
-                component.observed[namespaced] = FlattenedVariable(
-                    name=namespaced,
-                    type="observed",
-                    units=loader_var.units,
-                    description=loader_var.description,
-                    source_system=f"{full_prefix}.{sub_name}",
-                )
-                component.loader_fields.append(
-                    LoaderField(
-                        name=namespaced,
-                        owner=full_prefix,
-                        subkey=sub_name,
-                        var=var_name,
-                        loader=sub_model,
-                        cadence=cadence,
-                    )
-                )
-            continue
         sub_prefix = f"{full_prefix}.{sub_name}"
-        sub_component = _collect_model(sub_name, sub_model, sub_prefix)
+        sub_component = _collect_model(sub_name, sub_model, sub_prefix, data_sources)
         component.merge(sub_component)
 
     return component
@@ -1195,7 +1223,7 @@ def _apply_variable_map(
     ``additive``, ``multiplicative``) the target is left in the parameter list;
     we still substitute so the equation set references the canonical name.
 
-    ``loader_names`` is the set of top-level ``data_loaders`` keys. When a
+    ``loader_names`` is the set of top-level ``data_sources`` keys. When a
     ``param_to_var`` binds a LOADED field (``from_var``'s owning system is a data
     loader) onto a GRID-SHAPED consumer parameter (``to_var`` carries a non-scalar
     ``shape``), the shape is transferred to the loader-qualified ``from_var`` name
@@ -1380,8 +1408,12 @@ def _collect_components(
     """
     components: OrderedDict[str, _ComponentSystem] = OrderedDict()
     source_systems: list[str] = []
+    # The document-scoped ingest registry (esm-spec §8), threaded down so a
+    # data-fed parameter's `update.source` resolves and its cadence follows the
+    # SOURCE's `temporal` block.
+    doc_data_sources = getattr(esm_file, "data_sources", None) or {}
     for name, model in esm_file.models.items():
-        components[name] = _collect_model(name, model)
+        components[name] = _collect_model(name, model, data_sources=doc_data_sources)
         source_systems.append(name)
     for name, rs in esm_file.reaction_systems.items():
         components[name] = _collect_reaction_system(name, rs)
@@ -1427,9 +1459,9 @@ def _apply_couplings(
     for cp in couple_entries:
         _apply_couple(components, cp)
 
-    # Top-level data-loader names — used to recognize a ``param_to_var`` whose
-    # producer is a LOADED field, so a grid-shaped binding keeps its shape.
-    loader_names: set[str] = set(getattr(esm_file, "data_loaders", None) or {})
+    # Top-level data-source names — used to recognize a ``param_to_var`` whose
+    # producer is a source-fed field, so a grid-shaped binding keeps its shape.
+    loader_names: set[str] = set(getattr(esm_file, "data_sources", None) or {})
     for vm in var_map_entries:
         _apply_variable_map(components, vm, loader_names)
 

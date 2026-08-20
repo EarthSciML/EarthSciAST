@@ -40,7 +40,8 @@ func TestArrayedVarsFixtures(t *testing.T) {
 				// An empty-list shape is semantically equivalent to omission
 				// (both mean scalar). Bindings may normalize one to the
 				// other on round-trip; we only require zero dimensions.
-				assert.Len(t, v.Shape, 0, "explicit empty shape must parse as zero dimensions")
+				assert.NotNil(t, v.Shape, "explicit empty shape must be RETAINED, not folded into omission")
+				assert.Len(t, v.Dims(), 0, "explicit empty shape must parse as zero dimensions")
 				assert.Equal(t, "", v.Location)
 			},
 		},
@@ -49,7 +50,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 			model: "Diffusion1D",
 			check: func(t *testing.T, esm *ESMFile) {
 				v := esm.Models["Diffusion1D"].Variables["c"]
-				assert.Equal(t, []string{"x"}, v.Shape)
+				assert.Equal(t, []string{"x"}, v.Dims())
 				assert.Equal(t, "cell_center", v.Location)
 				d := esm.Models["Diffusion1D"].Variables["D"]
 				assert.Nil(t, d.Shape)
@@ -61,10 +62,10 @@ func TestArrayedVarsFixtures(t *testing.T) {
 			model: "StaggeredFlow2D",
 			check: func(t *testing.T, esm *ESMFile) {
 				p := esm.Models["StaggeredFlow2D"].Variables["p"]
-				assert.Equal(t, []string{"x", "y"}, p.Shape)
+				assert.Equal(t, []string{"x", "y"}, p.Dims())
 				assert.Equal(t, "cell_center", p.Location)
 				u := esm.Models["StaggeredFlow2D"].Variables["u"]
-				assert.Equal(t, []string{"x", "y"}, u.Shape)
+				assert.Equal(t, []string{"x", "y"}, u.Dims())
 				assert.Equal(t, "x_face", u.Location)
 			},
 		},
@@ -73,7 +74,7 @@ func TestArrayedVarsFixtures(t *testing.T) {
 			model: "VertexScalar2D",
 			check: func(t *testing.T, esm *ESMFile) {
 				phi := esm.Models["VertexScalar2D"].Variables["phi"]
-				assert.Equal(t, []string{"x", "y"}, phi.Shape)
+				assert.Equal(t, []string{"x", "y"}, phi.Dims())
 				assert.Equal(t, "vertex", phi.Location)
 			},
 		},
@@ -106,11 +107,13 @@ func TestArrayedVarsFixtures(t *testing.T) {
 			for name, ov := range orig {
 				rv, ok := rt[name]
 				require.True(t, ok, "variable %s missing after round-trip", name)
-				if len(ov.Shape) == 0 {
-					assert.Len(t, rv.Shape, 0, "scalar shape mismatch on %s", name)
-				} else {
-					assert.Equal(t, ov.Shape, rv.Shape, "shape mismatch on %s", name)
-				}
+				// esm 1.0.0 makes the DISTINCTION load-bearing: an absent
+				// `shape` and an authored `"shape": []` are both scalar, but a
+				// schedule/data/remesh parameter MUST carry the key, so the
+				// round-trip has to preserve which one was written.
+				assert.Equal(t, ov.Shape == nil, rv.Shape == nil,
+					"shape presence changed on %s", name)
+				assert.Equal(t, ov.Dims(), rv.Dims(), "shape mismatch on %s", name)
 				assert.Equal(t, ov.Location, rv.Location, "location mismatch on %s", name)
 			}
 		})

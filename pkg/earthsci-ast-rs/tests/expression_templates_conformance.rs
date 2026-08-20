@@ -14,6 +14,15 @@ use earthsci_ast::lower_expression_templates::{
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+/// An observed unknown's defining expression: from esm 1.0.0 that is the RHS of
+/// the equation whose LHS is the bare variable (esm-spec §6.3.1), not a field
+/// on the variable.
+fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    earthsci_ast::classification::observed_definition_json(model, name)
+        .unwrap_or_else(|| panic!("{name} has no defining equation"))
+}
+
+
 mod common;
 
 /// Repo-root-relative path into the shared conformance fixture directory.
@@ -49,13 +58,14 @@ fn expanded_vars(fixture: &str) -> Value {
 #[test]
 fn godunov_compound_rule_beats_inner_derivative() {
     let out = lower_fixture("godunov_beats_inner_deriv").expect("lowering must converge");
-    let got = &out["models"]["m"]["variables"];
+    let model = &out["models"]["m"];
+    let got = &model["variables"];
     assert_eq!(*got, expanded_vars("godunov_beats_inner_deriv"));
 
     // Guard the rewritten EXPRESSION subtree only (the variables dict still
     // declares an `inv_dx` parameter): the compound rule's product appears; the
     // per-derivative rule's `inv_dx` product does not.
-    let expr_json = got["grad_mag"]["expression"].to_string();
+    let expr_json = obs_def(model, "grad_mag").to_string();
     assert!(
         !expr_json.contains("inv_dx"),
         "per-derivative rule must not have fired: {expr_json}"
@@ -73,10 +83,10 @@ fn godunov_compound_rule_beats_inner_derivative() {
 #[test]
 fn nested_derivative_fixpoint_converges_across_passes() {
     let out = lower_fixture("fixpoint_nested_deriv").expect("lowering must converge");
-    let got = &out["models"]["m"]["variables"];
-    assert_eq!(*got, expanded_vars("fixpoint_nested_deriv"));
+    let model = &out["models"]["m"];
+    assert_eq!(model["variables"], expanded_vars("fixpoint_nested_deriv"));
 
-    let expr_json = got["lap"]["expression"].to_string();
+    let expr_json = obs_def(model, "lap").to_string();
     assert!(
         !expr_json.contains("laplacian"),
         "laplacian sugar must be gone: {expr_json}"
@@ -153,29 +163,72 @@ fn unlowered_integral_loads_but_is_gated_before_evaluation() {
 #[test]
 fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
     let src = r#"
-    {
-      "esm": "1.0.0",
-      "metadata": {"name": "attrs_match", "authors": ["t"]},
-      "models": {"m": {
-        "variables": {
-          "u": {"type": "unknown", "units": "1", "default": 0.0},
-          "y": {"type": "observed", "units": "1",
-            "expression": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
-        },
-        "equations": [],
-        "expression_templates": {
-          "lower_custom": {
-            "params": ["f", "g"],
-            "match": {"op": "custom_scheme", "args": ["f"], "attrs": {"gamma": "g"}},
-            "body": {"op": "*", "args": ["g", "f"]}
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "attrs_match",
+            "authors": [
+              "t"
+            ]
+          },
+          "models": {
+            "m": {
+              "variables": {
+                "u": {
+                  "type": "unknown",
+                  "units": "1",
+                  "default": 0.0
+                },
+                "y": {
+                  "type": "unknown",
+                  "units": "1"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": "y",
+                  "rhs": {
+                    "op": "custom_scheme",
+                    "args": [
+                      "u"
+                    ],
+                    "attrs": {
+                      "gamma": 1.4
+                    }
+                  }
+                }
+              ],
+              "expression_templates": {
+                "lower_custom": {
+                  "params": [
+                    "f",
+                    "g"
+                  ],
+                  "match": {
+                    "op": "custom_scheme",
+                    "args": [
+                      "f"
+                    ],
+                    "attrs": {
+                      "gamma": "g"
+                    }
+                  },
+                  "body": {
+                    "op": "*",
+                    "args": [
+                      "g",
+                      "f"
+                    ]
+                  }
+                }
+              }
+            }
           }
         }
-      }}
-    }
-    "#;
+        "#;
     let mut v: Value = serde_json::from_str(src).expect("parse attrs source");
     lower_expression_templates(&mut v).expect("lowering must converge");
-    let expr = &v["models"]["m"]["variables"]["y"]["expression"];
+    let expr = &(*earthsci_ast::classification::observed_definition_json(&v["models"]["m"], "y").expect("y defining equation"));
     assert_eq!(*expr, json!({"op": "*", "args": [1.4, "u"]}));
 }
 
@@ -189,12 +242,9 @@ fn scalar_field_param_conformance_fixture_matches_expanded() {
         .expect("read expanded.esm");
     let expanded: Value = serde_json::from_str(&src).expect("parse expanded.esm");
     assert_eq!(out["models"], expanded["models"]);
-    let vars = &out["models"]["Overlap"]["variables"];
-    assert_eq!(vars["area_planar"]["expression"]["manifold"], "planar");
-    assert_eq!(
-        vars["area_spherical"]["expression"]["manifold"],
-        "spherical"
-    );
+    let model = &out["models"]["Overlap"];
+    assert_eq!(obs_def(model, "area_planar")["manifold"], "planar");
+    assert_eq!(obs_def(model, "area_spherical")["manifold"], "spherical");
 }
 
 // ---------------------------------------------------------------------------

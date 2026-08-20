@@ -1312,13 +1312,11 @@ func summarizeModels(b *strings.Builder, esm *ESMFile) {
 	b.WriteString("\n")
 }
 
-// summarizeDataSources writes the "Data Sources" section, sources sorted.
-//
-// A source no longer lists the variables it provides -- that map is gone in
-// 1.0.0 -- so the line reports what a source now IS: its structural kind, its
-// url_template, and whether it is time-varying, which is the one property of a
-// source that changes how a consuming parameter behaves (CONFORMANCE_SPEC
-// 5.7.2).
+// summarizeDataSources writes the "Data Sources" section (sources sorted by
+// name). A source exposes no variables from esm 1.0.0 — the consuming PARAMETER
+// carries the binding — so what it can usefully report is its structural kind
+// and whether it is time-varying, which is also what decides the cadence of
+// every parameter drawn from it (CONFORMANCE_SPEC §5.7.2).
 func summarizeDataSources(b *strings.Builder, esm *ESMFile) {
 	if len(esm.DataSources) == 0 {
 		return
@@ -1326,12 +1324,11 @@ func summarizeDataSources(b *strings.Builder, esm *ESMFile) {
 	b.WriteString("  Data Sources:\n")
 	for _, name := range sortedKeys(esm.DataSources) {
 		src := esm.DataSources[name]
-		temporal := "static"
-		if src.HasTemporal() {
-			temporal = "temporal"
+		cadence := "static"
+		if src.IsTimeVarying() {
+			cadence = "temporal"
 		}
-		fmt.Fprintf(b, "    %s: %s, %s (%s)\n", name,
-			src.Kind, temporal, src.Source.URLTemplate)
+		fmt.Fprintf(b, "    %s (%s, %s)\n", name, src.Kind, cadence)
 	}
 	b.WriteString("\n")
 }

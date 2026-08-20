@@ -18,8 +18,8 @@ func TestComponentGraphFromFile(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown, Units: stringPtr("m")},
-					"y": {Type: VarTypeParameter, Units: stringPtr("s")},
+					"x": {Type: "unknown", Units: stringPtr("m")},
+					"y": {Type: "parameter", Units: stringPtr("s")},
 				},
 				Equations: []Equation{
 					{
@@ -55,6 +55,10 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 			},
 		},
+		// A `data_sources` entry is NOT a graph node from esm 1.0.0: it exposes no
+		// variables, cannot be a coupling endpoint, and so has no edges to draw
+		// (esm-spec §8, CONFORMANCE_SPEC §3.4). It is declared here precisely so
+		// the test asserts that it contributes NOTHING to the component graph.
 		DataSources: map[string]DataSource{
 			"TestSource": {
 				Kind: "grid",
@@ -63,11 +67,13 @@ func TestComponentGraphFromFile(t *testing.T) {
 				},
 			},
 		},
-		// A data source is NOT a coupling endpoint in esm 1.0.0, so the
-		// `variable_map` that used to wire TestLoader.temp into the model is gone.
-		// The model reaches the source through a parameter's `update.source`
-		// instead, which is a declaration rather than an edge.
 		Coupling: []CouplingEntry{
+			VariableMapCoupling{
+				Type:      "variable_map",
+				From:      "TestReactions.A",
+				To:        "TestModel.y",
+				Transform: "identity",
+			},
 			OperatorComposeCoupling{
 				Type:    "operator_compose",
 				Systems: [2]string{"TestModel", "TestReactions"},
@@ -77,9 +83,10 @@ func TestComponentGraphFromFile(t *testing.T) {
 
 	graph := ComponentGraphFromFile(file)
 
-	// Check nodes
-	if len(graph.Nodes) != 3 {
-		t.Errorf("Expected 3 nodes, got %d", len(graph.Nodes))
+	// Two component nodes: the model and the reaction system. The data source is
+	// not one.
+	if len(graph.Nodes) != 2 {
+		t.Errorf("Expected 2 nodes, got %d", len(graph.Nodes))
 	}
 
 	// Check that we have the right node types
@@ -94,15 +101,16 @@ func TestComponentGraphFromFile(t *testing.T) {
 	if nodeTypes["reaction_system"] != 1 {
 		t.Errorf("Expected 1 reaction_system node, got %d", nodeTypes["reaction_system"])
 	}
-	// A source is still a NODE -- a reader wants to see what the document
-	// ingests -- but it has no coupling edges.
-	if nodeTypes["data_source"] != 1 {
-		t.Errorf("Expected 1 data_source node, got %d", nodeTypes["data_source"])
+	for _, legacy := range []string{"data_loader", "data_source"} {
+		if nodeTypes[legacy] != 0 {
+			t.Errorf("a data source must contribute no graph node, got %d %s nodes",
+				nodeTypes[legacy], legacy)
+		}
 	}
 
 	// Check edges
-	if len(graph.Edges) != 1 {
-		t.Errorf("Expected 1 edge, got %d", len(graph.Edges))
+	if len(graph.Edges) != 2 {
+		t.Errorf("Expected 2 edges, got %d", len(graph.Edges))
 	}
 
 	// Check edge types
@@ -111,8 +119,51 @@ func TestComponentGraphFromFile(t *testing.T) {
 		edgeTypes[edge.Data.Type]++
 	}
 
+	if edgeTypes["variable_map"] != 1 {
+		t.Errorf("Expected 1 variable_map edge, got %d", edgeTypes["variable_map"])
+	}
 	if edgeTypes["operator_compose"] != 1 {
 		t.Errorf("Expected 1 operator_compose edge, got %d", edgeTypes["operator_compose"])
+	}
+}
+
+// A variable node is labelled with its DERIVED role (esm-spec §6.3.1), not with
+// the declared type — which, with only `unknown` and `parameter` left, would say
+// nothing about how the node behaves.
+func TestExpressionGraphNodeKindsAreDerivedRoles(t *testing.T) {
+	model := Model{
+		Variables: map[string]ModelVariable{
+			"x":   {Type: VarTypeUnknown},
+			"obs": {Type: VarTypeUnknown},
+			"alg": {Type: VarTypeUnknown},
+			"k":   {Type: VarTypeParameter},
+			"w": {Type: VarTypeParameter,
+				Distribution: &Distribution{Kind: DistributionNormal, Mean: 0.0, Std: 1.0},
+				Update:       ParameterUpdate{Kind: UpdateKindWiener}},
+			"s": {Type: VarTypeParameter,
+				Distribution: &Distribution{Kind: DistributionUniform, Low: 0.0, High: 1.0}},
+			"d": {Type: VarTypeParameter,
+				Update: ParameterUpdate{Kind: UpdateKindCondition, When: true, Expression: 1.0}},
+		},
+		Equations: []Equation{
+			{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: stringPtr("t")}, RHS: "k"},
+			{LHS: "obs", RHS: ExprNode{Op: "*", Args: []any{2.0, "x"}}},
+			{LHS: ExprNode{Op: "*", Args: []any{"alg", "alg"}}, RHS: "k"},
+		},
+	}
+	graph := ExpressionGraphFromModel(model, "S")
+	got := map[string]string{}
+	for _, n := range graph.Nodes {
+		got[n.Name] = n.Kind
+	}
+	want := map[string]string{
+		"x": RoleODEState, "obs": RoleObserved, "alg": RoleAlgebraic,
+		"k": RoleConstant, "w": RoleBrownian, "s": RoleSampled, "d": RoleDiscrete,
+	}
+	for name, kind := range want {
+		if got[name] != kind {
+			t.Errorf("node %q kind = %q, want %q", name, got[name], kind)
+		}
 	}
 }
 
@@ -120,9 +171,9 @@ func TestComponentGraphFromFile(t *testing.T) {
 func TestExpressionGraphFromModel(t *testing.T) {
 	model := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown, Units: stringPtr("m")},
-			"y": {Type: VarTypeParameter, Units: stringPtr("m/s")},
-			"z": {Type: VarTypeUnknown},
+			"x": {Type: "unknown", Units: stringPtr("m")},
+			"y": {Type: "parameter", Units: stringPtr("m/s")},
+			"z": {Type: "unknown"},
 		},
 		Equations: []Equation{
 			{
@@ -169,9 +220,9 @@ func TestExpressionGraphFromModel(t *testing.T) {
 func TestExpressionGraphEquationIndex(t *testing.T) {
 	model := Model{
 		Variables: map[string]ModelVariable{
-			"x": {Type: VarTypeUnknown},
-			"y": {Type: VarTypeParameter},
-			"z": {Type: VarTypeUnknown},
+			"x": {Type: "unknown"},
+			"y": {Type: "parameter"},
+			"z": {Type: "unknown"},
 		},
 		Equations: []Equation{
 			{

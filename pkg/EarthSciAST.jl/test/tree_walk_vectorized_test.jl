@@ -27,7 +27,7 @@ _bitsame(got, ref) = (got === ref) || (isnan(got) && isnan(ref))
 # field-ic fast path (indices bound as params, compiled a SINGLE time) against the
 # per-cell resolve+compile fallback. Mirrors the wildland-fire InitialPerimeter IC.
 function _fieldic_model(N)
-    vars = Dict("psi" => ModelVariable(StateVariable; shape=["i", "j"]))
+    vars = Dict("psi" => ModelVariable(UnknownVariable; shape=["i", "j"]))
     dref = _op("D", _idx("psi", _v("i"), _v("j")); wrt="t")
     drhs = _op("neg", _idx("psi", _v("i"), _v("j")))
     dlhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i", "j"],
@@ -85,8 +85,8 @@ end
 
     @testset "contraction (reduction) arrayop vectorizes + stays correct" begin
         # D(y[i]) = Σ_{k=1..3} A[i,k]·x[k]  (sum_product semiring)
-        vars = Dict("y" => ModelVariable(StateVariable),
-                    "x" => ModelVariable(StateVariable))
+        vars = Dict("y" => ModelVariable(UnknownVariable),
+                    "x" => ModelVariable(UnknownVariable))
         body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
         rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
                      ranges=Dict("i" => [1, 2], "k" => [1, 3]), reduce="+")
@@ -124,7 +124,7 @@ end
                 # linear/bilinear take (table, axis, x); searchsorted takes (x, xs)
                 error("run_unary_interp only models the (x, const) shape")
             end
-            m = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
             ics = Dict("u[$i]" => queries[i] for i in 1:N)
@@ -136,7 +136,7 @@ end
         function run_linear(table, axis, queries)
             N = length(queries)
             body = _op("fn", _const(table), _const(axis), _idx("u", _v("i")); name="interp.linear")
-            m = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
             ics = Dict("u[$i]" => queries[i] for i in 1:N)
@@ -184,7 +184,7 @@ end
             N = length(xqs)
             body = _op("fn", _const(table), _const(ax), _const(ay),
                        _idx("u", _v("i")), _v("cz"); name="interp.bilinear")
-            m = ESM.Model(Dict("u" => ModelVariable(StateVariable),
+            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable),
                                "cz" => ModelVariable(ParameterVariable; default=yval)),
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
@@ -249,7 +249,7 @@ end
         @testset "end-to-end: folded constant-query arrayop is correct + 0-alloc" begin
             N = 8
             body = _op("fn", _const(table), _const(axis), _n(2.0); name="interp.linear")
-            m = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+            m = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                           [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                         _ao1(body, "i", 1, N))])
             ics = Dict("u[$k]" => 0.0 for k in 1:N)
@@ -450,7 +450,7 @@ end
         ranges=contract ? Dict("i" => [1, N], "k" => [1, 1]) : Dict("i" => [1, N]))
 
     function _build_du(rhs; disable_stencil::Bool)
-        model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+        model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                           [ESM.Equation(lhs, rhs)])
         ics = Dict("u[$k]" => QUERY for k in 1:N)
         withenv("ESS_STENCIL_DISABLE" => (disable_stencil ? "1" : nothing)) do
@@ -528,7 +528,7 @@ end
                 expr_body=_Didx("u", _v("i")), ranges=Dict("i" => [1, N]))
             r = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
                 expr_body=_op("index", mk, _v("i")), ranges=Dict("i" => [1, N]))
-            model = ESM.Model(Dict("u" => ModelVariable(StateVariable)),
+            model = ESM.Model(Dict("u" => ModelVariable(UnknownVariable)),
                               [ESM.Equation(l, r)])
             ics = Dict("u[$k]" => QUERY for k in 1:N)
             withenv("ESS_STENCIL_DISABLE" => (disable ? "1" : nothing)) do

@@ -61,7 +61,7 @@ _const(val) = EarthSciAST.OpExpr("const",
 # Shared by tree_walk_vectorized_test.jl and tree_walk_allocation_test.jl.
 function _stencil_model(N)
     vars = Dict("u" => EarthSciAST.ModelVariable(
-        EarthSciAST.StateVariable))
+        EarthSciAST.UnknownVariable))
     body = _op("+",
         _idx("u", _op("-", _v("i"), _i(1))),
         _op("*", _n(-2.0), _idx("u", _v("i"))),

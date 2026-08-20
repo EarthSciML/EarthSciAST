@@ -33,8 +33,8 @@ _bits(v::AbstractVector{Float64}) = reinterpret(UInt64, v)
 # D(c[i]) = ⊕_{j ⋚ i} body(j), with `u` a state so the RHS reads real values.
 # `u` is held fixed (D(u)=0) so the equation under test owns `c` alone.
 function _scan_model(n::Int; filt="<=", reduce="+", body=nothing)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable),
-                "c" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                "c" => ESM.ModelVariable(ESM.UnknownVariable))
     b = body === nothing ? _idx("u", _v("j")) : body
     rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=b,
         ranges=Dict("i" => [1, n], "j" => [1, n]), reduce=reduce,
@@ -50,8 +50,8 @@ end
 # axis, which is what makes the last node's term nonexistent — the case the
 # term build must not be asked to construct.
 function _scan_model_staggered(n::Int; filt="<", reduce="+")
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable),
-                "c" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                "c" => ESM.ModelVariable(ESM.UnknownVariable))
     rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
         expr_body=_idx("u", _v("j")),
         ranges=Dict("i" => [1, n + 1], "j" => [1, n]), reduce=reduce,
@@ -130,8 +130,8 @@ end
     @testset "mirrored spelling `i >= j` is the same forward scan" begin
         n = 16
         m = _scan_model(n)                                   # j <= i
-        vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable),
-                    "c" => ESM.ModelVariable(ESM.StateVariable))
+        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                    "c" => ESM.ModelVariable(ESM.UnknownVariable))
         rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
             expr_body=_idx("u", _v("j")), ranges=Dict("i" => [1, n], "j" => [1, n]),
             reduce="+", filter=_op(">=", _v("i"), _v("j")))   # i >= j
@@ -225,8 +225,8 @@ end
         # Terms offset from the FRONT (`j` over 2..n+1) are not a prefix
         # recurrence on this axis at all.
         n = 8
-        vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable),
-                    "c" => ESM.ModelVariable(ESM.StateVariable))
+        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                    "c" => ESM.ModelVariable(ESM.UnknownVariable))
         rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"],
             expr_body=_idx("u", _v("j")),
             ranges=Dict("i" => [1, n + 1], "j" => [2, n + 1]), reduce="+",
@@ -313,7 +313,7 @@ end
 
     @testset "a model with no prefix reduction carries no folds" begin
         n = 8
-        vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
         plain = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n),
                                               _ao1(_op("-", _idx("u", _v("i"))), "i", 1, n))])
         _f, _u0, _p, _t, _vm, diag = ESM._build_evaluator_impl(plain)

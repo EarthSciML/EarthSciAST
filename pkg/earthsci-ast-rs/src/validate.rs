@@ -90,21 +90,22 @@ pub enum StructuralErrorCode {
     UndefinedParameter,
     /// Reaction with both substrates and products null
     NullReaction,
-    /// An event `affects` LHS names a parameter; events affect unknowns only
-    /// (esm-spec §5.4). The 1.0.0 replacement for `invalid_discrete_param`.
+    /// An event `affects` LHS names a PARAMETER (esm-spec §5.4/§5.5): esm
+    /// 1.0.0 events may affect UNKNOWNS only, and a parameter that changes
+    /// during a run declares its own `update` block instead.
     EventAffectsParameter,
-    /// A parameter's `update.source` names no declared `data_sources` entry.
-    DataSourceUndefined,
     /// Scoped reference cannot be resolved
     UnresolvedScopedRef,
     /// Variable in event is not declared
     EventVarUndeclared,
     /// Operator referenced but not declared
     UndefinedOperator,
+    /// A parameter `update` of kind `data` names a `data_sources` entry the
+    /// document does not declare (esm-spec §8.5).
+    DataSourceUndefined,
     /// System referenced but not declared
     UndefinedSystem,
-    /// Data loader variable not provided
-    DataSourceBindingMissing,
+
     /// Operator variable not available
     OperatorVariableMissing,
     /// Circular dependency detected
@@ -173,12 +174,11 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UndefinedParameter => "undefined_parameter",
             Self::NullReaction => "null_reaction",
             Self::EventAffectsParameter => "event_affects_parameter",
-            Self::DataSourceUndefined => "data_source_undefined",
             Self::UnresolvedScopedRef => "unresolved_scoped_ref",
             Self::EventVarUndeclared => "event_var_undeclared",
             Self::UndefinedOperator => "undefined_operator",
+            Self::DataSourceUndefined => "data_source_undefined",
             Self::UndefinedSystem => "undefined_system",
-            Self::DataSourceBindingMissing => "data_source_variable_missing",
             Self::OperatorVariableMissing => "operator_variable_missing",
             Self::CircularDependency => "circular_dependency",
             Self::UnitInconsistency => "unit_inconsistency",
@@ -286,18 +286,10 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
         }
     }
 
-    // A data-loader variable's `unit_conversion` (§8.5) is an Expression, so
-    // reference integrity applies to it (§4.9.5). It is applied to the loaded
-    // value and may name any declared symbol in the document, so it resolves
-    // against the document-wide declared set.
-    crate::structural::validate_data_source_unit_conversions(
-        esm_file,
-        &system_refs,
-        &mut structural_errors,
-    );
-
-    // A parameter's `update.source` MUST name a declared `data_sources` entry
-    // (esm-spec §5.4, §8.5).
+    // A parameter `update` of kind `data` names a `data_sources` entry, which
+    // MUST resolve (esm-spec §8.5, `data_source_undefined`). From esm 1.0.0 a
+    // source is not a component, so an `update.source` is the only place a
+    // source name can appear — and the only place it can be wrong.
     crate::structural::validate_data_source_references(esm_file, &mut structural_errors);
 
     // Validate coupling
@@ -511,11 +503,13 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
         }
     }
 
-    // Data sources are deliberately NOT registered as systems. Since 1.0.0 a
-    // source is a document-scoped ingest registry, not a component: it is not
-    // a coupling endpoint, not a subsystem, and not a path root in a scoped
-    // reference (esm-spec §8). A model reaches one only through a parameter's
-    // `update.source`, checked by `validate_data_source_references`.
+    // Data sources are DELIBERATELY not registered as systems. From esm 1.0.0
+    // (RFC unified-variable-model D2) a source is not a component: it cannot be
+    // a coupling endpoint, a subsystem, or the root of a scoped reference, and
+    // it exposes no variables at all — the consuming PARAMETER names the source
+    // in its `update` and owns the units. Registering one here would make
+    // `<source>.<something>` resolve as a scoped reference, which is exactly
+    // the shape 1.0.0 removes.
 
     // Add operators
     if let Some(ref operators) = esm_file.operators {
@@ -663,10 +657,10 @@ mod tests {
                 units: None,
                 default: None,
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -757,10 +751,10 @@ mod tests {
                 units: None,
                 default: None,
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
         variables.insert(
@@ -771,10 +765,10 @@ mod tests {
                 units: None,
                 default: None,
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -905,14 +899,15 @@ mod tests {
     }
 
     #[test]
+    /// esm 1.0.0 removed the variable `expression` field and with it the
+    /// `missing_observed_expr` diagnostic: an unknown with nothing defining it
+    /// is not a malformed declaration but an UNBALANCED SYSTEM, reported by
+    /// `equation_count_mismatch` (esm-spec §4.9.4).
     fn test_unknown_without_equation() {
         let mut models = HashMap::new();
         let mut variables = HashMap::new();
 
-        // An unknown that no equation defines. 1.0.0 retires
-        // `missing_observed_expr`: an unknown's behaviour is stated by an
-        // equation, so nothing defining it is an UNBALANCED SYSTEM rather than
-        // a malformed declaration (esm-spec §4.9.4).
+        // An unknown that NO equation defines - the defect.
         variables.insert(
             "total".to_string(),
             ModelVariable {
@@ -921,10 +916,10 @@ mod tests {
                 units: None,
                 default: None,
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -981,20 +976,23 @@ mod tests {
         let result = validate(&esm_file);
         assert!(!result.is_valid);
         assert_eq!(result.structural_errors.len(), 1);
-        let err = &result.structural_errors[0];
+        let finding = &result.structural_errors[0];
         assert!(matches!(
-            err.code,
+            finding.code,
             StructuralErrorCode::EquationCountMismatch
         ));
         assert_eq!(
-            err.message,
+            finding.message,
             "Number of equations (0) does not match number of unknowns (1)"
         );
-        assert_eq!(err.details["unknowns"], serde_json::json!(["total"]));
+        // `missing_equations_for` is what preserves the retired diagnostic's
+        // discriminating power: it names the very unknown that has nothing
+        // defining it.
         assert_eq!(
-            err.details["missing_equations_for"],
+            finding.details["missing_equations_for"],
             serde_json::json!(["total"])
         );
+        assert_eq!(finding.details["unknowns"], serde_json::json!(["total"]));
     }
 
     #[test]
@@ -1011,10 +1009,10 @@ mod tests {
                 units: Some("m".to_string()),
                 default: Some(1.0),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1027,14 +1025,15 @@ mod tests {
                 units: Some("1/s".to_string()),
                 default: Some(0.1),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
-        // Observed unknown, DEFINED BY an equation below.
+        // An OBSERVED unknown: declared `unknown`, and made observed by the
+        // bare-variable-LHS equation added below.
         variables.insert(
             "rate".to_string(),
             ModelVariable {
@@ -1043,10 +1042,10 @@ mod tests {
                 units: Some("m/s".to_string()),
                 default: None,
                 description: Some("Rate of change".to_string()),
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1068,8 +1067,6 @@ mod tests {
                         }),
                         rhs: Expr::Variable("rate".to_string()),
                     },
-                    // `rate ~ k * x` — the 1.0.0 home of what used to be the
-                    // variable's `expression` field.
                     Equation {
                         lhs: Expr::Variable("rate".to_string()),
                         rhs: Expr::operator(ExpressionNode {
@@ -1078,8 +1075,6 @@ mod tests {
                                 Expr::Variable("k".to_string()),
                                 Expr::Variable("x".to_string()),
                             ],
-                            wrt: None,
-                            dim: None,
                             ..Default::default()
                         }),
                     },
@@ -1137,8 +1132,8 @@ mod tests {
     }
 
     #[test]
-    fn test_json_serialization_with_observed_definition() {
-        // An observed unknown and its DEFINING EQUATION round-trip.
+    fn test_json_serialization_with_observed_expression() {
+        // Test that we can serialize and deserialize observed variables with expressions
         let json_str = r#"{
             "esm": "1.0.0",
             "metadata": {
@@ -1181,15 +1176,15 @@ mod tests {
             result.structural_errors
         );
 
-        // `rate` is an unknown DEFINED BY an equation, which is what makes it
-        // observed (esm-spec §6.3.1).
+        // `rate` is DECLARED an unknown and DERIVED observed, by the
+        // bare-variable-LHS equation that defines it (esm-spec §6.3.1).
         let model = esm_file.models.as_ref().unwrap().get("TestModel").unwrap();
         let rate_var = model.variables.get("rate").unwrap();
         assert_eq!(rate_var.var_type, VariableType::Unknown);
-        assert_eq!(crate::classify::observed_unknowns(model), vec!["rate"]);
+        assert_eq!(crate::classification::observed_unknowns(model), ["rate"]);
         assert!(
-            crate::classify::observed_definition(model, "rate").is_some(),
-            "an observed unknown must have a defining equation"
+            crate::classification::observed_definitions(model).contains_key("rate"),
+            "the observed unknown's definition is its equation's RHS"
         );
 
         // Test serialization back to JSON
@@ -1215,10 +1210,10 @@ mod tests {
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1231,10 +1226,10 @@ mod tests {
                 units: Some("1/s".to_string()), // per second
                 default: Some(0.1),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1337,10 +1332,10 @@ mod tests {
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1353,10 +1348,10 @@ mod tests {
                 units: Some("kg".to_string()), // mass units (incompatible)
                 default: Some(0.1),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1451,10 +1446,10 @@ mod tests {
                 units: Some("m".to_string()),
                 default: Some(0.0),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1467,10 +1462,10 @@ mod tests {
                 units: Some("m/s".to_string()),
                 default: Some(1.0),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1562,10 +1557,10 @@ mod tests {
                 units: Some("m".to_string()), // meters
                 default: Some(1.0),
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -1819,30 +1814,42 @@ mod tests {
     fn test_validate_complete_with_valid_json() {
         // Test validate_complete with valid JSON
         let valid_json = r#"
-        {
-            "esm": "1.0.0",
-            "metadata": {
+            {
+              "esm": "1.0.0",
+              "metadata": {
                 "name": "test"
-            },
-            "models": {
+              },
+              "models": {
                 "test_model": {
-                    "variables": {
-                        "x": {
-                            "type": "unknown",
-                            "units": "m",
-                            "default": 1.0
-                        }
-                    },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": [0.1, "x"]}
-                        }
-                    ]
+                  "variables": {
+                    "x": {
+                      "type": "unknown",
+                      "units": "m",
+                      "default": 1.0
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "x"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          0.1,
+                          "x"
+                        ]
+                      }
+                    }
+                  ]
                 }
+              }
             }
-        }
-        "#;
+            "#;
 
         let result = validate_complete(valid_json, None);
 
@@ -1896,9 +1903,7 @@ mod tests {
     // Issue #101 — `broadcast.fn` must be validated, not silently discarded.
     // -----------------------------------------------------------------------
 
-    /// A one-model document whose observed unknown `y` is defined by the
-    /// equation `y ~ <expr>` (esm-spec §6.3: an unknown's behaviour is stated
-    /// by an equation and nowhere else).
+    /// A one-model document whose observed `y` is defined by `expr`.
     fn doc_with_observed_expr(expr: &str) -> String {
         format!(
             r#"{{
@@ -1910,8 +1915,8 @@ mod tests {
                   "y": {{"type": "unknown", "units": "1"}}
                 }},
                 "equations": [
-                  {{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}}, "rhs": "y"}},
-                  {{"lhs": "y", "rhs": {expr}}}
+                  {{"lhs": "y", "rhs": {expr}}},
+                  {{"lhs": {{"op": "D", "args": ["x"], "wrt": "t"}}, "rhs": "y"}}
                 ]
               }}}}
             }}"#
@@ -1954,7 +1959,7 @@ mod tests {
         );
         let found = broadcast_findings(expr);
         assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
-        assert_eq!(found[0].path, "/models/M/equations/1/rhs");
+        assert_eq!(found[0].path, "/models/M/equations/0/rhs");
         assert!(
             found[0].message.contains("not_a_real_op"),
             "the message must name the offending fn: {}",
@@ -2044,6 +2049,6 @@ mod tests {
                        "expr": {"op": "broadcast", "fn": "nope", "args": ["x"]}}"#;
         let found = broadcast_findings(expr);
         assert_eq!(found.len(), 1, "expected one finding, got {found:?}");
-        assert_eq!(found[0].path, "/models/M/equations/1/rhs");
+        assert_eq!(found[0].path, "/models/M/equations/0/rhs");
     }
 }

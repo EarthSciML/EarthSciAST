@@ -14,6 +14,36 @@ from .expr_walk import any_child, map_children
 from .json_walk import DICT_LIST_CHILD_FIELDS, DICT_SINGLE_CHILD_FIELDS
 
 
+def _substitute_in_update(update, bindings: dict[str, Expr]):
+    """Rewrite the Expression positions of ONE parameter update rule: the
+    `when` trigger, the `expression` value form, and the `from` binding's
+    `unit_conversion`. These are ordinary expression positions (esm-spec §5.4 /
+    §8.5) and a substitution that skipped them would leave a stale free name
+    behind exactly where a coupling edge had just renamed one."""
+    changes = {}
+    if update.when is not None:
+        changes["when"] = substitute(update.when, bindings)
+    if update.expression is not None:
+        changes["expression"] = substitute(update.expression, bindings)
+    if update.from_source is not None and update.from_source.unit_conversion is not None:
+        changes["from_source"] = replace(
+            update.from_source,
+            unit_conversion=substitute(update.from_source.unit_conversion, bindings),
+        )
+    return replace(update, **changes) if changes else update
+
+
+def _substitute_in_variable(var, bindings: dict[str, Expr]):
+    """Rewrite a ModelVariable's expression positions. `replace` keeps every
+    other field (shape, default_units, location, distribution, ...) -- a
+    hand-listed rebuild silently drops them."""
+    if var.update is None:
+        return var
+    if isinstance(var.update, list):
+        return replace(var, update=[_substitute_in_update(r, bindings) for r in var.update])
+    return replace(var, update=_substitute_in_update(var.update, bindings))
+
+
 def substitute(expr: Expr, bindings: dict[str, Expr]) -> Expr:
     """
     Recursively substitute variables in an expression with their bindings.
@@ -95,13 +125,13 @@ def substitute_in_model(model, bindings: dict[str, Expr]):
                 eq["rhs"] = substitute(eq["rhs"], bindings)
         return result
 
-    # Typed Model object
-    # Substitute in model variables. ``replace`` keeps every other field
-    # (shape, default_units, location, noise_kind, ...) — the previous
-    # hand-listed ModelVariable(...) rebuild silently dropped them.
+    # Typed Model object. A variable carries no `expression` from 1.0.0 -- an
+    # unknown's behaviour is stated by the EQUATIONS -- so the substitution that
+    # used to rewrite `var.expression` now falls out of rewriting the equations
+    # below. A parameter's `update` DOES carry expression positions, so those
+    # are rewritten here.
     new_variables = {
-        name: replace(var, expression=substitute(var.expression, bindings))
-        for name, var in model.variables.items()
+        name: _substitute_in_variable(var, bindings) for name, var in model.variables.items()
     }
 
     # Substitute in equations (``replace`` preserves _comment).

@@ -2221,6 +2221,31 @@ fn validate_geometry_manifolds_refaware(
                 if k == "expression_templates" {
                     continue;
                 }
+                // An EQUATION whose LHS is a bare variable is the definition of
+                // that unknown (esm-spec 6.3.1), so label the call site with the
+                // NAME rather than the array index: from esm 1.0.0 that is
+                // where an observed's expression lives, and a diagnostic naming
+                // `equations/1/rhs` says less than one naming `area_bad`.
+                if k == "equations"
+                    && let Some(items) = v.as_array()
+                {
+                    for (i, eq) in items.iter().enumerate() {
+                        let label = eq
+                            .get("lhs")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| i.to_string());
+                        let shared = to_shared(eq);
+                        validate_manifolds_in_refs(
+                            &shared,
+                            &reg.named,
+                            &manifold_bearing,
+                            &format!("{compkind}.{cname}.equations/{label}"),
+                            &mut memo,
+                        )?;
+                    }
+                    continue;
+                }
                 let shared = to_shared(v);
                 validate_manifolds_in_refs(
                     &shared,
@@ -2565,7 +2590,13 @@ pub fn emit_document(
 
     root.remove("expression_template_imports");
     if bump {
-        root.insert("esm".to_string(), Value::String("0.9.0".to_string()));
+        // Stamp the version this binding implements rather than a literal, so
+        // the emitted byte form tracks `SCHEMA_VERSION` instead of drifting
+        // from it at the next format bump.
+        root.insert(
+            "esm".to_string(),
+            Value::String(crate::SCHEMA_VERSION.to_string()),
+        );
     }
     Ok(loaded)
 }
@@ -3358,7 +3389,7 @@ mod tests {
               "area": {"type": "unknown"}
             },
             "equations": [
-                    {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
+                {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [],
                   "name": name, "bindings": bindings}}],
             "expression_templates": templates
           }}
@@ -3381,7 +3412,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            v["models"]["M"]["variables"]["area"]["expression"],
+            (*crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation")),
             json!({"op": "polygon_intersection_area", "manifold": "planar",
                    "args": ["pa", "pb"]})
         );
@@ -3411,7 +3442,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            v["models"]["M"]["variables"]["area"]["expression"],
+            (*crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation")),
             json!({"op": "*", "args": [
               {"op": "polygon_intersection_area", "manifold": "spherical",
                "args": ["pa", "pb"]},
@@ -3453,7 +3484,7 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            v["models"]["M"]["variables"]["area"]["expression"]["manifold"],
+            (*crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation"))["manifold"],
             json!("spherical")
         );
     }

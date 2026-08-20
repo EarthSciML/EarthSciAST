@@ -93,11 +93,11 @@ def _field_epoch(field: LoaderField) -> _dt.datetime | None:
     the loader has no temporal anchor (a CONST loader, or a discrete loader with
     no ``start``) — the caller then falls back to local frequency arithmetic.
     """
-    temporal = field.loader.temporal
+    temporal = field.data_source.temporal
     start = getattr(temporal, "start", None) if temporal is not None else None
     if not start:
         return None
-    from .data_loaders.time_resolution import _coerce_datetime
+    from .data_sources.time_resolution import _coerce_datetime
 
     return _coerce_datetime(start)
 
@@ -120,7 +120,7 @@ def _sim_clock_epoch(flat: FlattenedSystem) -> _dt.datetime | None:
     temporal = getattr(domain, "temporal", None) if domain is not None else None
     if temporal is None:
         return None
-    from .data_loaders.time_resolution import _coerce_datetime
+    from .data_sources.time_resolution import _coerce_datetime
 
     for attr in ("reference_time", "start"):
         value = getattr(temporal, attr, None)
@@ -146,42 +146,22 @@ def _coerce_field_values(obj: Any) -> np.ndarray:
     return np.asarray(obj, dtype=float)
 
 
-def _loader_file_variable(field: LoaderField) -> str | None:
-    """The reader's on-disk / band key for ``field``, when it differs from ``var``.
-
-    EarthSciIO readers emit a ``NativeDataset`` keyed by ``file_variable`` — a
-    GeoTIFF band ``"Band1"``, a NetCDF short name ``"t"`` — declared per variable
-    on the loader. The flattened ``field.var`` is the model-facing *semantic*
-    name (``"fuel_model"``). Returns the declared ``file_variable`` when it
-    differs from ``field.var`` (so it must be remapped to index the native
-    dataset), else ``None`` (matching names, or a stub provider keyed by the
-    semantic name — no remapping).
-    """
-    loader = getattr(field, "loader", None)
-    variables = getattr(loader, "variables", None)
-    var = getattr(field, "var", None)
-    if isinstance(variables, dict):
-        decl = variables.get(var)
-        fv = getattr(decl, "file_variable", None) if decl is not None else None
-        if fv and str(fv) != var:
-            return str(fv)
-    return None
-
-
-def _extract_loader_var(native: Any, var: str, file_var: str | None = None) -> np.ndarray:
+def _extract_loader_var(native: Any, var: str) -> np.ndarray:
     """Pull ``var``'s raw values from a provider's native dataset.
 
-    Accepts a :class:`~earthsci_ast.data_loaders.grid.GridLoadResult` or an
+    Accepts a :class:`~earthsci_ast.data_sources.grid.GridLoadResult` or an
     EarthSciIO ``NativeDataset`` (either exposes a ``.variables`` mapping), or a
-    bare array returned by a minimal stub provider. ``file_var`` is the reader's
-    on-disk key for the field (its ``file_variable``); when given and present it
-    indexes the dataset, since readers key output by the file/band name
-    (``"Band1"``) rather than the semantic ``var`` (``"fuel_model"``).
+    bare array returned by a minimal stub provider.
+
+    ``var`` is the reader's ON-DISK key. From esm 1.0.0 that is exactly what a
+    :class:`~earthsci_ast.flatten.LoaderField` carries: the binding lives on the
+    consuming parameter and names its ``file_variable`` directly, so the
+    semantic-name -> file-name remap 0.x needed (a GeoTIFF band ``"Band1"``
+    behind a model-facing ``"fuel_model"``) has nothing left to do — the
+    model-facing name is the PARAMETER's, and it is ``field.name``.
     """
     variables = getattr(native, "variables", None)
     if variables is not None:
-        if file_var is not None and file_var in variables:
-            return _coerce_field_values(variables[file_var])
         return _coerce_field_values(variables[var])
     return _coerce_field_values(native)
 
@@ -195,7 +175,7 @@ def _provider_array(field: LoaderField, native: Any, target: Any = None) -> np.n
     target-grid / regrid machinery was removed in v0.8.0 (loader fields are
     injected raw).
     """
-    return _extract_loader_var(native, field.var, _loader_file_variable(field)).reshape(-1)
+    return _extract_loader_var(native, field.var).reshape(-1)
 
 
 def _loader_cadence_boundaries(
@@ -210,14 +190,14 @@ def _loader_cadence_boundaries(
     (the terminal-event segmentation the campaign spike calls for). A discrete
     loader with no parseable frequency contributes no interior boundary (a
     single segment over the whole span)."""
-    from .data_loaders.time_resolution import (
+    from .data_sources.time_resolution import (
         TimeResolutionError,
         parse_iso_duration,
     )
 
     boundaries: set[float] = set()
     for f in discrete_fields:
-        temporal = f.loader.temporal
+        temporal = f.data_source.temporal
         freq = getattr(temporal, "frequency", None) if temporal is not None else None
         if not freq:
             continue
@@ -439,7 +419,7 @@ def _simulate_with_loaders(
       ndarray`` (offline stubs / backward compatibility); cadence boundaries
       come from local frequency arithmetic.
     * otherwise the **provider-object** path (default): one
-      :class:`~earthsci_ast.data_loaders.provider.Provider` is built per
+      :class:`~earthsci_ast.data_sources.provider.Provider` is built per
       loader field at setup (the in-tree :class:`LoadDataProvider` by default, or
       an injected ``provider_factory`` — e.g. a real EarthSciIO provider).
       CONST → ``materialize()`` once, DISCRETE → ``refresh(t)`` at the seed and
@@ -479,7 +459,7 @@ def _simulate_with_loaders(
             # seed and each boundary. Native fields are bound RAW (on their native
             # grid); any native→sim regrid is an in-model coupling expression the
             # RHS evaluates (the obsolete regrid seam was removed in v0.8.0).
-            from .data_loaders.provider import build_default_provider
+            from .data_sources.provider import build_default_provider
 
             # Both the in-tree default and an injected provider_factory honour the
             # public ``(field, window) -> Provider`` contract, so route directly.
@@ -555,7 +535,7 @@ def _simulate_with_loaders(
 
 
 # --------------------------------------------------------------------------- #
-# Cadence-aware ``providers=`` path (top-level ``data_loaders`` injection seam).
+# Cadence-aware ``providers=`` path (top-level ``data_sources`` injection seam).
 #
 # The plain ``providers=`` seam (``simulation.simulate``) materializes EVERY
 # provider ONCE at t0 and integrates in a single shot — correct for a static

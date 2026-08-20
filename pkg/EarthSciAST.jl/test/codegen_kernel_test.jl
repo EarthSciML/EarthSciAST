@@ -65,7 +65,7 @@ end
 # ---- fixture models (locally prefixed to avoid clashes under runtests.jl) ----
 
 function _cgk_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
     body = _op("+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
@@ -80,7 +80,7 @@ function _cgk_2d_model(N)
 end
 
 function _cgk_makearray_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     fwd = _op("-", _idx("u", _op("+", _v("i"), _i(1))), _idx("u", _v("i")))
     ctr = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
@@ -94,7 +94,7 @@ function _cgk_makearray_model(N)
 end
 
 function _cgk_const_coef_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))
@@ -105,7 +105,7 @@ end
 # Guarded singularities: the codegen emission must stay LAZY (`ifelse` as a
 # ternary), so out-of-domain cells never evaluate log/sqrt off their domains.
 function _cgk_guarded_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     ui = _idx("u", _v("i"))
     guarded = _op("+",
         _op("ifelse", _op(">", ui, _n(0.0)), _op("log", ui), _n(-1.0)),
@@ -122,7 +122,7 @@ end
 
 function _cgk_param_model(N)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
         "alpha" => ESM.ModelVariable(ESM.ParameterVariable; default=0.35))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
@@ -132,7 +132,7 @@ function _cgk_param_model(N)
 end
 
 function _cgk_reduce_model(statevars, ybody, ni, klo, khi; reduce="+", filt=nothing)
-    vars = Dict(v => ESM.ModelVariable(ESM.StateVariable) for v in statevars)
+    vars = Dict(v => ESM.ModelVariable(ESM.UnknownVariable) for v in statevars)
     rhs = ESM.OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=ybody,
         ranges=Dict("i" => [1, ni], "k" => [klo, khi]), reduce=reduce, filter=filt)
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
@@ -142,7 +142,7 @@ const _CGK_LT = [10.0, 20.0, 40.0, 80.0, 160.0]
 const _CGK_LA = [0.0, 1.0, 2.0, 3.0, 4.0]
 
 function _cgk_interp_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     itp = _op("fn", _const(_CGK_LT), _const(_CGK_LA),
               _idx("u", _op("+", _v("i"), _i(1))); name="interp.linear")
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
@@ -153,7 +153,7 @@ function _cgk_interp_model(N)
 end
 
 function _cgk_searchsorted_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("fn", _idx("u", _v("i")), _const(_CGK_LA); name="interp.searchsorted")
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                   _ao1(body, "i", 1, N))])
@@ -161,7 +161,7 @@ end
 
 const _CGK_BT = Any[Any[1.0, 1.5, 2.0], Any[1.1, 1.6, 2.1], Any[1.2, 1.7, 2.2]]
 function _cgk_bilinear_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("fn", _const(_CGK_BT), _const([0.0, 1.0, 2.0]), _const([0.0, 1.0, 2.0]),
                _idx("u", _v("i")), _idx("u", _op("+", _v("i"), _i(1)));
                name="interp.bilinear")

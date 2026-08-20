@@ -39,8 +39,8 @@ _ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 # members. The kernels differ only in their state slots (and out-slots), the
 # exact thing the merge transposes into per-lane tables.
 function _om_twin_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable),
-                "v" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                "v" => ESM.ModelVariable(ESM.UnknownVariable))
     body(x) = _op("*", _n(-0.5), _op("*", _idx(x, _v("i")), _idx(x, _v("i"))))
     ESM.Model(vars, [
         ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(body("u"), "i", 1, N)),
@@ -50,8 +50,8 @@ end
 # Twin Laplacians: same-class STENCIL kernels (interior + ghost boundary cells)
 # for two states — classes across equations AND ghost-pattern variety.
 function _om_twin_stencil_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable),
-                "v" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                "v" => ESM.ModelVariable(ESM.UnknownVariable))
     lap(x) = _op("+", _idx(x, _op("-", _v("i"), _i(1))),
                       _op("*", _n(-2.0), _idx(x, _v("i"))),
                       _idx(x, _op("+", _v("i"), _i(1))))
@@ -63,8 +63,8 @@ end
 # Twin live-forcing equations: the merged kernel's forcing leaf must become an
 # `_AccArrTblBox` over the SAME bound buffer (live re-gather, not a frozen copy).
 function _om_twin_forcing_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable),
-                "v" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
+                "v" => ESM.ModelVariable(ESM.UnknownVariable))
     body(x) = _op("*", _idx("forcing", _v("i")), _idx(x, _v("i")))
     ESM.Model(vars, [
         ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(body("u"), "i", 1, N)),
@@ -80,8 +80,8 @@ _om_ics(N) = merge(Dict("u[$k]" => 0.6sin(0.7k) - 0.15 for k in 1:N),
 # than folding it into a per-lane recompute — `_oop_inv_nodes_identical`.
 function _om_twin_inv_model(N; g=3.0, h=7.0)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
-        "v" => ESM.ModelVariable(ESM.StateVariable),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "v" => ESM.ModelVariable(ESM.UnknownVariable),
         "g" => ESM.ModelVariable(ESM.ParameterVariable; default=g),
         "h" => ESM.ModelVariable(ESM.ParameterVariable; default=h))
     lap(x) = _op("+", _idx(x, _op("-", _v("i"), _i(1))),

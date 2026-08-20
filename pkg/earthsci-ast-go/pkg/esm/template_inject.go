@@ -127,17 +127,17 @@ func collectScopedOwners(out map[string]bool, x any) {
 // form B does not survive parse → emit.
 //
 // Diagnostics (esm-spec §9.6.6): a key naming no system the entry references is
-// `template_inject_target_unknown`; a key resolving to anything that is not a
-// model or a reaction system is `template_inject_target_not_component`. Only
-// top-level system targets are resolved by this binding — a nested
-// `Parent.Child` key is out of scope and reported the same way. Mirrors the
-// Julia reference `_apply_coupling_injections!`.
+// `template_inject_target_unknown`; a key resolving to neither a model nor a
+// reaction system is `template_inject_target_not_component`. Only top-level
+// system targets are resolved by this binding — a nested `Parent.Child` key is
+// out of scope and reported as `template_inject_target_not_component`. Mirrors
+// the Julia reference `_apply_coupling_injections!`.
 //
-// `template_inject_target_is_loader` is RETIRED. It existed because a data
-// loader was a COMPONENT a key could name but not legally target; from esm
-// 1.0.0 a data source is not a component at all (esm-spec §8), so it needs no
-// case of its own — it falls into `not_component` with everything else that is
-// neither a model nor a reaction system.
+// `template_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source is
+// not a component and cannot be a coupling endpoint, so no coupling entry can
+// reference one and the key could never be reached through `referenced` above.
+// A name that happens to match a `data_sources` key now falls to
+// `template_inject_target_not_component`, which is what it is.
 func applyCouplingInjections(view map[string]any) error {
 	coupling, ok := view["coupling"].([]any)
 	if !ok {
@@ -192,7 +192,7 @@ func applyCouplingInjections(view map[string]any) error {
 				comp = c
 			} else {
 				return newETErr("template_inject_target_not_component",
-					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). A `data_sources` entry is not a component and has no expression positions to rewrite; nested `Parent.Child` targets are out of scope.", tname))
+					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope.", tname))
 			}
 			importsList, ok := inj[tname].([]any)
 			if !ok {

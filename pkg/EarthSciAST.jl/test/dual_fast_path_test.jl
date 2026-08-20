@@ -68,7 +68,7 @@ function _dfp_model(N)
     eq(x, body) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
                                _ao1(body, "i", 1, N))
     vars = Dict{String,ESM.ModelVariable}(
-        n => ESM.ModelVariable(ESM.StateVariable) for n in ("u", "v"))
+        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v"))
     ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
 end
 

@@ -111,7 +111,7 @@ gating derived set's members — then pushes that set down as a per-axis
 `selection` ([`provider_sample`](@ref)) and fetches only the compact slab.
 
 The gate is `Dict("axes"=>[…], "applies_to"=>[names…])`, mirroring the `.esm`
-`data_loaders.<name>.metadata.x_esd.gated_select` field (which the runner reads
+`data_sources.<name>.metadata.x_esd.gated_select` field (which the runner reads
 to construct the gated provider — `format`/gating live at provider creation, not
 in the 0.8.0 source schema). Each entry of `axes` is one per NATIVE array axis:
 
@@ -160,7 +160,7 @@ provider_extent_metaparameter(::Any) = nothing
     providers_from_document(doc; cache_root, loaders=nothing, url_overrides=Dict()) -> Dict{String,Any}
 
 Construct the data providers a document DECLARES: one CONST provider per
-`data_loaders.<name>` variable whose loader carries a `metadata.esio_format`
+`data_sources.<name>` entry carrying a `metadata.esio_format`
 ("zarr", "ff10", …), keyed `"<Loader>.<var>"` — exactly the `providers` keys
 [`prepare`](@ref) consumes (and, with `pushdown_rewrite=true`, gates from the
 rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or a path.

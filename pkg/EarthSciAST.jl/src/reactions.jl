@@ -90,7 +90,7 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
     variables = Dict{String,ModelVariable}()
     for species in rxn_sys.species
         variables[species.name] = ModelVariable(
-            species.constant === true ? ParameterVariable : StateVariable,
+            species.constant === true ? ParameterVariable : UnknownVariable,
             # Honor the species' declared scalar `default` (matching the main
             # flatten path in flatten.jl `_collect_reaction_system!`); fall back
             # to the library convention only when no default is declared.

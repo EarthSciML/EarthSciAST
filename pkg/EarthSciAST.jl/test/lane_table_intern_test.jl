@@ -82,7 +82,7 @@ end
 _lti_nuniq(specs) = length(unique(map(objectid, specs)))
 
 _lti_vars(names...) =
-    Dict{String,ESM.ModelVariable}(n => ESM.ModelVariable(ESM.StateVariable)
+    Dict{String,ESM.ModelVariable}(n => ESM.ModelVariable(ESM.UnknownVariable)
                                    for n in names)
 _lti_eq(x, body, N) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
                                    _ao1(body, "i", 1, N))

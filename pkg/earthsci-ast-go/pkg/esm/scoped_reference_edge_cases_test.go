@@ -17,7 +17,7 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 		Models: map[string]Model{
 			"ModelA": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -28,7 +28,7 @@ func TestScopedReferenceEdgeCases(t *testing.T) {
 			},
 			"ModelB": {
 				Variables: map[string]ModelVariable{
-					"y": {Type: VarTypeParameter},
+					"y": {Type: "parameter"},
 				},
 				Subsystems: map[string]any{
 					"DeepNest": map[string]any{
@@ -147,7 +147,7 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 		Models: map[string]Model{
 			"ModelA": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -161,7 +161,7 @@ func TestValidationWithComplexScopedReferences(t *testing.T) {
 			},
 			"ModelB": {
 				Variables: map[string]ModelVariable{
-					"y": {Type: VarTypeParameter},
+					"y": {Type: "parameter"},
 				},
 				Subsystems: map[string]any{
 					"DeepNest": map[string]any{
@@ -196,7 +196,7 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 		Models: map[string]Model{
 			"ModelA": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Subsystems: map[string]any{
 					"SubA": map[string]any{
@@ -208,7 +208,7 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 			},
 			"ModelB": {
 				Variables: map[string]ModelVariable{
-					"y": {Type: VarTypeParameter},
+					"y": {Type: "parameter"},
 				},
 			},
 		},
@@ -268,7 +268,7 @@ func TestValidationErrorsForUnresolvedScopedReferences(t *testing.T) {
 		Models: map[string]Model{
 			"ModelA": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{

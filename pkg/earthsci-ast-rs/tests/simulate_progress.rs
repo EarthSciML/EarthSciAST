@@ -21,38 +21,125 @@ mod common;
 /// trajectory so the solver takes a useful number of adaptive steps. `k` is
 /// negative by default rather than negated in the expression, which keeps the
 /// document free of any unary-minus encoding.
-const DECAY: &str = r#"{
-  "esm": "1.0.0",
-  "metadata": { "name": "progress_decay" },
-  "models": { "M": {
-    "variables": {
-      "y": { "type": "unknown", "default": 1.0 },
-      "k": { "type": "parameter", "default": -1.0 }
-    },
-    "equations": [
-      { "lhs": { "op": "D", "args": ["y"], "wrt": "t" },
-        "rhs": { "op": "*", "args": ["k", "y"] } }
-    ]
-  }}
-}"#;
+const DECAY: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "progress_decay"
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "y": {
+              "type": "unknown",
+              "default": 1.0
+            },
+            "k": {
+              "type": "parameter",
+              "default": -1.0
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "y"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "*",
+                "args": [
+                  "k",
+                  "y"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+    "#;
 
 /// `D(y[i])/dt = Σ_{j∈1..3} i*j` over `i ∈ 1..2` — a constant-RHS contraction
 /// that routes through the array runtime rather than the scalar interpreter.
-const ARRAY: &str = r#"{
-  "esm": "1.0.0",
-  "metadata": { "name": "progress_array" },
-  "models": { "M": {
-    "variables": { "y": { "type": "unknown", "shape": ["i"], "default": 0.0 } },
-    "equations": [{
-      "lhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
-               "ranges": { "i": [1, 2] },
-               "expr": { "op": "D", "args": [{ "op": "index", "args": ["y", "i"] }], "wrt": "t" } },
-      "rhs": { "op": "aggregate", "args": [], "output_idx": ["i"], "reduce": "+",
-               "ranges": { "i": [1, 2], "j": [1, 3] },
-               "expr": { "op": "*", "args": ["i", "j"] } }
-    }]
-  }}
-}"#;
+const ARRAY: &str = r#"
+    {
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "progress_array"
+      },
+      "models": {
+        "M": {
+          "variables": {
+            "y": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ],
+              "default": 0.0
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    2
+                  ]
+                },
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "y",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "reduce": "+",
+                "ranges": {
+                  "i": [
+                    1,
+                    2
+                  ],
+                  "j": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    "i",
+                    "j"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+    "#;
 
 /// A recording observer plus the log it writes to.
 fn recorder() -> (ProgressFn, Arc<Mutex<Vec<Progress>>>) {

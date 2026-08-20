@@ -1,6 +1,6 @@
-//! Subsystem-loader consumption — pure-I/O data loader MOUNTED AS A MODEL
-//! SUBSYSTEM, consumed by the owning model's OWN equations (RFC
-//! `pure-io-data-loaders` §4.3; CONFORMANCE_SPEC.md §5.11).
+//! Source-fed parameter consumption — a pure-I/O data SOURCE read by the owning
+//! model's OWN equations through a parameter `update` (esm-spec 5.4, 8.5;
+//! CONFORMANCE_SPEC.md 5.11).
 //!
 //! Shared fixture + analytic golden live under
 //! `tests/conformance/subsystem_loader/`. Model `Box` mounts a static (CONST)
@@ -12,12 +12,12 @@
 //!
 //! ## What this locks for the Rust binding
 //!
-//! Previously the Rust flattener left `Model.subsystems` opaque, so a
-//! DataSource-subsystem field was never materialized/bound. `flatten` now lowers
-//! each loader variable to a const-array-backed observed `Box.raw.<var>` with no
-//! defining expression, and namespaces the owner's bare `raw.<var>` references to
-//! `Box.raw.<var>`. Both then resolve at the RHS through the same
-//! data-Provider forcing seam the top-level-loader fixtures use
+//! From esm 1.0.0 a data source is NOT a component and cannot be mounted as a
+//! subsystem: the model declares the two fields as its own PARAMETERS, each
+//! with an `update` naming the source (esm-spec 5.4). They flatten to
+//! `Box.<var>` DISCRETE parameters with no defining equation and resolve at the
+//! RHS through the same data-Provider forcing seam the top-level-source
+//! fixtures use
 //! (`loaded_ic_bc_simulation.rs`): a bare-scalar field is seeded as a 0-D
 //! forcing array (read back as a scalar); a gathered field as a 1-D array.
 
@@ -83,47 +83,24 @@ fn value_at(sol: &Solution, name: &str, t: f64) -> f64 {
     interp(&sol.time, &sol.state[vi], t)
 }
 
-/// Since 1.0.0 a data source is a document-scoped registry entry, not a
-/// component: it cannot be mounted as a subsystem, so there is no
-/// `Box.raw.<var>` observed any more. The owning model declares a PARAMETER per
-/// consumed field carrying `update: {kind: "data", source, from}`, and the
-/// flattener lowers each to `Box.<var>` in the DISCRETE bucket. Its value still
-/// arrives at the RHS through the provider forcing seam, so nothing defines it
-/// and it is not integrated.
+/// The flattener lowers each subsystem-loader variable to an observed
+/// `Box.<var>` as a DISCRETE parameter that no equation defines.
 #[test]
-fn source_backed_parameters_flatten_to_discrete_inputs() {
+fn subsystem_loader_flattens_to_expressionless_observeds() {
     let file =
         load_path(fixture_dir().join("fixtures/subsystem_loader_ode.esm")).expect("load fixture");
     let flat = flatten(&file).expect("flatten");
 
     for name in ["Box.k", "Box.wind"] {
-        let var = flat.discrete_variables.get(name).unwrap_or_else(|| {
-            panic!(
-                "{name} must be a discrete (source-refreshed) parameter; got {:?}",
-                flat.discrete_variables.keys().collect::<Vec<_>>()
-            )
-        });
-        let update = var.update.as_ref().unwrap_or_else(|| {
-            panic!("{name} must carry the `update` that makes it source-backed")
-        });
         assert!(
-            update.rules().iter().all(|r| r.source() == Some("raw")),
-            "{name} must refresh from the declared source 'raw'"
+            flat.discrete_variables.contains_key(name),
+            "{name} must be a DISCRETE parameter (a `data` update is the provider seam); got {:?}",
+            flat.discrete_variables.keys().collect::<Vec<_>>()
         );
-        assert!(
-            !update.is_brownian(),
-            "{name} is a data input, not a noise source"
-        );
-
-        // Not an integrated state, not an observed, and no equation defines it
-        // (the value is injected at the RHS through the provider seam).
+        // Not an integrated state, and no equation defines it.
         assert!(
             !flat.state_variables.contains_key(name),
             "{name} must not be an integrated state"
-        );
-        assert!(
-            !flat.observed_variables.contains_key(name),
-            "{name} must not be an observed"
         );
         assert!(
             !flat

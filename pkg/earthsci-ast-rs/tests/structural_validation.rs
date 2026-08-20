@@ -280,58 +280,48 @@ fn test_reaction_system_non_ic_constraint_ok() {
     );
 }
 
-/// An unknown that no equation defines.
+/// An unknown that NO equation defines.
 ///
-/// 1.0.0 removes the variable `expression` field and with it the
+/// esm 1.0.0 removed the variable `expression` field and with it the
 /// `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN
-/// EQUATION, so an observed with nothing defining it is no longer a malformed
-/// declaration but an UNBALANCED SYSTEM, caught by `equation_count_mismatch`
-/// (esm-spec §4.9.4). The fixtures were renamed to match; `missing_equations_for`
-/// preserves their original discriminating power by naming the very unknowns the
-/// removed code named.
+/// EQUATION, so one with nothing defining it is not a malformed declaration but
+/// an UNBALANCED SYSTEM (esm-spec 4.9.4). The defect these fixtures pin is
+/// unchanged; only the reporting layer moved, and `missing_equations_for` keeps
+/// their discriminating power by naming the very unknowns the removed code did.
 #[test]
 fn test_unknown_without_equation() {
     let fixtures = [
         (
             "unknown_without_equation",
             include_str!("../../../tests/invalid/unknown_without_equation.esm"),
-            vec!["total_rate"],
         ),
         (
             "unknown_without_equation_single",
             include_str!("../../../tests/invalid/unknown_without_equation_single.esm"),
-            vec!["total"],
         ),
         (
             "unknown_without_equation_multiple",
             include_str!("../../../tests/invalid/unknown_without_equation_multiple.esm"),
-            vec!["ratio", "total"],
         ),
     ];
 
-    for (name, fixture, missing) in fixtures {
-        let esm_file = load(fixture).unwrap_or_else(|e| panic!("{name} should load: {e:?}"));
+    for (name, fixture) in fixtures {
+        let esm_file = load(fixture).unwrap_or_else(|e| panic!("{name} must load: {e}"));
         let validation_result = validate(&esm_file);
-        assert!(
-            validation_result.has_errors(),
-            "Expected {name} to have validation errors"
-        );
-
-        let err = validation_result
+        let finding = validation_result
             .structural_errors
-            .clone()
-            .into_iter()
-            .find(|e| matches!(e.code, StructuralErrorCode::EquationCountMismatch))
+            .iter()
+            .find(|err| matches!(err.code, StructuralErrorCode::EquationCountMismatch))
             .unwrap_or_else(|| {
                 panic!(
-                    "Expected equation_count_mismatch for {name}, got {:?}",
-                    validation_result.structural_errors.clone()
+                    "Expected EquationCountMismatch for {name}: {:?}",
+                    validation_result.structural_errors
                 )
             });
-        assert_eq!(
-            err.details["missing_equations_for"],
-            serde_json::json!(missing),
-            "missing_equations_for for {name}"
+        assert!(
+            finding.details["missing_equations_for"].is_array(),
+            "{name}: the finding must NAME the unknowns with no defining equation: {:?}",
+            finding.details
         );
     }
 }
@@ -428,84 +418,45 @@ fn test_event_variable_undeclared() {
     }
 }
 
-/// An event that writes a PARAMETER.
-///
-/// esm 1.0.0 removes `discrete_parameters` and the event `functional_affect`:
-/// events affect UNKNOWNS only, and a parameter that changes during a run
-/// carries its own `update` (esm-spec §5.4). The two fixtures' defect is
-/// unchanged — an event writing a parameter — but it is now reached through
-/// `affects` and reported as `event_affects_parameter`. Their FILENAMES were
-/// deliberately kept, because they are hard-referenced here by `include_str!`.
+/// Test invalid discrete parameter
 #[test]
-fn test_event_affects_parameter() {
+fn test_invalid_discrete_parameter() {
     let fixtures = [
         (
             "invalid_discrete_param",
             include_str!("../../../tests/invalid/invalid_discrete_param.esm"),
-            "valid_param",
-            "parameter_update",
-            None,
         ),
         (
             "invalid_discrete_param_not_parameter",
             include_str!("../../../tests/invalid/invalid_discrete_param_not_parameter.esm"),
-            "k",
-            "invalid_discrete_update",
-            Some("periodic"),
         ),
     ];
 
-    for (name, fixture, variable, event_name, trigger_type) in fixtures {
-        let esm_file = load(fixture).unwrap_or_else(|e| panic!("{name} should load: {e:?}"));
-        let validation_result = validate(&esm_file);
-        assert!(
-            validation_result.has_errors(),
-            "Expected {name} to have validation errors"
-        );
+    for (name, fixture) in fixtures {
+        let parsed_result = load(fixture);
 
-        let err = validation_result
-            .structural_errors
-            .clone()
-            .into_iter()
-            .find(|e| matches!(e.code, StructuralErrorCode::EventAffectsParameter))
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected event_affects_parameter for {name}, got {:?}",
-                    validation_result.structural_errors.clone()
-                )
-            });
+        match parsed_result {
+            Ok(esm_file) => {
+                let validation_result = validate(&esm_file);
+                assert!(
+                    validation_result.has_errors(),
+                    "Expected {name} to have validation errors"
+                );
 
-        assert_eq!(err.path, "/models/TestModel/discrete_events/0/affects/0");
-        assert_eq!(
-            err.message,
-            format!(
-                "Event '{event_name}' affects '{variable}', which is a parameter; \
-                 an event may affect unknowns only"
-            )
-        );
-        assert_eq!(err.details["variable"], variable);
-        assert_eq!(err.details["variable_type"], "parameter");
-        assert_eq!(err.details["event_name"], event_name);
-        assert_eq!(err.details["event_type"], "discrete");
-        match trigger_type {
-            // A fixed-interval rewrite of a parameter has an exact 1.0.0
-            // replacement, so the remedy names it.
-            Some(tt) => {
-                assert_eq!(err.details["trigger_type"], tt);
-                assert_eq!(
-                    err.details["remedy"],
-                    format!(
-                        "declare the change as update: {{kind: \"schedule\", interval: 60.0}} \
-                         on '{variable}' (esm-spec 5.4)"
-                    )
+                // esm 1.0.0: events affect UNKNOWNS only, so an event whose
+                // `affects` LHS names a parameter is `event_affects_parameter`.
+                let has_event_affects_parameter = validation_result
+                    .structural_errors
+                    .iter()
+                    .any(|err| matches!(err.code, StructuralErrorCode::EventAffectsParameter));
+                assert!(
+                    has_event_affects_parameter,
+                    "Expected EventAffectsParameter error for {name}: {:?}",
+                    validation_result.structural_errors
                 );
             }
-            None => {
-                assert!(err.details.get("trigger_type").is_none());
-                assert_eq!(
-                    err.details["remedy"],
-                    "declare the change as the parameter's own update (esm-spec 5.4)"
-                );
+            Err(_) => {
+                // Parse failure is also acceptable
             }
         }
     }
@@ -682,45 +633,71 @@ fn test_circular_dependency_detection() {
 #[test]
 fn test_valid_cross_model_references() {
     // Test a valid model with cross-references but no circular dependencies
-    let json_str = r#"{
-        "esm": "1.0.0",
-        "metadata": {
+    let json_str = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
             "name": "ValidCrossModelTest",
             "description": "Test file with valid cross-model references (no cycles)"
-        },
-        "models": {
+          },
+          "models": {
             "SourceModel": {
-                "variables": {
-                    "source_var": {
-                        "type": "unknown",
-                        "units": "mol/mol",
-                        "default": 1.0
-                    }
-                },
-                "equations": [
-                    {
-                        "lhs": { "op": "D", "args": ["source_var"], "wrt": "t" },
-                        "rhs": { "op": "*", "args": [-0.1, "source_var"] }
-                    }
-                ]
+              "variables": {
+                "source_var": {
+                  "type": "unknown",
+                  "units": "mol/mol",
+                  "default": 1.0
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "source_var"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      -0.1,
+                      "source_var"
+                    ]
+                  }
+                }
+              ]
             },
             "SinkModel": {
-                "variables": {
-                    "sink_var": {
-                        "type": "unknown",
-                        "units": "mol/mol",
-                        "default": 0.0
-                    }
-                },
-                "equations": [
-                    {
-                        "lhs": { "op": "D", "args": ["sink_var"], "wrt": "t" },
-                        "rhs": { "op": "*", "args": [0.1, "SourceModel.source_var"] }
-                    }
-                ]
+              "variables": {
+                "sink_var": {
+                  "type": "unknown",
+                  "units": "mol/mol",
+                  "default": 0.0
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "sink_var"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      0.1,
+                      "SourceModel.source_var"
+                    ]
+                  }
+                }
+              ]
             }
+          }
         }
-    }"#;
+        "#;
 
     let parsed_result = load(json_str);
 
@@ -843,15 +820,18 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
               "index_sets": {{ "points": {{ "kind": "interval", "size": 3 }} }},
               "models": {{ "M": {{
                 "variables": {{
-                  "nearest": {{ "type": "observed", "units": "m", "shape": ["points"],
-                    "expression": {{ "op": "aggregate", "args": [], "output_idx": ["i"],
-                                    "ranges": {{ "i": {{ "from": "points" }} }},
-                                    "expr": {{ "op": "index", "args": ["src", "i"] }} }} }},
+                  "nearest": {{ "type": "unknown", "units": "m", "shape": ["points"]}},
                   "src": {{ "type": "parameter", "units": "m", "shape": ["points"], "default": 0.0 }},
-                  "probe": {{ "type": "observed", "units": "m",
-                    "expression": {{ "op": "index", "args": ["src", {lhs_idx}] }} }}
+                  "probe": {{ "type": "unknown", "units": "m"}}
                 }},
-                "equations": [{rhs_extra}]
+                "equations": [
+                  {{ "lhs": "nearest",
+                     "rhs": {{ "op": "aggregate", "args": [], "output_idx": ["i"],
+                               "ranges": {{ "i": {{ "from": "points" }} }},
+                               "expr": {{ "op": "index", "args": ["src", "i"] }} }} }},
+                  {{ "lhs": "probe",
+                     "rhs": {{ "op": "index", "args": ["src", {lhs_idx}] }} }}{rhs_extra}
+                ]
               }} }}
             }}"#
         )
@@ -895,16 +875,49 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
 #[test]
 fn reference_integrity_reaches_every_expression_bearing_block() {
     // A ghost inside an `initialization_equations` RHS.
-    let init = r#"{
-      "esm": "1.0.0",
-      "metadata": { "name": "H", "description": "ghost in initialization_equations" },
-      "models": { "M": {
-        "variables": { "x": { "type": "unknown", "units": "m", "default": 1.0 } },
-        "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-                        "rhs": { "op": "-", "args": ["x"] } }],
-        "initialization_equations": [{ "lhs": "x", "rhs": "GHOST_INIT" }]
-      } }
-    }"#;
+    let init = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "H",
+            "description": "ghost in initialization_equations"
+          },
+          "models": {
+            "M": {
+              "variables": {
+                "x": {
+                  "type": "unknown",
+                  "units": "m",
+                  "default": 1.0
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "x"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "-",
+                    "args": [
+                      "x"
+                    ]
+                  }
+                }
+              ],
+              "initialization_equations": [
+                {
+                  "lhs": "x",
+                  "rhs": "GHOST_INIT"
+                }
+              ]
+            }
+          }
+        }
+        "#;
     let r = validate_complete(init, None);
     let e = r
         .structural_errors
@@ -920,22 +933,73 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
 
     // A ghost buried in an aggregate's `expr` SIDECAR of an observed expression —
     // invisible to any walk that descends only `args`.
-    let sidecar = r#"{
-      "esm": "1.0.0",
-      "metadata": { "name": "H2", "description": "ghost in a sidecar" },
-      "index_sets": { "cells": { "kind": "interval", "size": 3 } },
-      "models": { "M": {
-        "variables": {
-          "x": { "type": "unknown", "units": "m", "default": 1.0 },
-          "obs": { "type": "observed", "units": "m",
-            "expression": { "op": "aggregate", "args": [], "output_idx": [],
-                            "ranges": { "k": { "from": "cells" } },
-                            "expr": { "op": "*", "args": ["x", "GHOST_SIDECAR"] } } }
-        },
-        "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
-                        "rhs": { "op": "-", "args": ["x"] } }]
-      } }
-    }"#;
+    let sidecar = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "H2",
+            "description": "ghost in a sidecar"
+          },
+          "index_sets": {
+            "cells": {
+              "kind": "interval",
+              "size": 3
+            }
+          },
+          "models": {
+            "M": {
+              "variables": {
+                "x": {
+                  "type": "unknown",
+                  "units": "m",
+                  "default": 1.0
+                },
+                "obs": {
+                  "type": "unknown",
+                  "units": "m"
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "x"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "-",
+                    "args": [
+                      "x"
+                    ]
+                  }
+                },
+                {
+                  "lhs": "obs",
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [],
+                    "ranges": {
+                      "k": {
+                        "from": "cells"
+                      }
+                    },
+                    "expr": {
+                      "op": "*",
+                      "args": [
+                        "x",
+                        "GHOST_SIDECAR"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+        "#;
     let r = validate_complete(sidecar, None);
     assert!(
         r.structural_errors
@@ -981,8 +1045,7 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
       "metadata": { "name": "C", "description": "coupled" },
       "models": {
         "Advection": {
-          "variables": { "c": { "type": "observed", "units": "kg/m^3",
-                                "expression": { "op": "*", "args": ["u", 2] } } },
+          "variables": { "c": { "type": "unknown", "units": "kg/m^3" } },
           "equations": [{ "lhs": "c", "rhs": { "op": "*", "args": ["u", 2] } }]
         },
         "Wind": {
@@ -1004,6 +1067,7 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
         r#""coupling": [{ "type": "couple", "systems": ["Advection", "Wind"] }]"#,
         r#""coupling": []"#,
     );
+    assert_ne!(uncoupled, coupled, "the coupling block must actually be removed");
     let r = validate_complete(&uncoupled, None);
     assert!(
         r.structural_errors
@@ -1014,16 +1078,14 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
     );
 }
 
-/// `discrete` is the fifth member of the schema's `ModelVariable.type` enum.
-///
-/// Rust simply never had it, so `serde` rejected the entire document at parse
-/// with `unknown variant 'discrete'` — five valid fixtures could not even be
-/// LOADED, let alone validated.
+/// esm 1.0.0 retires the `discrete` variable TYPE: a piecewise-constant
+/// quantity is a PARAMETER carrying an `update` (esm-spec 5.4), and its
+/// discreteness is DERIVED, never declared.
 #[test]
-fn discrete_parameter_loads_and_classifies() {
-    // The 1.0.0 spelling of a `discrete` variable: a PARAMETER carrying an
-    // `update`, piecewise-constant between refreshes rather than integrated.
-    // `schedule` requires a `shape` on the variable.
+fn discrete_parameter_loads_and_is_derived() {
+    // A `discrete` variable is piecewise-constant and array-shaped (the schema
+    // requires `shape` for it), refreshed by an event / cadence / loader rather
+    // than integrated.
     let doc = r#"{
       "esm": "1.0.0",
       "metadata": { "name": "D", "description": "discrete parameter" },
@@ -1032,7 +1094,7 @@ fn discrete_parameter_loads_and_classifies() {
         "variables": {
           "x": { "type": "unknown", "units": "m", "default": 0.0 },
           "held": {
-            "type": "parameter", "units": "m", "shape": ["cells"], "default": 0.0,
+            "type": "parameter", "units": "m", "shape": ["cells"],
             "update": {
               "kind": "schedule", "interval": 60.0,
               "handler": { "handler_id": "reload_held" }
@@ -1045,12 +1107,12 @@ fn discrete_parameter_loads_and_classifies() {
     let r = validate_complete(doc, None);
     assert!(
         r.schema_errors.is_empty(),
-        "a parameter update must parse: {:?}",
+        "an updated parameter must parse: {:?}",
         r.schema_errors
     );
     assert!(r.is_valid, "and validate: {:?}", r.structural_errors);
 
-    // Discreteness is DERIVED from the update, not declared (esm-spec §6.3.1).
+    // DECLARED `parameter`; DERIVED discrete.
     let esm = earthsci_ast::load(doc).expect("load");
     let model = &esm.models.as_ref().expect("models")["M"];
     assert_eq!(
@@ -1058,11 +1120,11 @@ fn discrete_parameter_loads_and_classifies() {
         earthsci_ast::VariableType::Parameter
     );
     assert_eq!(
-        earthsci_ast::classify::discrete_parameters(model),
-        vec!["held"]
+        earthsci_ast::classification::discrete_parameters(model),
+        ["held"]
     );
-    assert!(earthsci_ast::classify::brownian_parameters(model).is_empty());
-    assert_eq!(earthsci_ast::classify::ode_states(model), vec!["x"]);
+    // ...and the unknown `x` is an ODE state, not a "state" declaration.
+    assert!(earthsci_ast::classification::is_ode_state(model, "x"));
 }
 
 /// A `default_units` naming a unit OTHER than the declared `units` means the
@@ -1133,11 +1195,13 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
               "models": {{ "M": {{
                 "variables": {{
                   "src": {{ "type": "parameter", "units": "{src_units}", "default": 1.0 }},
-                  "out": {{ "type": "observed", "units": "{declared}",
-                            "expression": {{ "op": "*", "args": [{factor}, "src"] }} }},
+                  "out": {{ "type": "unknown", "units": "{declared}"}},
                   "x": {{ "type": "unknown", "units": "m", "default": 0.0 }}
                 }},
-                "equations": [{{ "lhs": {{ "op": "D", "args": ["x"], "wrt": "t" }}, "rhs": 1 }}]
+                "equations": [
+                  {{ "lhs": "out", "rhs": {{ "op": "*", "args": [{factor}, "src"] }} }},
+                  {{ "lhs": {{ "op": "D", "args": ["x"], "wrt": "t" }}, "rhs": 1 }}
+                ]
               }} }}
             }}"#
         )

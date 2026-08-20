@@ -29,7 +29,7 @@ end
                     "body" => Dict("op" => "*",
                                    "args" => [Dict("op" => "-", "args" => ["k"]), "x"]))),
             "variables" => Dict(
-                "a" => Dict("type" => "state", "units" => "1", "default" => 1.5),
+                "a" => Dict("type" => "unknown", "units" => "1", "default" => 1.5),
                 "k" => Dict("type" => "parameter", "units" => "1", "default" => 0.25)),
             "equations" => [Dict(
                 "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
@@ -70,7 +70,7 @@ end
             "metadata" => Dict("name" => "plain"),
             "models" => Dict("P" => Dict(
                 "variables" => Dict(
-                    "a" => Dict("type" => "state", "units" => "1", "default" => 2.0)),
+                    "a" => Dict("type" => "unknown", "units" => "1", "default" => 2.0)),
                 "equations" => [Dict(
                     "lhs" => Dict("op" => "D", "args" => ["a"], "wrt" => "t"),
                     "rhs" => Dict("op" => "*", "args" => [-1, "a"]))],

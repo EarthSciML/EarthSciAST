@@ -98,7 +98,7 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 	var residualPaths []string
 	for _, mname := range names {
 		m := file.Models[mname]
-		if !isDAETargetSystem(&m) {
+		if !isDAETargetSystem(file, &m) {
 			info.PerModel[mname] = 0
 			info.PerModelFactored[mname] = 0
 			continue
@@ -146,6 +146,11 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 
 // factorTrivialDAE runs trivial-algebraic factoring on a single model
 // until fixed point. Returns the number of equations factored out.
+//
+// Since esm 1.0.0 an observed unknown's definition IS one of these equations
+// (`variables[v].expression` is gone), so substituting into every other equation
+// is the whole job — there is no second, variable-side copy of the definition
+// left to keep in step.
 //
 // The `y` of a candidate equation `y ~ f(...)` is eliminated only when `y` does
 // not occur anywhere in `f` — and "anywhere" now genuinely means anywhere,
@@ -196,12 +201,6 @@ func factorTrivialDAE(model *Model, indep string) (int, error) {
 			}
 			model.Equations[j] = out
 		}
-		// A second substitution pass over the variables' own definitions used to be
-		// needed here, because an observed variable carried its defining
-		// expression in `variables[v].expression`. esm 1.0.0 removed that field:
-		// every definition is now an EQUATION, so the loop above already
-		// substitutes into all of them and a separate pass would have nothing to
-		// visit.
 		model.Equations = append(model.Equations[:idx], model.Equations[idx+1:]...)
 		factored++
 	}
@@ -233,14 +232,19 @@ func isDifferentialEquation(eq Equation, indep string) bool {
 }
 
 // isDAETargetSystem reports whether the DAE contract applies to model.
-// Models declared with a non-ODE SystemKind are handed off to other
-// solver stacks (nonlinear, SDE, PDE) and are outside the DAE/ODE
-// classification contract.
-func isDAETargetSystem(model *Model) bool {
-	if model.SystemKind == nil {
-		return true
+// Systems that are nonlinear, SDE, or PDE are handed off to other solver stacks
+// and are outside the DAE/ODE classification contract.
+//
+// The kind is the EFFECTIVE one (classify.go): the declared `system_kind` when
+// the model carries one, and the esm-spec §6.3.1 derivation otherwise. Before
+// 1.0.0 an undeclared model was assumed ODE, which quietly ran the factoring
+// over algebraic-only (nonlinear) systems that merely omitted the field.
+func isDAETargetSystem(file *ESMFile, model *Model) bool {
+	var domain *Domain
+	if file != nil {
+		domain = file.Domain
 	}
-	return *model.SystemKind == SystemKindODE
+	return EffectiveSystemKind(model, domain) == SystemKindODE
 }
 
 // fileIndepVar returns the independent (time) variable for the document. Every

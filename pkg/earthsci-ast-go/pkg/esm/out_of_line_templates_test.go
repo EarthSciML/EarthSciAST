@@ -244,13 +244,11 @@ func TestOOL_EmitMaterializedRegistry(t *testing.T) {
 		t.Fatalf("decode emit: %v", err)
 	}
 	adv := doc["models"].(map[string]any)["Advection"].(map[string]any)
-	// The §9.6.4 rule-8 stamp is a FLOOR: the emitted document must declare AT
-	// LEAST 0.9.0, the first version whose loader implements Option B. The source
-	// fixture declares 1.0.0, so the stamp must leave it alone -- lowering it to
-	// 0.9.0 would have the document disclaim the unified variable model it is
-	// actually written in.
+	// Rule 8's version stamp is a FLOOR — "esm: 0.9.0 OR LATER" — so a 1.0.0
+	// document stays 1.0.0 on emit rather than being downgraded. The golden
+	// (emitted.esm) is the byte-exact pin; this asserts the floor holds.
 	if doc["esm"] != "1.0.0" {
-		t.Errorf("esm = %v; want 1.0.0 (rule 8 stamps a floor and never downgrades)", doc["esm"])
+		t.Errorf("esm = %v; want 1.0.0 (rule 8 stamp is a floor, not an assignment)", doc["esm"])
 	}
 	if _, has := adv["expression_template_imports"]; has {
 		t.Errorf("expression_template_imports should be consumed")
@@ -295,16 +293,43 @@ func TestOOL_EmitRenameDottedKeys(t *testing.T) {
 	}
 }
 
+// oolVarDef returns the DEFINING EXPRESSION of an observed unknown in a RAW
+// document view: the RHS of the equation whose LHS is that bare name.
+//
+// esm 1.0.0 removed the `expression` field on a variable — an unknown's
+// behaviour is stated by the model's `equations` and nowhere else — so every
+// assertion that used to read `variables[v].expression` reads its equation here
+// instead. The template machinery is unaffected: the substitution site simply
+// moved with the expression.
+func oolVarDef(t *testing.T, root map[string]any, comp, v string) any {
+	t.Helper()
+	model, ok := root["models"].(map[string]any)[comp].(map[string]any)
+	if !ok {
+		t.Fatalf("model %q not found", comp)
+	}
+	eqs, _ := model["equations"].([]any)
+	for _, e := range eqs {
+		eq, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		if lhs, ok := eq["lhs"].(string); ok && lhs == v {
+			return eq["rhs"]
+		}
+	}
+	t.Fatalf("no defining equation for %s.%s", comp, v)
+	return nil
+}
+
 // -----------------------------------------------------------------------
 // eager_target_bearing (§9.6.4 rule 3): positive + negative.
 // -----------------------------------------------------------------------
 
 func TestOOL_EagerTargetBearing(t *testing.T) {
 	loaded := oolLoad(t, "eager_target_bearing")
-	rhsFor := oolEquationRHS(t, loaded, "m")
 	// POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
 	// lowered by the `central` rule → an aggregate. No surviving ref.
-	deager := normTree(rhsFor["d_eager"]).(map[string]any)
+	deager := normTree(oolVarDef(t, loaded, "m", "d_eager")).(map[string]any)
 	if deager["op"] != "index" {
 		t.Errorf("d_eager op = %v; want index", deager["op"])
 	}
@@ -312,7 +337,7 @@ func TestOOL_EagerTargetBearing(t *testing.T) {
 		t.Errorf("d_eager arg[0] op = %v; want aggregate (D lowered at load)", deager["args"].([]any)[0])
 	}
 	// NEGATIVE: scale_c (target-free) reference SURVIVES.
-	dsurv := normTree(rhsFor["d_survive"]).(map[string]any)
+	dsurv := normTree(oolVarDef(t, loaded, "m", "d_survive")).(map[string]any)
 	arg0 := dsurv["args"].([]any)[0]
 	if !isApplyNode(arg0) || arg0.(map[string]any)["name"] != "scale_c" {
 		t.Errorf("d_survive arg[0] = %v; want surviving scale_c reference", arg0)
@@ -330,7 +355,7 @@ func TestOOL_EagerTargetBearing(t *testing.T) {
 
 func TestOOL_OpacityNegative(t *testing.T) {
 	loaded := oolLoad(t, "opacity_negative")
-	flux := normTree(oolEquationRHS(t, loaded, "m")["flux"]).(map[string]any)
+	flux := normTree(oolVarDef(t, loaded, "m", "flux")).(map[string]any)
 	if flux["op"] != "D" {
 		t.Errorf("flux op = %v; want D (compound rule did NOT fire, no marker 999)", flux["op"])
 	}
@@ -351,7 +376,7 @@ func TestOOL_OpacityNegative(t *testing.T) {
 
 func TestOOL_OpacityPriorityShadowing(t *testing.T) {
 	loaded := oolLoad(t, "opacity_priority_shadowing")
-	flux := normTree(oolEquationRHS(t, loaded, "m")["flux"]).(map[string]any)
+	flux := normTree(oolVarDef(t, loaded, "m", "flux")).(map[string]any)
 	if flux["op"] != "*" {
 		t.Fatalf("flux op = %v; want * (generic rule fired)", flux["op"])
 	}
@@ -384,12 +409,8 @@ func TestOOL_PerInstantiationValidation(t *testing.T) {
 	if etErr.Code != "geometry_manifold_invalid" {
 		t.Errorf("code = %s; want geometry_manifold_invalid", etErr.Code)
 	}
-	// The call site is the DEFINING EQUATION of area_bad now, so the message
-	// locates it by equation index rather than by variable name -- 1.0.0 removed
-	// the `variables/<v>/expression` position the template application used to
-	// occupy. What matters is that it points at the offending instantiation.
-	if !strings.Contains(etErr.Message, "equations/1/rhs") {
-		t.Errorf("message must locate the offending call site: %s", etErr.Message)
+	if !strings.Contains(etErr.Message, "area_bad") {
+		t.Errorf("message must name offending call site area_bad: %s", etErr.Message)
 	}
 	if !strings.Contains(etErr.Message, "overlap") {
 		t.Errorf("message must name template overlap: %s", etErr.Message)
@@ -417,7 +438,7 @@ func TestOOL_FlattenRegistryMerge(t *testing.T) {
 	}
 	// References rewritten in lockstep.
 	refName := func(comp, v string) any {
-		return oolEquationRHS(t, root, comp)[v].(map[string]any)["name"]
+		return oolVarDef(t, root, comp, v).(map[string]any)["name"]
 	}
 	if refName("A", "za") != "A.s" {
 		t.Errorf("A.za name = %v; want A.s", refName("A", "za"))
@@ -619,31 +640,4 @@ func mustRead(t *testing.T, parts ...string) string {
 		t.Fatalf("read %v: %v", parts, err)
 	}
 	return string(data)
-}
-
-// oolEquationRHS indexes a component's `equations` by the bare-variable LHS each
-// one defines.
-//
-// Every one of these tests used to read `variables[v].expression`, because that
-// is where an observed unknown's definition -- and therefore any surviving or
-// expanded template reference -- lived. esm 1.0.0 removed the field, so the
-// lowering result is the RHS of the defining equation instead.
-func oolEquationRHS(t *testing.T, root map[string]any, component string) map[string]any {
-	t.Helper()
-	model, ok := root["models"].(map[string]any)[component].(map[string]any)
-	if !ok {
-		t.Fatalf("no model %q in document", component)
-	}
-	out := map[string]any{}
-	eqs, _ := model["equations"].([]any)
-	for _, raw := range eqs {
-		eq, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if lhs, ok := eq["lhs"].(string); ok {
-			out[lhs] = eq["rhs"]
-		}
-	}
-	return out
 }

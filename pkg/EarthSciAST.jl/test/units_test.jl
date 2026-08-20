@@ -430,7 +430,7 @@ using Unitful
 
         # Create a simple model with consistent units
         variables = Dict(
-            "x" => ModelVariable(StateVariable, units="m", default=0.0),
+            "x" => ModelVariable(UnknownVariable, units="m", default=0.0),
             "v" => ModelVariable(ParameterVariable, units="m/s", default=1.0)
         )
 

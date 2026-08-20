@@ -45,6 +45,7 @@ import re
 from typing import Any
 
 from . import index_alignment, op_registry
+from .classification import algebraic_unknowns, observed_definitions, ode_states
 from .json_walk import iter_child_values
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
@@ -427,11 +428,10 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
     for mname, m in (data.get("models") or {}).items():
         if not isinstance(m, dict):
             continue
-        state_vars = {
-            n
-            for n, v in (m.get("variables") or {}).items()
-            if isinstance(v, dict) and v.get("type") == "state"
-        }
+        # The unknowns the solver integrates or solves for -- DERIVED from the
+        # equations (esm-spec §6.3.1). An observed unknown is eliminable, so it
+        # is not a "state" for the purposes of the continuous-relational guard.
+        state_vars = set(ode_states(m)) | set(algebraic_unknowns(m))
         for site in _model_expression_sites(m, mname):
             location, expr = site[0], site[1]
             pointer = _pointer(location)
@@ -745,18 +745,11 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
             sym_info[pname] = {"type": "parameter", **pdef}
         reaction_systems[rsname] = sym_info
 
-    data_loaders = {}
-    for dname, d in data.get("data_loaders", {}).items():
-        loader_info = {}
-        for vname, vdef in d.get("variables", {}).items():
-            loader_info[vname] = vdef
-        data_loaders[dname] = loader_info
-
     # Global symbol set: the UNION of every DECLARATION site. Reference integrity
     # (§4.9.5) is only as good as this set — a name that is genuinely declared but
     # missing here turns the false-negative fix into a FALSE-POSITIVE rejection,
     # which is a net loss. The sites are: every model variable/parameter, every
-    # reaction species/parameter, every data-loader variable, the symbols the
+    # reaction species/parameter, the symbols the
     # DOCUMENT declares implicitly (the domain's independent variable and every
     # index-set / coordinate name — §5.3), and a coupling edge's
     # `config.callback_variables`, which a callback INJECTS into the target
@@ -766,8 +759,6 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
         global_symbols.update(m.keys())
     for rs in reaction_systems.values():
         global_symbols.update(rs.keys())
-    for d in data_loaders.values():
-        global_symbols.update(d.keys())
     for c in data.get("coupling", []) or []:
         if not isinstance(c, dict):
             continue
@@ -779,12 +770,16 @@ def _build_symbol_tables(data: dict[str, Any]) -> dict[str, Any]:
                 global_symbols.add(name)
                 global_symbols.add(name.split(".")[-1])
 
+    # A data source is NOT a system from 1.0.0: it is not a coupling endpoint,
+    # not a subsystem, and not a path root in a scoped reference. It contributes
+    # no symbols and no system name -- which is exactly what makes
+    # `data_source_undefined` the ONLY way to name one wrongly.
     return {
         "models": models,
         "reaction_systems": reaction_systems,
-        "data_loaders": data_loaders,
+        "data_sources": set(data.get("data_sources") or {}),
         "global_symbols": global_symbols,
-        "all_systems": set(models.keys()) | set(reaction_systems.keys()) | set(data_loaders.keys()),
+        "all_systems": set(models.keys()) | set(reaction_systems.keys()),
         "ref_systems": ref_systems,
     }
 
@@ -836,9 +831,6 @@ def _resolve_scoped_ref(ref: str, tables: dict[str, Any]) -> tuple:
             return (system, var, "ok")
     if system in tables["reaction_systems"]:
         if var in tables["reaction_systems"][system]:
-            return (system, var, "ok")
-    if system in tables["data_loaders"]:
-        if var in tables["data_loaders"][system]:
             return (system, var, "ok")
     return (system, var, "no_var")
 
@@ -939,6 +931,35 @@ def _check_variable_references(
                         )
 
 
+def _update_rules_with_paths(update: Any):
+    """Yield ``(path_suffix, rule)`` for a parameter's ``update``: ``("", rule)``
+    for the single-rule object form and ``("[i]", rule)`` for each entry of the
+    ordered array form (esm-spec §5.4)."""
+    if isinstance(update, dict):
+        yield "", update
+    elif isinstance(update, list):
+        for i, rule in enumerate(update):
+            yield f"[{i}]", rule
+
+
+def _lhs_is_closed_definition(lhs: Any, declared: set) -> bool:
+    """True when an equation's LHS makes it a closed local definition: a
+    derivative, or a bare / indexed reference to a locally declared variable."""
+    if isinstance(lhs, str):
+        return lhs in declared
+    if not isinstance(lhs, dict):
+        return False
+    op = lhs.get("op")
+    if op == "D":
+        return True
+    if op in ("index", "ic"):
+        args = lhs.get("args") or []
+        return bool(args) and _lhs_is_closed_definition(args[0], declared)
+    if op == "aggregate":
+        return _lhs_is_closed_definition(lhs.get("expr"), declared)
+    return False
+
+
 def _model_expression_sites(m: dict[str, Any], mname: str):
     """Every EXPRESSION-BEARING field of a model, as
     ``(location, expression, check_bare_names, phrase)``.
@@ -963,27 +984,59 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
     for values coupled in from another system, which are not declared locally.
     Every other site is a closed definition — every name in it must resolve.
     """
+    declared = set(m.get("variables") or {})
     for i, eq in enumerate(m.get("equations", []) or []):
-        lhs_is_derivative = isinstance(eq.get("lhs"), dict) and eq["lhs"].get("op") == "D"
+        lhs = eq.get("lhs")
+        # An equation is a CLOSED definition -- every bare name in its RHS must
+        # resolve -- when its LHS is a derivative or names a locally declared
+        # unknown. The latter is the 1.0.0 observed form: what used to live in
+        # `variables[v].expression` (and was checked) is now a bare-variable-LHS
+        # equation, so exempting every non-derivative LHS would reopen exactly
+        # the false negative `_model_expression_sites` was written to close.
+        # The exemption that remains is the operator-composed shape, whose LHS
+        # names no local variable and whose RHS is coupled in from elsewhere.
+        closed = _lhs_is_closed_definition(lhs, declared)
         for side in ("lhs", "rhs"):
             if side in eq:
                 yield (
                     f"models/{mname}/equations[{i}]/{side}",
                     eq[side],
-                    lhs_is_derivative and side == "rhs",
+                    closed and side == "rhs",
                     None,
                     {"equation_index": i, "expected_in": "variables"},
                 )
 
+    # A parameter's `update` carries expression positions (esm-spec §5.4): the
+    # `condition`/`crossing` trigger, the `expression` value form, and the `from`
+    # binding's `unit_conversion` (§8.5). All are subject to reference integrity;
+    # the last of these used to live on the data loader and is the one site that
+    # MOVED into `models` with 1.0.0.
     for vname, vdef in (m.get("variables") or {}).items():
-        if isinstance(vdef, dict) and vdef.get("expression") is not None:
-            yield (
-                f"models/{mname}/variables/{vname}/expression",
-                vdef["expression"],
-                True,
-                "observed variable expression",
-                {},
-            )
+        if not isinstance(vdef, dict):
+            continue
+        for suffix, rule in _update_rules_with_paths(vdef.get("update")):
+            base = f"models/{mname}/variables/{vname}/update{suffix}"
+            if not isinstance(rule, dict):
+                continue
+            if rule.get("when") is not None:
+                yield (f"{base}/when", rule["when"], True, "parameter update trigger", {})
+            if rule.get("expression") is not None:
+                yield (
+                    f"{base}/expression",
+                    rule["expression"],
+                    True,
+                    "parameter update expression",
+                    {},
+                )
+            binding = rule.get("from")
+            if isinstance(binding, dict) and binding.get("unit_conversion") is not None:
+                yield (
+                    f"{base}/from/unit_conversion",
+                    binding["unit_conversion"],
+                    True,
+                    "unit_conversion expression",
+                    {},
+                )
 
     for vname, expr in (m.get("guesses") or {}).items():
         yield (f"models/{mname}/guesses/{vname}", expr, True, "guesses expression", {})
@@ -1014,7 +1067,6 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
             )
         for key in ("affects", "affect_neg"):
             for j, aff in enumerate(ev.get(key, []) or []):
-                # A FunctionalAffect (handler_id/read_vars) carries no `rhs`.
                 if isinstance(aff, dict) and "rhs" in aff:
                     yield (
                         f"models/{mname}/continuous_events[{i}]/{key}[{j}]/rhs",
@@ -1063,37 +1115,6 @@ def _model_expression_sites(m: dict[str, Any], mname: str):
 def _pointer(location: str) -> str:
     """Slash/bracket location (``models/M/equations[0]/rhs``) -> JSON Pointer."""
     return "/" + location.replace("[", "/").replace("]", "").strip("/")
-
-
-def _check_data_loader_expressions(
-    data: dict[str, Any], tables: dict[str, Any], errors: list[str]
-) -> None:
-    """§4.9.5: a data loader's ``unit_conversion`` is an Expression, so its free
-    symbols must resolve like any other. It was never walked, so an undefined
-    name here was invisible."""
-    global_symbols = tables["global_symbols"]
-    for lname, loader in (data.get("data_loaders") or {}).items():
-        if not isinstance(loader, dict):
-            continue
-        for vname, vdef in (loader.get("variables") or {}).items():
-            if not isinstance(vdef, dict):
-                continue
-            expr = vdef.get("unit_conversion")
-            if expr is None:
-                continue
-            bound = _expression_bound_symbols(expr)
-            for ref in _walk_expression_strings(expr):
-                if ref == "_var" or ref in bound or "." in ref:
-                    continue
-                if ref not in global_symbols:
-                    errors.append(
-                        (
-                            f"/data_loaders/{lname}/variables/{vname}/unit_conversion",
-                            f'Variable "{ref}" referenced in unit_conversion expression '
-                            f"but not declared",
-                            {"variable": ref},
-                        )
-                    )
 
 
 def _check_coupling_expressions(
@@ -1249,54 +1270,98 @@ def _check_circular_references(
                 break
 
 
-def _check_data_loader_variables(data: dict[str, Any], errors: list[str]) -> None:
-    """Each variable in data_loader.variables must declare file_variable and units."""
-    for dname, d in data.get("data_loaders", {}).items():
-        variables = d.get("variables", {})
-        if not variables:
-            errors.append(f"data_loaders/{dname}/variables: must declare at least one variable")
-        for vname, vdef in variables.items():
+def _check_data_source_references(data: dict[str, Any], errors: list[str]) -> None:
+    """``data_source_undefined``: a parameter whose ``update.source`` names no
+    declared ``data_sources`` entry (esm-spec §8).
+
+    A source is not a component from 1.0.0, so ``update.source`` is the ONLY way
+    a document can name one — and it is schema-valid by construction (any
+    string), which is what makes this a genuinely reachable structural finding
+    rather than one masked by a schema error.
+    """
+    declared = data.get("data_sources") or {}
+    available = sorted(declared) if isinstance(declared, dict) else []
+    for mname, m in data.get("models", {}).items():
+        if not isinstance(m, dict):
+            continue
+        for vname, vdef in (m.get("variables") or {}).items():
             if not isinstance(vdef, dict):
                 continue
-            if "file_variable" not in vdef:
+            for suffix, rule in _update_rules_with_paths(vdef.get("update")):
+                if not isinstance(rule, dict) or rule.get("kind") != "data":
+                    continue
+                source = rule.get("source")
+                if source in available:
+                    continue
                 errors.append(
-                    f"data_loaders/{dname}/variables/{vname}: missing required 'file_variable' field"
+                    (
+                        f"/models/{mname}/variables/{vname}/update{suffix.replace('[', '/').replace(']', '')}",
+                        f"Parameter update names data source '{source}', which the "
+                        f"document does not declare",
+                        {
+                            "variable": vname,
+                            "source": source,
+                            "available_sources": available,
+                        },
+                    )
                 )
-            if "units" not in vdef:
-                errors.append(
-                    f"data_loaders/{dname}/variables/{vname}: missing required 'units' field"
-                )
 
 
-def _check_discrete_parameters(data: dict[str, Any], errors: list[str]) -> None:
-    """discrete_parameters list must reference variables of type 'parameter'.
+def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> None:
+    """``event_affects_parameter``: an event ``affects`` LHS naming a PARAMETER.
 
-    The pointer names the event's ``discrete_parameters`` FIELD — the node that
-    carries the defect — as ``/models/M/discrete_events/0/discrete_parameters``
-    (CONFORMANCE_SPEC §7.1.2; TypeScript reference).
+    From 1.0.0 an event may affect UNKNOWNS only. A parameter that changes during
+    a run declares its own ``update`` block, so the 0.x ``discrete_parameters``
+    list and the ``functional_affect`` handler are both gone; the defect they
+    used to describe is now reached through ``affects``.
+
+    The pointer names the offending affect entry, and the remedy names the update
+    rule that replaces it — for a periodic trigger there is an exact one.
     """
     for mname, m in data.get("models", {}).items():
-        var_types = {n: v.get("type") for n, v in m.get("variables", {}).items()}
-        for ei, event in enumerate(m.get("discrete_events", [])):
-            dp_pointer = f"/models/{mname}/discrete_events/{ei}/discrete_parameters"
-            for dp in event.get("discrete_parameters", []) or []:
-                if dp not in var_types:
-                    errors.append(
-                        (
-                            dp_pointer,
-                            f'discrete_parameters entry "{dp}" does not match a declared parameter',
-                            {"parameter": dp},
+        if not isinstance(m, dict):
+            continue
+        var_types = {n: v.get("type") for n, v in (m.get("variables") or {}).items()
+                     if isinstance(v, dict)}
+        for event_kind, key in (("continuous", "continuous_events"), ("discrete", "discrete_events")):
+            for ei, event in enumerate(m.get(key, []) or []):
+                if not isinstance(event, dict):
+                    continue
+                trigger = event.get("trigger") if isinstance(event.get("trigger"), dict) else {}
+                for side in ("affects", "affect_neg"):
+                    for ai, affect in enumerate(event.get(side) or []):
+                        if not isinstance(affect, dict):
+                            continue
+                        lhs = affect.get("lhs")
+                        if not isinstance(lhs, str) or var_types.get(lhs) != "parameter":
+                            continue
+                        details = {
+                            "variable": lhs,
+                            "variable_type": "parameter",
+                            "event_name": event.get("name", ""),
+                            "event_type": event_kind,
+                        }
+                        trigger_type = trigger.get("type")
+                        if trigger_type:
+                            details["trigger_type"] = trigger_type
+                        if trigger_type == "periodic" and trigger.get("interval") is not None:
+                            details["remedy"] = (
+                                f"declare the change as update: {{kind: \"schedule\", "
+                                f"interval: {trigger['interval']}}} on '{lhs}' (esm-spec 5.4)"
+                            )
+                        else:
+                            details["remedy"] = (
+                                "declare the change as the parameter's own update "
+                                "(esm-spec 5.4)"
+                            )
+                        errors.append(
+                            (
+                                f"/models/{mname}/{key}/{ei}/{side}/{ai}",
+                                f"Event '{event.get('name', '')}' affects '{lhs}', which is "
+                                f"a parameter; an event may affect unknowns only",
+                                details,
+                            )
                         )
-                    )
-                elif var_types[dp] != "parameter":
-                    errors.append(
-                        (
-                            dp_pointer,
-                            f'discrete_parameters entry "{dp}" references variable of type '
-                            f"'{var_types[dp]}', expected 'parameter'",
-                            {"parameter": dp, "actual_type": var_types[dp]},
-                        )
-                    )
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$")
@@ -1324,8 +1389,10 @@ def _check_metadata_formats(data: dict[str, Any], errors: list[str]) -> None:
 
 
 def _check_temporal_resolution(data: dict[str, Any], errors: list[str]) -> None:
-    """Validate ISO 8601 duration strings in data_loader.temporal fields."""
-    for dname, d in data.get("data_loaders", {}).items():
+    """Validate ISO 8601 duration strings in a data source's temporal fields."""
+    for dname, d in data.get("data_sources", {}).items():
+        if not isinstance(d, dict):
+            continue
         temporal = d.get("temporal", {})
         if not isinstance(temporal, dict):
             continue
@@ -1333,7 +1400,7 @@ def _check_temporal_resolution(data: dict[str, Any], errors: list[str]) -> None:
             res = temporal.get(field_name)
             if isinstance(res, str) and res and not _DURATION_RE.match(res):
                 errors.append(
-                    f"data_loaders/{dname}/temporal/{field_name}: '{res}' is not a valid ISO 8601 duration"
+                    f"data_sources/{dname}/temporal/{field_name}: '{res}' is not a valid ISO 8601 duration"
                 )
 
 
@@ -1346,10 +1413,6 @@ def _collect_var_units(tables: dict[str, Any]) -> dict[str, str]:
                 var_units[vname] = vdef["units"]
     for rs in tables["reaction_systems"].values():
         for vname, vdef in rs.items():
-            if vdef.get("units") is not None:
-                var_units[vname] = vdef["units"]
-    for d in tables["data_loaders"].values():
-        for vname, vdef in d.items():
             if vdef.get("units") is not None:
                 var_units[vname] = vdef["units"]
     return var_units
@@ -1587,13 +1650,13 @@ def _check_conversion_factor_consistency(data: dict[str, Any], errors: list[str]
 
     for mname, m in data.get("models", {}).items():
         var_units_map = {vname: vdef.get("units") for vname, vdef in m.get("variables", {}).items()}
-        for vname, vdef in m.get("variables", {}).items():
-            if vdef.get("type") != "observed":
-                continue
+        # An observed unknown's defining expression is its bare-variable-LHS
+        # equation's RHS (esm-spec §6.3.1), not a `variables[v].expression`.
+        for vname, expr in observed_definitions(m).items():
+            vdef = m.get("variables", {}).get(vname) or {}
             lhs_units = vdef.get("units")
             if not lhs_units:
                 continue
-            expr = vdef.get("expression")
             if not isinstance(expr, dict) or expr.get("op") != "*":
                 continue
             args = expr.get("args") or []
@@ -1694,10 +1757,8 @@ def _check_physical_constant_units(data: dict[str, Any], errors: list[str]) -> N
             if _units_compatible(declared, canonical):
                 continue
             usage_vname = None
-            for other_vname, other_vdef in variables.items():
-                if other_vdef.get("type") != "observed":
-                    continue
-                if _expr_references_name(other_vdef.get("expression"), vname):
+            for other_vname, other_expr in observed_definitions(m).items():
+                if _expr_references_name(other_expr, vname):
                     usage_vname = other_vname
                     break
             target = f"models/{mname}/variables/{usage_vname or vname}"
@@ -1953,10 +2014,10 @@ def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors
     var_units = _collect_var_units(tables)
 
     for mname, m in data.get("models", {}).items():
-        # Observed variables: check direct addition/subtraction operand compatibility
-        for vname, vdef in m.get("variables", {}).items():
-            if vdef.get("type") == "observed" and "expression" in vdef:
-                expr = vdef["expression"]
+        # Observed unknowns: check direct addition/subtraction operand
+        # compatibility in the DEFINING EQUATION's RHS (esm-spec §6.3.1).
+        for vname, expr in observed_definitions(m).items():
+            if True:
                 var_pointer = f"/models/{mname}/variables/{vname}"
                 if isinstance(expr, dict) and expr.get("op") in ("+", "-"):
                     sub_units = []
@@ -2074,7 +2135,7 @@ def _check_operator_state_coverage(data: dict[str, Any], errors: list[str]) -> N
     for op in data.get("operators", {}).values():
         op_modifies.update(op.get("modifies", []) or [])
     for mname, m in data.get("models", {}).items():
-        state_vars = [n for n, v in m.get("variables", {}).items() if v.get("type") == "state"]
+        state_vars = ode_states(m) + algebraic_unknowns(m)
         eq_lhs_vars = set()
         for eq in m.get("equations", []):
             lhs = eq.get("lhs")
@@ -2335,15 +2396,15 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # unresolvable one is an `unresolved_scoped_ref`, not a bare
     # `undefined_variable` (CONFORMANCE_SPEC §7.1; TypeScript reference).
     collect("unresolved_scoped_ref", lambda sub: _check_coupling_references(data, tables, sub))
-    # §4.9.5: reference integrity applies to EVERY expression-bearing field —
-    # including the two that live outside `models`: a data loader's
-    # `unit_conversion` and a coupling edge's connector/transform expressions.
-    collect("undefined_variable", lambda sub: _check_data_loader_expressions(data, tables, sub))
+    # §4.9.5: reference integrity applies to EVERY expression-bearing field.
+    # A data source's `unit_conversion` moved ONTO the consuming parameter with
+    # 1.0.0, so it is now reached by `_model_expression_sites` above; only the
+    # coupling edge's connector/transform expressions still live outside models.
     collect("unresolved_scoped_ref", lambda sub: _check_coupling_expressions(data, tables, sub))
     collect("undefined_system", lambda sub: _check_coupling_systems(data, tables, sub))
     collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
-    collect("data_loader_config", lambda sub: _check_data_loader_variables(data, sub))
-    collect("invalid_discrete_param", lambda sub: _check_discrete_parameters(data, sub))
+    collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
+    collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))
     # Subsystem ref existence/parse is checked by resolve_subsystem_refs after

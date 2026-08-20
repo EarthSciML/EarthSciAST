@@ -71,7 +71,7 @@ _bc_err(f) = try; f(); nothing; catch e; e; end
 # axes declared in the opposite order.
 function _bc_vars()
     Dict{String,Any}(
-        "dp" => Dict{String,Any}("type" => "state", "units" => "1",
+        "dp" => Dict{String,Any}("type" => "unknown", "units" => "1",
             "shape" => Any["lon", "lat", "lev"], "default" => 0),
         "w1" => Dict{String,Any}("type" => "observed", "units" => "1",
             "shape" => Any["lat"],
@@ -105,7 +105,7 @@ _bc_oracle(name, body) = _bc_model(name, _bc_agg(("i", "j", "k"),
     for f in ["-", "neg", "log", "exp", "sqrt", "abs", "sin", "cos", "tanh",
               "log10", "sign", "floor", "ceil"]
         vars = Dict{String,Any}(
-            "x" => Dict{String,Any}("type" => "state", "units" => "1", "default" => 0.7))
+            "x" => Dict{String,Any}("type" => "unknown", "units" => "1", "default" => 0.7))
         plain = _bc_doc("P", vars, Any[_bc_eq(_bc_D("x"), _bc_op(f, "x"))])
         bcast = _bc_doc("P", vars, Any[_bc_eq(_bc_D("x"), _bc_bcast(f, "x"))])
         @test _bc_rhs(bcast)["x"] === _bc_rhs(plain)["x"]
@@ -114,7 +114,7 @@ _bc_oracle(name, body) = _bc_model(name, _bc_agg(("i", "j", "k"),
     # a = -0.3 — the case Rust/Python answered with exp(-0.3). The RHS at t=0
     # must be `+0.3·dp`, i.e. the NEGATION of div_h, not div_h itself.
     vars = Dict{String,Any}(
-        "dp" => Dict{String,Any}("type" => "state", "units" => "1",
+        "dp" => Dict{String,Any}("type" => "unknown", "units" => "1",
             "shape" => Any["lon", "lat", "lev"], "default" => 1),
         "a" => Dict{String,Any}("type" => "parameter", "units" => "1", "default" => -0.3),
         "div_h" => Dict{String,Any}("type" => "observed", "units" => "1",
@@ -129,7 +129,7 @@ end
 
 @testset "n-ary broadcast ≡ the same n-ary scalar op" begin
     vars = Dict{String,Any}(
-        "x" => Dict{String,Any}("type" => "state", "units" => "1", "default" => 0.7),
+        "x" => Dict{String,Any}("type" => "unknown", "units" => "1", "default" => 0.7),
         "b" => Dict{String,Any}("type" => "parameter", "units" => "1", "default" => 2.5),
         "c" => Dict{String,Any}("type" => "parameter", "units" => "1", "default" => 4.0))
     for (f, args) in [("*", Any["x", "b"]), ("-", Any["x", "b"]),
@@ -228,7 +228,7 @@ end
 
 @testset "broadcast `fn` contract — validate() findings" begin
     mk(node) = _bc_doc("F", Dict{String,Any}(
-        "x" => Dict{String,Any}("type" => "state", "units" => "1", "default" => 0.7)),
+        "x" => Dict{String,Any}("type" => "unknown", "units" => "1", "default" => 0.7)),
         Any[_bc_eq(_bc_D("x"), node)])
 
     # ONE cross-binding diagnostic code — `invalid_broadcast_fn`, registered in
@@ -269,7 +269,7 @@ end
     # The contract is enforced in NESTED positions too (an observed's
     # `expression`, not only an equation RHS).
     nested = _bc_doc("F", Dict{String,Any}(
-        "x" => Dict{String,Any}("type" => "state", "units" => "1", "default" => 0.7),
+        "x" => Dict{String,Any}("type" => "unknown", "units" => "1", "default" => 0.7),
         "y" => Dict{String,Any}("type" => "observed", "units" => "1",
             "expression" => _bc_op("+", 1, _bc_bcast("nope", "x")))),
         Any[_bc_eq(_bc_D("x"), "y")])
@@ -281,7 +281,7 @@ end
 
 @testset "broadcast `fn` contract — build-time rejection" begin
     mk(node) = _bc_doc("F", Dict{String,Any}(
-        "x" => Dict{String,Any}("type" => "state", "units" => "1", "default" => 0.7)),
+        "x" => Dict{String,Any}("type" => "unknown", "units" => "1", "default" => 0.7)),
         Any[_bc_eq(_bc_D("x"), node)])
     for (node, code) in [(_bc_bcast("not_a_real_op", "x"), "E_TREEWALK_BROADCAST_FN"),
                          (_bc_bcast(nothing, "x"),         "E_TREEWALK_BROADCAST_FN"),
@@ -314,7 +314,7 @@ end
 end
 
 @testset "reshape / transpose / concat still reach the unsupported-op gate" begin
-    vars = Dict("u" => ESS.ModelVariable(ESS.StateVariable))
+    vars = Dict("u" => ESS.ModelVariable(ESS.UnknownVariable))
     ics = Dict("u" => 1.0)
     for node in [_op("reshape", _v("u"); shape=Any[1, 1]),
                  _op("transpose", _v("u"); perm=Any[0]),
@@ -359,7 +359,7 @@ end
     # = intersect_polygon(src[verts,coord], …)` is a kernel contract, not a
     # broadcast, and must stay valid.
     vars = Dict{String,Any}(
-        "dp" => Dict{String,Any}("type" => "state", "units" => "1",
+        "dp" => Dict{String,Any}("type" => "unknown", "units" => "1",
             "shape" => Any["lon", "lat", "lev"], "default" => 0),
         "src" => Dict{String,Any}("type" => "parameter", "units" => "1",
             "shape" => Any["qux"]))

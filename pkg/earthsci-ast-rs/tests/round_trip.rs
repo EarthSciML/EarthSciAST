@@ -331,8 +331,9 @@ fn test_model_tests_tolerance_round_trip() {
     );
 }
 
-/// Round-trip the Ornstein-Uhlenbeck SDE fixture, asserting that the
-/// wiener-updated parameter and its `distribution` survive load/save.
+/// Round-trip the Ornstein-Uhlenbeck SDE fixture, asserting that the Brownian
+/// parameter's `distribution` + `wiener` update survive load/save — and that it
+/// is DERIVED Brownian (esm-spec 6.3.1), not declared.
 #[test]
 fn test_ornstein_uhlenbeck_sde_round_trip() {
     let fixture = include_str!("../../../tests/fixtures/sde/ornstein_uhlenbeck.esm");
@@ -344,25 +345,19 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
         .and_then(|m| m.get("OU"))
         .expect("OU model missing");
     let bw = model.variables.get("Bw").expect("Bw variable missing");
-    // A former `brownian` variable is a PARAMETER with a distribution and a
-    // wiener update (esm-spec §6.3); Brownian-ness is derived, not declared.
     assert_eq!(bw.var_type, VariableType::Parameter);
-    assert!(bw.update.as_ref().expect("Bw update").is_brownian());
     assert!(bw.distribution.is_some(), "a wiener update needs a distribution");
+    assert!(bw.update.as_ref().expect("update").is_wiener());
+    assert_eq!(earthsci_ast::classification::brownian_parameters(model), ["Bw"]);
     assert_eq!(
-        earthsci_ast::classify::brownian_parameters(model),
-        vec!["Bw"]
-    );
-    assert_eq!(
-        earthsci_ast::classify::system_kind(model),
-        earthsci_ast::classify::SystemKind::Sde
+        earthsci_ast::classification::system_kind(model),
+        earthsci_ast::SystemKind::Sde
     );
 
     let serialized = save(&parsed).expect("failed to serialize OU SDE");
     let reparsed: EsmFile = load(&serialized).expect("failed to reparse OU SDE");
 
-    // Serialization must preserve the parameter type, its update and its
-    // distribution.
+    // Serialization must preserve the distribution and the wiener update.
     let rbw = reparsed
         .models
         .as_ref()
@@ -370,8 +365,8 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
         .and_then(|m| m.variables.get("Bw"))
         .expect("Bw missing after round-trip");
     assert_eq!(rbw.var_type, VariableType::Parameter);
-    assert!(rbw.update.as_ref().expect("Bw update").is_brownian());
-    assert!(rbw.distribution.is_some());
+    assert_eq!(rbw.distribution, bw.distribution);
+    assert_eq!(rbw.update, bw.update);
 
     // Idempotency.
     let serialized_again = save(&reparsed).expect("second serialize");
@@ -387,9 +382,9 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
     );
 }
 
-/// Correlated-noise SDE fixture: ONE vector-valued wiener parameter whose
-/// `distribution.cov` carries the correlation the 0.x `correlation_group` tag
-/// only named.
+/// Correlated-noise SDE fixture: ONE vector-valued Brownian parameter whose
+/// `cov` matrix states the correlation the 0.x `correlation_group` tag only
+/// named.
 #[test]
 fn test_correlated_noise_sde_round_trip() {
     let fixture = include_str!("../../../tests/fixtures/sde/correlated_noise.esm");
@@ -402,17 +397,15 @@ fn test_correlated_noise_sde_round_trip() {
         .expect("TwoBody model missing");
     let bv = model.variables.get("B").expect("B missing");
     assert_eq!(bv.var_type, VariableType::Parameter);
-    assert!(bv.update.as_ref().expect("B update").is_brownian());
-    let dist = bv.distribution.as_ref().expect("B distribution");
-    assert!(
-        dist.is_multivariate(),
-        "correlated noise is ONE vector-valued parameter"
-    );
+    assert!(bv.update.as_ref().expect("update").is_wiener());
+    let dist = bv.distribution.as_ref().expect("distribution");
+    assert!(dist.is_multivariate(), "correlated noise is vector-valued");
     assert_eq!(
-        dist.cov().expect("cov"),
-        &vec![vec![1.0, 0.5], vec![0.5, 1.0]],
-        "the off-diagonal IS the correlation"
+        dist.cov(),
+        Some(&vec![vec![1.0, 0.5], vec![0.5, 1.0]]),
+        "the correlation is the explicit off-diagonal of `cov`"
     );
+    assert_eq!(earthsci_ast::classification::brownian_parameters(model), ["B"]);
 
     let serialized = save(&parsed).expect("failed to serialize");
     let reparsed: EsmFile = load(&serialized).expect("failed to reparse");
@@ -421,12 +414,13 @@ fn test_correlated_noise_sde_round_trip() {
         serde_json::to_value(&reparsed).expect("reparsed as value"),
     );
 
-    // Flattening must surface brownians in their own collection.
+    // Flattening must surface Brownian parameters in their own collection. It
+    // is ONE vector-valued parameter now, not two tagged scalars: the
+    // correlation lives in its `cov`.
     use earthsci_ast::flatten::flatten;
     let flat = flatten(&parsed).expect("flatten");
-    assert_eq!(flat.brownian_variables.len(), 2);
-    assert!(flat.brownian_variables.contains_key("TwoBody.Bx"));
-    assert!(flat.brownian_variables.contains_key("TwoBody.By"));
+    assert_eq!(flat.brownian_variables.len(), 1);
+    assert!(flat.brownian_variables.contains_key("TwoBody.B"));
 }
 
 /// Round-trip: nonlinear models with initialization_equations, guesses, system_kind (gt-ebuq).
@@ -573,40 +567,91 @@ fn test_tests_analyses_comprehensive_round_trip() {
 /// v0.5.0: inline array-form plots.y passes schema validation.
 #[test]
 fn test_inline_multi_y_schema_validation() {
-    let esm = r#"{
-        "esm": "1.0.0",
-        "metadata": { "name": "multi_y_test" },
-        "models": {
+    let esm = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "multi_y_test"
+          },
+          "models": {
             "AB": {
-                "variables": {
-                    "A": { "type": "unknown", "default": 1.0 },
-                    "B": { "type": "unknown", "default": 0.0 }
+              "variables": {
+                "A": {
+                  "type": "unknown",
+                  "default": 1.0
                 },
-                "equations": [
-                    { "lhs": { "op": "D", "args": ["A"], "wrt": "t" }, "rhs": { "op": "*", "args": [-0.1, "A"] } },
-                    { "lhs": { "op": "D", "args": ["B"], "wrt": "t" }, "rhs": { "op": "*", "args": [0.1, "A"] } }
-                ],
-                "analyses": [
+                "B": {
+                  "type": "unknown",
+                  "default": 0.0
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "A"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      -0.1,
+                      "A"
+                    ]
+                  }
+                },
+                {
+                  "lhs": {
+                    "op": "D",
+                    "args": [
+                      "B"
+                    ],
+                    "wrt": "t"
+                  },
+                  "rhs": {
+                    "op": "*",
+                    "args": [
+                      0.1,
+                      "A"
+                    ]
+                  }
+                }
+              ],
+              "analyses": [
+                {
+                  "id": "ab_trace",
+                  "time_span": {
+                    "start": 0.0,
+                    "end": 10.0
+                  },
+                  "plots": [
                     {
-                        "id": "ab_trace",
-                        "time_span": { "start": 0.0, "end": 10.0 },
-                        "plots": [
-                            {
-                                "id": "ab_multi",
-                                "type": "line",
-                                "x": { "variable": "t" },
-                                "y": [
-                                    { "variable": "A", "label": "Species A" },
-                                    { "variable": "B", "label": "Species B" }
-                                ]
-                            }
-                        ]
+                      "id": "ab_multi",
+                      "type": "line",
+                      "x": {
+                        "variable": "t"
+                      },
+                      "y": [
+                        {
+                          "variable": "A",
+                          "label": "Species A"
+                        },
+                        {
+                          "variable": "B",
+                          "label": "Species B"
+                        }
+                      ]
                     }
-                ]
+                  ]
+                }
+              ]
             }
+          }
         }
-    }"#;
+        "#;
 
     let parsed: EsmFile = load(esm).expect("inline array-form plots.y must pass schema validation");
-    assert_eq!(parsed.esm, "0.5.0");
+    assert_eq!(parsed.esm, "1.0.0");
 }

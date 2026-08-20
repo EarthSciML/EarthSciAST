@@ -49,7 +49,7 @@ _fnk_ai() = Int64[0, 1, 2, 3, 4]
 # so sharing lands in the per-cell CSE tier: one fn value number occurring twice
 # ⇒ a recipe slot per kernel, where the split key yields two singletons ⇒ zero.
 function _fnk_twin_model(N; perturb::Int=0)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     x = _idx("u", _op("+", _v("i"), _i(1)))
     itp1 = _op("fn", _const(copy(_FNK_T)), _const(copy(_FNK_A)), x; name="interp.linear")
     itp2 = _op("fn", _const(_fnk_ti(perturb)), _const(_fnk_ai()), x; name="interp.linear")
@@ -65,7 +65,7 @@ end
 # slot FEWER than the perturbed build (same spine shape otherwise).
 function _fnk_inv_model(N; perturb::Int=0)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
         "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
         "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0))
     q = _op("/", _v("g"), _v("h"))
@@ -82,7 +82,7 @@ end
 # (pre-change that depended on accidental tuple/string egality), so the invariant
 # tier holds exactly two slots: the shared fn, and the `-` above it.
 function _fnk_dt_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     d1 = _op("fn", _v("t"); name="datetime.day_of_year")
     d2 = _op("fn", _v("t"); name="datetime.day_of_year")
     body = _op("*", _op("-", d1, d2), _idx("u", _v("i")))

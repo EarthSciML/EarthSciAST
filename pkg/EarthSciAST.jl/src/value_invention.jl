@@ -86,18 +86,11 @@ function _vi_node_kind(node)
     return :none
 end
 
-# Every (lhs, rhs) value-expression pair in a typed model: the equation list plus
-# the `expression` of each observed variable (lhs then a bare name String).
-function _vi_model_assignments(model::Model)
-    out = Tuple{Any,ASTExpr}[]
-    for eq in model.equations
-        push!(out, (eq.lhs, eq.rhs))
-    end
-    for (vname, v) in model.variables
-        v.expression === nothing || push!(out, (vname, v.expression))
-    end
-    return out
-end
+# Every (lhs, rhs) value-expression pair in a typed model. From esm 1.0.0 that
+# is exactly the equation list: an observed unknown's defining right-hand side
+# IS an equation, so there is no variable-level `expression` to append.
+_vi_model_assignments(model::Model) =
+    Tuple{Any,ASTExpr}[(eq.lhs, eq.rhs) for eq in model.equations]
 
 # Every `index` target name reachable in a sub-tree (the array a value reads
 # from): `index(NAME, …)` → NAME. Walks EVERY expression-bearing `OpExpr` field
@@ -254,6 +247,11 @@ struct _ViCtx
     index_sets::Dict{String,IndexSet}
     variables::Dict{String,ModelVariable}
     maps::Dict{String,Dict{Any,Any}}   # materialised map var → (output-index → value)
+    # Per-name cadence SEED, derived once from the model (esm-spec §6.3.1 /
+    # CONFORMANCE_SPEC §5.7.2). From esm 1.0.0 the seed cannot be read off a
+    # declared type, so it is computed by `_vi_seed_map` and carried here rather
+    # than re-derived at every leaf.
+    seeds::Dict{String,Int}
 end
 
 # Coerce a build-time numeric to an exact integer relational key component
@@ -808,29 +806,79 @@ const _VI_CLASS_DISCRETE = 1
 const _VI_CLASS_CONTINUOUS = 2
 const _VI_NO_OVERRIDES = Dict{String,Int}()
 
+"""
+    _vi_seed_map(model::Model) -> Dict{String,Int}
+
+The per-name cadence SEED of every variable in `model`, derived from the
+esm-spec §6.3.1 classification rather than from a declared type — the typed-IR
+twin of `Cadence.seed_leaf` (CONFORMANCE_SPEC §5.7.2):
+
+| Derived category | Seed |
+|---|---|
+| `ode_states`, `algebraic_unknowns` | CONTINUOUS |
+| `brownian_parameters` | CONTINUOUS (resampled every step) |
+| `observed_unknowns` | the class of its defining equation's RHS, transitively |
+| `discrete_parameters` | DISCRETE |
+| `sampled_parameters`, `constant_parameters` | CONST |
+
+The observed rule is the one that must not be shortcut: seeding every unknown
+CONTINUOUS would stop a state-free observed folding at bind — which is exactly
+what this build-time value-invention pass relies on — while seeding it CONST
+(the 0.x shortcut) would fold a value that reads a live state.
+"""
+function _vi_seed_map(model::Model)::Dict{String,Int}
+    seeds = Dict{String,Int}()
+    for n in ode_states(model);          seeds[n] = _VI_CLASS_CONTINUOUS; end
+    for n in algebraic_unknowns(model);  seeds[n] = _VI_CLASS_CONTINUOUS; end
+    for n in brownian_parameters(model); seeds[n] = _VI_CLASS_CONTINUOUS; end
+    for n in discrete_parameters(model); seeds[n] = _VI_CLASS_DISCRETE;   end
+    for n in sampled_parameters(model);  seeds[n] = _VI_CLASS_CONST;      end
+    for n in constant_parameters(model); seeds[n] = _VI_CLASS_CONST;      end
+    # Observed unknowns resolve through their defining equations, memoised, with
+    # a cycle guard (a cycle is a defect; it seeds CONTINUOUS, the conservative
+    # answer, and the acyclicity guard reports it).
+    defs = observed_definitions(model)
+    resolving = Set{String}()
+    function resolve(name)
+        haskey(seeds, name) && return seeds[name]
+        e = get(defs, name, nothing)
+        e === nothing && return _VI_CLASS_CONST
+        name in resolving && return _VI_CLASS_CONTINUOUS
+        push!(resolving, name)
+        cls = _VI_CLASS_CONST
+        for r in free_variables(e)
+            cls = max(cls, r == "t" ? _VI_CLASS_CONTINUOUS : resolve(r))
+        end
+        delete!(resolving, name)
+        seeds[name] = cls
+        return cls
+    end
+    for name in keys(defs)
+        resolve(name)
+    end
+    return seeds
+end
+
 function _vi_seed_class(name::AbstractString,
-                        variables::Dict{String,ModelVariable},
+                        seeds::Dict{String,Int},
                         overrides::Dict{String,Int})
     name == "t" && return _VI_CLASS_CONTINUOUS   # the independent variable
     cls = get(overrides, name, nothing)
     cls === nothing || return cls                # re-typed VI map buffer (§6.1)
-    v = get(variables, name, nothing)
-    # index-set name, bound index symbol (i, k, e, f), or relation tag — const.
-    v === nothing && return _VI_CLASS_CONST
-    (v.type == StateVariable || v.type == BrownianVariable) && return _VI_CLASS_CONTINUOUS
-    v.type == DiscreteVariable && return _VI_CLASS_DISCRETE
-    return _VI_CLASS_CONST                       # parameter / observed
+    # An unknown name is an index-set name, a bound index symbol (i, k, e, f),
+    # or a relation tag — const.
+    return get(seeds, name, _VI_CLASS_CONST)
 end
 
 # Derive a typed expression's cadence class: max over the generated child walk
 # (`foreach_child`, expression.jl — every expression-bearing `OpExpr` field).
-function _vi_class(expr::ASTExpr, variables::Dict{String,ModelVariable},
+function _vi_class(expr::ASTExpr, seeds::Dict{String,Int},
                    overrides::Dict{String,Int})::Int
-    expr isa VarExpr && return _vi_seed_class(expr.name, variables, overrides)
+    expr isa VarExpr && return _vi_seed_class(expr.name, seeds, overrides)
     expr isa OpExpr || return _VI_CLASS_CONST    # IntExpr / NumExpr literals
     cls = _VI_CLASS_CONST
     foreach_child(expr) do c
-        cls = max(cls, _vi_class(c, variables, overrides))
+        cls = max(cls, _vi_class(c, seeds, overrides))
     end
     return cls
 end
@@ -842,13 +890,13 @@ end
 # table) so the §5.7 guard 2 below classifies a producer/arg-witness that joins
 # on it correctly (a CONST-derived bin map passes; a genuinely state-dependent
 # one keeps its declared seed and still classifies CONTINUOUS → reject).
-function _vi_map_class_overrides(model::Model, maps)
+function _vi_map_class_overrides(model::Model, maps, seeds::Dict{String,Int})
     overrides = Dict{String,Int}()
     for (vname, node) in maps
         haskey(model.variables, vname) || continue
         body = node.expr_body
         body === nothing && continue
-        bcls = _vi_class(body, model.variables, _VI_NO_OVERRIDES)
+        bcls = _vi_class(body, seeds, _VI_NO_OVERRIDES)
         bcls == _VI_CLASS_CONTINUOUS && continue   # keep the declared seed
         overrides[vname] = bcls
     end
@@ -879,8 +927,7 @@ function _vi_assert_buildtime(ctx::_ViCtx, vname, node, vi_var_names)
     for r in _vi_index_targets!(Set{String}(), node)
         r in vi_var_names && continue            # an already-materialised VI buffer
         haskey(ctx.const_arrays, r) && continue  # a build-time const-array factor
-        v = get(ctx.variables, r, nothing)
-        v !== nothing && v.type == StateVariable && throw(TreeWalkError(
+        get(ctx.seeds, r, _VI_CLASS_CONST) == _VI_CLASS_CONTINUOUS && throw(TreeWalkError(
             "E_TREEWALK_VI_CONTINUOUS",
             "grouped/derived value-invention buffer '$vname' reads live state '$r' — a " *
             "build-time reduction's inputs must be CONST/DISCRETE factors or materialised " *
@@ -1014,7 +1061,8 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
         Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params),
         Dict{String,IndexSet}(String(k) => v for (k, v) in index_sets),
         model.variables,
-        Dict{String,Dict{Any,Any}}())
+        Dict{String,Dict{Any,Any}}(),
+        _vi_seed_map(model))
 
     # Cadence class overrides for the §5.7 guard-2 checks below (see
     # `_vi_map_class_overrides`): each value-invention MAP var re-seeds to its
@@ -1022,7 +1070,7 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
     # by the buffer's true (input-derived) cadence rather than the seed of its
     # declared `state` kind (§6.1). Depends only on the model structure, so it
     # is built before materialisation.
-    overrides = _vi_map_class_overrides(model, det.maps)
+    overrides = _vi_map_class_overrides(model, det.maps, ctx.seeds)
 
     # §5.7 guard 2 for arg-witness assignments: a state-dependent nearest-generator
     # buffer (continuous cadence) may not be materialised at build time — its
@@ -1032,7 +1080,7 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
     for (vname, node) in det.maps
         body = node.expr_body
         (body isa OpExpr && body.op in _VI_ARGWITNESS_OPS) || continue
-        _vi_class(node, ctx.variables, overrides) == _VI_CLASS_CONTINUOUS &&
+        _vi_class(node, ctx.seeds, overrides) == _VI_CLASS_CONTINUOUS &&
             throw(TreeWalkError("E_TREEWALK_VI_CONTINUOUS",
                 "arg-witness map '$vname' classifies CONTINUOUS — a build-time assignment " *
                 "buffer's inputs must be CONST/DISCRETE (RFC §5.7 guard 2)"))
@@ -1089,7 +1137,7 @@ function materialize_value_invention(model::Model, index_sets::AbstractDict,
         id = String(id)
         haskey(faq_to_set, id) || continue   # no derived set names this producer
         # §5.7 guard 2: a relational node may not run on the hot path.
-        _vi_class(node, ctx.variables, overrides) == _VI_CLASS_CONTINUOUS &&
+        _vi_class(node, ctx.seeds, overrides) == _VI_CLASS_CONTINUOUS &&
             throw(TreeWalkError("E_TREEWALK_VI_CONTINUOUS",
                 "value-invention producer '$id' classifies CONTINUOUS — it may not run per " *
                 "step (RFC §5.7 guard 2); its inputs must be CONST/DISCRETE"))

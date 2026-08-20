@@ -42,7 +42,7 @@ const _COMPONENT_KINDS = ("models", "reaction_systems")
 
 # A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
 const _LIBRARY_FORBIDDEN_KEYS =
-    ("models", "reaction_systems", "data_loaders", "coupling", "domain")
+    ("models", "reaction_systems", "data_sources", "coupling", "domain")
 
 # (`_raw_get` / `_raw_haskey` — string-keyed raw-JSON access — and
 # `_to_ordered` — the ONE order- and sharing-preserving normalizer every tree
@@ -1718,18 +1718,20 @@ target key to a top-level system and append its imports to that system's own
 (deleted from the entry) so form B does not survive `parse → emit`.
 
 Diagnostics (esm-spec §9.6.6): a key naming no system the entry references is
-`template_inject_target_unknown`; a key resolving to a data loader is
-`template_inject_target_is_loader`; a key resolving to neither model, reaction
-system, nor loader is `template_inject_target_not_component`. Only top-level
-system targets are resolved by this binding — a nested `Parent.Child` key is
-out of scope (RFC §8.3) and reported as `template_inject_target_not_component`.
+`template_inject_target_unknown`; a key resolving to neither a model nor a
+reaction system is `template_inject_target_not_component`. The 0.x
+`template_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source is
+no longer a component, so a coupling entry cannot reference one and such a key
+never reaches this resolution — it fails the `referenced` check first. Only
+top-level system targets are resolved by this binding — a nested
+`Parent.Child` key is out of scope (RFC §8.3) and reported as
+`template_inject_target_not_component`.
 """
 function _apply_coupling_injections!(root::AbstractDict)
     coupling = get(root, "coupling", nothing)
     coupling isa AbstractVector || return root
     models = get(root, "models", nothing)
     rsystems = get(root, "reaction_systems", nothing)
-    loaders = get(root, "data_loaders", nothing)
     _is_top(d, k) = d isa AbstractDict && haskey(d, k)
     for entry in coupling
         entry isa AbstractDict || continue
@@ -1752,17 +1754,11 @@ function _apply_coupling_injections!(root::AbstractDict)
                 comp = models[tname]
             elseif _is_top(rsystems, tname)
                 comp = rsystems[tname]
-            elseif _is_top(loaders, tname)
-                throw(ExpressionTemplateError(
-                    "template_inject_target_is_loader",
-                    "coupling entry `expression_template_imports` key '$tname' resolves to " *
-                    "a data loader, which is pure I/O with no expression positions to " *
-                    "rewrite (esm-spec §9.7.10 / §14)."))
             else
                 throw(ExpressionTemplateError(
                     "template_inject_target_not_component",
                     "coupling entry `expression_template_imports` key '$tname' resolves to " *
-                    "neither a top-level model, reaction system, nor data loader " *
+                    "neither a top-level model nor a reaction system " *
                     "(esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope."))
             end
             comp isa AbstractDict || throw(ExpressionTemplateError(

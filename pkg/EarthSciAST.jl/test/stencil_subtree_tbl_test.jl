@@ -43,7 +43,7 @@ const ESM = EarthSciAST
 # control (`_exprtbl_evaluable` must reject it; "u" is neither a loop index
 # nor a const array).
 function _stt_model(N; state_in_agg::Bool=false)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))

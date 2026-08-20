@@ -328,9 +328,13 @@ fn factor_model(model: &mut Model, indep: &str) -> (usize, Vec<usize>) {
             eq.rhs = substitute(&eq.rhs, &subs);
         }
 
-        // (An observed's defining expression is an ordinary equation since
-        // 1.0.0, substituted with the rest above.) Initialization equations
-        // still need their own pass so the model stays consistent.
+        // Also substitute into the parameter-update expressions each variable
+        // still carries (esm 1.0.0 moved an unknown's defining expression into
+        // `equations`, which the loop above already rewrote) and into
+        // initialization equations, so the model remains consistent.
+        for var_def in model.variables.values_mut() {
+            var_def.for_each_expression_mut(&mut |expr| *expr = substitute(expr, &subs));
+        }
         if let Some(init_eqs) = model.initialization_equations.as_mut() {
             for eq in init_eqs.iter_mut() {
                 eq.lhs = substitute(&eq.lhs, &subs);
@@ -423,16 +427,13 @@ mod tests {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         }
     }
 
-    /// An unknown that the test's equations define with a bare LHS, i.e. an
-    /// OBSERVED one. Observedness is derived from those equations, so the
-    /// declared type is simply `unknown`.
     fn observed_var() -> ModelVariable {
         ModelVariable {
             default_units: None,
@@ -440,10 +441,10 @@ mod tests {
             units: None,
             default: None,
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         }
     }
 
@@ -454,10 +455,10 @@ mod tests {
             units: None,
             default: Some(0.5),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         }
     }
 

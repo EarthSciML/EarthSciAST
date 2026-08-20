@@ -59,7 +59,7 @@ function _pc_doc(; fold_ic::Bool = true)
             "n" => Dict{String,Any}("kind" => "interval", "size" => 2)),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "y" => Dict{String,Any}("type" => "state", "default" => 0.0),
+                "y" => Dict{String,Any}("type" => "unknown", "default" => 0.0),
                 "k" => _pc_param(1.5),
                 "y0" => _pc_param(3.0),
                 "dat" => _pc_param(0.0; shape = Any["n"]),

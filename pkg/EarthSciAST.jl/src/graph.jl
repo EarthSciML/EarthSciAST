@@ -23,12 +23,12 @@ struct Graph{N, E}
 end
 
 """
-Component-level node representing a model, reaction system, data loader, or operator.
+Component-level node representing a model, reaction system, data source, or operator.
 """
 struct ComponentNode
     id::String
     name::String
-    type::String  # 'model' | 'reaction_system' | 'data_loader' | 'operator'
+    type::String  # 'model' | 'reaction_system' | 'data_source' | 'operator'
     description::Union{String, Nothing}
     reference::Any
     metadata::Dict{String, Any}
@@ -116,7 +116,7 @@ end
 
 Generate component-level graph showing systems and their couplings.
 
-Creates nodes for each model, reaction system, and data loader. Operators are
+Creates nodes for each model, reaction system, and data source. Operators are
 NOT given nodes: a `CouplingOperatorApply` entry only registers an operator
 (the operator lives in the file's `operators` section), so it contributes no
 node or edge here. Creates edges based on the remaining coupling entries with
@@ -191,9 +191,12 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
         end
     end
 
-    # Create nodes for data loaders
-    if file.data_loaders !== nothing
-        for (name, loader) in file.data_loaders
+    # Create nodes for data sources. From esm 1.0.0 a source is an ingest
+    # registry entry rather than a component, so it is drawn as a leaf that
+    # nothing couples to — the consuming parameters name it through their
+    # `update` (esm-spec §8).
+    if file.data_sources !== nothing
+        for (name, loader) in file.data_sources
             metadata = Dict{String, Any}(
                 "var_count" => 0,
                 "eq_count" => 0,
@@ -203,8 +206,8 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
             node = ComponentNode(
                 name,
                 name,
-                "data_loader",
-                nothing,  # DataLoader has no description; scientific role lives in metadata.tags
+                "data_source",
+                nothing,  # DataSource has no description; scientific role lives in metadata.tags
                 loader,
                 metadata
             )
@@ -411,11 +414,13 @@ function expression_graph(model::Model)::Graph{VariableNode, DependencyEdge}
 
     # Create nodes for all variables. The graph node-kind string IS the
     # variable type's wire spelling by contract (MODEL_VARIABLE_TYPE_TABLE,
-    # types.jl); "unknown" is the fail-soft for a future enum member the
-    # table has not caught up with (the table's load-time assert makes that
-    # unreachable today).
+    # types.jl), so from esm 1.0.0 it is `"unknown"` or `"parameter"` and
+    # nothing else; the finer role is DERIVED and belongs to the classification
+    # API (esm-spec §6.3.1), not to a node label. `""` is the fail-soft for a
+    # future enum member the table has not caught up with (the table's
+    # load-time assert makes that unreachable today).
     for (var_name, var) in model.variables
-        kind = get(_MODEL_VARIABLE_TYPE_WIRE, var.type, "unknown")
+        kind = get(_MODEL_VARIABLE_TYPE_WIRE, var.type, "")
 
         node = VariableNode(
             var_name,
@@ -710,7 +715,7 @@ _dot_escape(s::AbstractString)::String =
 const _COMPONENT_NODE_STYLE = Dict{String,@NamedTuple{dot_fillcolor::String, mermaid::Tuple{String,String}}}(
     "model"           => (dot_fillcolor = "lightgreen",  mermaid = ("[", "]")),
     "reaction_system" => (dot_fillcolor = "lightcoral",  mermaid = ("(", ")")),
-    "data_loader"     => (dot_fillcolor = "lightyellow", mermaid = ("{", "}")),
+    "data_source"     => (dot_fillcolor = "lightyellow", mermaid = ("{", "}")),
 )
 const _COMPONENT_NODE_DEFAULT_STYLE =
     (dot_fillcolor = "lightgray", mermaid = ("((", "))"))

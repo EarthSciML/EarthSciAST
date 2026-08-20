@@ -294,7 +294,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// to be referenced from different subsystem trees, just not circularly)
 		delete(visited, refKey)
 
-		// Extract the single top-level model, reaction system, or data loader
+		// Extract the single top-level model or reaction system
 		resolved, err := extractSingleSystemRaw(view, refKey)
 		if err != nil {
 			return fmt.Errorf("subsystem %q: %w", key, err)
@@ -413,26 +413,24 @@ func extractRefWithBindings(value any) (string, map[string]any, bool) {
 	return refStr, bindings, true
 }
 
-// extractSingleSystemRaw extracts the single top-level model, reaction
-// system, or data loader from a referenced ESM document's RAW view. If the
-// file contains exactly one such component it is returned as-is (a generic
-// map, preserving every Expression field verbatim). If there are multiple
-// systems or none, an error is returned.
+// extractSingleSystemRaw extracts the single top-level model or reaction system
+// from a referenced ESM document's RAW view. If the file contains exactly one
+// such component it is returned as-is (a generic map, preserving every
+// Expression field verbatim). If there are multiple systems or none, an error is
+// returned.
+//
+// A `data_sources` entry is NOT a component from esm 1.0.0 and cannot be
+// mounted as a subsystem (esm-spec §8, and the `subsystems` schema note), so a
+// referenced file whose only payload is a source catalogue has NO mountable
+// system — which is the correct rejection, not an oversight.
 func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 	models, _ := view["models"].(map[string]any)
 	rss, _ := view["reaction_systems"].(map[string]any)
-	// A `data_sources` entry is NOT a component (esm-spec §8), so it can never be
-	// the single top-level system a subsystem `ref` resolves to. It is counted
-	// only to make the diagnostic say what the file actually contains.
-	sources, _ := view["data_sources"].(map[string]any)
-	// A data source does NOT count toward the total: it is not a component, so a
-	// file containing only sources contains no mountable system at all, and one
-	// containing a model plus a source contains exactly one.
 	total := len(models) + len(rss)
 
 	if total == 0 {
 		return nil, newETErr(CodeAmbiguousSubsystemRef,
-			fmt.Sprintf("referenced file %q contains no models or reaction systems (data_sources=%d, which are not components); exactly one is required (esm-spec §4.7)", path, len(sources)))
+			fmt.Sprintf("referenced file %q contains no models or reaction systems; exactly one is required (esm-spec §4.7)", path))
 	}
 
 	if total > 1 {
@@ -442,11 +440,10 @@ func extractSingleSystemRaw(view map[string]any, path string) (any, error) {
 		// (tests/invalid/subsystem_ref_ambiguous.esm).
 		return nil, newETErr(CodeAmbiguousSubsystemRef,
 			fmt.Sprintf("referenced file %q contains %d systems (expected exactly 1); "+
-				"models=%d, reaction_systems=%d, data_sources=%d", path, total, len(models), len(rss), len(sources)))
+				"models=%d, reaction_systems=%d", path, total, len(models), len(rss)))
 	}
 
-	// Extract the single system. Precedence: models -> reaction_systems. A data
-	// source is not admissible; see above.
+	// Extract the single system. Precedence: models -> reaction_systems.
 	for _, m := range models {
 		return m, nil
 	}

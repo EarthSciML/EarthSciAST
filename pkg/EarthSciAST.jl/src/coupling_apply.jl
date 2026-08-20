@@ -514,28 +514,21 @@ When `transform` is an `ASTExpr` (esm-spec §10.4 expression transform), the tar
 parameter instead becomes an observed defined by the transform expression —
 see the expression arm below.
 
-`loader_names` is the set of top-level `data_loaders` keys. When a
-`param_to_var` binds a **loaded** field (`from`'s owning system is a data
-loader) onto a GRID-SHAPED consumer parameter (`to` carries a non-scalar
-`shape`), the shape is transferred to the loader-qualified `from` name so the
-downstream pointwise lift (§10.5) still recognizes it as an array-shaped operand
-to index per grid cell. Without this, deleting the shaped `to` param would strip
-the field's grid shape and the lift would leave a bare (scalar) reference to the
-loader variable — e.g. `-Meteorology.u_wind * grad(...)` would not be lifted to
-`-index(Meteorology.u_wind, i, j) * …`. (esm-spec §11.5 "BCs from data" +
-§10.4 `param_to_var`.)
+From esm 1.0.0 a data source is not a coupling endpoint (esm-spec §8), so there
+is no loader-producer arm here any more: a loaded field IS a parameter of the
+consuming model, declared with its own `shape` and its own `update`, and needs
+no shape transfer from a `param_to_var` edge.
 """
 function _apply_variable_map!(equations::Vector{Equation},
                               params::OrderedDict{String, ModelVariable},
                               entry::CouplingVariableMap;
-                              loader_names::Set{String}=Set{String}(),
                               observeds::Union{OrderedDict{String, ModelVariable},Nothing}=nothing)
     if entry.transform isa ASTExpr
         _apply_expression_transform!(equations, params, observeds, entry)
         return
     end
     _substitute_variable_map!(equations, entry)
-    _promote_variable_map_param!(params, entry, loader_names)
+    _promote_variable_map_param!(params, entry)
     return
 end
 
@@ -568,15 +561,14 @@ function _apply_expression_transform!(equations::Vector{Equation},
         delete!(params, to)
     end
     if observeds !== nothing
-        observeds[to] = ModelVariable(ObservedVariable;
+        observeds[to] = ModelVariable(UnknownVariable;
             units=to_var === nothing ? nothing : to_var.units,
             description=to_var === nothing ? nothing : to_var.description,
-            expression=transform,
             shape=to_var === nothing ? nothing : to_var.shape)
     end
-    # Synthesize the observed's defining equation (`to ~ transform`) so the
-    # flattened system stays well-determined — mirroring _collect_model!'s
-    # observed-equation synthesis for authored observeds.
+    # The defining equation (`to ~ transform`) is what MAKES `to` an observed
+    # unknown from esm 1.0.0 — the declaration carries no expression, so this
+    # push is the whole definition rather than a duplicate of one.
     push!(equations, Equation(VarExpr(to), transform))
     return
 end
@@ -632,28 +624,13 @@ function _rename_join_names(expr::OpExpr, to::AbstractString, from::AbstractStri
 end
 
 # For param_to_var / conversion_factor, remove the target param from the
-# parameter list (it is now driven by `from`), carrying its grid shape onto a
-# loader-qualified producer when applicable.
+# parameter list — it is now driven by `from`.
 function _promote_variable_map_param!(params::OrderedDict{String, ModelVariable},
-                                      entry::CouplingVariableMap,
-                                      loader_names::Set{String})
+                                      entry::CouplingVariableMap)
     (entry.transform == "param_to_var" || entry.transform == "conversion_factor") ||
         return
     haskey(params, entry.to) || return
-    to_var = params[entry.to]
     delete!(params, entry.to)
-    # Carry a grid shape from the (deleted) consumer parameter onto the
-    # loader-qualified producer name, so the pointwise lift indexes the
-    # loaded field per cell. Only when `from` is a data-loader variable
-    # (guards against binding a model STATE, which already lives in `states`).
-    if to_var.shape !== nothing && !isempty(to_var.shape) && !haskey(params, entry.from)
-        from_owner = first(split(entry.from, "."; limit=2))
-        if from_owner in loader_names
-            params[entry.from] = ModelVariable(ParameterVariable;
-                shape=to_var.shape, units=to_var.units,
-                description=to_var.description)
-        end
-    end
     return
 end
 

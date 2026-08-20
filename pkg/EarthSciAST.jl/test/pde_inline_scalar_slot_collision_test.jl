@@ -66,7 +66,7 @@ const _SSC_ESS = EarthSciAST
             "variables" => Dict{String,Any}(
                 "T" => Dict("type" => "parameter", "units" => "K", "default" => 10.0),
                 "a" => Dict("type" => "parameter", "units" => "1", "default" => a),
-                "k" => Dict("type" => "state", "units" => "1", "default" => 0.0)),
+                "k" => Dict("type" => "unknown", "units" => "1", "default" => 0.0)),
             "equations" => Any[
                 Dict("lhs" => Dict("op" => "D", "args" => Any["k"], "wrt" => "t"),
                      "rhs" => Dict("op" => "*", "args" => Any["a", "T"]))],

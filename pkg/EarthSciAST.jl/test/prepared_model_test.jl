@@ -46,7 +46,7 @@ end
         "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "S"),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "y" => Dict{String,Any}("type" => "state", "default" => 0.0),
+                "y" => Dict{String,Any}("type" => "unknown", "default" => 0.0),
                 "k" => Dict{String,Any}("type" => "parameter", "default" => 1.0)),
             "equations" => Any[Dict{String,Any}("lhs" => _D("y"), "rhs" => rhs)])))
 

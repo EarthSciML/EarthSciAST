@@ -9,6 +9,7 @@ from typing import Callable
 import sympy as sp
 
 from . import op_registry
+from .classification import ode_states
 from .errors import EarthSciAstError
 from .esm_types import Expr, ExprNode, Model
 from .expr_walk import iter_children, map_children
@@ -863,11 +864,9 @@ def symbolic_jacobian(model: Model) -> sp.Matrix:
     Raises:
         ValueError: If model has no state variables or equations
     """
-    # Get all state variables
-    state_vars = []
-    for name, var in model.variables.items():
-        if var.type == "state":
-            state_vars.append(name)
+    # The ODE states -- DERIVED from the equations (esm-spec §6.3.1), never
+    # read off a declared type.
+    state_vars = ode_states(model)
 
     if not state_vars:
         raise InvalidModelError("Model has no state variables")

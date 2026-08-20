@@ -57,37 +57,150 @@ use std::collections::HashMap;
 /// The `ArrayCompiled` (simulate) view: `scale`/`src` are undeclared forcing
 /// names (they namespace to `Box.scale`/`Box.src` post-flatten and resolve
 /// through the forcing buffer); `Box.c` is the dotted reference Sink couples to.
-const COUPLED_FORCED_JSON: &str = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "segmented_refresh_coupled"},
- "models": {
-  "Box": {
-   "variables": {"c": {"type": "unknown", "shape": ["i"], "default": 0.0}},
-   "equations": [
+const COUPLED_FORCED_JSON: &str = r#"
     {
-     "lhs": {"op": "arrayop", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["c", "i"]}], "wrt": "t"}},
-     "rhs": {"op": "arrayop", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "*", "args": [
-                {"op": "index", "args": ["scale", "i"]},
-                {"op": "index", "args": ["src", "i"]}
-             ]}}
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "segmented_refresh_coupled"
+      },
+      "models": {
+        "Box": {
+          "variables": {
+            "c": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ],
+              "default": 0.0
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "arrayop",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "c",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                }
+              },
+              "rhs": {
+                "op": "arrayop",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "scale",
+                        "i"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "src",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "Sink": {
+          "variables": {
+            "d": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ],
+              "default": 0.0
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "arrayop",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "d",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                }
+              },
+              "rhs": {
+                "op": "arrayop",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    3
+                  ]
+                },
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "Box.c",
+                    "i"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
     }
-   ]
-  },
-  "Sink": {
-   "variables": {"d": {"type": "unknown", "shape": ["i"], "default": 0.0}},
-   "equations": [
-    {
-     "lhs": {"op": "arrayop", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["d", "i"]}], "wrt": "t"}},
-     "rhs": {"op": "arrayop", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 3]},
-             "expr": {"op": "index", "args": ["Box.c", "i"]}}
-    }
-   ]
-  }
- }
-}"#;
+    "#;
 
 /// The cadence-classification view for [`RefreshExecutor`]: `src` is DISCRETE
 /// (loader `emis` has a `temporal` block), `scale` is CONST (loader `factors`
@@ -96,12 +209,10 @@ const COUPLED_FORCED_JSON: &str = r#"{
 fn classification_doc() -> Value {
     json!({
         "models": {"Box": {"variables": {
-            "src":   {"type": "parameter", "shape": ["i"], "default": 0.0,
-                      "update": {"kind": "data", "source": "emis",
-                                 "from": {"file_variable": "f"}}},
-            "scale": {"type": "parameter", "shape": ["i"], "default": 0.0,
-                      "update": {"kind": "data", "source": "factors",
-                                 "from": {"file_variable": "f"}}}
+            "src":   {"type": "parameter", "shape": ["i"],
+                         "update": {"kind": "data", "source": "emis", "from": {"file_variable": "F"}}},
+            "scale": {"type": "parameter", "shape": ["i"],
+                         "update": {"kind": "data", "source": "factors", "from": {"file_variable": "F"}}}
         }}},
         "data_sources": {
             "emis":    {"kind": "grid", "temporal": {"frequency": "PT1H"}},

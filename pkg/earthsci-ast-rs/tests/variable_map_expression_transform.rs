@@ -65,10 +65,10 @@ fn model_variable(var_type: VariableType, default: Option<f64>) -> ModelVariable
         units: None,
         default,
         description: None,
-        distribution: None,
-        update: None,
         shape: None,
         location: None,
+        distribution: None,
+        update: None,
     }
 }
 
@@ -122,12 +122,9 @@ fn transform_node() -> ExpressionNode {
 /// coupling maps `Src.F -> Sink.F_in` via the given transform.
 fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<f64>) -> EsmFile {
     let mut vars_src = HashMap::new();
-    // An observed unknown is DEFINED BY an equation since 1.0.0, so `F ~ 4.0`
-    // goes into Src's equation list rather than onto the variable.
-    vars_src.insert(
-        "F".to_string(),
-        model_variable(VariableType::Unknown, None),
-    );
+    // An OBSERVED unknown: declared `unknown`, made observed by the
+    // bare-variable-LHS equation `F ~ 4.0` on `Src` below (esm-spec 6.3.1).
+    vars_src.insert("F".to_string(), model_variable(VariableType::Unknown, None));
 
     let mut vars_sink = HashMap::new();
     vars_sink.insert(
@@ -312,7 +309,7 @@ fn factor_with_expression_transform_rejected_by_load() {
         "metadata": {"name": "factor_expr_reject", "authors": ["t"]},
         "models": {
             "Src": {"variables": {"F": {"type": "unknown"}}, "equations": [
-                    {"lhs": "F", "rhs": 4.0}]},
+                {"lhs": "F", "rhs": 4.0}]},
             "Sink": {
                 "variables": {
                     "offset": {"type": "parameter", "default": 1.5},
@@ -357,19 +354,20 @@ fn flatten_expression_transform_creates_observed_and_removes_parameter() {
     assert!(flat.parameters.contains_key("Sink.offset"));
 
     // An observed named exactly `Sink.F_in` exists, defined by the transform
-    // expression VERBATIM (fully-scoped references, no namespacing).
+    // expression VERBATIM (fully-scoped references, no namespacing). From esm
+    // 1.0.0 the DEFINITION is an equation with a bare-variable LHS, not a field
+    // on the variable.
     let obs = flat
         .observed_variables
         .get("Sink.F_in")
         .expect("expected observed Sink.F_in");
     assert_eq!(obs.var_type, VariableType::Unknown);
-    // Its defining expression is an EQUATION now: `Sink.F_in ~ <transform>`.
-    let def = flat
+    let defining = flat
         .equations
         .iter()
-        .find(|e| matches!(&e.lhs, Expr::Variable(v) if v == "Sink.F_in"))
-        .expect("expected a defining equation for Sink.F_in");
-    assert_eq!(def.rhs, Expr::operator(node));
+        .find(|eq| matches!(&eq.lhs, Expr::Variable(v) if v == "Sink.F_in"))
+        .expect("expected a bare-LHS equation defining Sink.F_in");
+    assert_eq!(defining.rhs, Expr::operator(node));
     // Units / description metadata carry over from the removed parameter.
     assert_eq!(obs.units.as_deref(), Some("kg/s"));
     assert_eq!(obs.description.as_deref(), Some("coupled inflow"));
@@ -441,7 +439,7 @@ fn lower_templates_expands_coupling_transform_against_receiving_component() {
             "Src": {
                 "variables": {"F": {"type": "unknown"}},
                 "equations": [
-                    {"lhs": "F", "rhs": 4.0}]
+                {"lhs": "F", "rhs": 4.0}]
             },
             "Sink": {
                 "variables": {
@@ -509,7 +507,7 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
                     "quadruple": {"params": ["x"], "body": {"op": "*", "args": [4.0, "x"]}}
                 },
                 "equations": [
-                    {"lhs": "F", "rhs": 4.0}]
+                {"lhs": "F", "rhs": 4.0}]
             },
             "Sink": {
                 "variables": {

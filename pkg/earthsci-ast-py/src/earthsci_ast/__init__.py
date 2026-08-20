@@ -26,14 +26,16 @@ from .esm_types import (
     ReactionSystem,
     ContinuousEvent,
     DiscreteEvent,
-    FunctionalAffect,
     DiscreteEventTrigger,
-    DataLoader,
-    DataLoaderKind,
-    DataLoaderSource,
-    DataLoaderTemporal,
-    DataLoaderVariable,
-    DataLoaderDeterminism,
+    Distribution,
+    ParameterUpdate,
+    FunctionalUpdate,
+    DataSource,
+    DataSourceKind,
+    DataSourceLocation,
+    DataSourceTemporal,
+    DataSourceBinding,
+    DataSourceDeterminism,
     Operator,
     CouplingEntry,
     CouplingImport,
@@ -188,6 +190,28 @@ from .geometry import (
 # evaluator, not an imperative Python assembly (bead ess-3lj.3).
 from .area_faq import polygon_area_via_faq
 
+# The esm 1.0.0 classification API (esm-spec §6.3.1) — the ONE sanctioned way
+# to recover the finer categories a solver needs from the two declared variable
+# types. Every site that used to branch on `variable.type == "state"` /
+# `"observed"` / `"brownian"` / `"discrete"` calls these instead.
+from .classification import (
+    ClassificationError,
+    algebraic_unknowns,
+    assert_partitions,
+    brownian_parameters,
+    constant_parameters,
+    declared_system_kind,
+    discrete_parameters,
+    is_ode_state,
+    model_nodes,
+    observed_definitions,
+    observed_unknowns,
+    ode_states,
+    sampled_parameters,
+    system_kind,
+    unknowns,
+)
+
 # Build-time cadence-partition pass — the structural_simplify analogue (RFC
 # semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7)
 from .cadence import (
@@ -283,8 +307,8 @@ from .codegen import (
     to_python_code,
 )
 
-# Runtime data loaders (dispatch on DataLoader.kind)
-from .data_loaders import (
+# Runtime data-source readers (dispatch on DataSource.kind)
+from .data_sources import (
     UrlTemplateError,
     expand_url_template,
     expand_with_mirrors,
@@ -314,7 +338,7 @@ from .data_loaders import (
     StaticLoaderError,
     StaticLoader,
     load_static,
-    DataLoaderDispatchError,
+    DataSourceDispatchError,
     load_data,
     resolve_files,
 )
@@ -329,6 +353,22 @@ except PackageNotFoundError:  # pragma: no cover - source-tree import
 
 # Streamlined public API - only Core + Analysis + Simulation tier functionality
 __all__ = [
+    # The esm 1.0.0 classification API (esm-spec §6.3.1)
+    "ode_states",
+    "observed_unknowns",
+    "algebraic_unknowns",
+    "is_ode_state",
+    "brownian_parameters",
+    "discrete_parameters",
+    "sampled_parameters",
+    "constant_parameters",
+    "system_kind",
+    "declared_system_kind",
+    "unknowns",
+    "observed_definitions",
+    "assert_partitions",
+    "model_nodes",
+    "ClassificationError",
     # Core data types
     "Expr",
     "ExprNode",
@@ -342,14 +382,16 @@ __all__ = [
     "ReactionSystem",
     "ContinuousEvent",
     "DiscreteEvent",
-    "FunctionalAffect",
     "DiscreteEventTrigger",
-    "DataLoader",
-    "DataLoaderKind",
-    "DataLoaderSource",
-    "DataLoaderTemporal",
-    "DataLoaderVariable",
-    "DataLoaderDeterminism",
+    "Distribution",
+    "ParameterUpdate",
+    "FunctionalUpdate",
+    "DataSource",
+    "DataSourceKind",
+    "DataSourceLocation",
+    "DataSourceTemporal",
+    "DataSourceBinding",
+    "DataSourceDeterminism",
     "Operator",
     "CouplingEntry",
     "CouplingImport",
@@ -528,7 +570,7 @@ __all__ = [
     "StaticLoaderError",
     "StaticLoader",
     "load_static",
-    "DataLoaderDispatchError",
+    "DataSourceDispatchError",
     "load_data",
     "resolve_files",
 ]

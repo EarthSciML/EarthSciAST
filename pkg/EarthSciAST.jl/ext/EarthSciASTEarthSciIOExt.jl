@@ -118,22 +118,28 @@ end
 
 # --------------------------------------------------------------------------- #
 # providers_from_document — document-declared provider construction (Phase 1
-# clean consolidation). The document's `data_loaders` already say WHAT to read
-# (source URL, variables), and Phase 0 added `metadata.esio_format` saying HOW
-# (the EarthSciIO format registry name). This closes the loop: the runner no
-# longer hand-constructs providers — it asks the document.
+# clean consolidation). The document's `data_sources` say WHAT to read (source
+# URL, ingest options) and `metadata.esio_format` says HOW (the EarthSciIO
+# format registry name). This closes the loop: the runner no longer
+# hand-constructs providers — it asks the document.
 #
-# One provider PER VARIABLE (keyed "<Loader>.<var>"), matching (a) `prepare`'s
-# providers contract ("bind one provider per consumer variable"), (b) the
-# single-variable sample the `provider_sample` adapter above returns, and
-# (c) the per-key gate the record-derived pushdown path attaches. All of a
-# loader's providers share one Cache (per-loader subdir under `cache_root`), so
-# a store's metadata objects are fetched once.
+# esm 1.0.0 moved the BINDING from the source to the consumer: a source exposes
+# no variables of its own, and a model reads one by declaring a PARAMETER whose
+# `update` names the source and binds a `file_variable` (esm-spec §8.5). So the
+# walk is over the models' parameters rather than over a loader's variable
+# table, and each provider is keyed by the CONSUMING PARAMETER's flattened name
+# ("<ModelPath>.<param>") — which is exactly the name `prepare`'s providers
+# contract binds ("one provider per consumer variable"), the name the
+# single-variable `provider_sample` adapter returns, and the name the
+# record-derived pushdown path attaches its per-key gate to. All the parameters
+# drawing from one source share that source's Cache (a per-source subdir under
+# `cache_root`), so a store's metadata objects are fetched once.
 # --------------------------------------------------------------------------- #
 
 # Raw document from any accepted carrier — a native `Dict`, a path, or an
 # `EsmFile`. `providers_from_document` needs the WHOLE document, not just its
-# `data_loaders`: a `select` range bound may name a `metaparameters` entry.
+# `data_sources`: a `select` range bound may name a `metaparameters` entry, and
+# the bindings live on the models' parameters.
 _doc_raw(doc::AbstractDict) = doc
 _doc_raw(doc::AbstractString) = _doc_raw(EarthSciAST.load(doc))
 # EsmFile (or anything typed that serializes): reuse the round-trip emitter.
@@ -511,41 +517,88 @@ function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     return _convert_units(p, _apply_declared_select(p.key, arr, axes))
 end
 
+# Every (flattened-name, variable-dict) pair of a raw model tree, recursing
+# through `subsystems` exactly as `flatten` namespaces them.
+function _walk_model_variables(models, prefix::String, cb)
+    models isa AbstractDict || return
+    for mname0 in sort!(String[String(k) for k in keys(models)])
+        m = models[mname0]
+        m isa AbstractDict || continue
+        path = isempty(prefix) ? mname0 : "$(prefix).$(mname0)"
+        vars = get(m, "variables", nothing)
+        if vars isa AbstractDict
+            for vname0 in sort!(String[String(k) for k in keys(vars)])
+                cb("$(path).$(vname0)", vname0, vars[vname0])
+            end
+        end
+        _walk_model_variables(get(m, "subsystems", nothing), path, cb)
+    end
+    return
+end
+
+# The FIRST `data` rule of a parameter's `update`, or `nothing`. `update` is a
+# single rule object or an ordered array of two or more (esm-spec §5.4).
+function _data_update_rule(vd)
+    vd isa AbstractDict || return nothing
+    u = get(vd, "update", nothing)
+    rules = u isa AbstractVector ? u : (u isa AbstractDict ? Any[u] : Any[])
+    for r in rules
+        r isa AbstractDict && get(r, "kind", nothing) == "data" && return r
+    end
+    return nothing
+end
+
 function providers_from_document(doc;
                                  cache_root::AbstractString,
                                  loaders = nothing,
                                  url_overrides::AbstractDict = Dict{String,String}())
     raw = _doc_raw(doc)
-    dls = get(raw, "data_loaders", nothing)
-    dls isa AbstractDict || throw(RefreshError(
-        "providers_from_document: the document declares no data_loaders"))
+    dss = get(raw, "data_sources", nothing)
+    dss isa AbstractDict || throw(RefreshError(
+        "providers_from_document: the document declares no data_sources"))
     want = loaders === nothing ? nothing : Set(String(l) for l in loaders)
+
+    # Group the consuming parameters by the source they name, so one source's
+    # Cache and RecordTable are built once and shared.
+    consumers = Dict{String,Vector{NamedTuple}}()
+    _walk_model_variables(get(raw, "models", nothing), "", (key, local_name, vd) -> begin
+        rule = _data_update_rule(vd)
+        rule === nothing && return
+        sname = get(rule, "source", nothing)
+        sname isa AbstractString || return
+        from = get(rule, "from", nothing)
+        from isa AbstractDict || return
+        push!(get!(() -> NamedTuple[], consumers, String(sname)),
+              (key = key, local_name = local_name, from = from))
+    end)
+
     out = Dict{String,Any}()
-    for (lname0, ld) in dls
-        lname = String(lname0)
+    for lname0 in sort!(String[String(k) for k in keys(dss)])
+        lname = lname0
         want !== nothing && !(lname in want) && continue
+        ld = dss[lname]
         ld isa AbstractDict || continue
+        binds = get(consumers, lname, NamedTuple[])
+        isempty(binds) && continue   # a source nothing reads needs no provider
         md = get(ld, "metadata", nothing)
         fmt = md isa AbstractDict ? get(md, "esio_format", nothing) : nothing
         if fmt === nothing
-            # An explicitly requested loader MUST be constructible; an
-            # unrestricted sweep just skips format-less loaders.
+            # An explicitly requested source MUST be constructible; an
+            # unrestricted sweep just skips format-less sources.
             want === nothing && continue
             throw(RefreshError(
-                "providers_from_document: data_loaders.$lname declares no " *
+                "providers_from_document: data_sources.$lname declares no " *
                 "metadata.esio_format — cannot construct a provider for it"))
         end
         src = get(ld, "source", nothing)
         url = get(url_overrides, lname,
                   src isa AbstractDict ? get(src, "url_template", nothing) : nothing)
         url isa AbstractString || throw(RefreshError(
-            "providers_from_document: data_loaders.$lname has no source.url_template " *
+            "providers_from_document: data_sources.$lname has no source.url_template " *
             "(and no url_overrides entry)"))
-        vars = get(ld, "variables", nothing)
-        vars isa AbstractDict || continue
         cache = EarthSciIO.Cache(; root = joinpath(String(cache_root), lname))
 
-        # ---- the loader's DECLARED ingest (esm-spec §8.9) -------------------
+        # ---- the source's DECLARED ingest (esm-spec §8.9) -------------------
         # `reader_options` is the document's spelling of EarthSciIO's
         # `reader_kwargs`; handing it over verbatim is the whole point, and an
         # unrecognised key fails at Provider construction rather than decoding
@@ -553,7 +606,7 @@ function providers_from_document(doc;
         ropts = get(ld, "reader_options", nothing)
         reader_kwargs = ropts isa AbstractDict ?
             Dict{Symbol,Any}(Symbol(k) => v for (k, v) in ropts) : Dict{Symbol,Any}()
-        loader_select = _parse_declared_select(raw, "data_loaders.$lname", ld)
+        loader_select = _parse_declared_select(raw, "data_sources.$lname", ld)
         ext = get(ld, "extent", nothing)
         extent_mp = ext isa AbstractDict && get(ext, "metaparameter", nothing) isa AbstractString ?
             String(ext["metaparameter"]) : nothing
@@ -563,18 +616,17 @@ function providers_from_document(doc;
             require_finite = String[String(v) for v in rf["require_finite"]]
         end
 
+        sort!(binds; by = b -> b.key)
         columns = ColumnSpec[]
-        for vname0 in sort!(String[String(k) for k in keys(vars)])
-            vd = vars[vname0]
-            fv = vd isa AbstractDict ? String(get(vd, "file_variable", vname0)) : vname0
-            push!(columns, ColumnSpec(vname0, fv,
-                _parse_codes("data_loaders.$lname.variables.$vname0", vd),
-                parse_unit_conversion(
-                    vd isa AbstractDict ? get(vd, "unit_conversion", nothing) : nothing;
-                    variable_name = "$lname.$vname0")))
+        for b in binds
+            fv = String(get(b.from, "file_variable", b.local_name))
+            push!(columns, ColumnSpec(b.local_name, fv,
+                _parse_codes("$(b.key).update.from", b.from),
+                parse_unit_conversion(get(b.from, "unit_conversion", nothing);
+                                      variable_name = b.key)))
         end
 
-        # A record filter or a code map makes the loader a TABLE: one decode,
+        # A record filter or a code map makes the source a TABLE: one decode,
         # one keep mask, columns that stay aligned.
         table = nothing
         if !isempty(require_finite) || any(c.codes !== nothing for c in columns)
@@ -586,11 +638,9 @@ function providers_from_document(doc;
                 columns, require_finite, nothing)
         end
 
-        for spec in columns
-            key = "$lname.$(spec.name)"
-            vd = vars[spec.name]
-            sel = _parse_declared_select(
-                raw, "data_loaders.$lname.variables.$(spec.name)", vd)
+        for (b, spec) in zip(binds, columns)
+            key = b.key
+            sel = _parse_declared_select(raw, "$(key).update.from", b.from)
             sel === nothing && (sel = loader_select)
             inner = EarthSciIO.const_provider(
                 cache, String(url); format = String(fmt),

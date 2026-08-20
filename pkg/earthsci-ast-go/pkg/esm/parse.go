@@ -308,13 +308,14 @@ func normalizeModelLiterals(m *Model) {
 	if m == nil {
 		return
 	}
-	for name, v := range m.Variables {
-		// The update's own Expression positions are literal-bearing too: a
-		// `when` comparison against 10 and a `unit_conversion` factor of 1 must
-		// keep their int shape exactly as an equation's literals do.
-		_ = v.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
-			return normalizeExpression(expr), nil
-		})
+	for name := range m.Variables {
+		v := m.Variables[name]
+		// Every Expression position on a variable is now inside its parameter
+		// `update` (esm-spec §5.4); VariableExprSites enumerates them so this
+		// pass cannot miss one the way a hand-listed field set would.
+		for _, site := range VariableExprSites(&v) {
+			site.Set(normalizeExpression(site.Expr))
+		}
 		if v.Default != nil {
 			v.Default = normalizeExpression(v.Default)
 		}
@@ -386,8 +387,8 @@ func rejectDeprecatedV02Blocks(jsonStr string) error {
 //
 // Node recursion routes through mapExprChildren so every Expression-bearing
 // field is covered (not just Args/TableAxes), and the carrier walk reaches
-// every top-level expression slot: observed-variable expressions, equations,
-// initialization equations, guesses, event triggers/conditions/affects, and —
+// every top-level expression slot: equations, initialization equations,
+// guesses, parameter `update` rules, event triggers/conditions/affects, and —
 // on reaction systems — reaction rates and constraint equations.
 func rejectCallOps(file *ESMFile) error {
 	var visit func(expr Expression) error
@@ -465,12 +466,12 @@ func rejectCallOps(file *ESMFile) error {
 	}
 
 	for _, m := range file.Models {
-		for _, v := range m.Variables {
-			err := v.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
-				return expr, visit(expr)
-			})
-			if err != nil {
-				return err
+		for name := range m.Variables {
+			v := m.Variables[name]
+			for _, site := range VariableExprSites(&v) {
+				if err := visit(site.Expr); err != nil {
+					return err
+				}
 			}
 		}
 		if err := visitEquations(m.Equations); err != nil {

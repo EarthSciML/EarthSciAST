@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import op_registry
+from .classification import algebraic_unknowns, ode_states
 
 
 def to_julia_code(file: dict[str, Any]) -> str:
@@ -65,10 +66,10 @@ def to_julia_code(file: dict[str, Any]) -> str:
         lines.append("")
 
     # Generate data loader placeholders (codegen not yet implemented)
-    if file.get("data_loaders"):
+    if file.get("data_sources"):
         lines.append("# Data Loaders (codegen not yet implemented)")
-        for name, data_loader in file["data_loaders"].items():
-            lines.extend(_generate_data_loader_comment(name, data_loader))
+        for name, data_source in file["data_sources"].items():
+            lines.extend(_generate_data_source_comment(name, data_source))
         lines.append("")
 
     return "\n".join(lines)
@@ -150,8 +151,12 @@ def _generate_model_code(name: str, model: dict[str, Any]) -> list[str]:
     parameters = []
 
     if model.get("variables"):
+        # `@variables` gets the unknowns the solver solves for -- ODE states and
+        # algebraic unknowns -- and `@parameters` the parameters. Both come from
+        # the §6.3.1 classification, not from a declared type.
+        solved = set(ode_states(model)) | set(algebraic_unknowns(model))
         for var_name, variable in model["variables"].items():
-            if variable.get("type") == "state":
+            if var_name in solved:
                 state_vars.append((var_name, variable))
             elif variable.get("type") == "parameter":
                 parameters.append((var_name, variable))
@@ -230,7 +235,7 @@ def _generate_coupling_comment(coupling: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _generate_data_loader_comment(name: str, data_loader: dict[str, Any]) -> list[str]:
+def _generate_data_source_comment(name: str, data_source: dict[str, Any]) -> list[str]:
     lines = []
     lines.append(f"# Data loader: {name}")
     source = data_loader.get("source")
@@ -453,8 +458,12 @@ def _generate_python_model_code(name: str, model: dict[str, Any]) -> list[str]:
     parameters = []
 
     if model.get("variables"):
+        # `@variables` gets the unknowns the solver solves for -- ODE states and
+        # algebraic unknowns -- and `@parameters` the parameters. Both come from
+        # the §6.3.1 classification, not from a declared type.
+        solved = set(ode_states(model)) | set(algebraic_unknowns(model))
         for var_name, variable in model["variables"].items():
-            if variable.get("type") == "state":
+            if var_name in solved:
                 state_vars.append((var_name, variable))
             elif variable.get("type") == "parameter":
                 parameters.append((var_name, variable))

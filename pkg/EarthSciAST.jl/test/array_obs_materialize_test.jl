@@ -44,9 +44,9 @@ end
                                 output_idx = Any["i"], ranges = copy(_rng),
                                 expr_body = body)
     vars = Dict(
-        "u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-        "g" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"]),
-        "h" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"]),
+        "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+        "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+        "h" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
         "k" => ESM_AOM.ModelVariable(ESM_AOM.ParameterVariable; default = 0.25),
     )
     eqs = [
@@ -99,10 +99,10 @@ end
     # fills ran in the wrong order, `w` would read an unfilled `g` buffer.
     @testset "dependency order through an inlined observed" begin
         vars2 = Dict(
-            "u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-            "g" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"]),
-            "w" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"]),
-            "s" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable),
+            "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "w" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "s" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable),
         )
         eqs2 = [
             ESM_AOM.Equation(_v("g"), _agg(_op("+", _idx("u", _v("i")), _n(1.0)))),
@@ -182,14 +182,15 @@ end
                                   values = ESM_AOM.ASTExpr[west, interior, east])
         end
         varsD = Dict(
-            "u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-            "A" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-            "B" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-            # `w` is a bit-exact copy of `u`
-            "w" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"],
-                                         expression = aggM(_idx("u", _v("i")))),
+            "u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "A" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            "B" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+            # `w` is a bit-exact copy of `u` (esm 1.0.0: defined by the
+            # bare-variable-LHS equation below, not by a `expression` field)
+            "w" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
         )
         eqsD = [
+            ESM_AOM.Equation(_v("w"), aggM(_idx("u", _v("i")))),
             ESM_AOM.Equation(_op("D", _v("u"); wrt = "t"), aggM(_n(0.0))),
             ESM_AOM.Equation(_op("D", _v("A"); wrt = "t"), lowered_D("w")),
             ESM_AOM.Equation(_op("D", _v("B"); wrt = "t"), lowered_D("u")),
@@ -221,10 +222,10 @@ end
         # this one does NOT depend on the observed's loop-index names, so no
         # amount of careful naming in a rule library avoids it.
         varsC = copy(varsD)
-        varsC["hz"] = ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"],
-                                            expression = lowered_D("u"))
-        varsC["C"] = ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"])
-        eqsC = vcat(eqsD, [ESM_AOM.Equation(_op("D", _v("C"); wrt = "t"),
+        varsC["hz"] = ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])
+        varsC["C"] = ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])
+        eqsC = vcat(eqsD, [ESM_AOM.Equation(_v("hz"), lowered_D("u")),
+                           ESM_AOM.Equation(_op("D", _v("C"); wrt = "t"),
                                             aggM(_idx("hz", _v("i"))))])
         icsC = copy(icsD)
         for j in 1:M
@@ -262,10 +263,11 @@ end
         aggJ(body) = ESM_AOM.OpExpr("aggregate", ESM_AOM.ASTExpr[];
             output_idx = Any["j"], ranges = Dict("j" => [1, 3]), expr_body = body)
         mR = ESM_AOM.Model(
-            Dict("c" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["tgt"]),
-                 "g" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable;
-                                              shape = ["tgt"], expression = gdef)),
-            [ESM_AOM.Equation(aggJ(_Didx("c", _v("j"))), aggJ(_idx("g", _v("j"))))])
+            Dict("c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["tgt"]),
+                 "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["tgt"])),
+            # esm 1.0.0: `g`'s contraction body is its defining equation.
+            [ESM_AOM.Equation(_v("g"), gdef),
+             ESM_AOM.Equation(aggJ(_Didx("c", _v("j"))), aggJ(_idx("g", _v("j"))))])
         kw = (; index_sets = Dict("tgt" => ESM_AOM.IndexSet("interval"; size = 3)),
                 initial_conditions = Dict("c[$j]" => 0.0 for j in 1:3),
                 const_arrays = Dict("W" => Wm, "src" => src))
@@ -307,8 +309,8 @@ end
                           "j" => ESM_AOM.IndexSetRef("y")),
             expr_body = body)
         mC = ESM_AOM.Model(
-            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x", "y"]),
-                 "s" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"]),
+            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x", "y"]),
+                 "s" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
                  "k" => ESM_AOM.ModelVariable(ESM_AOM.ParameterVariable; default = 0.5)),
             [ESM_AOM.Equation(_v("s"), colsum),
              ESM_AOM.Equation(agg2(_Didx("u", _v("i"), _v("j"))),
@@ -378,9 +380,9 @@ end
             filter = _op("<=", _v("j"), _v("i")),
             expr_body = _idx("g", _v("j")))
         mS = ESM_AOM.Model(
-            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-                 "c" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-                 "g" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"])),
+            Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+                 "c" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+                 "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])),
             [ESM_AOM.Equation(_v("g"), aggS(_op("*", _n(2.0), _idx("u", _v("i"))))),
              ESM_AOM.Equation(aggS(_Didx("c", _v("i"))), scan_rhs),
              ESM_AOM.Equation(aggS(_Didx("u", _v("i"))), aggS(_n(0.0)))])
@@ -423,12 +425,12 @@ end
     _ix(a, ks...) = Dict{String,Any}("op" => "index", "args" => Any[a, ks...])
 
     doc = Dict{String,Any}(
-        "esm" => "0.8.0", "metadata" => Dict("name" => "agg_inline_capture"),
+        "esm" => "1.0.0", "metadata" => Dict("name" => "agg_inline_capture"),
         "models" => Dict("R" => Dict{String,Any}(
             "variables" => Dict(
-                "q"    => Dict("type" => "state",    "shape" => Any["gi", "gk"]),
-                "w"    => Dict("type" => "observed", "shape" => Any["gi"]),
-                "mean" => Dict("type" => "observed", "shape" => Any["gi", "gk"])),
+                "q"    => Dict("type" => "unknown",    "shape" => Any["gi", "gk"]),
+                "w"    => Dict("type" => "unknown", "shape" => Any["gi"]),
+                "mean" => Dict("type" => "unknown", "shape" => Any["gi", "gk"])),
             "equations" => Any[
                 # w[gi] = Σ_gk q[gi,gk]           — `gk` CONTRACTED
                 Dict("lhs" => "w",
@@ -488,8 +490,8 @@ end
         ranges = Dict("i" => Any[1, Ns], "j" => Any[1, Ns]),
         expr_body = _op("*", _idx("u", _v("j")), _idx("u", _v("j"))))
     mO = ESM_AOM.Model(
-        Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.StateVariable; shape = ["x"]),
-             "g" => ESM_AOM.ModelVariable(ESM_AOM.ObservedVariable; shape = ["x"])),
+        Dict("u" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"]),
+             "g" => ESM_AOM.ModelVariable(ESM_AOM.UnknownVariable; shape = ["x"])),
         [ESM_AOM.Equation(_v("g"), totO),
          ESM_AOM.Equation(aggO(_Didx("u", _v("i"))),
                           aggO(_op("-", _idx("g", _v("i")), _idx("u", _v("i")))))])

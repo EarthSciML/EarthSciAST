@@ -25,10 +25,10 @@ fn test_undefined_variable_in_model() {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
 
@@ -114,10 +114,10 @@ fn test_equation_count_mismatch() {
             units: None,
             default: Some(1.0),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
     variables.insert(
@@ -128,10 +128,10 @@ fn test_equation_count_mismatch() {
             units: None,
             default: Some(0.1),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
 
@@ -349,10 +349,10 @@ fn test_valid_file_passes() {
             units: None,
             default: Some(0.1),
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         },
     );
 

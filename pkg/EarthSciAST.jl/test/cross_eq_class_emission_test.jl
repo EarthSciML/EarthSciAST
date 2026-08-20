@@ -75,8 +75,8 @@ end
 # equations (or the repair pass) can produce the class kernel.
 function _xq_twin_interp_model(N)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
-        "v" => ESM.ModelVariable(ESM.StateVariable))
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "v" => ESM.ModelVariable(ESM.UnknownVariable))
     body(x, tbl) = _op("*",
         _op("fn", _const(tbl), _const(_XQ_AX), _idx(x, _v("i"));
             name="interp.linear"),
@@ -89,8 +89,8 @@ end
 # state-slot variation — the merged kernel carries state tables, no lane spec.
 function _xq_twin_plain_model(N)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
-        "v" => ESM.ModelVariable(ESM.StateVariable))
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "v" => ESM.ModelVariable(ESM.UnknownVariable))
     body(x) = _op("*", _op("*", _n(-0.5), _idx(x, _v("i"))), _v("k"))
     ESM.Model(vars, [_xq_percell_eq("u", body("u"), N),
                      _xq_percell_eq("v", body("v"), N)])
@@ -103,8 +103,8 @@ end
 # ⇒ box-kernel classes across equations AND across ghost patterns.
 function _xq_afbox_model(N)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
-        "v" => ESM.ModelVariable(ESM.StateVariable))
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "v" => ESM.ModelVariable(ESM.UnknownVariable))
     lap(x) = _op("+", _idx(x, _op("-", _v("i"), _i(1))),
                       _op("*", _n(-2.0), _idx(x, _v("i"))),
                       _idx(x, _op("+", _v("i"), _i(1))))

@@ -131,6 +131,214 @@ type AffectEquation struct {
 // 2. Model Components
 // ========================================
 
+// ModelVariable represents a variable in a mathematical model.
+//
+// esm 1.0.0 declares exactly TWO variable types (esm-spec 6.3): `unknown` (a
+// quantity the solver solves for, whose behaviour is stated by the model's
+// `equations` and NOWHERE else) and `parameter` (a quantity supplied to the
+// solver, valued by `default` or a `distribution` and optionally refreshed by an
+// `update`). Everything finer a solver needs -- which unknowns are ODE states,
+// observed, or algebraic; which parameters are Brownian, discrete, sampled, or
+// constant -- is DERIVED by the classification functions in classify.go
+// (esm-spec 6.3.1) and MUST NOT be read off a declared type.
+type ModelVariable struct {
+	Type    string  `json:"type"` // "unknown" or "parameter"
+	Units   *string `json:"units,omitempty"`
+	Default any     `json:"default,omitempty"`
+	// DefaultUnits declares the units the scalar `default` is expressed in when
+	// they differ from `units`. The value is converted at load. A conversion that
+	// is AFFINE (degC<->K) cannot be expressed as a scalar factor, so declaring
+	// one here is a `unit_inconsistency` -- see checkDefaultUnits.
+	DefaultUnits *string `json:"default_units,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	// Shape lists index-set names for arrayed variables, drawn from the
+	// document-scoped `index_sets` registry (ESMFile.IndexSets). A nil pointer
+	// means the key is absent (scalar); a pointer to an EMPTY slice is the
+	// authored `"shape": []`, which is also scalar but must survive the
+	// round-trip verbatim -- esm 1.0.0 REQUIRES the key on a parameter whose
+	// update is `schedule` / `data` / `remesh` (esm-spec 5.4), so silently
+	// dropping an empty shape re-emits a schema-INVALID document. Use Dims() to
+	// read the axes without caring which spelling arrived.
+	Shape *[]string `json:"shape,omitempty"`
+	// Location tags the variable's staggered-grid location
+	// (e.g., "cell_center", "edge_normal", "vertex"). Empty means
+	// no explicit staggering. See discretization RFC 10.2.
+	Location string `json:"location,omitempty"`
+	// Distribution is parameter-only: draw the value from a closed-set
+	// distribution instead of fixing it at `default` (mutually exclusive with
+	// it). With no Update the draw happens ONCE at setup (the UQ / ensemble
+	// case); with `update.kind: "wiener"` it is redrawn every step with sqrt(dt)
+	// scaling, which makes the enclosing model an SDE (esm-spec 6.3).
+	Distribution *Distribution `json:"distribution,omitempty"`
+	// Update is parameter-only: WHEN this parameter refreshes and WHAT from
+	// (esm-spec 5.4). The wire shape is the ParameterUpdateSpec union -- either
+	// one ParameterUpdate object or an ordered array of two or more -- and is
+	// held as `any` (carrying ParameterUpdate or []ParameterUpdate) so the
+	// reflection-based canonical emitter still walks into it and normalises the
+	// floats inside. Read it through UpdateRules() rather than type-switching at
+	// each site.
+	Update any `json:"update,omitempty"`
+}
+
+// Dims returns the variable's declared index-set axes, treating an absent
+// `shape` and an authored empty one alike (both are scalar). It is the accessor
+// every consumer that only cares about dimensionality should use.
+func (mv ModelVariable) Dims() []string {
+	if mv.Shape == nil {
+		return nil
+	}
+	return *mv.Shape
+}
+
+// SetDims sets the variable's `shape` to the given axes, materializing the
+// pointer. Passing a nil slice records an authored `"shape": []` (a scalar with
+// the key present); call ClearDims to drop the key entirely.
+func (mv *ModelVariable) SetDims(dims []string) {
+	if dims == nil {
+		dims = []string{}
+	}
+	mv.Shape = &dims
+}
+
+// ClearDims removes the `shape` key entirely.
+func (mv *ModelVariable) ClearDims() { mv.Shape = nil }
+
+// UpdateRules returns the parameter's update rules in declaration order,
+// flattening both spellings of the ParameterUpdateSpec union (esm-spec 5.4).
+// A variable with no `update` returns nil.
+func (mv ModelVariable) UpdateRules() []ParameterUpdate {
+	switch u := mv.Update.(type) {
+	case nil:
+		return nil
+	case ParameterUpdate:
+		return []ParameterUpdate{u}
+	case *ParameterUpdate:
+		if u == nil {
+			return nil
+		}
+		return []ParameterUpdate{*u}
+	case []ParameterUpdate:
+		if len(u) == 0 {
+			return nil
+		}
+		return u
+	default:
+		return nil
+	}
+}
+
+// HasUpdate reports whether the variable carries any update rule.
+func (mv ModelVariable) HasUpdate() bool { return len(mv.UpdateRules()) > 0 }
+
+// SetUpdate stores the given rules in the canonical spelling of the union: a
+// lone rule as the OBJECT form (a one-element array is invalid per esm-spec
+// 5.4) and two or more as the array form. No rules clears the field.
+func (mv *ModelVariable) SetUpdate(rules []ParameterUpdate) {
+	switch len(rules) {
+	case 0:
+		mv.Update = nil
+	case 1:
+		mv.Update = rules[0]
+	default:
+		mv.Update = rules
+	}
+}
+
+// Update kind literals (esm-spec 5.4, "When: the six kinds").
+const (
+	UpdateKindWiener    = "wiener"
+	UpdateKindSchedule  = "schedule"
+	UpdateKindCondition = "condition"
+	UpdateKindCrossing  = "crossing"
+	UpdateKindData      = "data"
+	UpdateKindRemesh    = "remesh"
+)
+
+// ParameterUpdate is ONE rule of a parameter's `update` block (esm-spec 5.4):
+// WHEN the parameter refreshes (Kind, plus the kind's own trigger fields) and
+// WHAT from (exactly one of Expression / From / Handler -- except `wiener`,
+// which takes none because it resamples the parameter's own Distribution).
+//
+// It collapses three 0.x constructs: the `brownian` variable type (now
+// `wiener`), the `discrete` type's RefreshTrigger (now `schedule` / `data` /
+// `remesh`), and the `discrete_parameters` event lists with their
+// `functional_affect` (now `condition` / `crossing` carrying a Handler).
+type ParameterUpdate struct {
+	Kind string `json:"kind"`
+
+	// --- schedule ---
+	Times         []float64 `json:"times,omitempty"`
+	Interval      *float64  `json:"interval,omitempty"`
+	InitialOffset *float64  `json:"initial_offset,omitempty"`
+
+	// --- condition / crossing ---
+	When Expression `json:"when,omitempty"`
+	// Direction is crossing-only: "up" | "down" | "any" (default "any").
+	Direction string `json:"direction,omitempty"`
+
+	// --- data ---
+	// Source names a `data_sources` key; it MUST resolve
+	// (`data_source_undefined`, esm-spec 8.5).
+	Source string `json:"source,omitempty"`
+
+	// --- remesh ---
+	Hook string `json:"hook,omitempty"`
+
+	// --- the three value forms; exactly one is set on a non-wiener rule ---
+	Expression Expression         `json:"expression,omitempty"`
+	From       *DataSourceBinding `json:"from,omitempty"`
+	Handler    *FunctionalUpdate  `json:"handler,omitempty"`
+}
+
+// IsBrownian reports whether this rule is the driving Wiener process.
+func (u ParameterUpdate) IsBrownian() bool { return u.Kind == UpdateKindWiener }
+
+// FunctionalUpdate is a registered handler that computes a parameter's new
+// value when its update fires (esm-spec 5.5). It is the 0.x event
+// `functional_affect` relocated onto the parameter it writes: a handler's only
+// write channel was `modified_params`, so moving it here REMOVED that list
+// rather than relocating it.
+type FunctionalUpdate struct {
+	HandlerID  string         `json:"handler_id"`
+	ReadVars   []string       `json:"read_vars,omitempty"`
+	ReadParams []string       `json:"read_params,omitempty"`
+	Config     map[string]any `json:"config,omitempty"`
+}
+
+// Distribution is a parameter's value drawn from a closed set of probability
+// distributions (esm-spec 6.3): `normal` (Mean + Std|Cov), `lognormal`
+// (Mu + Sigma|Cov), or `uniform` (Low + High). A distribution is univariate when
+// its location parameter is a number and multivariate when it is an array, in
+// which case the parameter's `shape` must agree and Cov gives the full
+// covariance matrix -- which is how 1.0.0 spells correlated noise, replacing the
+// 0.x `correlation_group` tag that never carried a matrix.
+//
+// The scalar-or-vector fields are `any` (float64 or []any) because the schema
+// admits both spellings at every one of them.
+type Distribution struct {
+	Kind string `json:"kind"`
+	// normal
+	Mean any `json:"mean,omitempty"`
+	Std  any `json:"std,omitempty"`
+	// lognormal
+	Mu    any `json:"mu,omitempty"`
+	Sigma any `json:"sigma,omitempty"`
+	// uniform
+	Low  any `json:"low,omitempty"`
+	High any `json:"high,omitempty"`
+	// Cov is the symmetric positive-semidefinite covariance matrix (row-major)
+	// of a multivariate `normal` / `lognormal`. Mutually exclusive with
+	// Std / Sigma.
+	Cov [][]float64 `json:"cov,omitempty"`
+}
+
+// Distribution kind literals (esm-spec 6.3).
+const (
+	DistributionNormal    = "normal"
+	DistributionLognormal = "lognormal"
+	DistributionUniform   = "uniform"
+)
+
 // Model represents an ODE system
 type Model struct {
 	Reference        *Reference               `json:"reference,omitempty"`
@@ -351,10 +559,10 @@ type Analysis struct {
 // 4. Events
 // ========================================
 
-// The 0.x `FunctionalAffect` type is GONE (esm-spec 5.4, RFC
-// unified-variable-model D5). A handler's only write channel was
-// `modified_params`, so in 1.0.0 it lives on the parameter it writes, as
-// `update.handler` -- see FunctionalUpdate in variable_model.go.
+// esm 1.0.0 removes the event `functional_affect`. A handler had exactly one
+// write channel -- `modified_params` -- so it now lives ON the parameter it
+// writes, as `update.handler`, and its Go type is FunctionalUpdate (types.go,
+// esm-spec 5.5). Events affect UNKNOWNS only.
 
 // DiscreteEventTrigger represents different trigger types for discrete events
 type DiscreteEventTrigger struct {
@@ -365,11 +573,10 @@ type DiscreteEventTrigger struct {
 	Times         []float64  `json:"times,omitempty"`          // for preset_times
 }
 
-// DiscreteEvent represents a discrete event
-// An event may affect UNKNOWNS ONLY (esm-spec 5). From 1.0.0 a parameter
-// carries its own `update`, so there is no `discrete_parameters` list and no
-// `functional_affect` here; an affects LHS naming a parameter is
-// `event_affects_parameter`.
+// DiscreteEvent represents a discrete event. From esm 1.0.0 an event may affect
+// UNKNOWNS ONLY (`event_affects_parameter` otherwise): a parameter that changes
+// during a run carries its own `update` block, so there is no
+// `discrete_parameters` list and no `functional_affect` here.
 type DiscreteEvent struct {
 	Name         string               `json:"name,omitempty"`
 	Trigger      DiscreteEventTrigger `json:"trigger"`
@@ -378,7 +585,9 @@ type DiscreteEvent struct {
 	Description  *string              `json:"description,omitempty"`
 }
 
-// ContinuousEvent represents a continuous event
+// ContinuousEvent represents a continuous event. As with DiscreteEvent, every
+// affect LHS must name an unknown; a parameter that changes on a zero crossing
+// declares `update: {kind: "crossing", ...}` on itself (esm-spec 5.4).
 type ContinuousEvent struct {
 	Name         *string          `json:"name,omitempty"`
 	Conditions   []Expression     `json:"conditions"`
@@ -393,45 +602,51 @@ type ContinuousEvent struct {
 // 5. Data Sources
 // ========================================
 
-// DataSource is a named external data source reduced to pure I/O: it locates,
-// reads, decodes, slices and filters bytes on disk (esm-spec §8).
+// DataSource is a runtime-agnostic description of an external dataset, reduced
+// to a single responsibility: locate, read, decode, slice, and filter bytes on
+// disk (esm-spec 8). It performs no reprojection and no regridding.
 //
-// From esm 1.0.0 it is NOT a component. It cannot be a coupling endpoint, a
-// subsystem, or the path root of a scoped reference, and — the load-bearing
-// change — it exposes NO variables. A model consumes it by declaring a
-// parameter whose `update` names this source and binds one of its
-// `file_variable`s; that parameter owns the units, declared once instead of
-// twice. Grid geometry a source reads (coordinates, connectivity, metric
-// arrays) arrives the same way, as ordinary parameters, and is transformed
-// downstream by `aggregate` FAQs rather than by a descriptor here.
+// From esm 1.0.0 a data source is a document-scoped REGISTRY ENTRY, not a
+// component: it exposes no variables of its own, and cannot be a coupling
+// endpoint, a subsystem, or a scoped-name path root. A model consumes one by
+// declaring a PARAMETER whose `update` names the source and binds one of its
+// file variables (`update: {kind: "data", source, from}`) -- the parameter IS
+// the loaded field, and it owns the units that the 0.x loader-variable map used
+// to declare a second time.
 type DataSource struct {
-	Kind        string                 `json:"kind"` // "grid", "points", or "static" (esm-spec §8.9)
+	Kind        string                 `json:"kind"` // "grid", "points", or "static" (esm-spec 8.1)
 	Source      DataSourceLocation     `json:"source"`
 	Temporal    *DataSourceTemporal    `json:"temporal,omitempty"`
 	Determinism *DataSourceDeterminism `json:"determinism,omitempty"`
-	// ReaderOptions are format-specific DECODE options passed to the reader
-	// verbatim. They say how bytes become an array, never what the array means.
+	// ReaderOptions are format-specific DECODE options handed to the format
+	// reader verbatim (esm-spec 8.9.1).
 	ReaderOptions map[string]any `json:"reader_options,omitempty"`
-	// Select is the source-level default slice, overridable per binding.
+	// Select is the per-axis default selection every parameter drawing from this
+	// source inherits, unless its own `from.select` overrides it (esm-spec
+	// 8.9.2). Held raw: this binding round-trips it but does not evaluate it.
 	Select any `json:"select,omitempty"`
-	// RecordFilter narrows which records are read.
-	RecordFilter any `json:"record_filter,omitempty"`
-	// Extent bounds the region read.
-	Extent    any            `json:"extent,omitempty"`
-	Reference *Reference     `json:"reference,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
+	// RecordFilter decides which records of a `points` source survive. The mask
+	// is computed ONCE for the source and applied to every parameter drawing
+	// from it, which is what keeps two columns of one table in alignment
+	// (esm-spec 8.9.3).
+	RecordFilter *DataSourceRecordFilter `json:"record_filter,omitempty"`
+	// Extent binds the delivered record count to a metaparameter, for a source
+	// whose size is not knowable until it is read (esm-spec 8.9.4).
+	Extent    *DataSourceExtent `json:"extent,omitempty"`
+	Reference *Reference        `json:"reference,omitempty"`
+	Metadata  map[string]any    `json:"metadata,omitempty"`
 }
 
-// HasTemporal reports whether the source declares a `temporal` block. This is
-// the whole of the cadence source-seed refinement (CONFORMANCE_SPEC §5.7.2): a
-// `data`-updated parameter reading a source WITH temporal stays DISCRETE, one
-// reading a source WITHOUT it refines to CONST. `temporal` is optional and its
-// absence means non-time-varying.
-func (d *DataSource) HasTemporal() bool { return d != nil && d.Temporal != nil }
+// IsTimeVarying reports whether the source declares a `temporal` block. This is
+// the one document field a cadence leaf seed reads outside the variable's own
+// declaration (CONFORMANCE_SPEC 5.7.2, source-seeded refinement): a parameter
+// fed by a source WITH `temporal` stays DISCRETE, one fed by a source without it
+// refines down to CONST.
+func (d DataSource) IsTimeVarying() bool { return d.Temporal != nil }
 
-// DataSourceDeterminism is the reproducibility contract a source advertises
-// to bindings (esm-spec §8.9.2). A binding that cannot honor the declared
-// contract MUST reject the file at load.
+// DataSourceDeterminism is the reproducibility contract a source advertises to
+// bindings (esm-spec 8.1). A binding that cannot honor the declared contract
+// MUST reject the file at load.
 type DataSourceDeterminism struct {
 	Endian       *string `json:"endian,omitempty"`        // "little" | "big"
 	FloatFormat  *string `json:"float_format,omitempty"`  // "ieee754_single" | "ieee754_double"
@@ -439,27 +654,54 @@ type DataSourceDeterminism struct {
 }
 
 // DataSourceLocation describes file discovery for a data source. URL templates
-// use Jinja-style substitutions for dates, variable names, and similar.
+// use Jinja-style substitutions for dates, variable names, and similar
+// (esm-spec 8.2).
 type DataSourceLocation struct {
 	URLTemplate string   `json:"url_template"`
 	Mirrors     []string `json:"mirrors,omitempty"`
 }
 
-// DataSourceTemporal describes the temporal coverage and record layout.
-// RecordsPerFile may be an int or the string "auto"; represented as interface{}.
+// DataSourceTemporal describes the temporal coverage and record layout
+// (esm-spec 8.3). RecordsPerFile may be an int or the string "auto".
 type DataSourceTemporal struct {
-	Start          *string `json:"start,omitempty"`
-	End            *string `json:"end,omitempty"`
-	FilePeriod     *string `json:"file_period,omitempty"`
-	Frequency      *string `json:"frequency,omitempty"`
-	RecordsPerFile any     `json:"records_per_file,omitempty"`
-	TimeVariable   *string `json:"time_variable,omitempty"`
+	Start            *string `json:"start,omitempty"`
+	End              *string `json:"end,omitempty"`
+	FilePeriod       *string `json:"file_period,omitempty"`
+	Frequency        *string `json:"frequency,omitempty"`
+	RecordsPerFile   any     `json:"records_per_file,omitempty"`
+	TimeVariable     *string `json:"time_variable,omitempty"`
+	RecordsPerSample *int    `json:"records_per_sample,omitempty"`
 }
 
-// The 0.x `DataLoaderVariable` is GONE with the source-side `variables` map: a
-// source declares no fields, so the file-variable binding lives on the
-// consuming parameter as `update.from` — see DataSourceBinding in
-// variable_model.go, which is this type minus `units`.
+// DataSourceRecordFilter names the file variables whose value must be finite for
+// a record of a `points` source to be delivered (esm-spec 8.9.3).
+type DataSourceRecordFilter struct {
+	RequireFinite []string `json:"require_finite,omitempty"`
+}
+
+// DataSourceExtent binds a source's delivered record count to a metaparameter
+// (esm-spec 8.9.4).
+type DataSourceExtent struct {
+	Metaparameter string `json:"metaparameter"`
+}
+
+// DataSourceBinding binds a PARAMETER to one file variable of a `data_sources`
+// entry, through the `from` value form of a `data` update (esm-spec 8.5). It is
+// the 0.x DataLoaderVariable minus `units`: the units are the parameter's own,
+// declared once instead of twice.
+//
+// UnitConversion is a single Expression position -- `Expression` already admits
+// a bare number, so the 0.x `oneOf: [number, Expression]` spelling was
+// unsatisfiable for every plain factor. Its free names are subject to reference
+// integrity (esm-spec 4.9.5).
+type DataSourceBinding struct {
+	FileVariable   string     `json:"file_variable"`
+	UnitConversion any        `json:"unit_conversion,omitempty"`
+	Codes          any        `json:"codes,omitempty"`
+	Select         any        `json:"select,omitempty"`
+	Description    *string    `json:"description,omitempty"`
+	Reference      *Reference `json:"reference,omitempty"`
+}
 
 // The top-level `operators` and `registered_functions` blocks (and the `call`
 // AST op that referenced them) were removed in v0.3.0 by the closed function
@@ -554,7 +796,8 @@ type CallbackCoupling struct {
 
 func (c CallbackCoupling) CouplingType() string { return c.Type }
 
-// EventCoupling represents event-based coupling
+// EventCoupling represents event-based coupling. Like a model-local event it may
+// affect UNKNOWNS ONLY (`event_affects_parameter` otherwise, esm-spec 5.4).
 type EventCoupling struct {
 	Type         string                `json:"type"`       // "event"
 	EventType    string                `json:"event_type"` // "continuous" or "discrete"
@@ -692,7 +935,10 @@ type ESMFile struct {
 	Metadata        Metadata                  `json:"metadata" validate:"required"`
 	Models          map[string]Model          `json:"models,omitempty"`
 	ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
-	DataSources     map[string]DataSource     `json:"data_sources,omitempty"`
+	// DataSources is the document-scoped ingest registry (esm-spec 8). It is
+	// NOT a map of components: nothing here can be coupled, subsystem'd, or used
+	// as a scoped-reference path root.
+	DataSources map[string]DataSource `json:"data_sources,omitempty"`
 	// Enums holds file-local symbol → positive-integer mappings used by the
 	// `enum` AST op (esm-spec §9.3). Each entry is an enum name; its value is
 	// a map from symbolic names (strings) to positive integers. Lowering

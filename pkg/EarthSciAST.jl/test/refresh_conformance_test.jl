@@ -14,7 +14,7 @@
 #
 # TWO-VIEW contract: the loader-fed `F_src`/`scale_src` are declared
 # `discrete`+`data_ingest` for the cadence classifier, but the typed RHS compiler
-# has no Discrete VariableType — this adapter STRIPS them (and `data_loaders`)
+# has no Discrete VariableType — this adapter STRIPS them (and `data_sources`)
 # from the doc so they resolve through the forcing buffers (`param_arrays` for the
 # DISCRETE `F_src`, `const_arrays` for the CONST `scale_src`). Julia's idiom is a
 # single `solve` over a `build_refresh_callback` whose `post_refresh =
@@ -62,14 +62,14 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         field_atol = 1e-9
 
         # Simulate view: strip the loader-fed `discrete` declarations (+ the
-        # `data_loaders` block) so the typed RHS resolves F_src/scale_src as
+        # `data_sources` block) so the typed RHS resolves F_src/scale_src as
         # forcing names. The cadence classifier's view is the raw doc (unstripped);
         # the executor here is driven by the provider directly.
         sim_doc = _rg_mutable(JSON3.read(read(fixture, String)))
         for v in ("F_src", "scale_src")
             delete!(sim_doc["models"]["M"]["variables"], v)
         end
-        delete!(sim_doc, "data_loaders")
+        delete!(sim_doc, "data_sources")
 
         ics = Dict{String,Float64}()
         for s in ("c", "d"), j in 1:3

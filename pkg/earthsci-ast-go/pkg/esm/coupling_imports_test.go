@@ -43,15 +43,15 @@ func couplingAssembly(coupling []CouplingEntry) *ESMFile {
 		Models: map[string]Model{
 			"FuelModelLookup": {
 				Variables: map[string]ModelVariable{
-					"sigma": {Type: VarTypeParameter},
-					"w_0":   {Type: VarTypeParameter},
+					"sigma": {Type: "parameter"},
+					"w_0":   {Type: "parameter"},
 				},
 				Equations: []Equation{},
 			},
 			"RothermelFireSpread": {
 				Variables: map[string]ModelVariable{
-					"sigma": {Type: VarTypeParameter},
-					"w0":    {Type: VarTypeParameter},
+					"sigma": {Type: "parameter"},
+					"w0":    {Type: "parameter"},
 				},
 				Equations: []Equation{},
 			},

@@ -282,7 +282,7 @@ _ld_has_scalar(hlo, v::String) = occursin("dense<$v> : tensor<f64>", hlo)
                 "args" => Any[Dict{String,Any}("op" => "index",
                                                "args" => Any[x, "i"])])),
             "rhs" => ao(rhs))
-        st() = Dict{String,Any}("type" => "state", "shape" => Any["n"])
+        st() = Dict{String,Any}("type" => "unknown", "shape" => Any["n"])
         doc = Dict{String,Any}(
             "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "LD"),
             "index_sets" => Dict{String,Any}("n" => Dict{String,Any}(

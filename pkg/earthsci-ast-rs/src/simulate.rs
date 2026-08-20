@@ -458,10 +458,25 @@ impl Compiled {
         let state_defaults: Vec<Option<f64>> =
             flat.state_variables.values().map(|mv| mv.default).collect();
 
-        let param_names: Vec<String> = flat.parameters.keys().cloned().collect();
+        // Plain parameters, plus the DISCRETE ones: a discrete parameter is
+        // piecewise-constant between refreshes, and this scalar backend has no
+        // refresh machinery — but it must still RESOLVE, seeded at its declared
+        // `default`, or every expression naming one fails to compile. The
+        // driver-level segmented solve (`crate::provider`) is what actually
+        // rewrites such a value between segments.
+        let param_names: Vec<String> = flat
+            .parameters
+            .keys()
+            .chain(flat.discrete_variables.keys())
+            .cloned()
+            .collect();
         let param_index = build_index_map(&param_names);
-        let param_defaults: Vec<Option<f64>> =
-            flat.parameters.values().map(|mv| mv.default).collect();
+        let param_defaults: Vec<Option<f64>> = flat
+            .parameters
+            .values()
+            .chain(flat.discrete_variables.values())
+            .map(|mv| mv.default)
+            .collect();
 
         let observed_names_raw: Vec<String> = flat.observed_variables.keys().cloned().collect();
         let observed_index_raw = build_index_map(&observed_names_raw);
@@ -1082,8 +1097,11 @@ fn classify_equations(
     let mut state_ic_raw: Vec<Option<Expr>> = vec![None; state_names.len()];
     let mut observed_rhs_raw: Vec<Option<Expr>> = vec![None; flat.observed_variables.len()];
 
-    // (No variable-struct fallback since 1.0.0: an observed's defining
-    // expression is an ordinary algebraic equation, picked up below.)
+    // An observed unknown's defining expression is an EQUATION from esm 1.0.0
+    // (esm-spec §6.3.1) — a bare-variable LHS in `flat.equations`, which the
+    // classification loop below picks up. The variable struct carries no
+    // `expression` field to fall back to any more, and `flatten` no longer
+    // produces one.
 
     // `ic(state) = rhs` (esm-spec §11.4) declares the target's INITIAL value,
     // not its dynamics, so `flatten` routes every one of them out of
@@ -2428,62 +2446,30 @@ fn observed_lhs_name(lhs: &Expr) -> Option<String> {
     }
 }
 
-/// Flattened names of the system's **algebraic** states: those whose value is
-/// fixed by a bare-LHS equation `x = …` (e.g. `NOx = NO + NO2`) rather than by
-/// a derivative `D(x, t) = …`.
+/// Flattened names of the unknowns whose value is fixed by a bare-LHS equation
+/// `x = …` (e.g. `NOx = NO + NO2`) rather than by a derivative `D(x, t) = …` —
+/// the OBSERVED unknowns of esm-spec §6.3.1.
 ///
-/// These are not user-settable initial conditions. The integrator holds their
-/// derivative at zero and reconstructs the whole trajectory from the defining
-/// body, so an initial value supplied for one is overwritten before the first
-/// step ([`Compiled::apply_algebraic_ics`]) — which is also why
-/// [`Compiled::build_ic_vec`] does not demand a `default` for them.
+/// These are not user-settable initial conditions: their value is reconstructed
+/// from the defining body, so an initial value supplied for one would be
+/// discarded. Exposed because every host needs this distinction to build a run
+/// UI — an initial-condition editor must not offer a field whose value the
+/// solver is going to overwrite.
 ///
-/// Exposed because every host needs this distinction to build a run UI: an
-/// initial-condition editor must not offer a field whose value the solver is
-/// going to discard. Hosts previously re-derived it by walking the raw `.esm`
-/// JSON themselves, which is the same rule implemented twice — and the copy
-/// drifts, because it has to guess at things the flattening pass has already
-/// settled (namespacing, which bare-LHS targets are states rather than observed
-/// variables, and the precedence rule below).
+/// esm 1.0.0 is what makes this ONE set rather than two. Before it, a variable
+/// declared `state` with a bare-LHS equation was an "algebraic state" (kept as a
+/// row, reconciled at t₀) while one declared `observed` with the same equation
+/// was eliminated — a difference in the DECLARATION, not in the mathematics.
+/// With two declared types the distinction has nowhere to live, and §6.3.1
+/// settles it the eliminable way: a bare-variable LHS makes an unknown observed.
+/// [`crate::flatten`] therefore routes every one of them into
+/// `observed_variables`, which is exactly the set this reports.
 ///
-/// Applies the same precedence as [`classify_equations`]: a variable carrying
-/// **both** a derivative and a plain equation is differential, not algebraic
-/// (esm-y3n). Unlike `classify_equations` this is total — it reports what the
-/// document says rather than validating it, so an incomplete system is
-/// described here and rejected later, at compile time, with a better message.
+/// The precedence rule is unchanged and now lives in the shared derivation: an
+/// unknown carrying BOTH a derivative and a bare-LHS equation is an ODE state,
+/// not observed (esm-y3n).
 pub fn algebraic_state_names(flat: &FlattenedSystem) -> Vec<String> {
-    let n = flat.state_variables.len();
-    let state_index: HashMap<&str, usize> = flat
-        .state_variables
-        .keys()
-        .enumerate()
-        .map(|(i, name)| (name.as_str(), i))
-        .collect();
-
-    let mut differential = vec![false; n];
-    let mut algebraic = vec![false; n];
-
-    for eq in &flat.equations {
-        if let Some(name) = state_lhs_name(&eq.lhs) {
-            if let Some(&i) = state_index.get(name.as_str()) {
-                differential[i] = true;
-            }
-        } else if let Some(name) = observed_lhs_name(&eq.lhs) {
-            // Only a bare LHS naming a STATE is an algebraic state. The same
-            // shape naming an observed variable is an ordinary assignment and
-            // is not a state at all.
-            if let Some(&i) = state_index.get(name.as_str()) {
-                algebraic[i] = true;
-            }
-        }
-    }
-
-    flat.state_variables
-        .keys()
-        .enumerate()
-        .filter(|(i, _)| algebraic[*i] && !differential[*i])
-        .map(|(_, name)| name.clone())
-        .collect()
+    flat.observed_variables.keys().cloned().collect()
 }
 
 // ============================================================================
@@ -2600,33 +2586,64 @@ mod tests {
     fn algebraic_cycle_rejected() {
         // Two algebraic states a, b form a cycle: a = b + 1, b = a * 2.
         // dx/dt = a is a non-cyclic ODE that anchors the system.
-        let json = r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "TestFixture"},
-            "models": {
+        let json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "TestFixture"
+              },
+              "models": {
                 "M": {
-                    "variables": {
-                        "x": {"type": "unknown", "default": 0.0},
-                        "a": {"type": "unknown", "default": 1.0},
-                        "b": {"type": "unknown", "default": 1.0}
+                  "variables": {
+                    "x": {
+                      "type": "unknown",
+                      "default": 0.0
                     },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                            "rhs": "a"
-                        },
-                        {
-                            "lhs": "a",
-                            "rhs": {"op": "+", "args": ["b", 1.0]}
-                        },
-                        {
-                            "lhs": "b",
-                            "rhs": {"op": "*", "args": ["a", 2.0]}
-                        }
-                    ]
+                    "a": {
+                      "type": "unknown",
+                      "default": 1.0
+                    },
+                    "b": {
+                      "type": "unknown",
+                      "default": 1.0
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "x"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": "a"
+                    },
+                    {
+                      "lhs": "a",
+                      "rhs": {
+                        "op": "+",
+                        "args": [
+                          "b",
+                          1.0
+                        ]
+                      }
+                    },
+                    {
+                      "lhs": "b",
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          "a",
+                          2.0
+                        ]
+                      }
+                    }
+                  ]
                 }
+              }
             }
-        }"#;
+            "#;
         let file = crate::parse::load(json).expect("parse fixture");
         let err = Compiled::from_file(&file).expect_err("cycle must be rejected");
         let msg = err.to_string();
@@ -2647,30 +2664,75 @@ mod tests {
         // looked_up = interp.linear([10,20,40,80,160], [0,1,2,3,4], code);
         // dx/dt = looked_up, x(0) = 0. At code = 2.0 the lookup is the exact
         // knot 40.0, so x(1) = 40.0.
-        let json = r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "FnFixture"},
-            "models": {
+        let json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "FnFixture"
+              },
+              "models": {
                 "M": {
-                    "variables": {
-                        "x": {"type": "unknown", "default": 0.0},
-                        "code": {"type": "parameter", "default": 2.0},
-                        "looked_up": {"type": "observed", "expression": {
-                            "op": "fn", "name": "interp.linear", "args": [
-                                {"op": "const", "value": [10.0, 20.0, 40.0, 80.0, 160.0], "args": []},
-                                {"op": "const", "value": [0.0, 1.0, 2.0, 3.0, 4.0], "args": []},
-                                "code"
-                            ]}}
+                  "variables": {
+                    "x": {
+                      "type": "unknown",
+                      "default": 0.0
                     },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                            "rhs": "looked_up"
-                        }
-                    ]
+                    "code": {
+                      "type": "parameter",
+                      "default": 2.0
+                    },
+                    "looked_up": {
+                      "type": "unknown"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "x"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": "looked_up"
+                    },
+                    {
+                      "lhs": "looked_up",
+                      "rhs": {
+                        "op": "fn",
+                        "name": "interp.linear",
+                        "args": [
+                          {
+                            "op": "const",
+                            "value": [
+                              10.0,
+                              20.0,
+                              40.0,
+                              80.0,
+                              160.0
+                            ],
+                            "args": []
+                          },
+                          {
+                            "op": "const",
+                            "value": [
+                              0.0,
+                              1.0,
+                              2.0,
+                              3.0,
+                              4.0
+                            ],
+                            "args": []
+                          },
+                          "code"
+                        ]
+                      }
+                    }
+                  ]
                 }
+              }
             }
-        }"#;
+            "#;
         let file = crate::parse::load(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
@@ -2711,25 +2773,49 @@ mod tests {
     fn fn_op_datetime_scalar_arg() {
         // yr = datetime.year(946684800) = 2000 (2000-01-01T00:00:00Z).
         // dx/dt = yr, x(0) = 0, so x(1) = 2000.
-        let json = r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "DatetimeFixture"},
-            "models": {
+        let json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "DatetimeFixture"
+              },
+              "models": {
                 "M": {
-                    "variables": {
-                        "x": {"type": "unknown", "default": 0.0},
-                        "yr": {"type": "observed", "expression": {
-                            "op": "fn", "name": "datetime.year", "args": [946684800.0]}}
+                  "variables": {
+                    "x": {
+                      "type": "unknown",
+                      "default": 0.0
                     },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                            "rhs": "yr"
-                        }
-                    ]
+                    "yr": {
+                      "type": "unknown"
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "x"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": "yr"
+                    },
+                    {
+                      "lhs": "yr",
+                      "rhs": {
+                        "op": "fn",
+                        "name": "datetime.year",
+                        "args": [
+                          946684800.0
+                        ]
+                      }
+                    }
+                  ]
                 }
+              }
             }
-        }"#;
+            "#;
         let file = crate::parse::load(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
@@ -2765,26 +2851,58 @@ mod tests {
     #[test]
     fn a_bare_lhs_state_is_algebraic_and_a_derivative_one_is_not() {
         let names = algebraic_names_of(
-            r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "TestFixture"},
-            "models": {
-                "M": {
-                    "variables": {
-                        "D": {"type": "unknown", "default": 1.0},
-                        "G": {"type": "unknown"},
-                        "k": {"type": "parameter", "default": 1.0}
-                    },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["D"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "G"]}
+            r#"
+                {
+                  "esm": "1.0.0",
+                  "metadata": {
+                    "name": "TestFixture"
+                  },
+                  "models": {
+                    "M": {
+                      "variables": {
+                        "D": {
+                          "type": "unknown",
+                          "default": 1.0
                         },
-                        {"lhs": "G", "rhs": "D"}
-                    ]
+                        "G": {
+                          "type": "unknown"
+                        },
+                        "k": {
+                          "type": "parameter",
+                          "default": 1.0
+                        }
+                      },
+                      "equations": [
+                        {
+                          "lhs": {
+                            "op": "D",
+                            "args": [
+                              "D"
+                            ],
+                            "wrt": "t"
+                          },
+                          "rhs": {
+                            "op": "*",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "k"
+                                ]
+                              },
+                              "G"
+                            ]
+                          }
+                        },
+                        {
+                          "lhs": "G",
+                          "rhs": "D"
+                        }
+                      ]
+                    }
+                  }
                 }
-            }
-        }"#,
+                "#,
         );
         // Namespaced, as every caller needs it — the name that indexes `ic`.
         assert_eq!(names, vec!["M.G".to_string()]);
@@ -2795,55 +2913,103 @@ mod tests {
         // esm-y3n: the derivative wins. A host that missed this rule would hide
         // a genuinely settable initial condition from its Run UI.
         let names = algebraic_names_of(
-            r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "TestFixture"},
-            "models": {
-                "M": {
-                    "variables": {
-                        "x": {"type": "unknown", "default": 1.0},
-                        "k": {"type": "parameter", "default": 1.0}
-                    },
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "k"},
-                        {"lhs": "x", "rhs": "k"}
-                    ]
+            r#"
+                {
+                  "esm": "1.0.0",
+                  "metadata": {
+                    "name": "TestFixture"
+                  },
+                  "models": {
+                    "M": {
+                      "variables": {
+                        "x": {
+                          "type": "unknown",
+                          "default": 1.0
+                        },
+                        "k": {
+                          "type": "parameter",
+                          "default": 1.0
+                        }
+                      },
+                      "equations": [
+                        {
+                          "lhs": {
+                            "op": "D",
+                            "args": [
+                              "x"
+                            ],
+                            "wrt": "t"
+                          },
+                          "rhs": "k"
+                        },
+                        {
+                          "lhs": "x",
+                          "rhs": "k"
+                        }
+                      ]
+                    }
+                  }
                 }
-            }
-        }"#,
+                "#,
         );
         assert!(names.is_empty(), "derivative must win, got {names:?}");
     }
 
     #[test]
-    fn a_bare_lhs_observed_variable_is_not_an_algebraic_state() {
-        // `obs` is an observed variable, not a state, so it must not appear —
-        // it has no slot in the state vector to hide from an IC editor.
+    fn a_bare_lhs_observed_unknown_is_reported() {
+        // esm 1.0.0 unified the two declarations this test used to tell apart.
+        // `obs` is defined by a bare-variable-LHS equation, which IS what makes
+        // an unknown observed (esm-spec §6.3.1) — the same property that made
+        // `G` an "algebraic state" before. Both are eliminable and neither may
+        // be offered an IC field, so both are reported.
         let names = algebraic_names_of(
-            r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "TestFixture"},
-            "models": {
-                "M": {
-                    "variables": {
-                        "x": {"type": "unknown", "default": 1.0},
-                        "obs": {"type": "observed", "expression": "x"},
-                        "k": {"type": "parameter", "default": 1.0}
-                    },
-                    "equations": [
-                        {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "k"},
-                        {"lhs": "obs", "rhs": "x"}
-                    ]
+            r#"
+                {
+                  "esm": "1.0.0",
+                  "metadata": {
+                    "name": "TestFixture"
+                  },
+                  "models": {
+                    "M": {
+                      "variables": {
+                        "x": {
+                          "type": "unknown",
+                          "default": 1.0
+                        },
+                        "obs": {
+                          "type": "unknown"
+                        },
+                        "k": {
+                          "type": "parameter",
+                          "default": 1.0
+                        }
+                      },
+                      "equations": [
+                        {
+                          "lhs": {
+                            "op": "D",
+                            "args": [
+                              "x"
+                            ],
+                            "wrt": "t"
+                          },
+                          "rhs": "k"
+                        },
+                        {
+                          "lhs": "obs",
+                          "rhs": "x"
+                        }
+                      ]
+                    }
+                  }
                 }
-            }
-        }"#,
+                "#,
         );
-        assert!(names.is_empty(), "observed is not a state, got {names:?}");
+        assert_eq!(names, vec!["M.obs".to_string()]);
     }
 
     #[test]
-    #[test]
-    fn an_algebraic_state_needs_no_default() {
+    fn an_observed_unknown_needs_no_default() {
         // The same shape as `algebraic_ic_reconciled_to_constraint`, except G
         // declares NO default at all — as `NOx = NO + NO2` does in real
         // chemistry, where the sum is defined by its parts and there is nothing
@@ -2855,26 +3021,58 @@ mod tests {
         // also split the ecosystem — the TypeScript binding injected a
         // placeholder before calling simulate, so a model that ran in a browser
         // failed on a server calling this function directly.
-        let json = r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "TestFixture"},
-            "models": {
+        let json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "TestFixture"
+              },
+              "models": {
                 "M": {
-                    "variables": {
-                        "D": {"type": "unknown", "default": 1.0},
-                        "G": {"type": "unknown"},
-                        "k": {"type": "parameter", "default": 1.0}
+                  "variables": {
+                    "D": {
+                      "type": "unknown",
+                      "default": 1.0
                     },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["D"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "G"]}
-                        },
-                        {"lhs": "G", "rhs": "D"}
-                    ]
+                    "G": {
+                      "type": "unknown"
+                    },
+                    "k": {
+                      "type": "parameter",
+                      "default": 1.0
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "D"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              "k"
+                            ]
+                          },
+                          "G"
+                        ]
+                      }
+                    },
+                    {
+                      "lhs": "G",
+                      "rhs": "D"
+                    }
+                  ]
                 }
+              }
             }
-        }"#;
+            "#;
         let file = crate::parse::load(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
@@ -2883,19 +3081,23 @@ mod tests {
         };
         let sol = compiled
             .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-            .expect("a defaultless ALGEBRAIC state must not block a simulation");
+            .expect("a defaultless OBSERVED unknown must not block a simulation");
 
-        let g = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n.ends_with("G"))
-            .expect("G in solution");
-        // G is determined by its own body (G = D), so it starts at D's default
-        // rather than at the placeholder the IC pass wrote.
+        // `G` is DEFINED by `G = D`, so esm 1.0.0 makes it an observed unknown:
+        // it is eliminated rather than integrated, and has no state row and no
+        // initial condition to supply. `D` is the only thing solved for.
         assert!(
-            (sol.state[g][0] - 1.0).abs() < 1e-9,
-            "G should be reconciled to D at t0, got {}",
-            sol.state[g][0]
+            !sol.state_variable_names.iter().any(|n| n.ends_with("G")),
+            "an observed unknown is eliminated, not integrated: {:?}",
+            sol.state_variable_names
+        );
+        assert!(
+            compiled
+                .observed_variable_names()
+                .iter()
+                .any(|n| n.ends_with("G")),
+            "G must be reported as an observed: {:?}",
+            compiled.observed_variable_names()
         );
     }
 
@@ -2904,24 +3106,50 @@ mod tests {
     /// model at zero.
     #[test]
     fn a_defaultless_differential_state_is_still_refused() {
-        let json = r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "TestFixture"},
-            "models": {
+        let json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "TestFixture"
+              },
+              "models": {
                 "M": {
-                    "variables": {
-                        "D": {"type": "unknown"},
-                        "k": {"type": "parameter", "default": 1.0}
+                  "variables": {
+                    "D": {
+                      "type": "unknown"
                     },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["D"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "D"]}
-                        }
-                    ]
+                    "k": {
+                      "type": "parameter",
+                      "default": 1.0
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "D"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              "k"
+                            ]
+                          },
+                          "D"
+                        ]
+                      }
+                    }
+                  ]
                 }
+              }
             }
-        }"#;
+            "#;
         let file = crate::parse::load(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let err = compiled
@@ -2934,33 +3162,67 @@ mod tests {
     }
 
     #[test]
-    fn algebraic_ic_reconciled_to_constraint() {
+    fn an_observed_unknowns_default_is_ignored() {
         // dD/dt = -k*G,  G = D  (so D evolves as exp(-k*t), G tracks D).
-        // G's default is deliberately wrong (99.0) to prove the IC pass
-        // overrides it from the algebraic body.
-        let json = r#"{
-            "esm": "1.0.0",
-            "metadata": {"name": "TestFixture"},
-            "models": {
+        // G's default is deliberately wrong (99.0). Under esm 1.0.0 the
+        // bare-LHS equation makes G an OBSERVED unknown: it is eliminated
+        // rather than integrated, so the wrong default cannot reach the
+        // trajectory at all — a stronger guarantee than the 0.x reconciliation
+        // pass, which wrote the default into a state slot and then overwrote
+        // it before the first step.
+        let json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "TestFixture"
+              },
+              "models": {
                 "M": {
-                    "variables": {
-                        "D": {"type": "unknown", "default": 1.0},
-                        "G": {"type": "unknown", "default": 99.0},
-                        "k": {"type": "parameter", "default": 1.0}
+                  "variables": {
+                    "D": {
+                      "type": "unknown",
+                      "default": 1.0
                     },
-                    "equations": [
-                        {
-                            "lhs": {"op": "D", "args": ["D"], "wrt": "t"},
-                            "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "G"]}
-                        },
-                        {
-                            "lhs": "G",
-                            "rhs": "D"
-                        }
-                    ]
+                    "G": {
+                      "type": "unknown",
+                      "default": 99.0
+                    },
+                    "k": {
+                      "type": "parameter",
+                      "default": 1.0
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "D",
+                        "args": [
+                          "D"
+                        ],
+                        "wrt": "t"
+                      },
+                      "rhs": {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              "k"
+                            ]
+                          },
+                          "G"
+                        ]
+                      }
+                    },
+                    {
+                      "lhs": "G",
+                      "rhs": "D"
+                    }
+                  ]
                 }
+              }
             }
-        }"#;
+            "#;
         let file = crate::parse::load(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
@@ -2976,32 +3238,25 @@ mod tests {
             .iter()
             .position(|n| n.ends_with("D"))
             .expect("D in solution");
-        let g_idx = sol
-            .state_variable_names
-            .iter()
-            .position(|n| n.ends_with("G"))
-            .expect("G in solution");
+        assert!(
+            !sol.state_variable_names.iter().any(|n| n.ends_with("G")),
+            "G is observed, so it is eliminated rather than integrated: {:?}",
+            sol.state_variable_names
+        );
 
         assert!(
             (sol.state[d_idx][0] - 1.0).abs() < 1e-12,
             "D(0) should be 1.0, got {}",
             sol.state[d_idx][0]
         );
-        // The bogus G default (99.0) must be reconciled to D(0)=1.0.
-        assert!(
-            (sol.state[g_idx][0] - 1.0).abs() < 1e-12,
-            "G(0) should be reconciled to D(0)=1.0, got {}",
-            sol.state[g_idx][0]
-        );
+        // The bogus G default (99.0) never reaches the RHS: had it done so,
+        // dD/dt would have started at -99 and D(1) would be nowhere near
+        // exp(-1).
         let expected = (-1.0_f64).exp();
         assert!(
             (sol.state[d_idx][1] - expected).abs() < 1e-6,
             "D(1) ≈ exp(-1), got {}",
             sol.state[d_idx][1]
-        );
-        assert!(
-            (sol.state[g_idx][1] - sol.state[d_idx][1]).abs() < 1e-12,
-            "G(1) must equal D(1) by algebraic constraint"
         );
     }
 }

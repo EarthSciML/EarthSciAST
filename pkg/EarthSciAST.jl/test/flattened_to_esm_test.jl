@@ -56,9 +56,13 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
                         # `h` is plain arithmetic so the tree-walk eval needs no
                         # table_lookup lowering (covered separately); the `fuel`
                         # table is still carried through flatten + the bridge.
-                        "h" => Dict{String,Any}("type"=>"observed", "expression"=>op("*","code",10)),
-                        "y" => Dict{String,Any}("type"=>"state")),
-                    "equations" => Any[Dict{String,Any}(
+                        # esm 1.0.0 §6.3: an observed unknown is an `unknown`
+                        # DEFINED by a bare-variable-LHS equation.
+                        "h" => Dict{String,Any}("type"=>"unknown"),
+                        "y" => Dict{String,Any}("type"=>"unknown")),
+                    "equations" => Any[
+                        Dict{String,Any}("lhs"=>"h", "rhs"=>op("*","code",10)),
+                        Dict{String,Any}(
                         "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["y"],"wrt"=>"t"),
                         "rhs"=>"h")]),
             ))
@@ -90,16 +94,21 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
     end
 
     @testset "deep observed chain resolves through build_evaluator (no pre-inline)" begin
-        O(e) = Dict{String,Any}("type"=>"observed","expression"=>e)
+        # esm 1.0.0 §6.3: each link of the chain is an `unknown` whose DEFINING
+        # equation is a bare-variable-LHS entry of the model's `equations`.
+        U() = Dict{String,Any}("type"=>"unknown")
         op(o,a...) = Dict{String,Any}("op"=>o,"args"=>collect(Any,a))
+        def(n, e) = Dict{String,Any}("lhs"=>n, "rhs"=>e)
         vars = Dict{String,Any}(
             "x"=>Dict{String,Any}("type"=>"parameter","default"=>3.0),
-            "a"=>O(op("+","x",1)), "b"=>O(op("*",2,"a")), "c"=>O(op("+","b","a")),
-            "d"=>O(op("*","c","c")), "e"=>O(op("-","d",1)),
-            "y"=>Dict{String,Any}("type"=>"state"))
-        eq = Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["y"],"wrt"=>"t"),"rhs"=>"e")
+            "a"=>U(), "b"=>U(), "c"=>U(), "d"=>U(), "e"=>U(),
+            "y"=>U())
+        eqs = Any[
+            def("a", op("+","x",1)), def("b", op("*",2,"a")), def("c", op("+","b","a")),
+            def("d", op("*","c","c")), def("e", op("-","d",1)),
+            Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["y"],"wrt"=>"t"),"rhs"=>"e")]
         doc = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"Chain"),
-            "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>vars,"equations"=>Any[eq])))
+            "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>vars,"equations"=>eqs)))
         f!, u0, p, _t, vmap = E.build_evaluator(doc; initial_conditions=Dict("y"=>0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["y"]] ≈ 143.0   # x=3: a4 b8 c12 d144 e143

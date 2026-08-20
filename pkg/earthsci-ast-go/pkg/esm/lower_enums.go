@@ -69,16 +69,18 @@ func LowerEnums(file *ESMFile) error {
 }
 
 func lowerModelEnums(m *Model, enums map[string]map[string]int) error {
-	// A variable's Expression positions moved onto the parameter's `update` in
-	// 1.0.0 (`when`, `expression`, `from.unit_conversion`). Lowering only the old
-	// `variables[v].expression` would leave an `enum` node unlowered in every one
-	// of them.
-	for name, v := range m.Variables {
-		err := v.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
-			return lowerExprEnums(expr, enums)
-		})
-		if err != nil {
-			return err
+	// A variable's Expression-bearing positions are its parameter `update`
+	// rules (`when`, `expression`, `from.unit_conversion`); the observed
+	// `expression` field they replaced is gone in esm 1.0.0, and an observed
+	// unknown's defining expression is lowered below as an ordinary equation.
+	for name := range m.Variables {
+		v := m.Variables[name]
+		for _, site := range VariableExprSites(&v) {
+			lowered, err := lowerExprEnums(site.Expr, enums)
+			if err != nil {
+				return err
+			}
+			site.Set(lowered)
 		}
 		m.Variables[name] = v
 	}

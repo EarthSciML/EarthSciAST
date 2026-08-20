@@ -158,6 +158,14 @@ def _flat_to_sympy_rhs(
     # Classify equations: differential (D(var, t) = …) vs algebraic (var = …).
     diff_rhs: dict[str, sp.Expr] = {}
     alg_rhs: dict[str, sp.Expr] = {}
+    # Bare-variable LHSs already seen. A SECOND equation on the same name is the
+    # same-system DAE shape (`K_w ~ K_w_298` alongside `K_w ~ [H+][OH-]`) — the
+    # alias-elimination case below. Tracked separately from `alg_rhs` because in
+    # esm 1.0.0 the first such equation makes the name an OBSERVED unknown, so
+    # flatten files it under `observed_variables` and it never reaches `alg_rhs`;
+    # keying the duplicate test off `alg_rhs` alone silently dropped the
+    # constraint and left the unbound algebraic unknown frozen at its default.
+    first_bare_rhs: dict[str, sp.Expr] = {}
     for eq in flat.equations:
         lhs = eq.lhs
         if isinstance(lhs, ExprNode) and lhs.op == "D" and lhs.args:
@@ -169,13 +177,18 @@ def _flat_to_sympy_rhs(
                     fn_callable_map,
                 )
                 continue
-        if isinstance(lhs, str) and lhs in flat.state_variables:
+        if isinstance(lhs, str) and (
+            lhs in flat.state_variables or lhs in flat.observed_variables
+        ):
             rhs_sym = _expr_to_sympy(
                 eq.rhs,
                 dict(symbol_map),
                 fn_callable_map,
             )
-            if lhs in alg_rhs:
+            duplicate = lhs in first_bare_rhs
+            if not duplicate:
+                first_bare_rhs[lhs] = rhs_sym
+            if duplicate:
                 # Same-system DAE: a previous equation already defines this
                 # variable. Treat ``lhs = rhs_sym`` as an algebraic constraint
                 # on a different unbound state variable that appears in the
@@ -199,8 +212,25 @@ def _flat_to_sympy_rhs(
                     target = free_states[0]
                     target_name = str(target)
                     try:
+                        # What stands on the left of the constraint depends
+                        # on what the duplicated name IS. A state carries its own
+                        # symbol into the compiled algebraic function, so the
+                        # symbol is enough. An OBSERVED (which is what 1.0.0
+                        # makes the first bare-LHS definition) does NOT: the
+                        # algebraic function's arguments are states and
+                        # parameters only, so leaving its symbol in the solution
+                        # would leave it unbound and the recovered value zero.
+                        # Substituting its FIRST definition instead resolves the
+                        # constraint entirely in terms the function is given --
+                        # `K_w ~ K_w_298` then `K_w ~ [H+][OH-]` solves to
+                        # `[OH-] = K_w_298 / [H+]`, which is what the DAE means.
+                        lhs_expr = (
+                            symbol_map[lhs]
+                            if lhs in flat.state_variables and lhs in symbol_map
+                            else first_bare_rhs[lhs]
+                        )
                         solutions = sp.solve(
-                            sp.Eq(symbol_map[lhs], rhs_sym),
+                            sp.Eq(lhs_expr, rhs_sym),
                             target,
                         )
                     except Exception as exc:
@@ -223,7 +253,11 @@ def _flat_to_sympy_rhs(
                 # either a redundant restatement or a genuine contradiction.
                 # Skip it; downstream output will surface any inconsistency.
                 continue
-            alg_rhs[lhs] = rhs_sym
+            if lhs in flat.state_variables:
+                alg_rhs[lhs] = rhs_sym
+            # An OBSERVED LHS is handled by `_observed_to_sympy_value_exprs`,
+            # which builds its value expression from the same equation; it is
+            # not a state to solve for, so it contributes no algebraic row here.
             continue
         # Other LHS shapes (e.g. array ops) are handled by the NumPy path.
 

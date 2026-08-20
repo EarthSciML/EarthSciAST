@@ -41,13 +41,15 @@ const ESM = EarthSciAST
 # D(x)  = −flux·x                                — scalar rhs entry
 function _gi_model(N)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
-        "y" => ESM.ModelVariable(ESM.StateVariable),
-        "x" => ESM.ModelVariable(ESM.StateVariable; default=1.0),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "y" => ESM.ModelVariable(ESM.UnknownVariable),
+        "x" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
         "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
         "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0),
-        "rate" => ESM.ModelVariable(ESM.ObservedVariable),
-        "flux" => ESM.ModelVariable(ESM.ObservedVariable))
+        # esm 1.0.0 §6.3: `rate` / `flux` are `unknown`s DEFINED by the
+        # bare-variable-LHS equations below; there is no `observed` type.
+        "rate" => ESM.ModelVariable(ESM.UnknownVariable),
+        "flux" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))

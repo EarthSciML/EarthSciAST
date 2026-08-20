@@ -40,7 +40,7 @@ _du(f!, u0, p) = (d = similar(u0); fill!(d, 0); f!(d, u0, p, 0.0); d)
 
 # 2-D 5-point Laplacian over the full i×j range (ghosts on all four edges).
 function _ad_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
     body = _op("+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
@@ -57,7 +57,7 @@ end
 # 1-D variable-coefficient diffusion K[i]·Δ²u (K a const array) — exercises
 # `_AccConstBox` const reads (Float64 data, zero derivative) alongside the AD.
 function _ad_const_coef_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))
@@ -69,7 +69,7 @@ end
 # access spine, so ForwardDiff-over-parameters exercises the generic param arm.
 function _ad_param_model(N; alpha=0.5)
     vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.StateVariable),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
         "alpha" => ESM.ModelVariable(ESM.ParameterVariable; default=alpha))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),

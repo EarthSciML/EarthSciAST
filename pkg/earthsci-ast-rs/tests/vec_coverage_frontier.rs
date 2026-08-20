@@ -292,32 +292,111 @@ fn frontier_indirect_gather_falls_back() {
     // index vector, produced (like MPAS `cellsOnEdge`) as an ordinary observed
     // rather than a literal, so the fixture isolates the GATHER and does not
     // also trip the array-valued-`const` gate below.
-    let json = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "vec_frontier_gather"},
- "models": {
-  "M": {
-   "variables": {
-     "u": {"type": "unknown", "shape": ["i"]},
-     "nbr": {"type": "observed", "shape": ["i"],
-             "expression": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                            "ranges": {"i": [1, 6]},
-                            "expr": {"op": "-", "args": [7, "i"]}}}
-   },
-   "equations": [
-    {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-             "ranges": {"i": [1, 6]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "ranges": {"i": [1, 6]},
-             "expr": {"op": "index", "args": ["u",
-                       {"op": "index", "args": ["nbr", "i"]}]}}
-    }
-   ]
-  }
- }
-}"#;
+    let json = r#"
+        {
+          "esm": "1.0.0",
+          "metadata": {
+            "name": "vec_frontier_gather"
+          },
+          "models": {
+            "M": {
+              "variables": {
+                "u": {
+                  "type": "unknown",
+                  "shape": [
+                    "i"
+                  ]
+                },
+                "nbr": {
+                  "type": "unknown",
+                  "shape": [
+                    "i"
+                  ]
+                }
+              },
+              "equations": [
+                {
+                  "lhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "expr": {
+                      "op": "D",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "u",
+                            "i"
+                          ]
+                        }
+                      ],
+                      "wrt": "t"
+                    },
+                    "ranges": {
+                      "i": [
+                        1,
+                        6
+                      ]
+                    }
+                  },
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": [
+                        1,
+                        6
+                      ]
+                    },
+                    "expr": {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "index",
+                          "args": [
+                            "nbr",
+                            "i"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "lhs": "nbr",
+                  "rhs": {
+                    "op": "aggregate",
+                    "args": [],
+                    "output_idx": [
+                      "i"
+                    ],
+                    "ranges": {
+                      "i": [
+                        1,
+                        6
+                      ]
+                    },
+                    "expr": {
+                      "op": "-",
+                      "args": [
+                        7,
+                        "i"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+        "#;
     check("indirect gather", json, false);
 }
 

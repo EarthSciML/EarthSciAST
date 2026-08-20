@@ -444,22 +444,8 @@ func TestModelSummary(t *testing.T) {
 		Models: map[string]Model{
 			"Advection": {
 				Variables: map[string]ModelVariable{
-					"u_wind": {
-						Type: VarTypeParameter, Units: strPtr("m/s"), Shape: []string{},
-						Update: &ParameterUpdateSpec{Rules: []ParameterUpdate{{
-							Kind:   UpdateKindData,
-							Source: "GEOSFP",
-							From:   &DataSourceBinding{FileVariable: "U"},
-						}}},
-					},
-					"v_wind": {
-						Type: VarTypeParameter, Units: strPtr("m/s"), Shape: []string{},
-						Update: &ParameterUpdateSpec{Rules: []ParameterUpdate{{
-							Kind:   UpdateKindData,
-							Source: "GEOSFP",
-							From:   &DataSourceBinding{FileVariable: "V"},
-						}}},
-					},
+					"u_wind": {Type: "parameter", Units: strPtr("m/s"), Default: 0.0},
+					"v_wind": {Type: "parameter", Units: strPtr("m/s"), Default: 0.0},
 				},
 				Equations: []Equation{
 					{
@@ -487,16 +473,18 @@ func TestModelSummary(t *testing.T) {
 				},
 			},
 		},
+		// A `data_sources` entry is an ingest REGISTRY entry, not a component: it
+		// exposes no variables and cannot be a coupling endpoint, so the three
+		// `variable_map` edges that used to wire GEOSFP.{T,u,v} into the models
+		// are gone with it. Each field is now a parameter of the model that reads
+		// it, declared on that model.
 		DataSources: map[string]DataSource{
 			"GEOSFP": {
 				Kind: "grid",
 				Source: DataSourceLocation{
 					URLTemplate: "https://example.com/{date:%Y%m%d}.nc",
 				},
-				Temporal: &DataSourceTemporal{
-					FilePeriod: strPtr("P1D"),
-					Frequency:  strPtr("PT3H"),
-				},
+				Temporal: &DataSourceTemporal{FilePeriod: strPtr("P1D")},
 			},
 		},
 		Coupling: []CouplingEntry{
@@ -530,9 +518,11 @@ func TestModelSummary(t *testing.T) {
 	// advection terms print as grad(_var). Unary minus is an operator node, so it
 	// is parenthesized inside the product ((−a)·b), per RENDERING_CONTRACT.md.
 	assert.Contains(t, result, "∂_var/∂t = (−u_wind) · grad(_var) + (−v_wind) · grad(_var)")
-	// A source no longer lists the variables it provides, so the summary reports
-	// its structural kind, whether it is time-varying, and where the bytes are.
-	assert.Contains(t, result, "GEOSFP: grid, temporal (https://example.com/{date:%Y%m%d}.nc)")
+	// A source has no variables to list; what the summary reports is its
+	// structural kind and whether it is time-varying — the latter being what
+	// decides the cadence of every parameter drawn from it.
+	assert.Contains(t, result, "Data Sources:")
+	assert.Contains(t, result, "GEOSFP (grid, temporal)")
 	assert.Contains(t, result, "operator_compose: SimpleOzone + Advection")
 	assert.Contains(t, result, "2024-05-01 to 2024-05-03")
 }

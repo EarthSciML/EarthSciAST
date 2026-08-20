@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "CEDS_Fixture",
-    "description": "EarthSciData.jl CEDS loader expressed in the STAC-like DataSource schema. Corresponds to EarthSciData.jl src/ceds.jl — struct CEDSFileSet (lines 59-151), relpath (lines 159-167), and the 50-year chunked archive layout CEDS_GN_CHUNKS (lines 21-28). CEDS files have a `(time, sector, lat, lon)` layout at 0.5°×0.5° global resolution; the Julia loader either sums across all sectors or filters by a given subset — that sector-filter is a runtime option, not a schema field. Each file covers one species and one 50-year chunk; the runtime picks the chunk file based on the query date.",
+    "description": "EarthSciData.jl CEDS loader expressed in the STAC-like DataLoader schema. Corresponds to EarthSciData.jl src/ceds.jl — struct CEDSFileSet (lines 59-151), relpath (lines 159-167), and the 50-year chunked archive layout CEDS_GN_CHUNKS (lines 21-28). CEDS files have a `(time, sector, lat, lon)` layout at 0.5°×0.5° global resolution; the Julia loader either sums across all sectors or filters by a given subset — that sector-filter is a runtime option, not a schema field. Each file covers one species and one 50-year chunk; the runtime picks the chunk file based on the query date.",
     "authors": [
       "ESM Rust binding acceptance suite"
     ],

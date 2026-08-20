@@ -18,7 +18,7 @@ import Symbolics
         ext = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
 
         vars = Dict(
-            "sea_level_rise" => ModelVariable(StateVariable;
+            "sea_level_rise" => ModelVariable(UnknownVariable;
                 default=0.0, description="sea level rise", units="m"),
             "k" => ModelVariable(ParameterVariable; default=0.1,
                 description="decay rate", units="1/s"),
@@ -47,7 +47,7 @@ import Symbolics
     @testset "Only units" begin
         ext = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
         vars = Dict(
-            "T" => ModelVariable(StateVariable; default=300.0, units="K"),
+            "T" => ModelVariable(UnknownVariable; default=300.0, units="K"),
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
@@ -64,7 +64,7 @@ import Symbolics
 
     @testset "Only description" begin
         vars = Dict(
-            "x" => ModelVariable(StateVariable; default=1.0,
+            "x" => ModelVariable(UnknownVariable; default=1.0,
                 description="population count"),
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
@@ -82,7 +82,7 @@ import Symbolics
 
     @testset "Neither description nor units: no metadata attached" begin
         vars = Dict(
-            "x" => ModelVariable(StateVariable; default=1.0),
+            "x" => ModelVariable(UnknownVariable; default=1.0),
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )
         eq = Equation(
@@ -100,7 +100,7 @@ import Symbolics
 
     @testset "Description does not clobber default value" begin
         vars = Dict(
-            "x" => ModelVariable(StateVariable; default=2.5,
+            "x" => ModelVariable(UnknownVariable; default=2.5,
                 description="thing", units="m"),
             "k" => ModelVariable(ParameterVariable; default=0.1),
         )

@@ -19,7 +19,7 @@ type GraphEdge[N any, E any] struct {
 // ComponentNode represents a node in the component graph
 type ComponentNode struct {
 	ID            string         `json:"id"`
-	Type          string         `json:"type"` // "model", "reaction_system", "data_source", "operator"
+	Type          string         `json:"type"` // "model", "reaction_system", "data_loader", "operator"
 	Name          string         `json:"name"`
 	VariableCount *int           `json:"variable_count,omitempty"`
 	EquationCount *int           `json:"equation_count,omitempty"`
@@ -48,8 +48,12 @@ type CouplingEdge struct {
 
 // VariableNode represents a node in the expression graph
 type VariableNode struct {
-	Name   string  `json:"name"`
-	Kind   string  `json:"kind"` // a classification.go Class* value, or "species"
+	Name string `json:"name"`
+	// Kind is the DERIVED role of the variable (esm-spec §6.3.1), not a declared
+	// type: "ode_state", "observed", "algebraic" for an unknown; "brownian",
+	// "discrete", "sampled", "constant" for a parameter; "species" for a
+	// reaction-system species.
+	Kind   string  `json:"kind"`
 	Units  *string `json:"units,omitempty"`
 	System string  `json:"system"`
 }
@@ -127,24 +131,11 @@ func ComponentGraphFromFile(file *ESMFile) *ComponentGraph {
 		nodeMap[id] = node
 	}
 
-	// Add nodes for data sources. A source is not a component and has no coupling
-	// edges (esm-spec 8), but it stays a NODE so a reader can see what the
-	// document ingests; the edge to it is now implicit in the consuming
-	// parameter's `update.source` rather than in a coupling entry.
-	for id, source := range file.DataSources {
-		node := ComponentNode{
-			ID:   id,
-			Type: "data_source",
-			Name: id,
-			Metadata: map[string]any{
-				"kind":     source.Kind,
-				"temporal": source.HasTemporal(),
-			},
-		}
-
-		graph.Nodes = append(graph.Nodes, node)
-		nodeMap[id] = node
-	}
+	// A `data_sources` entry is NOT a graph node. From esm 1.0.0 it is a
+	// document-scoped ingest registry rather than a component: it exposes no
+	// variables, cannot be a coupling endpoint, and therefore has no edges to
+	// draw (esm-spec §8, CONFORMANCE_SPEC §3.4). External data reaches a model
+	// through a PARAMETER of that model, which is already a node's variable.
 
 	// `operators` block removed in v0.3.0 (closed-function-registry RFC).
 
@@ -296,12 +287,16 @@ func depNodeKey(systemName, name string) string {
 	return systemName + "." + name
 }
 
-// addModelNodesToGraph adds nodes from a model to the graph
+// addModelNodesToGraph adds nodes from a model to the graph, labelling each
+// node with its DERIVED role rather than its declared type — there are only two
+// declared types in esm 1.0.0, and "unknown" tells a reader nothing about how
+// the node behaves.
 func addModelNodesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNode, systemName string, model Model) {
+	roles := variableRoles(&model)
 	for varName, variable := range model.Variables {
 		node := VariableNode{
 			Name:   varName,
-			Kind:   variable.Type,
+			Kind:   roles[varName],
 			Units:  variable.Units,
 			System: systemName,
 		}
@@ -309,6 +304,42 @@ func addModelNodesToGraph(graph *ExpressionGraph, nodeMap map[string]VariableNod
 		graph.Nodes = append(graph.Nodes, node)
 		nodeMap[depNodeKey(systemName, varName)] = node
 	}
+}
+
+// Derived variable-role labels (esm-spec §6.3.1), used by the expression graph
+// and by any consumer that wants one word for what a variable does.
+const (
+	RoleODEState  = "ode_state"
+	RoleObserved  = "observed"
+	RoleAlgebraic = "algebraic"
+	RoleBrownian  = "brownian"
+	RoleDiscrete  = "discrete"
+	RoleSampled   = "sampled"
+	RoleConstant  = "constant"
+)
+
+// variableRoles maps every declared variable of a model to its derived role.
+// It is a thin presentation layer over the seven classification functions, kept
+// here so the two graph builders share one spelling of the labels.
+func variableRoles(model *Model) map[string]string {
+	roles := make(map[string]string, len(model.Variables))
+	for _, group := range []struct {
+		role  string
+		names []string
+	}{
+		{RoleODEState, ODEStates(model)},
+		{RoleObserved, ObservedUnknowns(model)},
+		{RoleAlgebraic, AlgebraicUnknowns(model)},
+		{RoleBrownian, BrownianParameters(model)},
+		{RoleDiscrete, DiscreteParameters(model)},
+		{RoleSampled, SampledParameters(model)},
+		{RoleConstant, ConstantParameters(model)},
+	} {
+		for _, n := range group.names {
+			roles[n] = group.role
+		}
+	}
+	return roles
 }
 
 // addReactionSystemNodesToGraph adds nodes from a reaction system to the graph

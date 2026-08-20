@@ -356,6 +356,60 @@ fn to_owned_sorted(set: BTreeSet<&str>) -> Vec<String> {
     set.into_iter().map(str::to_string).collect()
 }
 
+
+// ---------------------------------------------------------------------------
+// Raw-JSON helpers
+// ---------------------------------------------------------------------------
+//
+// The rewrite passes (`pushdown_rewrite`, `value_invention`, `cadence`) work on
+// `serde_json::Value` documents rather than typed models, so they need the same
+// "an unknown is defined by an equation" lookup at the JSON level.
+
+/// The RHS of the equation defining `name` in a raw-JSON `model` — the 1.0.0
+/// home of what 0.x kept in `variables[name].expression`.
+pub fn json_definition<'a>(
+    model: &'a serde_json::Value,
+    name: &str,
+) -> Option<&'a serde_json::Value> {
+    model
+        .get("equations")?
+        .as_array()?
+        .iter()
+        .find(|eq| eq.get("lhs").and_then(|l| l.as_str()) == Some(name))
+        .and_then(|eq| eq.get("rhs"))
+}
+
+/// Mutable access to that RHS.
+pub fn json_definition_mut<'a>(
+    model: &'a mut serde_json::Value,
+    name: &str,
+) -> Option<&'a mut serde_json::Value> {
+    model
+        .get_mut("equations")?
+        .as_array_mut()?
+        .iter_mut()
+        .find(|eq| eq.get("lhs").and_then(|l| l.as_str()) == Some(name))
+        .and_then(|eq| eq.get_mut("rhs"))
+}
+
+/// Define `name` as `rhs`, replacing any existing defining equation. Appends
+/// `{"lhs": name, "rhs": rhs}` when the model has none yet.
+pub fn set_json_definition(model: &mut serde_json::Value, name: &str, rhs: serde_json::Value) {
+    if let Some(slot) = json_definition_mut(model, name) {
+        *slot = rhs;
+        return;
+    }
+    let Some(obj) = model.as_object_mut() else {
+        return;
+    };
+    let eqs = obj
+        .entry("equations".to_string())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if let Some(arr) = eqs.as_array_mut() {
+        arr.push(serde_json::json!({"lhs": name, "rhs": rhs}));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,8 +12,8 @@ func TestResolveScopedReference(t *testing.T) {
 		Models: map[string]Model{
 			"MainModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeParameter},
+					"x": {Type: "unknown"},
+					"y": {Type: "parameter"},
 				},
 				Subsystems: map[string]any{
 					"SubsystemA": map[string]any{
@@ -141,8 +141,8 @@ func TestValidationWithScopedReferences(t *testing.T) {
 		Models: map[string]Model{
 			"MainModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeParameter},
+					"x": {Type: "unknown"},
+					"y": {Type: "parameter"},
 				},
 				Equations: []Equation{
 					{
@@ -179,7 +179,7 @@ func TestSubstitutionWithScopedReferences(t *testing.T) {
 		Models: map[string]Model{
 			"MainModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Subsystems: map[string]any{
 					"SubsystemA": map[string]any{

@@ -81,10 +81,16 @@ class ErrorCode(Enum):
     UNDEFINED_SYSTEM = "undefined_system"
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref"
     UNDEFINED_OPERATOR = "undefined_operator"
-    INVALID_DISCRETE_PARAM = "invalid_discrete_param"
     NULL_REACTION = "null_reaction"
-    MISSING_OBSERVED_EXPR = "missing_observed_expr"
     EVENT_VAR_UNDECLARED = "event_var_undeclared"
+    # esm 1.0.0. An event affects UNKNOWNS ONLY: a parameter that changes during
+    # a run declares its own `update`, so `discrete_parameters` and the event
+    # `functional_affect` are gone and the defect they described is reached
+    # through `affects`.
+    EVENT_AFFECTS_PARAMETER = "event_affects_parameter"
+    # esm 1.0.0. A data source is not a component, so `update.source` is the only
+    # way a document can name one -- and it MUST resolve.
+    DATA_SOURCE_UNDEFINED = "data_source_undefined"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string
@@ -107,8 +113,6 @@ class ErrorCode(Enum):
     # declared units are both present and DIFFERENT (statically decidable from a
     # single document; mirrors flatten's DomainUnitMismatchError into validate()).
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch"
-    UNDECLARED_READ_PARAMETER = "undeclared_read_parameter"
-    UNDECLARED_MODIFIED_PARAMETER = "undeclared_modified_parameter"
     # Phase markers used when load()/validate() fails wholesale.
     SCHEMA = "schema"
     PARSE = "parse"
@@ -163,10 +167,12 @@ TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME = "template_import_rebind_unknown_name"
 TEMPLATE_IMPORT_RENAME_COLLISION = "template_import_rename_collision"
 TEMPLATE_IMPORT_RENAME_INVALID = "template_import_rename_invalid"
 
-# Scope-injection codes (esm-spec §9.7.10).
+# Scope-injection codes (esm-spec §9.7.10). `template_inject_target_is_loader`
+# is RETIRED in 1.0.0: a data source is not a component, so it can no longer be
+# an injection target at all and needs no diagnostic of its own -- such a key
+# resolves to nothing and is `template_inject_target_not_component`.
 TEMPLATE_INJECT_TARGET_UNKNOWN = "template_inject_target_unknown"
 TEMPLATE_INJECT_TARGET_NOT_COMPONENT = "template_inject_target_not_component"
-TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader"
 
 # ===========================================================================
 # Coupling-library / coupling_import role-binding codes (esm-spec §10.9–§10.11;

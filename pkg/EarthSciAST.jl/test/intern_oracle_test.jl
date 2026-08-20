@@ -66,7 +66,7 @@ end
 # ---- gridded fixture builders (mirrors stencil_affine_diff_test.jl) ----
 
 function _int_stencil2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
     body = _op("+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
@@ -81,7 +81,7 @@ function _int_stencil2d_model(N)
 end
 
 function _int_makearray_region_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     fwd = _op("-", _idx("u", _op("+", _v("i"), _i(1))), _idx("u", _v("i")))
     ctr = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
@@ -95,7 +95,7 @@ function _int_makearray_region_model(N)
 end
 
 function _int_const_coef_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))
@@ -110,16 +110,19 @@ end
 # is what interning must merge without changing a bit.
 function _int_observed_model()
     kuv = _op("*", _v("k"), _op("+", _v("u"), _v("v")))
-    w1 = ESM.ModelVariable(ESM.ObservedVariable; expression=kuv)
-    w2 = ESM.ModelVariable(ESM.ObservedVariable;
-        expression=_op("+", _op("*", _v("k"), _op("+", _v("u"), _v("v"))),
-                       _op("sin", _v("w1"))))
+    # esm 1.0.0 (esm-spec §6.3.1): `w1` / `w2` are plain unknowns carrying no
+    # `expression`; each is DEFINED by its bare-variable-LHS equation below.
     vars = Dict(
-        "u" => ESM.ModelVariable(ESM.StateVariable; default=1.25),
-        "v" => ESM.ModelVariable(ESM.StateVariable; default=0.5),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default=1.25),
+        "v" => ESM.ModelVariable(ESM.UnknownVariable; default=0.5),
         "k" => ESM.ModelVariable(ESM.ParameterVariable; default=2.0),
-        "w1" => w1, "w2" => w2)
-    eqs = [ESM.Equation(_D("u"), _op("-", _v("w2"), _v("u"))),
+        "w1" => ESM.ModelVariable(ESM.UnknownVariable),
+        "w2" => ESM.ModelVariable(ESM.UnknownVariable))
+    eqs = [ESM.Equation(_v("w1"), kuv),
+           ESM.Equation(_v("w2"),
+               _op("+", _op("*", _v("k"), _op("+", _v("u"), _v("v"))),
+                   _op("sin", _v("w1")))),
+           ESM.Equation(_D("u"), _op("-", _v("w2"), _v("u"))),
            ESM.Equation(_D("v"), _op("*", _n(-0.5), _v("w1")))]
     ESM.Model(vars, eqs)
 end
@@ -173,10 +176,14 @@ end
         @test _intern_expr(d1, ctx) !== _intern_expr(d3, ctx)
         # the model pass does not mutate the input model
         m = _int_observed_model()
-        w2_before = m.variables["w2"].expression
+        # esm 1.0.0: an observed's body lives in its defining EQUATION, so the
+        # non-mutation check reads `observed_definition` instead of
+        # `variables["w2"].expression`.
+        w2_before = ESM.observed_definition(m, "w2")
+        @test w2_before !== nothing
         eq1_before = m.equations[1]
         mi = _intern_model(m, _InternCtx())
-        @test m.variables["w2"].expression === w2_before
+        @test ESM.observed_definition(m, "w2") === w2_before
         @test m.equations[1] === eq1_before
     end
 

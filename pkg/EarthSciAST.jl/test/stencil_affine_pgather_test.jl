@@ -37,7 +37,7 @@ end
 
 # D(u[i]) = forcing[i]  — pure forcing, one box, isolates _AccForcingBox.
 function _pg_pure_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                                   _ao1(_idx("forcing", _v("i")), "i", 1, N))])
 end
@@ -45,7 +45,7 @@ end
 # D(u[i]) = forcing[i] + (u[i-1] − 2u[i] + u[i+1]) — lane-affine forcing summed
 # with a Laplacian, so every box (interior + 2 boundary) carries a forcing leaf.
 function _pg_1d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                    _op("*", _n(-2.0), _idx("u", _v("i"))),
                    _idx("u", _op("+", _v("i"), _i(1))))
@@ -56,7 +56,7 @@ end
 # D(u[i,j]) = forcing[i,j] + 5-point Laplacian — exercises 2-D forcing strides
 # (s1=1, s2=N) alongside the multi-dim box structure.
 function _pg_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
     lap = _op("+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),

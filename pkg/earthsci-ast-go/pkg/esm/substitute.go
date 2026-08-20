@@ -271,24 +271,15 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 	}
 	newModel.Equations = newEquations
 
-	// Substitute in each parameter's update expressions.
-	//
-	// This used to substitute into `variables[v].expression`, an observed's
-	// definition. 1.0.0 moved every definition into `equations` -- already
-	// covered above -- and left the variable carrying a different set of
-	// Expression positions: an update's `when`, its `expression` value form, and
-	// a `from` binding's `unit_conversion`. Those are what need substituting now,
-	// and dropping the loop entirely would silently stop rewriting them.
+	// Substitute in every Expression position a variable carries. From esm 1.0.0
+	// those are the parameter `update` rules (`when`, `expression`,
+	// `from.unit_conversion`); an observed unknown's defining expression is an
+	// ordinary equation and was already rewritten above.
 	newVariables := make(map[string]ModelVariable)
 	for name, variable := range model.Variables {
 		newVar := variable
-		if newVar.Update != nil {
-			rules := make([]ParameterUpdate, len(newVar.Update.Rules))
-			copy(rules, newVar.Update.Rules)
-			newVar.Update = &ParameterUpdateSpec{Rules: rules, IsArray: newVar.Update.IsArray}
-			_ = newVar.MapUpdateExpressions(func(expr Expression, _ int, _ string) (Expression, error) {
-				return sub(expr), nil
-			})
+		for _, site := range VariableExprSites(&newVar) {
+			site.Set(sub(site.Expr))
 		}
 		newVariables[name] = newVar
 	}

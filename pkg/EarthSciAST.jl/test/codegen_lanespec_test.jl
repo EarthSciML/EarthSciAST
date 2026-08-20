@@ -120,7 +120,7 @@ const _CGL_TB = [-3.0, 5.0, -11.0, 17.0, -23.0]
 const _CGL_TC = [0.25, -0.5, 1.0, -2.0, 4.0]
 
 _cgl_vars(names...) =
-    Dict{String,ESM.ModelVariable}(n => ESM.ModelVariable(ESM.StateVariable)
+    Dict{String,ESM.ModelVariable}(n => ESM.ModelVariable(ESM.UnknownVariable)
                                    for n in names)
 _cgl_eq(x, body, N) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
                                    _ao1(body, "i", 1, N))

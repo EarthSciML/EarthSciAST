@@ -548,13 +548,17 @@ pub struct OutputMeta {
     pub var_dims: BTreeMap<String, Vec<String>>,
     /// Variable name → retained CF attributes (`units`, `description`).
     pub var_attrs: BTreeMap<String, JsonMap<String, JsonValue>>,
-    /// Variable name → declared kind, so observed fields can be gated on the
-    /// caller's request list (RFC decision 8).
+    /// Variable name → DECLARED kind (`unknown` / `parameter`, esm-spec §6.3).
     pub var_types: BTreeMap<String, VariableType>,
-    /// Keys (bare and qualified) of the variables that are OBSERVED unknowns.
-    /// Observedness is derived from the equations (esm-spec §6.3.1), not from
-    /// the declared type, so it needs its own set alongside `var_types`.
-    pub observed_keys: std::collections::BTreeSet<String>,
+    /// The names that are OBSERVED unknowns, keyed exactly as `var_types` is,
+    /// so observed fields can be gated on the caller's request list (RFC
+    /// decision 8).
+    ///
+    /// Derived through [`crate::classification::observed_unknowns`], not read
+    /// off a declared type: from esm 1.0.0 "observed" is a property of the
+    /// equation that defines the unknown, and the declaration says only
+    /// `unknown`.
+    pub observed_unknowns: std::collections::BTreeSet<String>,
     /// The additive document-scoped `coordinates` registry (§8.3), verbatim.
     pub coordinates: BTreeMap<String, Coordinate>,
     /// Record-axis name: `domain.independent_variable`, else `"time"`.
@@ -588,14 +592,17 @@ impl OutputMeta {
         self.lookup(&self.var_types, base)
     }
 
-    /// Is `base` an OBSERVED unknown (esm-spec §6.3.1)?
+    /// Whether `base` is an OBSERVED unknown (esm-spec §6.3.1), by the same
+    /// exact-then-last-segment lookup the other tables use.
     #[must_use]
     pub fn is_observed(&self, base: &str) -> bool {
-        self.observed_keys.contains(base)
-            || self
-                .model_names
-                .iter()
-                .any(|m| self.observed_keys.contains(&format!("{m}.{base}")))
+        if self.observed_unknowns.contains(base) {
+            return true;
+        }
+        match base.rsplit('.').next() {
+            Some(bare) if bare != base => self.observed_unknowns.contains(bare),
+            _ => false,
+        }
     }
 
     /// The retained CF attributes of `base`.
@@ -658,8 +665,9 @@ pub fn derive_output_meta(doc: &EsmFile) -> OutputMeta {
 
     for mname in &meta.model_names {
         let model = &models[mname];
-        let observed: std::collections::HashSet<String> =
-            crate::classify::observed_unknowns(model).into_iter().collect();
+        // Which unknowns are OBSERVED is derived from this model's equations
+        // (esm-spec §6.3.1), once per model.
+        let class = crate::classification::Classification::of(model);
         let mut vnames: Vec<&String> = model.variables.keys().collect();
         vnames.sort();
         for vn in vnames {
@@ -687,8 +695,8 @@ pub fn derive_output_meta(doc: &EsmFile) -> OutputMeta {
                 if !attrs.is_empty() {
                     meta.var_attrs.insert(key.clone(), attrs.clone());
                 }
-                if observed.contains(vn.as_str()) {
-                    meta.observed_keys.insert(key.clone());
+                if class.is_observed(vn) {
+                    meta.observed_unknowns.insert(key.clone());
                 }
                 meta.var_types.insert(key, v.var_type);
             }

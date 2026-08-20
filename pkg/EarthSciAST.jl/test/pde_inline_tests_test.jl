@@ -42,13 +42,13 @@ _pit_cos_pi_x() = Dict{String,Any}(
 function _pit_decay_doc(assertions::Vector)
     idx = Dict{String,Any}("op" => "index", "args" => Any["u", "i"])
     Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.0.0",
         "metadata" => Dict("name" => "pde_inline_decay"),
         "index_sets" => Dict{String,Any}(
             "x" => Dict("kind" => "interval", "size" => _PIT_N)),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "u" => Dict("type" => "state", "units" => "1",
+                "u" => Dict("type" => "unknown", "units" => "1",
                             "shape" => Any["x"])),
             "equations" => Any[
                 Dict{String,Any}("lhs" => Dict("op" => "ic", "args" => Any["u"]),
@@ -133,11 +133,11 @@ end
 
     # coords on a scalar (0-D) variable is ill-formed per §6.6.5.
     scalar_doc = Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.0.0",
         "metadata" => Dict("name" => "scalar_coords"),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "z" => Dict("type" => "state", "units" => "1",
+                "z" => Dict("type" => "unknown", "units" => "1",
                             "default" => 1.0)),
             "equations" => Any[Dict{String,Any}(
                 "lhs" => Dict("op" => "D", "args" => Any["z"], "wrt" => "t"),
@@ -165,14 +165,14 @@ function _pit_2d_doc(ny::Int)
     idx = Dict{String,Any}("op" => "index", "args" => Any["u", "i", "j"])
     ranges = Dict{String,Any}("i" => Any[1, 4], "j" => Any[1, ny])
     Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.0.0",
         "metadata" => Dict("name" => "pde_inline_2d"),
         "index_sets" => Dict{String,Any}(
             "x" => Dict("kind" => "interval", "size" => 4),
             "y" => Dict("kind" => "interval", "size" => ny)),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "u" => Dict("type" => "state", "units" => "1",
+                "u" => Dict("type" => "unknown", "units" => "1",
                             "shape" => Any["x", "y"])),
             "equations" => Any[
                 Dict{String,Any}("lhs" => Dict("op" => "ic", "args" => Any["u"]),
@@ -273,6 +273,12 @@ end
 # a `CartesianIndices` comprehension: rank≥2 yields a Matrix, and the pre-fix
 # `sort!` on it threw `UndefKeywordError: dims`. Pins the `vec()` fix and the
 # row-major (lexicographic) cell mapping that pairs with the value layout.
+#
+# esm 1.0.0 (§6.3, §6.3.1): `base` and `scaled` are declared as plain `unknown`s
+# and are made OBSERVED by their bare-variable-LHS equations below — a variable
+# carries no `expression` field any more, so what was
+# `{"type":"observed","expression":E}` is now `{"type":"unknown"}` plus
+# `{"lhs":"<name>","rhs":E}` in the model's `equations`.
 function _pit_observed_doc(sizes::Vector{Int}, mult::Float64, base_nested,
                            assertions::Vector)
     R = length(sizes)
@@ -284,22 +290,24 @@ function _pit_observed_doc(sizes::Vector{Int}, mult::Float64, base_nested,
         "output_idx" => Any[idxs...], "ranges" => ranges, "args" => Any["base"],
         "expr" => Dict{String,Any}("op" => "*", "args" => Any[mult, index_base]))
     Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.0.0",
         "metadata" => Dict("name" => "pde_inline_observed_rankN"),
         "index_sets" => Dict{String,Any}(
             dims[k] => Dict("kind" => "interval", "size" => sizes[k]) for k in 1:R),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "base" => Dict("type" => "observed", "shape" => Any[dims...],
-                    "expression" => Dict("op" => "const", "args" => Any[],
-                                         "value" => base_nested)),
-                "scaled" => Dict("type" => "observed", "shape" => Any[dims...],
-                    "expression" => scaled_expr),
-                "u" => Dict("type" => "state", "shape" => Any[dims...],
+                "base" => Dict("type" => "unknown", "shape" => Any[dims...]),
+                "scaled" => Dict("type" => "unknown", "shape" => Any[dims...]),
+                "u" => Dict("type" => "unknown", "shape" => Any[dims...],
                             "default" => 0.5)),
-            "equations" => Any[Dict{String,Any}(
-                "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
-                "rhs" => "scaled")],
+            "equations" => Any[
+                Dict{String,Any}("lhs" => "base",
+                    "rhs" => Dict("op" => "const", "args" => Any[],
+                                  "value" => base_nested)),
+                Dict{String,Any}("lhs" => "scaled", "rhs" => scaled_expr),
+                Dict{String,Any}(
+                    "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                    "rhs" => "scaled")],
             "tests" => Any[Dict{String,Any}(
                 "id" => "observed_rankN",
                 "time_span" => Dict("start" => 0.0, "end" => 1.0),
@@ -370,7 +378,7 @@ function _pit_param_observed_doc(assertions::Vector)
         "args" => Any["base"],
         "expr" => Dict{String,Any}("op" => "*", "args" => Any["k", idx]))
     Dict{String,Any}(
-        "esm" => "0.8.0",
+        "esm" => "1.0.0",
         "metadata" => Dict("name" => "pde_inline_param_observed"),
         "index_sets" => Dict{String,Any}(
             "d1" => Dict("kind" => "interval", "size" => 2),
@@ -378,16 +386,20 @@ function _pit_param_observed_doc(assertions::Vector)
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
                 "k" => Dict("type" => "parameter", "default" => 1.5),
-                "base" => Dict("type" => "observed", "shape" => Any["d1", "d2"],
-                    "expression" => Dict("op" => "const", "args" => Any[],
-                        "value" => Any[Any[0.5, 1.5, 2.5], Any[3.5, 4.5, 5.5]])),
-                "scaled" => Dict("type" => "observed", "shape" => Any["d1", "d2"],
-                    "expression" => scaled_expr),
-                "u" => Dict("type" => "state", "shape" => Any["d1", "d2"],
+                # esm 1.0.0: observed unknowns, defined by the bare-variable-LHS
+                # equations below rather than by a variable `expression`.
+                "base" => Dict("type" => "unknown", "shape" => Any["d1", "d2"]),
+                "scaled" => Dict("type" => "unknown", "shape" => Any["d1", "d2"]),
+                "u" => Dict("type" => "unknown", "shape" => Any["d1", "d2"],
                             "default" => 0.5)),
-            "equations" => Any[Dict{String,Any}(
-                "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
-                "rhs" => "scaled")],
+            "equations" => Any[
+                Dict{String,Any}("lhs" => "base",
+                    "rhs" => Dict("op" => "const", "args" => Any[],
+                        "value" => Any[Any[0.5, 1.5, 2.5], Any[3.5, 4.5, 5.5]])),
+                Dict{String,Any}("lhs" => "scaled", "rhs" => scaled_expr),
+                Dict{String,Any}(
+                    "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                    "rhs" => "scaled")],
             "tests" => Any[Dict{String,Any}(
                 "id" => "param_observed",
                 "time_span" => Dict("start" => 0.0, "end" => 1.0),

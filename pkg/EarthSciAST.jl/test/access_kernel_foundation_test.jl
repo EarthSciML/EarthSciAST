@@ -217,8 +217,8 @@ end
         N = 64
         perm = Int[mod1(7i + 3, N) for i in 1:N]
         conn = Float64.(perm)
-        vars = Dict("y" => ModelVariable(StateVariable),
-                    "u" => ModelVariable(StateVariable))
+        vars = Dict("y" => ModelVariable(UnknownVariable),
+                    "u" => ModelVariable(UnknownVariable))
         lhs = _arrayop1d(_D_idx("y", _v("i")), "i", 1, N)
         rhs = _arrayop1d(_idx("u", _idx("conn", _v("i"))), "i", 1, N)
         model = E.Model(vars, [E.Equation(lhs, rhs)])

@@ -317,3 +317,84 @@ func exprRefChildren(node ExprNode) []exprRefChild {
 	}
 	return out
 }
+
+// --- ModelVariable Expression positions -------------------------------------
+
+// VariableExprSite is one Expression-bearing position inside a ModelVariable,
+// with the JSON-pointer suffix that addresses it and a setter that writes a
+// rewritten tree back.
+//
+// esm 1.0.0 moved an observed unknown's defining expression OUT of the variable
+// (into the model's `equations`), and moved parameter mutation IN (as `update`).
+// The positions a pass must visit on a variable are therefore no longer "the
+// `expression` field" but the update block's `when` / `expression` and its data
+// binding's `unit_conversion` — exactly the three variable-scoped rows of the
+// esm-spec §4.9.5 table. Enumerating them ONCE here is what stops the five
+// passes that walk variables (enum lowering, parse normalization, substitution,
+// reference integrity, unit propagation) from each growing a different hole.
+type VariableExprSite struct {
+	// Path is the JSON-pointer suffix from the variable, e.g.
+	// "/update/expression" or "/update/1/from/unit_conversion".
+	Path string
+	// Expr is the Expression currently at the position.
+	Expr Expression
+	// Set writes a replacement back into the variable.
+	Set func(Expression)
+}
+
+// VariableExprSites returns every Expression-bearing position of mv, in a stable
+// order. mv must be addressable; the returned setters mutate it in place.
+func VariableExprSites(mv *ModelVariable) []VariableExprSite {
+	rules := mv.UpdateRules()
+	if len(rules) == 0 {
+		return nil
+	}
+	// Work on a private copy so a caller writing through a setter cannot alias
+	// another variable that happens to share the backing array.
+	copied := make([]ParameterUpdate, len(rules))
+	copy(copied, rules)
+	single := len(copied) == 1
+	writeBack := func() {
+		if single {
+			mv.Update = copied[0]
+			return
+		}
+		mv.Update = copied
+	}
+
+	var sites []VariableExprSite
+	for i := range copied {
+		prefix := "/update"
+		if !single {
+			prefix = fmt.Sprintf("/update/%d", i)
+		}
+		idx := i
+		if copied[idx].When != nil {
+			sites = append(sites, VariableExprSite{
+				Path: prefix + "/when",
+				Expr: copied[idx].When,
+				Set:  func(e Expression) { copied[idx].When = e; writeBack() },
+			})
+		}
+		if copied[idx].Expression != nil {
+			sites = append(sites, VariableExprSite{
+				Path: prefix + "/expression",
+				Expr: copied[idx].Expression,
+				Set:  func(e Expression) { copied[idx].Expression = e; writeBack() },
+			})
+		}
+		if copied[idx].From != nil && copied[idx].From.UnitConversion != nil {
+			sites = append(sites, VariableExprSite{
+				Path: prefix + "/from/unit_conversion",
+				Expr: copied[idx].From.UnitConversion,
+				Set: func(e Expression) {
+					from := *copied[idx].From
+					from.UnitConversion = e
+					copied[idx].From = &from
+					writeBack()
+				},
+			})
+		}
+	}
+	return sites
+}

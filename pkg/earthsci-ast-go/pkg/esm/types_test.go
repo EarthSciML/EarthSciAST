@@ -26,17 +26,15 @@ func TestESMFileBasicStructure(t *testing.T) {
 	assert.Contains(t, err.Error(), "at least one of 'models', 'reaction_systems', 'data_sources', 'expression_templates', or 'coupling_roles' must be present")
 }
 
-func TestESMFileWithDataSourceOnly(t *testing.T) {
-	// A document whose sole payload is the ingest registry. `data_sources` is
-	// still one of the root anyOf payload keys even though a source stopped being
-	// a component -- a file that only registers where bytes live is well-formed.
-	//
-	// Note what the entry no longer carries: no `variables` map. The fields it
-	// supplies are declared by whichever model consumes them.
+// A bare `data_sources` block is a legitimate document: a source CATALOGUE
+// (esm-spec §3.1). It is ingest configuration rather than a component — it
+// declares no variables and cannot be coupled or mounted as a subsystem — but it
+// still satisfies the top-level "at least one payload" invariant.
+func TestESMFileWithDataSourcesOnly(t *testing.T) {
 	esmFile := ESMFile{
 		ESM: "1.0.0",
 		Metadata: Metadata{
-			Name:    "SourceOnly",
+			Name:    "SourceCatalogue",
 			Authors: []string{"Test Author"},
 		},
 		DataSources: map[string]DataSource{
@@ -49,7 +47,6 @@ func TestESMFileWithDataSourceOnly(t *testing.T) {
 		},
 	}
 
-	// Validation passes because data_sources is present.
 	err := esmFile.ValidateStruct()
 	assert.NoError(t, err)
 }
@@ -66,7 +63,7 @@ func TestESMFileWithModel(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    VarTypeUnknown,
+						Type:    "state",
 						Units:   strPtr("m"),
 						Default: 0.0,
 					},
@@ -132,7 +129,7 @@ func TestJSONSerialization(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    VarTypeUnknown,
+						Type:    "state",
 						Units:   strPtr("m"),
 						Default: 0.0,
 					},
@@ -406,12 +403,16 @@ func TestCouplingValidationWithTypedEntries(t *testing.T) {
 }
 
 // TestEventCouplingPreservesAllFields is a regression test for a decode bug
-// where EventCoupling.UnmarshalJSON's temp struct omitted functional_affect,
-// affect_neg, root_find, and reinitialize, silently dropping those documented
-// fields on load. It asserts each survives a full Load -> Save -> Load cycle.
+// where EventCoupling.UnmarshalJSON's temp struct omitted several documented
+// fields, silently dropping them on load. It asserts each survives a full
+// Load -> Save -> Load cycle.
+//
+// `functional_affect` is no longer among them: esm 1.0.0 removes it (a handler
+// lives on the parameter it writes, as `update.handler`), so what this pins now
+// is affects / affect_neg / root_find / reinitialize.
 func TestEventCouplingPreservesAllFields(t *testing.T) {
 	jsonData := `{
-		"esm": "0.8.0",
+		"esm": "1.0.0",
 		"metadata": {"name": "EventCouplingFields", "authors": ["Test"]},
 		"models": {
 			"m1": {"variables": {"x": {"type": "unknown"}}, "equations": []},
@@ -431,13 +432,10 @@ func TestEventCouplingPreservesAllFields(t *testing.T) {
 		]
 	}`
 
-	// `functional_affect` is NOT among the fields checked here: it was removed
-	// with esm 1.0.0, and a cross-system event affects unknowns only. Its
-	// successor is `update.handler` on the parameter a handler writes, covered by
-	// parameter_update_test.go.
 	assertFields := func(t *testing.T, ec EventCoupling) {
 		t.Helper()
 		require.Len(t, ec.Affects, 1, "affects dropped")
+		assert.Equal(t, "m2.y", ec.Affects[0].LHS)
 		require.Len(t, ec.AffectNeg, 1, "affect_neg dropped")
 		assert.Equal(t, "m2.y", ec.AffectNeg[0].LHS)
 		require.NotNil(t, ec.RootFind, "root_find dropped")

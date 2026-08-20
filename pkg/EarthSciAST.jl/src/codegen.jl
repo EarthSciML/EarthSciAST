@@ -8,7 +8,7 @@ OrdinaryDiffEq).
 
 """
     _generate_script(file::EsmFile; language, imports, model_emitter,
-                     reaction_system_emitter, emit_data_loaders=false)
+                     reaction_system_emitter, emit_data_sources=false)
 
 Script driver behind [`to_julia_code`](@ref): header → imports → models →
 reaction systems → coupling → domain → data loaders. The language-specific
@@ -24,7 +24,7 @@ function _generate_script(file::EsmFile;
                           imports::Vector{String},
                           model_emitter::Function,
                           reaction_system_emitter::Function,
-                          emit_data_loaders::Bool=false)
+                          emit_data_sources::Bool=false)
     # Expand at the boundary (RFC out-of-line-expression-templates §7.7): the
     # expression emitters have no `apply_expression_template` arm (the generic
     # fallback would render `apply_expression_template()`, dropping name and
@@ -82,11 +82,11 @@ function _generate_script(file::EsmFile;
         push!(lines, "")
     end
 
-    # Generate data loader placeholders (codegen not yet implemented)
-    if emit_data_loaders && !isnothing(file.data_loaders) && !isempty(file.data_loaders)
-        push!(lines, "# Data Loaders")
-        for (name, data_loader) in file.data_loaders
-            append!(lines, generate_data_loader_placeholder(name, data_loader))
+    # Generate data source placeholders (codegen not yet implemented)
+    if emit_data_sources && !isnothing(file.data_sources) && !isempty(file.data_sources)
+        push!(lines, "# Data Sources")
+        for (name, data_source) in file.data_sources
+            append!(lines, generate_data_source_placeholder(name, data_source))
         end
         push!(lines, "")
     end
@@ -117,7 +117,7 @@ function to_julia_code(file::EsmFile)
         ],
         model_emitter = generate_model_code,
         reaction_system_emitter = generate_reaction_system_code,
-        emit_data_loaders = true)
+        emit_data_sources = true)
 end
 
 # Helper functions for Julia code generation
@@ -127,24 +127,30 @@ function generate_model_code(name::String, model::Model)
 
     push!(lines, "# Model: $name")
 
-    # Collect state variables, parameters, and brownian (Wiener) noise sources.
-    # Brownian variables map to MTK `@brownians` and promote the system to
-    # an SDESystem (vs ODESystem). See spec ModelVariable.type = "brownian".
+    # Split the model's variables by their DERIVED role (esm-spec §6.3.1): the
+    # unknowns the solver integrates or eliminates become `@variables`, the
+    # parameters become `@parameters`, and the Brownian parameters become MTK
+    # `@brownians`, which promotes the system from an ODESystem to an
+    # SDESystem. None of this is declared — `brownian_parameters` derives it
+    # from the parameters' `update`.
+    unknown_set = Set(unknown_names(model))
+    brownian_set = Set(brownian_parameters(model))
     state_vars = Tuple{String, ModelVariable}[]
     parameters = Tuple{String, ModelVariable}[]
     brownians = Tuple{String, ModelVariable}[]
 
     if !isnothing(model.variables) && !isempty(model.variables)
         for (var_name, variable) in model.variables
-            if variable.type == StateVariable
+            if var_name in unknown_set
                 push!(state_vars, (var_name, variable))
-            elseif variable.type == ParameterVariable || variable.type == DiscreteVariable
-                # A discrete variable is a refresh-fed buffer the solver never
-                # differentiates — it emits as an MTK parameter (`@parameters`),
-                # written by the cadence/loader refresh callback.
-                push!(parameters, (var_name, variable))
-            elseif variable.type == BrownianVariable
+            elseif var_name in brownian_set
                 push!(brownians, (var_name, variable))
+            else
+                # Every other parameter — constant, sampled, or
+                # discrete-cadence — emits as an MTK parameter. A
+                # discrete-cadence one is a refresh-fed buffer the solver never
+                # differentiates, written by the update callback.
+                push!(parameters, (var_name, variable))
             end
         end
     end
@@ -305,13 +311,13 @@ function generate_domain_placeholder(domain::Domain)
     return lines
 end
 
-function generate_data_loader_placeholder(name::String, data_loader::DataLoader)
+function generate_data_source_placeholder(name::String, data_source::DataSource)
     lines = String[]
-    push!(lines, "# Data loader: $name")
-    push!(lines, "#   Kind: $(data_loader.kind)")
-    push!(lines, "#   Source: $(data_loader.source.url_template)")
-    var_names = sort(collect(keys(data_loader.variables)))
-    push!(lines, "#   Variables: $(join(var_names, ", "))")
+    push!(lines, "# Data source: $name")
+    push!(lines, "#   Kind: $(data_source.kind)")
+    push!(lines, "#   Source: $(data_source.source.url_template)")
+    # A source exposes no variables of its own from esm 1.0.0 — the consuming
+    # parameters name it through their `update` (esm-spec §8).
     return lines
 end
 

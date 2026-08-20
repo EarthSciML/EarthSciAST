@@ -34,6 +34,7 @@ from typing import Any
 import numpy as np
 
 from . import broad_phase, cadence, relational
+from .classification import algebraic_unknowns, ode_states
 from .errors import EarthSciAstError
 from .esm_types import ExprNode
 
@@ -296,6 +297,12 @@ class _ViCtx:
     params: dict[str, float]
     index_sets: dict[str, Any]
     variables: dict[str, Any]
+    # The unknowns the solver solves for -- ODE states plus algebraic unknowns,
+    # DERIVED from the equations (esm-spec §6.3.1). Reading one in a build-time
+    # reduction is the §5.7 guard-2 violation; an OBSERVED unknown is not in
+    # this set, because it is eliminable and its own class is resolved from its
+    # defining equation.
+    solved_unknowns: set = field(default_factory=set)
     # Per-const-array boundary policy (ess-gj4): array name → per-dimension policy
     # strings (each one of "periodic" | "clamp" | "error"). An array absent from
     # this map keeps the strict default ("error" in every dim), so genuine
@@ -1051,8 +1058,7 @@ def _vi_assert_buildtime(
     for r in _vi_index_targets(node, set()):
         if r in vi_var_names or r in ctx.const_arrays:
             continue
-        v = ctx.variables.get(r)
-        if isinstance(v, Mapping) and v.get("type") == "state":
+        if r in ctx.solved_unknowns:
             raise ValueInventionError(
                 f"grouped/derived value-invention buffer {vname!r} reads live state {r!r} — a "
                 f"build-time reduction's inputs must be CONST/DISCRETE factors or materialised "
@@ -1169,11 +1175,22 @@ def _vi_classification_model(
         if body is None:
             continue
         bcls = cadence.classify(body, model_json)
-        newtype = "parameter" if bcls == "const" else ("discrete" if bcls == "discrete" else None)
-        if newtype is None:
+        if bcls == "continuous":
             continue
+        # A materialised buffer is no longer solved for: it becomes a PARAMETER.
+        # 1.0.0 has no `discrete` variable type to retype it to -- the DISCRETE
+        # cadence is now carried by the parameter's `update`, so a buffer whose
+        # body classifies `discrete` is a parameter with a `remesh` update (it
+        # refreshes when the topology it is derived from does), and one that
+        # classifies `const` is a plain parameter.
         v = dict(variables[vname])
-        v["type"] = newtype
+        v["type"] = "parameter"
+        v.pop("distribution", None)
+        if bcls == "discrete":
+            v["update"] = {"kind": "remesh", "expression": body}
+            v.setdefault("shape", [])
+        else:
+            v.pop("update", None)
         variables[vname] = v
     out = dict(model_json)
     out["variables"] = variables
@@ -1325,6 +1342,7 @@ def materialize_value_invention(
         params={str(k): float(v) for k, v in params.items()},
         index_sets=dict(index_sets or {}),
         variables=dict(model_json.get("variables", {}) or {}),
+        solved_unknowns=set(ode_states(model_json)) | set(algebraic_unknowns(model_json)),
         const_array_boundaries={
             str(k): [str(p) for p in v] for k, v in const_array_boundaries.items()
         },

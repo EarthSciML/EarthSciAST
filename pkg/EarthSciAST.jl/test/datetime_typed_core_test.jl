@@ -193,7 +193,7 @@ end
     # D(u[i]) = doy(t + u[i]·3600) + julian_day(t)·1e-3 — a lane-varying
     # datetime arg on the spine plus a hoistable invariant one.
     function _dtc_model(N)
-        vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
         targ = _op("+", _v("t"), _op("*", _idx("u", _v("i")), _n(3600.0)))
         body = _op("+",
             _op("fn", targ; name="datetime.day_of_year"),

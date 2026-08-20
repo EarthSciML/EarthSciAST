@@ -192,7 +192,7 @@ end
         "SR_pSO4"=>param(["emis_src_cells","rcv_cells"]),
         "SR_PrimaryPM25"=>param(["emis_src_cells","rcv_cells"]),
         "src_cell_of_ppl"=>param(["emis_src_cells"]),
-        "emis_src_cell_member"=>Dict("type"=>"state", "shape"=>["emis_src_cells"]),
+        "emis_src_cell_member"=>Dict("type"=>"unknown", "shape"=>["emis_src_cells"]),
         "cell_W"=>obs(["emis_src_cells"], _cell_edge("W")),
         "cell_S"=>obs(["emis_src_cells"], _cell_edge("S")),
         "cell_E"=>obs(["emis_src_cells"], _cell_edge("E")),

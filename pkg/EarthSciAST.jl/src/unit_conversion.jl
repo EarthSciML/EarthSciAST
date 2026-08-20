@@ -21,7 +21,7 @@
 # variables) folds to a constant and takes the same multiply path as a bare
 # factor.
 #
-# The Julia peer of the Python `earthsci_ast.data_loaders.variables` and the
+# The Julia peer of the Python `earthsci_ast.data_sources` binding and the
 # Rust `earthsci_ast::unit_conversion`. All three must agree bit for bit: the
 # conversion is the last thing that touches a delivered array, so a
 # disagreement here is a disagreement about the numbers the model integrates.

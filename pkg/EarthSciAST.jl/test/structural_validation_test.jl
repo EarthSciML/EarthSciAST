@@ -42,8 +42,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "Missing equation for state variable" begin
             # Create a model with missing equation for state variable
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0),
-                "y" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=2.0),
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0),
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=2.0),
                 "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.5)
             )
 
@@ -58,14 +58,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             errors = EarthSciAST.validate_structural(esm_file)
             @test length(errors) == 1
             # The shared cross-binding contract (tests/invalid/expected_errors.json)
-            # pins BOTH balance directions — a state with no equation, and an
-            # equation with no state — under one code, `equation_count_mismatch`,
+            # pins the balance under one code, `equation_count_mismatch`,
             # reported at the MODEL's pointer (a balance is a property of the
-            # model, not of any single equation). Julia used to report a
-            # Julia-only `missing_equation` at `<model>/equations`; that
-            # divergence is what let the corpus's equation_count fixtures pass.
+            # model, not of any single equation). From esm 1.0.0 the balance is
+            # stated over UNKNOWNS and EQUATIONS (esm-spec §4.9.4), and
+            # `missing_equations_for` names the unknowns nothing defines — the
+            # discriminating power the retired `missing_observed_expr` carried.
             @test errors[1].path == "/models/test_model"
-            @test occursin("state variable 'y'", errors[1].message)
+            @test errors[1].message ==
+                  "Number of equations (1) does not match number of unknowns (2)"
+            @test errors[1].details["equations"] == 1
+            @test errors[1].details["missing_equations_for"] == ["y"]
             @test errors[1].error_type == "equation_count_mismatch"
         end
 
@@ -114,7 +117,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Event with undefined affect variable" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)
             )
             equations = [
                 EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
@@ -137,7 +140,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Valid model - no errors" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0),
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0),
                 "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default=0.5)
             )
             equations = [
@@ -156,7 +159,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Valid file" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)
             )
             equations = [
                 EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
@@ -173,8 +176,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "File with structural errors" begin
             variables = Dict(
-                "x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0),
-                "y" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=2.0)
+                "x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0),
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=2.0)
             )
             equations = [
                 EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))
@@ -194,7 +197,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         metadata = EarthSciAST.Metadata("test-model")
 
         @testset "CouplingOperatorCompose validation" begin
-            model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)),
+            model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)),
                                   [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
 
@@ -244,7 +247,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
 
         @testset "CouplingVariableMap validation" begin
-            model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable, default=1.0)),
+            model = EarthSciAST.Model(Dict("x" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable, default=1.0)),
                                   [EarthSciAST.Equation(EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x")], wrt="t"), EarthSciAST.NumExpr(1.0))])
             esm_file = EarthSciAST.EsmFile("0.1.0", metadata, models=Dict("test_model" => model))
 
@@ -367,15 +370,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ParameterVariable;
                     units="atm", default=1.0),
                 "converted_pressure" => EarthSciAST.ModelVariable(
-                    EarthSciAST.ObservedVariable;
-                    units="Pa",
-                    expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.ASTExpr[
-                            EarthSciAST.NumExpr(50000.0),
-                            EarthSciAST.VarExpr("p_atm"),
-                        ])),
+                    EarthSciAST.UnknownVariable;
+                        units="Pa"),
             )
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[])
+            # The defining EQUATION is what makes `converted_pressure` observed from
+            # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
+            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
+                EarthSciAST.Equation(EarthSciAST.VarExpr("converted_pressure"),
+                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
+                        EarthSciAST.NumExpr(50000.0),
+                        EarthSciAST.VarExpr("p_atm"),
+                    ]))])
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test length(errors) == 1
             @test errors[1].error_type == "unit_inconsistency"
@@ -390,15 +395,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ParameterVariable;
                     units="atm", default=1.0),
                 "converted_pressure" => EarthSciAST.ModelVariable(
-                    EarthSciAST.ObservedVariable;
-                    units="Pa",
-                    expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.ASTExpr[
-                            EarthSciAST.NumExpr(101325.0),
-                            EarthSciAST.VarExpr("p_atm"),
-                        ])),
+                    EarthSciAST.UnknownVariable;
+                        units="Pa"),
             )
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[])
+            # The defining EQUATION is what makes `converted_pressure` observed from
+            # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
+            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
+                EarthSciAST.Equation(EarthSciAST.VarExpr("converted_pressure"),
+                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
+                        EarthSciAST.NumExpr(101325.0),
+                        EarthSciAST.VarExpr("p_atm"),
+                    ]))])
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test isempty(errors)
         end
@@ -410,15 +417,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ParameterVariable;
                     units="°C", default=0.0),
                 "T_K" => EarthSciAST.ModelVariable(
-                    EarthSciAST.ObservedVariable;
-                    units="K",
-                    expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.ASTExpr[
-                            EarthSciAST.NumExpr(1.0),
-                            EarthSciAST.VarExpr("T_C"),
-                        ])),
+                    EarthSciAST.UnknownVariable;
+                        units="K"),
             )
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[])
+            # The defining EQUATION is what makes `T_K` observed from
+            # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
+            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
+                EarthSciAST.Equation(EarthSciAST.VarExpr("T_K"),
+                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
+                        EarthSciAST.NumExpr(1.0),
+                        EarthSciAST.VarExpr("T_C"),
+                    ]))])
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test isempty(errors)
         end
@@ -431,15 +440,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                     EarthSciAST.ParameterVariable;
                     units="atm", default=1.0),
                 "x" => EarthSciAST.ModelVariable(
-                    EarthSciAST.ObservedVariable;
-                    units="m",
-                    expression=EarthSciAST.OpExpr("*",
-                        EarthSciAST.ASTExpr[
-                            EarthSciAST.NumExpr(2.0),
-                            EarthSciAST.VarExpr("p_atm"),
-                        ])),
+                    EarthSciAST.UnknownVariable;
+                        units="m"),
             )
-            model = EarthSciAST.Model(variables, EarthSciAST.Equation[])
+            # The defining EQUATION is what makes `x` observed from
+            # esm 1.0.0 (esm-spec §6.3.1); the declaration carries none.
+            model = EarthSciAST.Model(variables, EarthSciAST.Equation[
+                EarthSciAST.Equation(EarthSciAST.VarExpr("x"),
+                    EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
+                        EarthSciAST.NumExpr(2.0),
+                        EarthSciAST.VarExpr("p_atm"),
+                    ]))])
             errors = EarthSciAST.validate_conversion_factor_consistency(model, "/models/M")
             @test isempty(errors)
         end
@@ -478,7 +489,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         grad_model(x_var) = begin
             variables = Dict(
                 "c" => EarthSciAST.ModelVariable(
-                    EarthSciAST.StateVariable, default=0.0, units="mol/m^3"),
+                    EarthSciAST.UnknownVariable, default=0.0, units="mol/m^3"),
             )
             x_var !== nothing && (variables["x"] = x_var)
             equations = [
@@ -551,7 +562,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # flag the bound index. Built via the typed API so it is schema-free.
         @testset "Bound loop index in an aggregate is not flagged" begin
             variables = Dict{String,EarthSciAST.ModelVariable}(
-                "q" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable),
+                "q" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable),
             )
             agg = EarthSciAST.OpExpr("aggregate",
                 EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];
@@ -577,7 +588,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # vacuous — the bound index `i` is still excused).
         @testset "Undeclared name inside an aggregate body is flagged" begin
             variables = Dict{String,EarthSciAST.ModelVariable}(
-                "q" => EarthSciAST.ModelVariable(EarthSciAST.StateVariable),
+                "q" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable),
             )
             agg = EarthSciAST.OpExpr("aggregate",
                 EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")];

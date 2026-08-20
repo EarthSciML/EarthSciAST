@@ -197,6 +197,21 @@ pub enum FlattenError {
     )]
     MalformedConnectorEquation { systems: String, side: String },
 
+    /// A model subsystem that structurally declares itself a [`DataSource`] —
+    /// it carries the discriminating `kind` / `source` keys — failed to
+    /// deserialize as one. Distinguished from a nested model or a
+    /// `{ "ref": … }` reference, which are legitimately not loaders and are
+    /// left for the array runtime (esm-spec §4.6; RFC `pure-io-data-loaders`
+    /// §4.3).
+    #[error(
+        "Malformed data-loader subsystem '{subsystem}' in model '{system}': carries loader keys but did not deserialize as a DataSource: {reason}"
+    )]
+    MalformedLoaderSubsystem {
+        system: String,
+        subsystem: String,
+        reason: String,
+    },
+
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
     Empty,
@@ -403,8 +418,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 5: collect into the final FlattenedSystem shape.
     let mut parts = assemble_output(per_system);
 
-    // Phase 5a: post-collection variable_map parameter removals.
-    let loaded_producers = apply_variable_map_removals(file, &mut parts);
+    // Phase 5a: post-collection variable_map parameter removals, plus the
+    // source-fed array parameters that replace them from esm 1.0.0.
+    let mut loaded_producers = apply_variable_map_removals(file, &mut parts);
+    loaded_producers.extend(source_fed_producers(&parts));
 
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
     maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers)?;
@@ -624,6 +641,33 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
 /// the array evaluator would otherwise resolve ahead of the forcing buffer).
 /// Returns the loaded-producer name → rank map consumed by
 /// [`maybe_apply_pointwise_lift`].
+/// The grid-shaped fields fed from OUTSIDE the model — every discrete
+/// parameter with a non-empty declared `shape`, keyed by its flattened name and
+/// mapped to its rank.
+///
+/// This is the esm 1.0.0 successor of [`apply_variable_map_removals`]'s
+/// `param_to_var` result. Before 1.0.0 a loaded field arrived as a coupling
+/// edge from a loader component to a model parameter, and that EDGE is what
+/// told the pointwise lift which operands were grid-shaped external fields.
+/// The edge is gone: the loaded field IS a parameter carrying an `update` that
+/// names its source (esm-spec §8.5). The same fact is therefore read off the
+/// declaration — a discrete parameter with a shape — instead of off a coupling
+/// entry, and the lift indexes it per cell exactly as before. Without this a
+/// grid-shaped wind field stays a whole ARRAY inside a per-cell expression and
+/// the tendency evaluates to `NaN`.
+fn source_fed_producers(parts: &AssembledParts) -> HashMap<String, usize> {
+    parts
+        .discrete_variables
+        .iter()
+        .filter_map(|(name, var)| {
+            var.shape
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|s| (name.clone(), s.len()))
+        })
+        .collect()
+}
+
 fn apply_variable_map_removals(
     file: &EsmFile,
     parts: &mut AssembledParts,
@@ -666,16 +710,12 @@ fn apply_variable_map_removals(
                 }
                 // Expression transform (esm-spec §10.4): the entry binds the
                 // target to a DERIVED value. Remove the `to` parameter and
-                // introduce in its place an OBSERVED UNKNOWN — same name,
-                // units, shape, description — defined by a new equation
-                // `to ~ <transform>` (the transform VERBATIM: its references
-                // are, by contract, already fully scoped, so no namespacing is
-                // applied). Since 1.0.0 an unknown's behaviour is stated by an
-                // equation and nowhere else, so the defining expression goes
-                // into `parts.equations` rather than onto the variable.
-                // References to `to` in the equations are left intact: they now
-                // resolve to the observed, exactly as if the author had
-                // declared it.
+                // introduce in its place an observed variable — same name,
+                // units, shape, description — whose defining expression is the
+                // transform VERBATIM (its references are, by contract, already
+                // fully scoped, so no namespacing is applied). References to
+                // `to` in the equations are left intact: they now resolve to
+                // the observed, exactly as if the author had declared it.
                 VariableMapTransform::Expression(node) => {
                     let removed = parts.parameters.shift_remove(to);
                     let (units, shape, description) = removed
@@ -689,12 +729,16 @@ fn apply_variable_map_removals(
                             default: None,
                             default_units: None,
                             description,
-                            distribution: None,
-                            update: None,
                             shape,
                             location: None,
+                            distribution: None,
+                            update: None,
                         },
                     );
+                    // The DEFINITION is an equation with a bare-variable LHS —
+                    // esm 1.0.0 has no `expression` field on a variable, and it
+                    // is that equation form that makes `to` an observed unknown
+                    // (esm-spec §6.3.1).
                     parts.equations.push(Equation {
                         lhs: Expr::Variable(to.clone()),
                         rhs: Expr::operator(node.clone()),
@@ -807,6 +851,7 @@ struct SystemBlock {
     discrete_events: Vec<DiscreteEvent>,
 }
 
+
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
@@ -814,63 +859,55 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     let mut brownian_vars = IndexMap::new();
     let mut discrete_vars = IndexMap::new();
 
-    // Since 1.0.0 a data source is a document-scoped registry entry, NOT a
-    // component: it can no longer be mounted as a subsystem, so there are no
-    // `<system>.<sub>.<var>` loader observeds to lower. A model consumes a
-    // source by declaring a PARAMETER whose `update` names it, which the
-    // ordinary parameter path below already handles.
-    let subsys_keys: HashSet<String> = HashSet::new();
-
     // The component's own declared names — the gate for namespacing the
     // plain-string references a `join` clause carries (§5.5.6).
     // Mirrors Julia `_collect_model!`'s `local_names`.
+    //
+    // From esm 1.0.0 a data source can no longer be mounted as a SUBSYSTEM
+    // (RFC unified-variable-model D2: a source is not a component), so there
+    // are no loader-subsystem keys to add here and no loader observeds to
+    // synthesise. A model reads external data through a PARAMETER whose
+    // `update` names the source, which lands in `parameters` below like any
+    // other parameter.
     let locals: HashSet<String> = model.variables.keys().cloned().collect();
 
-    // The five output buckets are DERIVED categories, so they are seeded from
-    // the §6.3.1 classification functions rather than from a declared type
-    // (which since 1.0.0 only distinguishes `unknown` from `parameter`).
-    // An ALGEBRAIC unknown joins `state_vars`: like an ODE state it is a
-    // quantity the solver carries and solves for, unlike an observed it cannot
-    // be eliminated by substitution. That matches what 0.x expressed by
-    // declaring such a variable `state`.
-    let ode_states: HashSet<String> = crate::classify::ode_states(model).into_iter().collect();
-    let observed: HashSet<String> = crate::classify::observed_unknowns(model)
-        .into_iter()
-        .collect();
-    let brownian: HashSet<String> = crate::classify::brownian_parameters(model)
-        .into_iter()
-        .collect();
-    let discrete: HashSet<String> = crate::classify::discrete_parameters(model)
-        .into_iter()
-        .collect();
+    // Which unknowns are ODE states and which are observed is DERIVED from
+    // this model's equations (esm-spec §6.3.1), once, before namespacing.
+    let class = crate::classification::Classification::of(model);
 
     let mut var_names: Vec<&String> = model.variables.keys().collect();
     var_names.sort();
     for var_name in var_names {
         let var = &model.variables[var_name];
         let namespaced = format!("{system_name}.{var_name}");
-        let cloned = var.clone();
+        let mut cloned = var.clone();
+        // A parameter's `update` carries Expressions (trigger, value,
+        // unit conversion) over the model's own symbols, so they namespace
+        // exactly as the equations do.
+        cloned.for_each_expression_mut(&mut |expr| {
+            *expr = namespace_expr(expr, system_name, &locals);
+        });
         match var.var_type {
+            // An unknown lands in the bucket its EQUATIONS put it in. An
+            // algebraic unknown joins `state_vars`: it is solved for, is not
+            // eliminable, and the downstream consumers that integrate this
+            // bucket already tolerate an unknown with no derivative equation
+            // (that is what the DAE contract in `dae.rs` handles).
             VariableType::Unknown => {
-                if observed.contains(var_name) {
+                if class.is_observed(var_name) {
                     observed_vars.insert(namespaced, cloned);
                 } else {
-                    // ODE state, or an algebraic unknown.
-                    debug_assert!(
-                        ode_states.contains(var_name) || !observed.contains(var_name),
-                        "unknown {var_name} must fall in exactly one class"
-                    );
                     state_vars.insert(namespaced, cloned);
                 }
             }
+            // A parameter lands in the bucket its `distribution` / `update`
+            // put it in — Brownian, discrete, or plain.
             VariableType::Parameter => {
-                if brownian.contains(var_name) {
+                if class.is_brownian(var_name) {
                     brownian_vars.insert(namespaced, cloned);
-                } else if discrete.contains(var_name) {
+                } else if class.is_discrete_parameter(var_name) {
                     discrete_vars.insert(namespaced, cloned);
                 } else {
-                    // Constant or sampled-once-at-setup: both are supplied to
-                    // the solver as parameters.
                     parameters.insert(namespaced, cloned);
                 }
             }
@@ -881,8 +918,8 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .equations
         .iter()
         .map(|eq| Equation {
-            lhs: namespace_expr_with_subsys(&eq.lhs, system_name, &subsys_keys, &locals),
-            rhs: namespace_expr_with_subsys(&eq.rhs, system_name, &subsys_keys, &locals),
+            lhs: namespace_expr(&eq.lhs, system_name, &locals),
+            rhs: namespace_expr(&eq.rhs, system_name, &locals),
         })
         .collect();
 
@@ -942,10 +979,10 @@ fn build_reaction_block(
             default: species.default,
             default_units: None,
             description: species.description.clone(),
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         };
         if species.constant == Some(true) {
             parameters.insert(namespaced, var);
@@ -967,10 +1004,10 @@ fn build_reaction_block(
                 default: param.default,
                 default_units: None,
                 description: param.description.clone(),
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
     }
@@ -1038,19 +1075,6 @@ fn namespace_expr(expr: &Expr, system_name: &str, locals: &HashSet<String>) -> E
     namespace_expr_scoped(expr, system_name, &HashSet::new(), &HashSet::new(), locals)
 }
 
-/// [`namespace_expr`] that additionally model-namespaces bare subsystem-local
-/// references: a dotted reference `<sub>.<rest>` whose head `<sub>` is a declared
-/// subsystem key becomes `<system>.<sub>.<rest>`. The default rule treats *any*
-/// dotted name as already-namespaced (correct for a cross-component reference,
-/// wrong for a subsystem-local one), so `subsys` is the exception set.
-fn namespace_expr_with_subsys(
-    expr: &Expr,
-    system_name: &str,
-    subsys: &HashSet<String>,
-    locals: &HashSet<String>,
-) -> Expr {
-    namespace_expr_scoped(expr, system_name, &HashSet::new(), subsys, locals)
-}
 
 /// Dot-prefix the plain-string names carried by a node's `join` clauses
 /// (CONFORMANCE_SPEC §5.5.6). Applies the SAME rule [`namespace_expr_scoped`]
@@ -1618,11 +1642,22 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
             eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
             eq.rhs = rename_join_names(&crate::substitute::substitute(&eq.rhs, &subs), to, from);
         }
-        // (An observed's DEFINING expression needs no separate rewrite since
-        // 1.0.0: it is an ordinary equation with a bare-variable LHS, so the
-        // equation loop above already reached it. In 0.x the definition hid on
-        // the variable, which is exactly why this pass had to walk observeds
-        // as well.)
+        // A `variable_map` also removes the mapped parameter from the system, so
+        // it must reach every remaining Expression a VARIABLE carries — the
+        // trigger and value expressions of a parameter `update` — otherwise one
+        // keeps a dangling reference to the now-removed parameter and evaluates
+        // to NaN. (An observed unknown's defining expression is an equation from
+        // esm 1.0.0, already rewritten by the loop above.)
+        for var in block
+            .observed_vars
+            .values_mut()
+            .chain(block.parameters.values_mut())
+            .chain(block.discrete_vars.values_mut())
+        {
+            var.for_each_expression_mut(&mut |expr| {
+                *expr = rename_join_names(&crate::substitute::substitute(expr, &subs), to, from);
+            });
+        }
         // ...and event conditions / affect RHS (continuous + discrete), for the
         // same reason: an event whose condition or affect referenced the removed
         // `to` parameter would otherwise keep a dangling reference. The event
@@ -2196,10 +2231,10 @@ mod tests {
                 default: Some(0.0),
                 default_units: None,
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
         vars.insert(
@@ -2210,10 +2245,10 @@ mod tests {
                 default: Some(1.0),
                 default_units: None,
                 description: None,
-                distribution: None,
-                update: None,
                 shape: None,
                 location: None,
+                distribution: None,
+                update: None,
             },
         );
 
@@ -2303,10 +2338,10 @@ mod tests {
             default: None,
             default_units: None,
             description: None,
-            distribution: None,
-            update: None,
             shape: None,
             location: None,
+            distribution: None,
+            update: None,
         }
     }
 

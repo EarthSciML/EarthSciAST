@@ -27,7 +27,7 @@ end
 
 # D(u[i]) = s*s + s,  s = (u[i-1] − 2u[i] + u[i+1]).  `s` occurs 3× → shared.
 function _cse_shared_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     s = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                  _op("*", _n(-2.0), _idx("u", _v("i"))),
                  _idx("u", _op("+", _v("i"), _i(1))))
@@ -39,7 +39,7 @@ end
 # D(u[i]) = g*g,  g = exp(u[i-1]) * exp(u[i+1]) − a nested shared subexpr through a
 # transcendental (the expensive-shared-work case CSE is meant to collapse).
 function _cse_nested_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     g = _op("*", _op("exp", _idx("u", _op("-", _v("i"), _i(1)))),
                  _op("exp", _idx("u", _op("+", _v("i"), _i(1)))))
     body = _op("*", g, g)
@@ -49,7 +49,7 @@ end
 
 # D(u[i]) = u[i-1] − 2u[i] + u[i+1]  — plain Laplacian, NO repeated subexpression.
 function _cse_nosharing_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     body = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
                     _op("*", _n(-2.0), _idx("u", _v("i"))),
                     _idx("u", _op("+", _v("i"), _i(1))))

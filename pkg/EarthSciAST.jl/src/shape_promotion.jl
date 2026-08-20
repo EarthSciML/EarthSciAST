@@ -316,7 +316,11 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
     new_obs = OrderedDict{String,ModelVariable}(flat.observed_variables)
     for (k, v) in flat.state_variables
         if (k in alg_defined) && !(k in diff_states)
-            new_obs[k] = reconstruct(v; type=ObservedVariable)
+            # Both sides are `unknown` from esm 1.0.0; the move between the
+            # FlattenedSystem's state and observed buckets IS the reclassification
+            # (an algebraically-defined name is observed, esm-spec §6.3.1), so the
+            # declared type is already right and the variable copies across as-is.
+            new_obs[k] = v
         else
             new_states[k] = v
         end
@@ -744,10 +748,10 @@ function flat_was_scalar(flat::FlattenedSystem, name::AbstractString)::Bool
     return true
 end
 
-# Return a copy of a ModelVariable with a new (array) shape. A promoted variable's
-# defining scalar `expression` is cleared — its rewritten `arrayop` EQUATION is now
-# the single source of truth (flatten always emits an equation per observed), so a
-# stale scalar expression at an array shape can't be mistaken for the definition.
+# Return a copy of a ModelVariable with a new (array) shape. From esm 1.0.0 the
+# rewritten `arrayop` EQUATION is the ONLY source of truth for a promoted
+# variable's definition — there is no scalar `expression` on the declaration
+# left to clear, so this is a shape change and nothing else.
 function _with_shape(v::ModelVariable, shape::Vector{String})::ModelVariable
-    return reconstruct(v; expression=nothing, shape=copy(shape))
+    return reconstruct(v; shape=copy(shape))
 end

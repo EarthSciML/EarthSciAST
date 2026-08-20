@@ -57,7 +57,7 @@ _pv_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
 _pv_ao(e) = Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
     "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
     "args" => Any[], "expr" => e)
-_pv_state(; kw...) = Dict{String,Any}("type" => "state",
+_pv_state(; kw...) = Dict{String,Any}("type" => "unknown",
                                       (String(k) => v for (k, v) in kw)...)
 _pv_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
 _pv_doc(name, vars, eqs; index_sets = nothing) = begin

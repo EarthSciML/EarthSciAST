@@ -66,14 +66,14 @@ function _rebuild(file::EsmFile;
                   metadata = file.metadata,
                   models = file.models,
                   reaction_systems = file.reaction_systems,
-                  data_loaders = file.data_loaders,
+                  data_sources = file.data_sources,
                   coupling = file.coupling,
                   domain = file.domain)
     return EsmFile(
         esm, metadata;
         models = models,
         reaction_systems = reaction_systems,
-        data_loaders = data_loaders,
+        data_sources = data_sources,
         coupling = coupling,
         domain = domain,
         enums = file.enums,
@@ -459,7 +459,7 @@ function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
     # Merge dictionaries (file_b takes precedence), handling nothing values
     merged_models = _merge_optional(file_a.models, file_b.models)
     merged_reaction_systems = _merge_optional(file_a.reaction_systems, file_b.reaction_systems)
-    merged_data_loaders = _merge_optional(file_a.data_loaders, file_b.data_loaders)
+    merged_data_sources = _merge_optional(file_a.data_sources, file_b.data_sources)
 
     # v0.8.0: a single shared `domain` object (file_b takes precedence).
     merged_domain = file_b.domain === nothing ? file_a.domain : file_b.domain
@@ -475,7 +475,7 @@ function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
         metadata=merged_metadata,
         models=merged_models,
         reaction_systems=merged_reaction_systems,
-        data_loaders=merged_data_loaders,
+        data_sources=merged_data_sources,
         coupling=merged_coupling,
         domain=merged_domain)
 end
@@ -492,7 +492,7 @@ component does not exist.
 function extract(file::EsmFile, component_name::String)::EsmFile
     extracted_models = Dict{String,Model}()
     extracted_reaction_systems = Dict{String,ReactionSystem}()
-    extracted_data_loaders = Dict{String,DataLoader}()
+    extracted_data_sources = Dict{String,DataSource}()
 
     found = false
     if file.models !== nothing && haskey(file.models, component_name)
@@ -501,8 +501,8 @@ function extract(file::EsmFile, component_name::String)::EsmFile
     elseif file.reaction_systems !== nothing && haskey(file.reaction_systems, component_name)
         extracted_reaction_systems[component_name] = file.reaction_systems[component_name]
         found = true
-    elseif file.data_loaders !== nothing && haskey(file.data_loaders, component_name)
-        extracted_data_loaders[component_name] = file.data_loaders[component_name]
+    elseif file.data_sources !== nothing && haskey(file.data_sources, component_name)
+        extracted_data_sources[component_name] = file.data_sources[component_name]
         found = true
     end
 
@@ -537,6 +537,6 @@ function extract(file::EsmFile, component_name::String)::EsmFile
     return _rebuild(file;
         models=extracted_models,
         reaction_systems=extracted_reaction_systems,
-        data_loaders=extracted_data_loaders,
+        data_sources=extracted_data_sources,
         coupling=relevant_coupling)
 end

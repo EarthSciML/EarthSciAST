@@ -25,7 +25,8 @@ The governing principle is that a node's class is a **pure function of the
 data-dependency DAG** — ``class(node) = max`` (the lattice join) over its inputs'
 classes — and is **never declared** by the author. The boundary between phases is
 *derived*, not written into the file. The one new declaration the pass needs is
-the leaf seed (the ``discrete`` variable kind); the optional ``expect_cadence``
+the leaf seed, which from esm 1.0.0 comes from the §6.3.1 classification
+functions rather than from a declared type; the optional ``expect_cadence``
 annotation is a *checked assertion*, not a control input.
 
 The gather rule (the rule that carries the design)
@@ -92,6 +93,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from .classification import (
+    brownian_parameters,
+    inlined_unknowns,
+    constant_parameters,
+    discrete_parameters,
+    observed_definitions,
+    sampled_parameters,
+)
 from .errors import EarthSciAstError
 from .op_registry import by_category as _by_category
 from .relational import FloatKeyError, distinct, rank, skolem, skolem_edge
@@ -152,29 +161,79 @@ def cadence_join(*classes: str) -> str:
     return CLASS_ORDER[max(_CLASS_RANK[c] for c in classes)]
 
 
-def _loader_without_temporal(var: Mapping[str, Any], model: Mapping[str, Any]) -> bool:
-    """True iff ``var`` is a discrete variable whose ``data_ingest`` refresh names
-    a DataLoader — found in the document's top-level ``data_loaders``, attached to
-    the model by :func:`model_from_doc` — that declares no ``temporal`` block.
-    Such a loader describes non-time-varying data, so its output variable seeds
-    ``const`` (folds at bind), not ``discrete`` (RFC pure-io-data-loaders §4.6 /
-    §5.7.2)."""
-    refresh = var.get("refresh")
-    if not isinstance(refresh, Mapping) or refresh.get("kind") != "data_ingest":
+def _source_without_temporal(var: Mapping[str, Any], model: Mapping[str, Any]) -> bool:
+    """True iff ``var`` is a parameter whose ``data`` update names a DataSource —
+    found in the document's top-level ``data_sources``, attached to the model by
+    :func:`model_from_doc` — that declares no ``temporal`` block. Such a source
+    describes non-time-varying data, so the parameter reading it seeds ``const``
+    (folds at bind), not ``discrete`` (RFC pure-io-data-loaders §4.6 / §5.7.2).
+    The rule is unchanged from 0.x; only its spelling is, since a ``discrete``
+    variable with a ``data_ingest`` refresh is now a parameter with a ``data``
+    update."""
+    update = var.get("update")
+    if not isinstance(update, Mapping) or update.get("kind") != "data":
         return False
-    loaders = model.get("data_loaders") or {}
-    loader = loaders.get(refresh.get("source"))
-    return isinstance(loader, Mapping) and "temporal" not in loader
+    sources = model.get("data_sources") or {}
+    source = sources.get(update.get("source"))
+    return isinstance(source, Mapping) and "temporal" not in source
 
 
-def seed_leaf(leaf: Any, model: Mapping[str, Any]) -> str:
-    """Seed a leaf's cadence from its declared role (§5.7 leaf-seed table).
+def _classification(model: Mapping[str, Any]) -> dict[str, Any]:
+    """The §6.3.1 classification of ``model``, memoised on the model dict.
 
-    ``state`` / the independent variable ``t`` → ``continuous`` (an explicit
-    continuous-``t`` forcing is not piecewise-constant between events, so it may
-    not be classed ``discrete``); ``discrete`` variable → ``discrete``;
-    ``parameter`` / numeric literal / index-set name / bound index symbol →
-    ``const``. ``brownian`` seeds ``continuous`` (a per-step noise channel).
+    §5.7.2 requires every binding to SEED FROM these functions rather than
+    re-derive the categories locally: five local derivations are five chances to
+    disagree about which nodes fold, and a disagreement here is a different hot
+    loop, not different formatting.
+    """
+    cached = model.get("_classification")
+    if cached is not None:
+        return cached
+    derived = {
+        "brownian": frozenset(brownian_parameters(model)),
+        "discrete": frozenset(discrete_parameters(model)),
+        "const": frozenset(sampled_parameters(model)) | frozenset(constant_parameters(model)),
+        "observed_defs": observed_definitions(model),
+    }
+    # ``model`` is a plain dict built by :func:`model_from_doc` for this pass, so
+    # memoising on it is safe and keeps the classification from being recomputed
+    # once per leaf.
+    if isinstance(model, dict):
+        model["_classification"] = derived
+    return derived
+
+
+def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> str:
+    """Seed a leaf's cadence from its DERIVED role (§5.7.2 leaf-seed table).
+
+    From esm 1.0.0 the seed cannot be read off a declared type, because there are
+    only two of those. It comes from the classification (esm-spec §6.3.1):
+
+    * the independent variable ``t`` → ``continuous`` (an explicit continuous-``t``
+      forcing is not piecewise-constant between events, so it may not be classed
+      ``discrete``);
+    * an unknown in ``ode_states`` or ``algebraic_unknowns`` → ``continuous``;
+    * an unknown in ``observed_unknowns`` → **the join of its DEFINING
+      EQUATION's RHS**, resolved transitively and memoised (see below);
+    * a parameter in ``brownian_parameters`` → ``continuous`` (resampled every
+      step);
+    * a parameter in ``discrete_parameters`` → ``discrete``, subject to the
+      source refinement;
+    * a parameter in ``sampled_parameters`` / ``constant_parameters`` → ``const``;
+    * a numeric literal, index-set name, bound index symbol or relation tag →
+      ``const``.
+
+    **The observed leaf is the one that changed, and it must not be shortcut.**
+    Before 1.0.0 an ``observed`` leaf seeded ``const``, with the code admitting
+    that was imprecise and unexercised. That shortcut is now both unavailable —
+    observed and ODE-state are the same declared type — and unsound, since an
+    observed defined from a state is ``continuous``. Seeding every unknown
+    ``continuous`` is equally wrong in the other direction: it would stop a
+    STATE-FREE observed from folding, and const-folding exactly those is what the
+    geometry and projection-pushdown paths rely on. So an observed leaf resolves
+    to the join of the leaves of its defining equation's RHS. The observed
+    sub-DAG is acyclic (§4.9.4 balance plus the DAE contract), so the recursion
+    terminates; a cycle is a defect and is REPORTED rather than silently seeded.
     """
     if isinstance(leaf, bool):
         # ``bool`` is an ``int`` subclass; a boolean literal is a CONST scalar.
@@ -187,21 +246,35 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any]) -> str:
         return "continuous"
     variables = model.get("variables", {}) or {}
     if leaf in variables:
-        kind = variables[leaf].get("type")
-        if kind in ("state", "brownian"):
+        var = variables[leaf]
+        kind = var.get("type")
+        derived = _classification(model)
+        if kind == "unknown":
+            definitions = derived["observed_defs"]
+            if leaf in definitions:
+                if leaf in _resolving:
+                    raise CadenceError(
+                        f"observed definition cycle through {leaf!r}: "
+                        + " -> ".join((*_resolving, leaf))
+                    )
+                return classify(definitions[leaf], model, _resolving=(*_resolving, leaf))
+            # An ODE state or an algebraic unknown: CONTINUOUS.
             return "continuous"
-        if kind == "discrete":
-            # Loader-seeded cadence refinement (§5.7.2): a discrete variable fed
-            # by a ``data_ingest`` refresh whose source loader has no ``temporal``
-            # block is non-time-varying and seeds ``const`` (folds at bind). With
-            # ``temporal`` (or any other trigger / unresolvable source) it keeps
-            # the declared ``discrete`` seed and refreshes on each ingest event.
-            return "const" if _loader_without_temporal(variables[leaf], model) else "discrete"
-        if kind in ("parameter", "observed"):
-            # parameter = CONST. An ``observed`` leaf resolves to its defining
-            # expression's class elsewhere; none of the §6.1 fixtures read an
-            # observed as a leaf, so CONST is the conservative seed here.
-            return "const"
+        if kind == "parameter":
+            if leaf in derived["brownian"]:
+                # A driving Wiener process is resampled every step.
+                return "continuous"
+            if leaf in derived["const"]:
+                # constant or sampled-once — CONST either way.
+                return "const"
+            # Source-seeded cadence refinement (RFC pure-io-data-loaders §4.6 /
+            # §5.7.2): a parameter fed by a `data` update whose source declares
+            # no `temporal` block is non-time-varying and seeds CONST (folds at
+            # bind). With `temporal` — or any other update kind, or an
+            # unresolvable source — it seeds DISCRETE and refreshes on each event.
+            if _source_without_temporal(var, model):
+                return "const"
+            return "discrete"
         raise CadenceError(f"leaf {leaf!r}: unknown variable kind {kind!r}")
     # index-set name, bound index symbol (i, k, e, f, le), relation tag
     # ("edge"), or numeric-string literal — all CONST.
@@ -231,7 +304,12 @@ def child_exprs(node: Mapping[str, Any]) -> Iterator[Any]:
             yield axes[axis_name]
 
 
-def classify(node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None) -> str:
+def classify(
+    node: Any,
+    model: Mapping[str, Any],
+    _cache: dict[int, str] | None = None,
+    _resolving: tuple = (),
+) -> str:
     """Derive a node's cadence class. For a leaf, seed it. For an operator node,
     ``class = max`` over child classes — which, for a gather ``index(A, e…)``, is
     ``max(class(A), class(e…))``: the index expressions are classed
@@ -246,15 +324,21 @@ def classify(node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None 
     through. ``id(node)`` reuse is safe here because the AST is held alive by the
     model for the cache's (single-pass) lifetime."""
     if not isinstance(node, Mapping):
-        return seed_leaf(node, model)
+        return seed_leaf(node, model, _resolving)
     if _cache is None:
         _cache = {}
     key = id(node)
     cached = _cache.get(key)
     if cached is not None:
         return cached
-    child_classes = [classify(c, model, _cache) for c in child_exprs(node)]
+    child_classes = [classify(c, model, _cache, _resolving) for c in child_exprs(node)]
     result = cadence_join(*child_classes)
+    # Only a resolution-stack-free classification is cacheable: a node reached
+    # WHILE resolving an observed definition is classified under the same model
+    # and the same rules, so the value is identical -- but caching it keyed on
+    # identity alone would also hide a cycle from a later, differently-rooted
+    # walk. Storing it is safe because the cycle guard fires on the STACK, not
+    # on the cache.
     _cache[key] = result
     return result
 
@@ -535,21 +619,21 @@ def compute_fold(label: str, spec: Mapping[str, Any], inputs: Mapping[str, Any])
 
 def model_from_doc(doc: Mapping[str, Any], model_name: str) -> dict[str, Any]:
     """Extract the named model from a parsed ``.esm`` document, attaching the
-    document's top-level ``data_loaders`` so the loader-seeded cadence refinement
-    (§5.7.2) can resolve a ``discrete`` variable's ``data_ingest`` source loader,
-    and the document-scoped ``index_sets`` registry (v0.8.0, RFC §5.2) so the
-    partition pass can resolve ``ranges[*].from`` / ``from_faq`` references.
+    document's top-level ``data_sources`` so the source-seeded cadence refinement
+    (§5.7.2) can resolve a data-fed parameter's ``update.source``, and the
+    document-scoped ``index_sets`` registry (v0.8.0, RFC §5.2) so the partition
+    pass can resolve ``ranges[*].from`` / ``from_faq`` references.
 
-    Returns a shallow copy with ``data_loaders`` and ``index_sets`` added (the
+    Returns a shallow copy with ``data_sources`` and ``index_sets`` added (the
     parsed document is left unmutated). Raises :class:`CadenceError` if the model
     is absent."""
     models = doc.get("models", {}) or {}
     if model_name not in models:
         raise CadenceError(f"model {model_name!r} not found")
     model = models[model_name]
-    loaders = doc.get("data_loaders")
-    if loaders and "data_loaders" not in model:
-        model = {**model, "data_loaders": loaders}
+    sources = doc.get("data_sources")
+    if sources and "data_sources" not in model:
+        model = {**model, "data_sources": sources}
     # index_sets moved to the document top level in v0.8.0; thread it onto the
     # per-model dict the partition pass reads.
     index_sets = doc.get("index_sets")
@@ -643,6 +727,15 @@ def partition(model: Mapping[str, Any]) -> Partition:
     # so it can never leak across models/passes.
     cache: dict[int, str] = {}
 
+    # An INLINED observed's defining equation (`y ~ f(…)`, a bare-variable LHS)
+    # is not an output of its own: it is substituted into its consumers, and its
+    # class is consumed through the leaf seed (§5.7.2). It is still walked for
+    # the guards, the `expect_cadence` assertions and the class summary -- only
+    # the materialization frontier skips it, because a value that is inlined
+    # never becomes a buffer. An ARRAYED definition (`y[i] ~ f(i)`) DOES
+    # materialize, so it keeps its output buffer.
+    inlined = set(inlined_unknowns(model))
+
     for eq in model.get("equations", []) or []:
         rhs = eq.get("rhs")
         if not isinstance(rhs, Mapping):
@@ -654,6 +747,12 @@ def partition(model: Mapping[str, Any]) -> Partition:
         tally_classes(rhs, model, counts, cache)
 
         rhs_class = classify(rhs, model, cache)
+        lhs = eq.get("lhs")
+        if isinstance(lhs, str) and lhs in inlined:
+            if rhs_class == "continuous":
+                hot_empty = False
+                materialization_frontier(rhs, model, points, cache)
+            continue
         if rhs_class == "continuous":
             hot_empty = False
             # Internal frontier cuts inside the kept hot tree.

@@ -53,8 +53,8 @@ function _tc_fastjx_model(K::Int, M::Int)
     vars = Dict{String,ModelVariable}(
         "w" => ModelVariable(ParameterVariable; default=0.7),
         "scale" => ModelVariable(ParameterVariable; default=1.5),
-        "sza" => ModelVariable(ObservedVariable),
-        "met" => ModelVariable(ObservedVariable),
+        "sza" => ModelVariable(UnknownVariable),
+        "met" => ModelVariable(UnknownVariable),
     )
     eqs = ESM.Equation[
         ESM.Equation(_v("sza"),
@@ -63,13 +63,13 @@ function _tc_fastjx_model(K::Int, M::Int)
         ESM.Equation(_v("met"), _op("*", _idx("F", _i(1)), _v("scale"))),
     ]
     for i in 1:K
-        vars["band$i"] = ModelVariable(ObservedVariable)
+        vars["band$i"] = ModelVariable(UnknownVariable)
         push!(eqs, ESM.Equation(_v("band$i"),
             _tc_fn("interp.linear", _tc_const(_tc_table(i)), _tc_const(_tc_axis()),
                    _v("sza"))))
     end
     for j in 1:M
-        vars["x$j"] = ModelVariable(StateVariable; default=1.0 + 0.25j)
+        vars["x$j"] = ModelVariable(UnknownVariable; default=1.0 + 0.25j)
         terms = ESM.ASTExpr[_op("*", _n(0.1 + 0.05i + 0.02j),
                                 _op("*", _v("band$i"), _v("met"))) for i in 1:K]
         prod = length(terms) == 1 ? terms[1] : OpExpr("+", terms)

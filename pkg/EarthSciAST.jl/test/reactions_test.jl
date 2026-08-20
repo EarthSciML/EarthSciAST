@@ -199,9 +199,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test haskey(model.variables, "C")
         @test haskey(model.variables, "k1")
 
-        @test model.variables["A"].type == StateVariable
-        @test model.variables["B"].type == StateVariable
-        @test model.variables["C"].type == StateVariable
+        @test model.variables["A"].type == UnknownVariable
+        @test model.variables["B"].type == UnknownVariable
+        @test model.variables["C"].type == UnknownVariable
         @test model.variables["k1"].type == ParameterVariable
         @test model.variables["k1"].default == 0.1
 
@@ -422,8 +422,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         model = derive_odes(rxn_sys)
         @test model.variables["CH4"].type == ParameterVariable
         @test model.variables["CH4"].default == 1700.0
-        @test model.variables["OH"].type == StateVariable
-        @test model.variables["HO2"].type == StateVariable
+        @test model.variables["OH"].type == UnknownVariable
+        @test model.variables["HO2"].type == UnknownVariable
     end
 
     @testset "Reservoir species stay fixed through flatten (shared fixture)" begin

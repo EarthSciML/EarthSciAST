@@ -153,21 +153,41 @@ def derive_odes(system: ReactionSystem) -> Model:
             )
         else:
             variables[species.name] = ModelVariable(
-                type="state",
+                # An UNKNOWN: the ODE derived below is what makes it a state.
+                # 1.0.0 has no `state` type to declare -- ODE-state-ness follows
+                # from the D(.,t) equation, which `derive_odes` emits.
+                type="unknown",
                 units=species.units,
                 description=f"Concentration of {species.name}",
             )
 
+    # A reaction parameter whose `value` is a NUMBER is a plain parameter. One
+    # whose value is an EXPRESSION (a temperature-dependent rate constant, say)
+    # is no longer expressible as a parameter at all: 1.0.0 gives a parameter a
+    # `default` or a `distribution`, never a formula. It lowers to an UNKNOWN
+    # defined by a bare-variable-LHS equation -- which is what an observed IS
+    # (esm-spec §6.3.1), and what the value already meant.
+    derived_equations: list[Equation] = []
     for param in system.parameters:
+        if isinstance(param.value, (int, float)) and not isinstance(param.value, bool):
+            variables[param.name] = ModelVariable(
+                type="parameter",
+                units=param.units,
+                description=param.description,
+                default=param.value,
+            )
+            continue
         variables[param.name] = ModelVariable(
-            type="parameter",
+            type="unknown",
             units=param.units,
             description=param.description,
-            default=param.value if isinstance(param.value, (int, float)) else None,
-            expression=param.value if not isinstance(param.value, (int, float)) else None,
         )
+        if param.value is not None:
+            derived_equations.append(Equation(lhs=param.name, rhs=param.value))
 
-    equations = lower_reactions_to_equations(system.reactions, system.species)
+    equations = derived_equations + lower_reactions_to_equations(
+        system.reactions, system.species
+    )
 
     return Model(
         name=f"{system.name}_odes",

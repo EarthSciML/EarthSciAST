@@ -1178,11 +1178,15 @@ Four families are checked:
 2. **Declared vs default units** — a parameter whose `default` is supplied in
    `default_units` that are not the same unit as its declared `units`.
 3. **Observed-variable defining expressions** — an inconsistency *inside* the
-   `expression` of an observed variable (`length + mass`, `exp(mass)`, …).
-   The declared units of the variable are deliberately NOT compared against the
-   computed dimension of its expression: that comparison is a different (and
-   much more false-positive-prone) rule, and the shared corpus does not pin it.
-4. **Equations** — an inconsistency inside either side, or an LHS/RHS mismatch.
+   expression-bearing fields of a parameter's `update` (§5.4) — the `when`
+   trigger and the `expression` value form.
+4. **Equations** — the two-sided balance of a derivative equation.
+5. **Defining equations** — an inconsistency inside a bare-variable-LHS
+   equation's right-hand side, and the defined variable's declared units against
+   the dimension that right-hand side actually has. This is the 0.x
+   observed-`expression` rule following its expression into the equations
+   (esm-spec §6.3.1); it reports at the DEFINED VARIABLE's pointer, which is
+   where the shared corpus pins it.
 
 Subsystems are NOT recursed here (the caller owns path construction and does the
 recursion), keeping this function's pointers purely model-local.
@@ -1229,41 +1233,66 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
             end
         end
 
-        # 3. observed-variable defining expression.
-        if var.expression !== nothing
-            internal = expression_unit_findings(var.expression, var_units)
-            for msg in internal
-                push!(out, UnitFinding("variables/$name", "$msg (variable '$name')",
-                                       UNIT_DIMENSION_MISMATCH))
-            end
-
-            # 3b. DECLARED units vs the dimension its expression actually has.
-            # `{units: "m", expression: length + mass}` is exactly as wrong as
-            # the equation `x = length + mass`; it just lives in the variable
-            # table. Skipped unless BOTH sides are known — an undeclared unit is
-            # not an error, and an unresolvable one is already reported above.
-            # Only when the expression was internally clean, so one defect is
-            # not reported twice.
-            declared = get(var_units, name, nothing)
-            if isempty(internal) && declared !== nothing
-                got = _expr_dimensions!(String[], var.expression, var_units)
-                want = _absolute_unit(parse_units(declared))
-                if got !== nothing && want !== nothing &&
-                   dimension(got) != dimension(want)
-                    push!(out, UnitFinding("variables/$name",
-                        "Observed variable '$name' is declared '$declared' but its " *
-                        "expression has units '$(_ustr(got))'",
-                        UNIT_DIMENSION_MISMATCH))
+        # 3. A parameter update's expression-bearing fields (esm-spec §5.4):
+        # the `when` trigger and the `expression` value form are ordinary
+        # expression positions, so an internal inconsistency in either is the
+        # same defect as one inside an equation side.
+        if var.update !== nothing
+            for (ri, rule) in enumerate(var.update)
+                for (field, e) in (("when", rule.when), ("expression", rule.expression))
+                    e === nothing && continue
+                    for msg in expression_unit_findings(e, var_units)
+                        push!(out, UnitFinding("variables/$name/update/$(ri - 1)/$field",
+                            "$msg (variable '$name', update rule $(ri - 1), field '$field')",
+                            UNIT_DIMENSION_MISMATCH))
+                    end
                 end
             end
         end
     end
 
-    # 4. equations.
+    # 4. equations — the two-sided balance of a derivative equation.
     for (i, eq) in enumerate(model.equations)
         for msg in equation_unit_findings(eq, var_units)
             push!(out, UnitFinding("equations/$(i-1)", msg, UNIT_DIMENSION_MISMATCH))
         end
+    end
+
+    # 5. DEFINING equations — an equation whose LHS is a bare variable naming a
+    # declared one. This is the 0.x "observed variable's defining expression"
+    # rule, following its expression out of `variables/<v>/expression` and into
+    # the equations (esm-spec §6.3.1). Both halves move with it:
+    #
+    #   a. an inconsistency INSIDE the defining right-hand side (`length + mass`
+    #      — 'm' + 'kg'), and
+    #   b. the declared units of the defined variable against the dimension its
+    #      definition actually has, checked only when the right-hand side was
+    #      internally clean so one defect is not reported twice.
+    #
+    # Reported at the DEFINED VARIABLE's pointer, not the equation's: the
+    # finding is about that variable's definition, and it is where the shared
+    # corpus pins it (`tests/invalid/units_gradient_operator_mismatch.esm` ⇒
+    # `/models/<M>/variables/bad_sum`). Only the layer holding the expression
+    # moved in 1.0.0; the defect and its address did not.
+    for eq in model.equations
+        lhs = eq.lhs
+        (lhs isa VarExpr && haskey(model.variables, lhs.name)) || continue
+        name = lhs.name
+        internal = expression_unit_findings(eq.rhs, var_units)
+        for msg in internal
+            push!(out, UnitFinding("variables/$name", "$msg (variable '$name')",
+                                   UNIT_DIMENSION_MISMATCH))
+        end
+        declared = get(var_units, name, nothing)
+        (isempty(internal) && declared !== nothing) || continue
+        got = _expr_dimensions!(String[], eq.rhs, var_units)
+        want = _absolute_unit(parse_units(declared))
+        (got !== nothing && want !== nothing) || continue
+        dimension(got) == dimension(want) && continue
+        push!(out, UnitFinding("variables/$name",
+            "Observed variable '$name' is declared '$declared' but its " *
+            "defining equation has units '$(_ustr(got))'",
+            UNIT_DIMENSION_MISMATCH))
     end
 
     return out

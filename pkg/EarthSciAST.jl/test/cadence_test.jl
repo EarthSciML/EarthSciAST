@@ -82,37 +82,73 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
             Dict{String,Any}("variables" => Dict{String,Any}("omega" => Dict{String,Any}("type" => "parameter")))) == "continuous"
     end
 
-    @testset "loader-seeded cadence: temporal -> discrete, no temporal -> const (§5.7.2)" begin
-        # A discrete variable fed by a `data_ingest` refresh resolves through its
-        # source loader's `temporal` block (RFC pure-io-data-loaders §4.6): the
-        # SAME declaration seeds DISCRETE under a temporal loader and CONST (folds
-        # at bind) under a non-temporal one.
+    @testset "source-seeded cadence: temporal -> discrete, no temporal -> const (§5.7.2)" begin
+        # A parameter fed by a `data` update resolves through its source's
+        # `temporal` block (RFC pure-io-data-loaders §4.6): the SAME declaration
+        # seeds DISCRETE under a temporal source and CONST (folds at bind) under
+        # a non-temporal one. Only the spelling changed in esm 1.0.0 — a
+        # `discrete` variable with a `data_ingest` refresh is now a PARAMETER
+        # with a `data` update.
         variables = Dict{String,Any}(
-            "c" => Dict{String,Any}("type" => "state", "shape" => Any["cells"]),
-            "bc" => Dict{String,Any}("type" => "discrete", "shape" => Any["cells"],
-                "refresh" => Dict{String,Any}("kind" => "data_ingest", "source" => "bc_loader")))
+            "c" => Dict{String,Any}("type" => "unknown", "shape" => Any["cells"]),
+            "bc" => Dict{String,Any}("type" => "parameter", "shape" => Any["cells"],
+                "update" => Dict{String,Any}("kind" => "data", "source" => "bc_loader",
+                    "from" => Dict{String,Any}("file_variable" => "bc"))))
         bc = Dict{String,Any}("op" => "index", "args" => Any["bc", "i"])
 
-        # Loader WITH temporal -> DISCRETE (refreshes on each ingest).
+        # Source WITH temporal -> DISCRETE (refreshes on each ingest).
         with_temporal = Dict{String,Any}("variables" => variables,
-            "data_loaders" => Dict{String,Any}("bc_loader" =>
+            "data_sources" => Dict{String,Any}("bc_loader" =>
                 Dict{String,Any}("kind" => "grid", "temporal" => Dict{String,Any}("frequency" => "PT6H"))))
         @test _Cadence.classify(bc, with_temporal) == "discrete"
 
-        # Loader WITHOUT temporal -> CONST (non-time-varying, folds at bind).
+        # Source WITHOUT temporal -> CONST (non-time-varying, folds at bind).
         no_temporal = Dict{String,Any}("variables" => variables,
-            "data_loaders" => Dict{String,Any}("bc_loader" => Dict{String,Any}("kind" => "static")))
+            "data_sources" => Dict{String,Any}("bc_loader" => Dict{String,Any}("kind" => "static")))
         @test _Cadence.classify(bc, no_temporal) == "const"
 
-        # No loaders attached / unresolvable source -> keeps the declared discrete seed.
+        # No sources attached / unresolvable source -> keeps the DISCRETE seed.
         @test _Cadence.classify(bc, Dict{String,Any}("variables" => variables)) == "discrete"
 
-        # load_model_json attaches the document's top-level data_loaders so the
-        # refinement can resolve the source loader.
+        # load_model_json attaches the document's top-level data_sources so the
+        # refinement can resolve the named source.
         m = _Cadence.load_model_json(
             joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", "loader_temporal_seed.esm"),
             "LoaderTemporalSeed")
-        @test haskey(m, "data_loaders") && haskey(m["data_loaders"], "bc_loader")
+        @test haskey(m, "data_sources") && haskey(m["data_sources"], "bc_loader")
+    end
+
+    @testset "observed leaf seeds from its DEFINING EQUATION's RHS (§5.7.2)" begin
+        # The one place the cadence pass must follow the 1.0.0 relocation: an
+        # observed unknown's definition moved out of `variables[v].expression`
+        # and into `equations`. Both wrong answers are discriminated here.
+        m = _Cadence.load_model_json(
+            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
+                     "observed_leaf_seeds.esm"), "ObservedLeafSeeds")
+
+        # A state-free observed folds (seeding every unknown CONTINUOUS would
+        # stop it), one reading the state does not (seeding an observed CONST —
+        # the 0.x shortcut — would fold a per-step value), one reading a
+        # discrete parameter is DISCRETE, and the resolution is TRANSITIVE.
+        @test _Cadence.seed_leaf("geom", m) == "const"
+        @test _Cadence.seed_leaf("geom_chain", m) == "const"
+        @test _Cadence.seed_leaf("k_scaled", m) == "discrete"
+        @test _Cadence.seed_leaf("u_scaled", m) == "continuous"
+        @test _Cadence.seed_leaf("u", m) == "continuous"     # the ODE state itself
+        @test _Cadence.seed_leaf("dx", m) == "const"
+        @test _Cadence.seed_leaf("Kdiff", m) == "discrete"
+
+        # A definition CYCLE is reported, not silently seeded.
+        cyc = Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "a" => Dict{String,Any}("type" => "unknown"),
+                "b" => Dict{String,Any}("type" => "unknown")),
+            "equations" => Any[
+                Dict{String,Any}("lhs" => "a",
+                    "rhs" => Dict{String,Any}("op" => "*", "args" => Any["b", 2.0])),
+                Dict{String,Any}("lhs" => "b",
+                    "rhs" => Dict{String,Any}("op" => "*", "args" => Any["a", 2.0]))])
+        @test_throws _Cadence.CadenceError _Cadence.seed_leaf("a", cyc)
     end
 
     # --- Negative controls: the guards must REJECT non-conforming input. ------
@@ -130,7 +166,7 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
     @testset "neg: continuous relational rejected (guard 2)" begin
         # A distinct aggregate whose key reads state u classifies CONTINUOUS.
         model = Dict{String,Any}(
-            "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "state")),
+            "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown")),
             "index_sets" => Dict{String,Any}("faces" => Dict{String,Any}("kind" => "interval", "size" => 4)))
         rhs = Dict{String,Any}(
             "op" => "aggregate", "distinct" => true, "semiring" => "bool_and_or",

@@ -1,19 +1,22 @@
-"""Loader -> consumer value-injection tests (campfire-e2e C1, bead ess-06y).
+"""Data source -> consumer value-injection tests (campfire-e2e C1, bead ess-06y).
 
-These lock in the RFC pure-io-data-loaders §4.3 injection path:
+These lock in the esm-spec §8.5 injection path. From esm 1.0.0 a data source is
+NOT a component: there is no loader subsystem and no coupling edge. A model
+consumes a source by declaring a PARAMETER whose ``update`` names it —
+``{"kind": "data", "source": "<key>", "from": {"file_variable": "U"}}`` — so
+the parameter IS the loaded field and owns the units.
 
-* ``flatten`` no longer SKIPS ``DataLoader`` subsystems — it lowers each loader
-  variable to a flattened observed array ``<owner>.<subkey>.<var>`` and records
-  a :class:`LoaderField` carrying its cadence (temporal -> discrete, static ->
-  const) and the owning model's per-variable regrid spec.
-* ``simulate`` executes the loaders and binds their arrays into the NumPy RHS as
-  read-only inputs, so a consumer equation that referenced the loader field
-  (via a coupling edge) resolves it as a value — not the parameter's constant
-  default.
-* Const loaders are read once; discrete loaders refresh at their cadence via
+* ``flatten`` records a :class:`LoaderField` per such parameter, carrying its
+  cadence. The cadence follows the SOURCE, not the parameter: a source WITH a
+  ``temporal`` block is time-varying (``discrete``), one without is read once
+  (``const``).
+* ``simulate`` executes the sources and binds their arrays into the NumPy RHS as
+  read-only inputs under the parameter's flattened name, so the consumer
+  equation sees the loaded values rather than the parameter's constant default.
+* Const sources are read once; discrete sources refresh at their cadence via
   terminal-event segmentation, and the RHS is pure within a segment.
 
-The loaders are driven by a deterministic in-process provider (no network), so
+The sources are driven by a deterministic in-process provider (no network), so
 the consumer's trajectory is analytic. The single-component physics is
 ``dc/dt = F - c`` with a piecewise-constant forcing ``F``; on each segment with
 constant ``F`` and start value ``c0`` the closed form is
@@ -33,12 +36,11 @@ from earthsci_ast.flatten import LoaderField, flatten
 from earthsci_ast.parse import load
 from earthsci_ast.simulation import simulate
 
-
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "loader_injection" / "loader_consumer.esm"
 
 
 def _seg_value(t: float) -> float:
-    """Wind value u[2] for the segment containing simulation time ``t``.
+    """Wind value U[2] for the segment containing simulation time ``t``.
 
     Segment [0, 1) -> 10, [1, 2) -> 20, ... (steps every cadence second). The
     provider is queried once per segment at the segment's start, so ``round``
@@ -48,21 +50,21 @@ def _seg_value(t: float) -> float:
 
 
 def _make_provider(calls: Dict[str, List[float]]):
-    """Deterministic loader provider that records the times it is queried.
+    """Deterministic source provider that records the times it is queried.
 
-    ``u`` is a 3-element wind array whose MIDDLE element (1-based index 2) is the
-    only one the consumer reads, proving the loader symbol resolves to a real
-    multi-element array (not a coincidental scalar). ``z0`` is a static 3-element
-    roughness array; its middle element is 1.0.
+    ``U`` is a 3-element wind array whose MIDDLE element (1-based index 2) is
+    the only one the consumer reads, proving the bound symbol resolves to a real
+    multi-element array (not a coincidental scalar). ``Z0`` is a static
+    3-element roughness array; its middle element is 1.0.
     """
 
     def provider(field: LoaderField, t: float) -> np.ndarray:
         calls.setdefault(field.var, []).append(t)
-        if field.var == "u":
+        if field.var == "U":
             return np.array([99.0, _seg_value(t), -99.0])
-        if field.var == "z0":
+        if field.var == "Z0":
             return np.array([0.25, 1.0, 0.25])
-        raise AssertionError(f"unexpected loader var {field.var!r}")
+        raise AssertionError(f"unexpected source file variable {field.var!r}")
 
     return provider
 
@@ -72,44 +74,46 @@ def _c_at(result, t: float) -> float:
 
 
 # --------------------------------------------------------------------------
-# (a) flatten lowers loader subsystems to observed arrays
+# (a) flatten records a LoaderField per data-fed parameter
 # --------------------------------------------------------------------------
 
 
-def test_flatten_lowers_loaders_to_observed_arrays() -> None:
+def test_flatten_records_a_field_per_data_fed_parameter() -> None:
     flat = flatten(load(_FIXTURE))
 
     by_name = {lf.name: lf for lf in flat.loader_fields}
-    assert set(by_name) == {"Met.pl.u", "Met.sfc.z0"}, (
-        "both loader variables must be lowered (loaders are no longer skipped)"
+    assert set(by_name) == {"Plume.wind", "Plume.rough"}, (
+        "each parameter whose update reads a source is a loader field, keyed by "
+        "the parameter's namespaced name"
     )
 
-    u = by_name["Met.pl.u"]
-    assert (u.owner, u.subkey, u.var) == ("Met", "pl", "u")
-    assert u.cadence == "discrete", "a temporal loader seeds discrete cadence"
+    wind = by_name["Plume.wind"]
+    assert (wind.owner, wind.subkey, wind.var) == ("Plume", "pl", "U")
+    assert wind.cadence == "discrete", "a source WITH `temporal` seeds discrete cadence"
 
-    z0 = by_name["Met.sfc.z0"]
-    assert (z0.owner, z0.subkey, z0.var) == ("Met", "sfc", "z0")
-    assert z0.cadence == "const", "a static (no-temporal) loader seeds const cadence"
+    rough = by_name["Plume.rough"]
+    assert (rough.owner, rough.subkey, rough.var) == ("Plume", "sfc", "Z0")
+    assert rough.cadence == "const", "a source WITHOUT `temporal` seeds const cadence"
 
-    # Lowered as observed arrays (the observed-as-array vehicle), with NO
-    # defining equation (their value is injected, not computed).
-    assert "Met.pl.u" in flat.observed_variables
-    assert "Met.sfc.z0" in flat.observed_variables
-    observed_lhs = {eq.lhs for eq in flat.equations if isinstance(eq.lhs, str)}
-    assert "Met.pl.u" not in observed_lhs
-    assert "Met.sfc.z0" not in observed_lhs
+    # The data-fed parameter is still a PARAMETER of the flattened system -- the
+    # source is not a component, so nothing is mounted and nothing is observed --
+    # and it carries no defining equation: its value is injected, not computed.
+    assert "Plume.wind" in flat.parameters
+    assert "Plume.rough" in flat.parameters
+    lhs_names = {eq.lhs for eq in flat.equations if isinstance(eq.lhs, str)}
+    assert "Plume.wind" not in lhs_names
+    assert "Plume.rough" not in lhs_names
 
 
-def test_flatten_without_loaders_has_empty_loader_fields() -> None:
+def test_flatten_without_data_sources_has_empty_loader_fields() -> None:
     # Regression guard: a plain model carries no loader fields, so simulate()
     # never enters the injection path (cross-binding / existing models intact).
     doc = {
-        "esm": "0.7.0",
+        "esm": "1.0.0",
         "metadata": {"name": "plain"},
         "models": {
             "M": {
-                "variables": {"x": {"type": "state", "default": 1.0}},
+                "variables": {"x": {"type": "unknown", "default": 1.0}},
                 "equations": [
                     {
                         "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
@@ -122,8 +126,55 @@ def test_flatten_without_loaders_has_empty_loader_fields() -> None:
     assert flatten(load(doc)).loader_fields == []
 
 
+def test_a_parameter_naming_an_undeclared_source_is_rejected() -> None:
+    # `data_source_undefined` (esm-spec §8). A source is not a component from
+    # 1.0.0, so `update.source` is the ONLY way a document can name one -- and it
+    # is schema-valid by construction (any string), which is what makes this a
+    # genuinely reachable structural finding rather than one masked by a schema
+    # error.
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {"name": "dangling"},
+        "index_sets": {"cells": {"kind": "interval", "size": 3}},
+        "data_sources": {
+            "real": {"kind": "static", "source": {"url_template": "file:///x.nc"}}
+        },
+        "models": {
+            "M": {
+                "variables": {
+                    "x": {"type": "unknown", "default": 1.0},
+                    "p": {
+                        "type": "parameter",
+                        "default": 0.0,
+                        "shape": ["cells"],
+                        "update": {
+                            "kind": "data",
+                            "source": "missing",
+                            "from": {"file_variable": "P"},
+                        },
+                    },
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "-", "args": ["x"]},
+                    }
+                ],
+            }
+        },
+    }
+    with pytest.raises(Exception) as excinfo:
+        load(doc)
+    records = getattr(excinfo.value, "records", [])
+    assert any(r["code"] == "data_source_undefined" for r in records), records
+    finding = next(r for r in records if r["code"] == "data_source_undefined")
+    assert finding["path"] == "/models/M/variables/p/update"
+    assert finding["details"]["source"] == "missing"
+    assert finding["details"]["available_sources"] == ["real"]
+
+
 # --------------------------------------------------------------------------
-# (b) simulate injects loader arrays at the right cadence
+# (b) simulate injects the loaded arrays at the right cadence
 # --------------------------------------------------------------------------
 
 
@@ -139,7 +190,7 @@ def test_discrete_and_const_cadence_injection() -> None:
     assert result.success, result.message
     assert result.vars == ["Plume.c"]
 
-    # Analytic piecewise solution of dc/dt = (u[2] + z0[2]) - c, c(0) = 0.
+    # Analytic piecewise solution of dc/dt = (wind[2] + rough[2]) - c, c(0) = 0.
     z0 = 1.0
     f0 = _seg_value(0.0) + z0  # 11 on [0, 1)
     f1 = _seg_value(1.0) + z0  # 21 on [1, 2)
@@ -150,7 +201,7 @@ def test_discrete_and_const_cadence_injection() -> None:
     assert _c_at(result, 2.0) == pytest.approx(c2, rel=1e-4)
 
 
-def test_const_loader_read_once_discrete_per_segment() -> None:
+def test_const_source_read_once_discrete_per_segment() -> None:
     esm = load(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
@@ -161,27 +212,27 @@ def test_const_loader_read_once_discrete_per_segment() -> None:
     )
     assert result.success, result.message
 
-    # Const loader: executed exactly once, before integration.
-    assert calls["z0"] == [0.0], "static loader must be read once (const cadence)"
+    # Const source: executed exactly once, before integration.
+    assert calls["Z0"] == [0.0], "a source with no `temporal` must be read once"
 
-    # Discrete loader: once at the start, once per interior cadence boundary
+    # Discrete source: once at the start, once per interior cadence boundary
     # (here a single boundary at t=1) — and NOTHING per RHS evaluation. With
     # hundreds of solver RHS calls, a provider hit count of 2 is the proof that
     # the RHS is pure within a segment.
-    assert calls["u"] == [0.0, 1.0]
+    assert calls["U"] == [0.0, 1.0]
     assert result.nfev > 10
-    assert len(calls["u"]) < result.nfev
+    assert len(calls["U"]) < result.nfev
 
 
 def test_injected_values_not_constant_defaults() -> None:
     # The consumer's `wind`/`rough` params default to 0.0. If injection failed
     # and the RHS saw the defaults, the forcing would be 0 and c would stay 0.
     # A constant non-zero provider drives c toward its injected steady state
-    # F = u[2] + z0[2], proving real array values reach the RHS.
+    # F = wind[2] + rough[2], proving real array values reach the RHS.
     esm = load(_FIXTURE)
 
     def steady_provider(field: LoaderField, t: float) -> np.ndarray:
-        if field.var == "u":
+        if field.var == "U":
             return np.array([0.0, 7.0, 0.0])
         return np.array([0.0, 3.0, 0.0])
 
@@ -197,11 +248,12 @@ def test_injected_values_not_constant_defaults() -> None:
     assert _c_at(result, 50.0) > 9.0
 
 
-def test_loader_arrays_resolve_via_coupling_edge() -> None:
-    # The consumer equation referenced `Plume.wind` / `Plume.rough`; the coupling
-    # edges substituted the producer symbols `Met.pl.u` / `Met.sfc.z0`. The run
-    # succeeding (symbols resolve) AND tracking the injected value confirms the
-    # substituted loader symbol resolves to the injected array at the RHS.
+def test_the_parameter_name_is_what_resolves_at_the_rhs() -> None:
+    # The consumer equation names `wind` / `rough` directly: from 1.0.0 the
+    # parameter IS the loaded field, so there is no producer symbol to
+    # substitute and no coupling edge to resolve. The run succeeding AND
+    # tracking the injected value confirms the parameter's namespaced name binds
+    # to the injected array at the RHS rather than to its declared default.
     esm = load(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
@@ -212,5 +264,5 @@ def test_loader_arrays_resolve_via_coupling_edge() -> None:
     )
     assert result.success, result.message
     # On [0, 1): F = 11, c(1) = 11 (1 - e^-1) ~= 6.953. A failure to resolve the
-    # coupled loader symbol would raise (caught -> success False).
+    # data-fed parameter would raise (caught -> success False).
     assert _c_at(result, 1.0) == pytest.approx(11.0 * (1.0 - math.exp(-1.0)), rel=1e-4)

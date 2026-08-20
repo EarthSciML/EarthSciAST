@@ -22,8 +22,8 @@ const ESM = EarthSciAST
 # D(y[i]) = Σ_{k=1..M} A[i,k]·x[k] (sum_product) — exercises the VK_REDUCE axis
 # fold + CONSTVEC (A[i,k]) + GATHER (x[k]).
 function _contraction_model(M)
-    vars = Dict("y" => ModelVariable(StateVariable),
-                "x" => ModelVariable(StateVariable))
+    vars = Dict("y" => ModelVariable(UnknownVariable),
+                "x" => ModelVariable(UnknownVariable))
     body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))
     rhs = OpExpr("arrayop", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=body,
                  ranges=Dict("i" => [1, 2], "k" => [1, M]), reduce="+")
@@ -55,7 +55,7 @@ function _advection_esm(n)
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "grid" => "gx",
             "variables" => Dict{String,Any}(
-                "u" => Dict{String,Any}("type" => "state", "default" => 0.0,
+                "u" => Dict{String,Any}("type" => "unknown", "default" => 0.0,
                     "units" => "1", "shape" => Any["i"], "location" => "cell_center"),
                 "dx" => Dict{String,Any}("type" => "parameter", "default" => dx, "units" => "1")),
             "equations" => Any[Dict{String,Any}(
@@ -73,14 +73,14 @@ end
 # though the RHS contains a table lookup. This coverage gap is exactly why the
 # per-lane `Float64`→`Any` box went unnoticed before ess-wrh.
 _interp_linear_model(N) = ESM.Model(
-    Dict("u" => ModelVariable(StateVariable)),
+    Dict("u" => ModelVariable(UnknownVariable)),
     [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                   _ao1(_op("fn", _const([10.0, 20.0, 40.0, 80.0, 160.0]),
                            _const([0.0, 1.0, 2.0, 3.0, 4.0]),
                            _idx("u", _v("i")); name="interp.linear"), "i", 1, N))])
 
 _interp_searchsorted_model(N) = ESM.Model(
-    Dict("u" => ModelVariable(StateVariable)),
+    Dict("u" => ModelVariable(UnknownVariable)),
     [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                   _ao1(_op("fn", _idx("u", _v("i")),
                            _const([1.0, 2.0, 3.0, 4.0, 5.0]);
@@ -90,7 +90,7 @@ _interp_searchsorted_model(N) = ESM.Model(
 # parameter (→ PARAM). Both children stay non-constant, so the leaf runs the
 # whole-array kernel rather than folding.
 _interp_bilinear_model(N) = ESM.Model(
-    Dict("u" => ModelVariable(StateVariable),
+    Dict("u" => ModelVariable(UnknownVariable),
          "cz" => ModelVariable(ParameterVariable; default=0.5)),
     [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                   _ao1(_op("fn",
@@ -105,7 +105,7 @@ _interp_bilinear_model(N) = ESM.Model(
 # N-independent: the only Float64 arrays are the captured flat buffer and the
 # preallocated gather `slots`/`buf`, none allocated per call.
 _forcing_gather_model(N) = ESM.Model(
-    Dict("u" => ModelVariable(StateVariable)),
+    Dict("u" => ModelVariable(UnknownVariable)),
     [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
                   _ao1(_op("+", _idx("forcing", _v("i")), _idx("u", _v("i"))), "i", 1, N))])
 
@@ -127,8 +127,8 @@ _forcing_gather_model(N) = ESM.Model(
 # aliased flat buffer).
 #   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
 function _cse_forcing_scalar_model()
-    vars = Dict("x" => ModelVariable(StateVariable; default=1.0),
-                "y" => ModelVariable(StateVariable; default=1.0),
+    vars = Dict("x" => ModelVariable(UnknownVariable; default=1.0),
+                "y" => ModelVariable(UnknownVariable; default=1.0),
                 "k" => ModelVariable(ParameterVariable; default=2.0))
     fk = _op("*", _idx("F", _i(1)), _v("k"))
     ESM.Model(vars, [
@@ -138,24 +138,24 @@ end
 
 function _scalar_interp_linear_model()
     axis = _const([0.0, 1.0, 2.0, 3.0]); tab = _const([10.0, 20.0, 30.0, 40.0])
-    vars = Dict("x" => ModelVariable(StateVariable; default=1.5),
-                "z" => ModelVariable(StateVariable; default=0.0))
+    vars = Dict("x" => ModelVariable(UnknownVariable; default=1.5),
+                "z" => ModelVariable(UnknownVariable; default=0.0))
     body = _op("fn", tab, axis, _v("x"); name="interp.linear")
     ESM.Model(vars, [ESM.Equation(_D("z"), body)])
 end
 function _scalar_interp_searchsorted_model()
     xs = _const([1.0, 2.0, 3.0, 4.0, 5.0])
-    vars = Dict("x" => ModelVariable(StateVariable; default=2.5),
-                "z" => ModelVariable(StateVariable; default=0.0))
+    vars = Dict("x" => ModelVariable(UnknownVariable; default=2.5),
+                "z" => ModelVariable(UnknownVariable; default=0.0))
     body = _op("fn", _v("x"), xs; name="interp.searchsorted")
     ESM.Model(vars, [ESM.Equation(_D("z"), body)])
 end
 function _scalar_interp_bilinear_model()
     tab = _const([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
     ax  = _const([0.0, 1.0, 2.0]); ay = _const([0.0, 10.0, 20.0])
-    vars = Dict("x" => ModelVariable(StateVariable; default=0.5),
-                "y" => ModelVariable(StateVariable; default=5.0),
-                "z" => ModelVariable(StateVariable; default=0.0))
+    vars = Dict("x" => ModelVariable(UnknownVariable; default=0.5),
+                "y" => ModelVariable(UnknownVariable; default=5.0),
+                "z" => ModelVariable(UnknownVariable; default=0.0))
     body = _op("fn", tab, ax, ay, _v("x"), _v("y"); name="interp.bilinear")
     ESM.Model(vars, [ESM.Equation(_D("z"), body)])
 end

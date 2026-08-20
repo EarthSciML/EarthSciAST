@@ -19,12 +19,12 @@ func TestValidateValidModel(t *testing.T) {
 			"TestModel": {
 				Variables: map[string]ModelVariable{
 					"x": {
-						Type:    VarTypeUnknown,
+						Type:    "unknown",
 						Units:   strPtr("m"),
 						Default: 0.0,
 					},
 					"y": {
-						Type: VarTypeUnknown,
+						Type: "unknown",
 					},
 				},
 				Equations: []Equation{
@@ -32,7 +32,6 @@ func TestValidateValidModel(t *testing.T) {
 						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 						RHS: float64(1.0),
 					},
-					// `y` is observed: defined by its bare-variable-LHS equation.
 					{LHS: "y", RHS: "x"},
 				},
 			},
@@ -54,7 +53,7 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -82,7 +81,7 @@ func TestValidationPathsAreJSONPointer(t *testing.T) {
 		Metadata: Metadata{Name: "TestModel", Authors: []string{"Test Author"}},
 		Models: map[string]Model{
 			"TestModel": {
-				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+				Variables: map[string]ModelVariable{"x": {Type: "unknown"}},
 				Equations: []Equation{{
 					LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
 					RHS: "unknown_var",
@@ -101,11 +100,11 @@ func TestValidationPathsAreJSONPointer(t *testing.T) {
 	}
 }
 
-// An unknown that NO equation defines used to be `missing_observed_expr`, a
-// malformed declaration. In esm 1.0.0 an observed unknown is defined by an
-// equation, so the same defect is an UNBALANCED SYSTEM and surfaces as
-// equation_count_mismatch, whose `missing_equations_for` detail names exactly
-// the unknown the retired code used to name (esm-spec §4.9.4).
+// esm 1.0.0 retires `missing_observed_expr`: the variable `expression` field it
+// named is gone, and an observed unknown is DEFINED BY AN EQUATION. An unknown
+// with nothing defining it is therefore an unbalanced system, reported as
+// `equation_count_mismatch` (esm-spec §4.9.4) — which is exactly what
+// tests/invalid/unknown_without_equation.esm pins.
 func TestValidateUnknownWithoutEquation(t *testing.T) {
 	esmFile := &ESMFile{
 		ESM: "0.1.0",
@@ -116,8 +115,8 @@ func TestValidateUnknownWithoutEquation(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeUnknown}, // no equation defines it
+					"x": {Type: "unknown"},
+					"y": {Type: "unknown"}, // no equation defines it
 				},
 				Equations: []Equation{
 					{
@@ -134,20 +133,6 @@ func TestValidateUnknownWithoutEquation(t *testing.T) {
 	assert.Len(t, result.Messages, 1)
 	assert.Contains(t, result.Messages[0].Message,
 		"Number of equations (1) does not match number of unknowns (2)")
-
-	// And the structured surface names the offending unknown, which is the
-	// discriminating power the retired code carried.
-	structured := ValidateStructuralWithCodes(esmFile)
-	var found bool
-	for _, se := range structured.StructuralErrors {
-		if se.Code != ErrorEquationCountMismatch {
-			continue
-		}
-		found = true
-		missing, _ := se.Details["missing_equations_for"].([]string)
-		assert.Equal(t, []string{"y"}, missing)
-	}
-	assert.True(t, found, "want an equation_count_mismatch finding")
 }
 
 func TestValidateReactionSystem(t *testing.T) {
@@ -272,9 +257,9 @@ func TestValidateComplexExpression(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeUnknown},
-					"k": {Type: VarTypeParameter},
+					"x": {Type: "unknown"},
+					"y": {Type: "unknown"},
+					"k": {Type: "parameter"},
 				},
 				Equations: []Equation{
 					{
@@ -317,7 +302,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -358,7 +343,7 @@ func TestValidateDataSources(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -383,6 +368,9 @@ func TestValidateDataSources(t *testing.T) {
 	assert.Empty(t, result.Messages)
 }
 
+// A data source still owes `kind` and `source.url_template`. What it no longer
+// owes is a `variables` map: from esm 1.0.0 a source declares no fields at all,
+// so the three per-variable checks that used to sit beside these have no subject.
 func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 	esmFile := &ESMFile{
 		ESM: "0.1.0",
@@ -393,7 +381,7 @@ func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 		Models: map[string]Model{
 			"TestModel": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -404,21 +392,16 @@ func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 			},
 		},
 		DataSources: map[string]DataSource{
-			// Missing Kind and Source.URLTemplate -- the only two structural
-			// obligations a source still has. The per-variable checks are gone with
-			// the `variables` map: a source declares no fields in esm 1.0.0.
-			"BadSource": {},
+			"BadSource": {
+				// Missing Kind and Source.URLTemplate.
+			},
 		},
 	}
 
 	result := Validate(esmFile)
 	assert.False(t, result.Valid)
 
-	// Expect errors for the missing kind and url_template -- the only two
-	// structural obligations a data source still has. There is no third: the
-	// `variables` map whose absence used to be the third error was removed by
-	// esm 1.0.0, and a source that declares fields is now rejected by the SCHEMA
-	// for having them (tests/invalid/data_source_legacy_variables.esm).
+	// Expect errors for the missing kind and url_template.
 	errorCount := 0
 	for _, msg := range result.Messages {
 		if msg.Level == "error" {
@@ -429,7 +412,14 @@ func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 	assert.GreaterOrEqual(t, errorCount, 2)
 }
 
-// Test equation-unknown balance validation
+// Equation-unknown balance is UNKNOWNS vs EQUATIONS (esm-spec §4.9.4), not ODE
+// states vs time-derivative equations. Since esm 1.0.0 it is also the only thing
+// it could be: `unknown` is the declared type, and ODE-state-ness is derived
+// from the very equations being counted (§6.3.1).
+//
+// An equation is credited whichever LHS form it takes — a derivative, a bare
+// variable, or an arbitrary EXPRESSION — so an algebraic system is balanced by
+// the same rule as a differential one.
 func TestValidateEquationUnknownBalance(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -438,115 +428,138 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name: "balanced model with one state variable and one ODE",
+			name: "one unknown, one differential equation",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
 				},
 				Equations: []Equation{
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
-						RHS: float64(1.0),
-					},
+					{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
 				},
 			},
 			expectedValid: true,
 		},
 		{
-			name: "balanced model with two state variables and two ODEs",
+			name: "two unknowns, two differential equations",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeUnknown},
-					"k": {Type: VarTypeParameter},
+					"x": {Type: "unknown"},
+					"y": {Type: "unknown"},
+					"k": {Type: "parameter"},
 				},
 				Equations: []Equation{
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []any{"k", "y"}},
-					},
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")},
-						RHS: ExprNode{Op: "*", Args: []any{"k", "x"}},
-					},
+					{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{"k", "y"}}},
+					{LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{"k", "x"}}},
 				},
 			},
 			expectedValid: true,
 		},
 		{
-			name: "unbalanced model with state variable but no ODE",
+			name: "an unknown with no defining equation is unbalanced",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
+					"y": {Type: "unknown"},
 				},
 				Equations: []Equation{
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
-						RHS: float64(1.0),
-					},
+					{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
 				},
 			},
 			expectedValid: false,
 			expectedError: "Number of equations (1) does not match number of unknowns (2)",
 		},
 		{
-			// One unknown, two equations: over-determined. The old check phrased
-			// this as "an ODE equation for a non-state variable"; the 1.0.0 rule
-			// counts, so the surplus equation is what shows up.
-			name: "over-determined model",
+			name: "more equations than unknowns is unbalanced",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"k": {Type: VarTypeParameter},
+					"x": {Type: "unknown"},
+					"k": {Type: "parameter"},
 				},
 				Equations: []Equation{
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
-						RHS: float64(1.0),
-					},
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")},
-						RHS: float64(2.0),
-					},
+					{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
+					{LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")}, RHS: float64(2.0)},
 				},
 			},
 			expectedValid: false,
 			expectedError: "Number of equations (2) does not match number of unknowns (1)",
 		},
 		{
-			name: "no unknowns but one equation",
+			name: "equations but no unknowns at all",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"k": {Type: VarTypeParameter},
+					"k": {Type: "parameter"},
 				},
 				Equations: []Equation{
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")},
-						RHS: float64(1.0),
-					},
+					{LHS: ExprNode{Op: "D", Args: []any{"k"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
 				},
 			},
 			expectedValid: false,
 			expectedError: "Number of equations (1) does not match number of unknowns (0)",
 		},
 		{
-			name: "model with non-derivative equations (should be balanced)",
+			name: "a bare-variable (observed) equation counts",
 			model: Model{
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown},
-					"y": {Type: VarTypeUnknown},
+					"x": {Type: "unknown"},
+					"y": {Type: "unknown"},
 				},
 				Equations: []Equation{
-					{
-						LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
-						RHS: float64(1.0),
-					},
-					{
-						// This is not an ODE, it's an algebraic constraint
-						LHS: "y",
-						RHS: ExprNode{Op: "*", Args: []any{"x", 2.0}},
-					},
+					{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
+					{LHS: "y", RHS: ExprNode{Op: "*", Args: []any{"x", 2.0}}},
+				},
+			},
+			expectedValid: true,
+		},
+		{
+			// The ISORROPIA shape: two unknowns determined by one bare-variable
+			// equation and one EXPRESSION-LHS constraint. A checker that credits
+			// only assignment-shaped LHSs reports "1 equation, 2 unknowns" and
+			// rejects a perfectly balanced 2x2 system.
+			name: "an expression-LHS algebraic constraint counts",
+			model: Model{
+				Variables: map[string]ModelVariable{
+					"H":   {Type: "unknown"},
+					"SO4": {Type: "unknown"},
+					"Ksp": {Type: "parameter"},
+				},
+				Equations: []Equation{
+					{LHS: "H", RHS: ExprNode{Op: "*", Args: []any{2.0, "SO4"}}},
+					{LHS: ExprNode{Op: "*", Args: []any{"H", "H", "SO4"}}, RHS: "Ksp"},
+				},
+			},
+			expectedValid: true,
+		},
+		{
+			// An `ic` equation PRESCRIBES an initial value; it is not a
+			// determining equation and must not inflate the count.
+			name: "an ic equation does not count as an equation",
+			model: Model{
+				Variables: map[string]ModelVariable{
+					"x": {Type: "unknown"},
+				},
+				Equations: []Equation{
+					{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
+					{LHS: ExprNode{Op: OpIC, Args: []any{"x"}}, RHS: float64(100.0)},
+				},
+			},
+			expectedValid: true,
+		},
+		{
+			// A Brownian noise source is a PARAMETER in 1.0.0, so it is not an
+			// unknown and owes no equation — the balance is the ordinary one.
+			name: "a wiener parameter is not an unknown",
+			model: Model{
+				Variables: map[string]ModelVariable{
+					"x": {Type: "unknown"},
+					"w": {Type: "parameter",
+						Distribution: &Distribution{Kind: DistributionNormal, Mean: 0.0, Std: 1.0},
+						Update:       ParameterUpdate{Kind: UpdateKindWiener}},
+				},
+				Equations: []Equation{
+					{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")},
+						RHS: ExprNode{Op: "*", Args: []any{"x", "w"}}},
 				},
 			},
 			expectedValid: true,
@@ -556,7 +569,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			esmFile := &ESMFile{
-				ESM: "0.1.0",
+				ESM: "1.0.0",
 				Metadata: Metadata{
 					Name:    "TestModel",
 					Authors: []string{"Test Author"},
@@ -567,31 +580,45 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 			}
 
 			result := Validate(esmFile)
-
-			assert.Equal(t, tc.expectedValid, result.Valid, "Validation result should match expected")
-
-			if !tc.expectedValid {
-				assert.NotEmpty(t, result.Messages, "Should have validation messages")
-
+			assert.Equal(t, tc.expectedValid, result.Valid, "messages: %+v", result.Messages)
+			if tc.expectedError != "" {
 				found := false
 				for _, msg := range result.Messages {
-					if tc.expectedError != "" && assert.Contains(t, msg.Message, tc.expectedError) {
+					if strings.Contains(msg.Message, tc.expectedError) {
 						found = true
 						break
 					}
 				}
-
-				if tc.expectedError != "" {
-					assert.True(t, found, "Should find expected error message containing: %s", tc.expectedError)
-				}
-			} else {
-				// Check that there are no equation-unknown balance errors
-				for _, msg := range result.Messages {
-					assert.NotContains(t, msg.Message, "Equation-unknown balance", "Should not have equation-unknown balance errors")
-				}
+				assert.True(t, found, "want %q among %+v", tc.expectedError, result.Messages)
 			}
 		})
 	}
+}
+
+// `missing_equations_for` is the detail that preserves the discriminating power
+// of the removed `missing_observed_expr`: it names exactly the unknowns that
+// code used to name.
+func TestEquationBalanceNamesUndefinedUnknowns(t *testing.T) {
+	model := Model{
+		Variables: map[string]ModelVariable{
+			"x":     {Type: "unknown"},
+			"y":     {Type: "unknown"},
+			"total": {Type: "unknown"},
+		},
+		Equations: []Equation{
+			{LHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
+			{LHS: ExprNode{Op: "D", Args: []any{"y"}, Wrt: strPtr("t")}, RHS: float64(1.0)},
+		},
+	}
+	s := &structuralScan{indep: DefaultIndepVar}
+	s.validateEquationUnknownBalance("M", &model, "/models/M")
+	require.Len(t, s.errors, 1)
+	se := s.errors[0]
+	assert.Equal(t, ErrorEquationCountMismatch, se.Code)
+	assert.Equal(t, "/models/M", se.Path)
+	assert.Equal(t, []string{"total", "x", "y"}, se.Details["unknowns"])
+	assert.Equal(t, 2, se.Details["equations"])
+	assert.Equal(t, []string{"total"}, se.Details["missing_equations_for"])
 }
 
 func TestValidateFileSpecCompliant(t *testing.T) {
@@ -632,8 +659,7 @@ func TestValidateFileSpecCompliant(t *testing.T) {
 	// Schema should be valid
 	assert.Empty(t, result.SchemaErrors, "No schema errors expected for valid JSON")
 
-	// Should have a structural error from the equation/unknown balance
-	// (2 unknowns, 1 equation).
+	// Should have structural error due to equation-unknown balance (2 state vars, 1 ODE equation)
 	assert.NotEmpty(t, result.StructuralErrors, "Should have structural error for equation count mismatch")
 	assert.False(t, result.IsValid, "Should be invalid due to structural errors")
 
@@ -700,7 +726,7 @@ func TestUndefinedVariableInAggregateBodyFlagged(t *testing.T) {
 		Models: map[string]Model{
 			"AggBody": {
 				Variables: map[string]ModelVariable{
-					"total": {Type: VarTypeUnknown},
+					"total": {Type: "unknown"},
 				},
 				Equations: []Equation{
 					{
@@ -755,8 +781,8 @@ func TestBoundLoopIndexInAggregateNotFlagged(t *testing.T) {
 		Models: map[string]Model{
 			"AggIdx": {
 				Variables: map[string]ModelVariable{
-					"total": {Type: VarTypeUnknown},
-					"u":     {Type: VarTypeParameter},
+					"total": {Type: "unknown"},
+					"u":     {Type: "parameter"},
 				},
 				Equations: []Equation{
 					{
@@ -802,7 +828,7 @@ func TestUnparseableUnitIsAHardError(t *testing.T) {
 		Models: map[string]Model{
 			"BadUnit": {
 				Variables: map[string]ModelVariable{
-					"x": {Type: VarTypeUnknown, Units: strPtr("notaunit")},
+					"x": {Type: "unknown", Units: strPtr("notaunit")},
 				},
 				Equations: []Equation{
 					{

@@ -52,7 +52,7 @@ function _cgt_1d_model(N)
     eq(x, body) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
                                _ao1(body, "i", 1, N))
     vars = Dict{String,ESM.ModelVariable}(
-        n => ESM.ModelVariable(ESM.StateVariable) for n in ("u", "v"))
+        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v"))
     ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
 end
 _cgt_1d_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
@@ -61,7 +61,7 @@ _cgt_1d_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
 # 2-D 5-point Laplacian over full ranges: the stencil pass decomposes it into
 # an interior rank-2 box plus boundary regions — the rank-2 chunked nest.
 function _cgt_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
     body = _op("+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
@@ -80,7 +80,7 @@ _cgt_2d_ics(N) = Dict("u[$i,$j]" => sin(0.3i) * cos(0.2j) + 0.05i
 
 # 3-D 7-point Laplacian, same construction — the rank-3 chunked nest.
 function _cgt_3d_model(Ni, Nj, Nk)
-    vars = Dict("u" => ESM.ModelVariable(ESM.StateVariable; shape=["i", "j", "k"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j", "k"]))
     u(i, j, k) = _idx("u", i, j, k)
     I = _v("i"); J = _v("j"); K = _v("k")
     body = _op("+",

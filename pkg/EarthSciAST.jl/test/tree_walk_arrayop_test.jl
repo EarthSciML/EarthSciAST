@@ -29,7 +29,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     # 1. D(index(u, k)) — indexed scalar derivatives
     # ------------------------------------------------------------------
     @testset "1. Indexed scalar derivative D(index(u,k))" begin
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         eqs = [
             ESM.Equation(_D_idx("u", _i(1)), _op("-", _idx("u", _i(1)))),
             ESM.Equation(_D_idx("u", _i(2)), _op("*", _n(-2.0), _idx("u", _i(2)))),
@@ -49,7 +49,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     # ------------------------------------------------------------------
     @testset "2. Arrayop 1D decay D(u[i])=-u[i]" begin
         N = 5
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         lhs = _arrayop1d(_D_idx("u", _v("i")), "i", 1, N)
         rhs = _arrayop1d(_op("-", _idx("u", _v("i"))), "i", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
@@ -66,7 +66,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     # ------------------------------------------------------------------
     @testset "3. Arrayop 2D decay D(u[i,j])=-u[i,j]" begin
         M, N = 3, 4
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         lhs = _arrayop2d(_D_idx("u", _v("i"), _v("j")), "i", 1, M, "j", 1, N)
         rhs = _arrayop2d(_op("-", _idx("u", _v("i"), _v("j"))), "i", 1, M, "j", 1, N)
         model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
@@ -82,7 +82,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     # 4. Ghost cells — index(u, 0) returns 0.0
     # ------------------------------------------------------------------
     @testset "4. Ghost cell (out-of-bounds → 0)" begin
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         # D(u[1]) = u[0] - 2*u[1] + u[2]; u[0] is ghost → 0
         rhs = _op("+",
             _idx("u", _i(0)),               # ghost → 0
@@ -105,7 +105,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     # ------------------------------------------------------------------
     @testset "5. 1D diffusion stencil (offset index)" begin
         N = 10
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         body = _op("+",
             _idx("u", _v("i")),
             _op("*", _n(-2.0), _idx("u", _op("+", _v("i"), _i(1)))),
@@ -304,9 +304,9 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     #     x[j] are state variables (constant D=0).
     # ------------------------------------------------------------------
     @testset "13. Scalar arrayop over state variables (reduce +/max)" begin
-        vars = Dict("z" => ModelVariable(StateVariable),
-                    "w" => ModelVariable(StateVariable),
-                    "x" => ModelVariable(StateVariable))
+        vars = Dict("z" => ModelVariable(UnknownVariable),
+                    "w" => ModelVariable(UnknownVariable),
+                    "x" => ModelVariable(UnknownVariable))
         N = 3
         # arrayop(index(x, j), output_idx=[], ranges={j:[1,N]}, reduce=op)
         _idx_x_j = _op("index", _v("x"), _v("j"))
@@ -339,8 +339,8 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     #     D(z_min) = min_{j=1}^{5} j = 1
     # ------------------------------------------------------------------
     @testset "14. Scalar arrayop max/min reducers" begin
-        vars = Dict("z_max" => ModelVariable(StateVariable),
-                    "z_min" => ModelVariable(StateVariable))
+        vars = Dict("z_max" => ModelVariable(UnknownVariable),
+                    "z_min" => ModelVariable(UnknownVariable))
         _ao(body, idx, lo, hi, reduce_op) = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx=Any[], expr_body=body, reduce=reduce_op,
             ranges=Dict(idx => [lo, hi]))
@@ -394,7 +394,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
     # ------------------------------------------------------------------
     @testset "15. makearray interior+boundary (later-overwrite)" begin
         N = 5
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         # makearray: region1=[1:5]=1.0, region2=[2:4]=2.0
         makearray_node = OpExpr("makearray", ESM.ASTExpr[];
             regions = [[[1,5]], [[2,4]]],
@@ -459,7 +459,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
                                1.0 2.0]   # cell 3 → neighbors 1, 2
         coeff_data = fill(0.5, N_c, max_k)
 
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         _c  = _v("c"); _k_var = _v("k")
         coeff_idx  = _op("index", _v("coeff"), _c, _k_var)
         nb_expr    = _op("index", _v("cells_on_cell"), _c, _k_var)
@@ -532,7 +532,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
                       1.0  POISON_W]             # cell 4
         n_edges_on_cell_data = [1.0, 2.0, 2.0, 1.0]   # per-cell valence (the bound)
 
-        vars = Dict("u" => ModelVariable(StateVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable))
         _c  = _v("c"); _k_var = _v("k")
         coeff_idx  = _op("index", _v("coeff"), _c, _k_var)
         nb_expr    = _op("index", _v("cells_on_cell"), _c, _k_var)
@@ -629,7 +629,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         rhs = EarthSciAST.OpExpr("arrayop", EarthSciAST.ASTExpr[];
             output_idx = Any[], expr_body = _op("index", comb, _v("p")),
             ranges = Dict("p" => [1, N]))
-        model = EarthSciAST.Model(Dict("y" => ModelVariable(StateVariable)),
+        model = EarthSciAST.Model(Dict("y" => ModelVariable(UnknownVariable)),
                                   [EarthSciAST.Equation(_D("y"), rhs)])
         f!, u0, p, _, vmap = EarthSciAST._build_evaluator_impl(model;
             initial_conditions = Dict("y" => 0.0),
@@ -643,7 +643,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
             output_idx = Any[],
             expr_body = _op("index", _op("*", _n(5.0), ca), _v("p")),
             ranges = Dict("p" => [1, N]))
-        model2 = EarthSciAST.Model(Dict("y" => ModelVariable(StateVariable)),
+        model2 = EarthSciAST.Model(Dict("y" => ModelVariable(UnknownVariable)),
                                    [EarthSciAST.Equation(_D("y"), rhs2)])
         f2!, u02, p2, _, vmap2 = EarthSciAST._build_evaluator_impl(model2;
             initial_conditions = Dict("y" => 0.0), const_arrays = Dict("a" => a))

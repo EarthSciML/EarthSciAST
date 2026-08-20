@@ -1,14 +1,15 @@
-# Cross-language conformance for a pure-I/O data loader MOUNTED AS A MODEL
-# SUBSYSTEM and consumed by the owning model's OWN equations (RFC
-# pure-io-data-loaders §4.3; CONFORMANCE_SPEC.md §5.11). Shared fixture + analytic
-# golden live under `tests/conformance/subsystem_loader/`.
+# Cross-language conformance for a pure-I/O data SOURCE consumed by the owning
+# model's OWN equations (esm-spec §8.5; CONFORMANCE_SPEC.md §5.11). Shared
+# fixture + analytic golden live under `tests/conformance/subsystem_loader/`.
 #
-# This exercises the Julia flatten fix (`_collect_model!` no longer SKIPS a
-# DataLoader subsystem — it lowers each loader variable to a const-array-backed
-# observed `<owner>.<subkey>.<var>`) and the provider seam:
-#   * `Box.raw.k`    — a BARE-SCALAR loader reference (`raw.k`), the path that
-#     previously threw `E_TREEWALK_UNBOUND_VARIABLE: Box.raw.k`.
-#   * `Box.raw.wind` — a GATHER `index(raw.wind, 2)`.
+# esm 1.0.0 semantics: a data source is a document-scoped REGISTRY ENTRY, not a
+# component — it is never mounted as a subsystem and exposes no variables of its
+# own. The model consumes it by declaring PARAMETERS whose `update` names the
+# source and binds a `file_variable`, so the flattened names are `<Model>.<param>`
+# (`Box.k`, `Box.wind`) rather than the 0.x `<owner>.<subkey>.<var>`
+# (`Box.raw.k`, `Box.raw.wind`). The provider seam is keyed by those same names.
+#   * `Box.k`    — a BARE-SCALAR source-backed parameter reference.
+#   * `Box.wind` — a GATHER `index(wind, 2)`.
 # Both bind through the offline CONST provider seam; the forcing is constant
 # (F = k + wind[2] = 2 + 5 = 7) so `c(t) = 7 (1 - e^-t)` is analytic and exact.
 using Test
@@ -25,32 +26,49 @@ end
 _ESS_SL.provider_refresh_times(::_SubsysLoaderStub) = Float64[]
 _ESS_SL.provider_sample(p::_SubsysLoaderStub, ::Real) = p.field
 
-@testset "subsystem_loader conformance — mounted CONST loader, bare-scalar + gather (§5.11)" begin
+@testset "subsystem_loader conformance — source-backed CONST parameters, bare-scalar + gather (§5.11)" begin
     root = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "subsystem_loader")
     fixture = joinpath(root, "fixtures", "subsystem_loader_ode.esm")
     golden_path = joinpath(root, "golden", "subsystem_loader_ode.json")
     if _require_fixture(fixture) && _require_fixture(golden_path)
         golden = JSON3.read(read(golden_path, String))
 
-        # (a) flatten lowers each loader-subsystem variable to a materialized
-        # observed with NO defining equation (its value is injected, not computed).
-        flat = _ESS_SL.flatten(_ESS_SL.load(fixture))
-        obs = Set(String.(keys(flat.observed_variables)))
-        @test "Box.raw.k" in obs
-        @test "Box.raw.wind" in obs
+        # (a) flatten carries each source-backed consumer through as a
+        # namespaced PARAMETER with NO defining equation (its value is injected
+        # by the provider seam, not computed). In 0.x these were observed
+        # variables synthesized from a mounted loader subsystem; in 1.0.0 the
+        # declaration is a parameter on the consuming model and stays one.
+        model = _ESS_SL.load(fixture)
+        flat = _ESS_SL.flatten(model)
+        params = Set(String.(keys(flat.parameters)))
+        @test "Box.k" in params
+        @test "Box.wind" in params
+        # …and each is a `data` update naming the registry entry it reads.
+        for (pname, fvar) in ("Box.k" => "K", "Box.wind" => "U")
+            upd = flat.parameters[pname].update
+            @test upd !== nothing && length(upd) == 1
+            @test upd[1].kind == "data"
+            @test upd[1].source == "raw"
+            @test upd[1].from !== nothing && upd[1].from.file_variable == fvar
+        end
+        # The data source itself is a registry entry, never a subsystem: it
+        # contributes no flattened variable of its own under the `raw.` prefix.
+        @test !any(n -> startswith(n, "Box.raw."), params)
+        @test !any(n -> startswith(n, "Box.raw."), String.(keys(flat.observed_variables)))
         lhs_names = Set{String}()
         for eq in flat.equations
             eq.lhs isa _ESS_SL.VarExpr && push!(lhs_names, (eq.lhs::_ESS_SL.VarExpr).name)
         end
-        @test !("Box.raw.k" in lhs_names)     # no synthesized defining equation
-        @test !("Box.raw.wind" in lhs_names)
+        @test !("Box.k" in lhs_names)        # no synthesized defining equation
+        @test !("Box.wind" in lhs_names)
 
-        # (b) simulate binds both fields through the offline CONST provider seam.
+        # (b) simulate binds both fields through the offline CONST provider seam,
+        # keyed by the flattened PARAMETER name.
         providers = Dict{String,Any}(
-            "Box.raw.k"    => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.raw.k"]["native"])),
-            "Box.raw.wind" => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.raw.wind"]["native"])),
+            "Box.k"    => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.k"]["native"])),
+            "Box.wind" => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.wind"]["native"])),
         )
-        @test _ESS_SL.provider_is_const(providers["Box.raw.k"])
+        @test _ESS_SL.provider_is_const(providers["Box.k"])
 
         tspan = (Float64(golden["cadence"]["tspan"][1]), Float64(golden["cadence"]["tspan"][2]))
         traj = golden["trajectory"]

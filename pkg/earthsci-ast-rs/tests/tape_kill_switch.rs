@@ -10,25 +10,82 @@ use std::collections::HashMap;
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
 
-const MODEL: &str = r#"{
- "esm": "1.0.0",
- "metadata": {"name": "tape_kill_switch"},
- "models": {
-  "Decay": {
-   "variables": {"u": {"type": "unknown", "shape": ["i"]}},
-   "equations": [
+const MODEL: &str = r#"
     {
-     "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-             "ranges": {"i": [1, 6]}},
-     "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-             "ranges": {"i": [1, 6]},
-             "expr": {"op": "*", "args": [-0.5, {"op": "index", "args": ["u", "i"]}]}}
+      "esm": "1.0.0",
+      "metadata": {
+        "name": "tape_kill_switch"
+      },
+      "models": {
+        "Decay": {
+          "variables": {
+            "u": {
+              "type": "unknown",
+              "shape": [
+                "i"
+              ]
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "expr": {
+                  "op": "D",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ],
+                  "wrt": "t"
+                },
+                "ranges": {
+                  "i": [
+                    1,
+                    6
+                  ]
+                }
+              },
+              "rhs": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": [
+                    1,
+                    6
+                  ]
+                },
+                "expr": {
+                  "op": "*",
+                  "args": [
+                    -0.5,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
     }
-   ]
-  }
- }
-}"#;
+    "#;
 
 #[test]
 fn ess_tape_disable_reverts_wholesale_to_the_legacy_path() {

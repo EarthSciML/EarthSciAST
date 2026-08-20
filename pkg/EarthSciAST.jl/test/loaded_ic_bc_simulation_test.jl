@@ -33,13 +33,17 @@ import OrdinaryDiffEqTsit5: Tsit5
 const _ESS_IC = EarthSciAST
 
 # ---------------------------------------------------------------------------- #
-# Static stub Provider (DESIGN §2). Serves the fixture's declared loader
-# variables from the manifest `inputs` arrays. CONST: empty `refresh_times` ⇒
+# Static stub Provider (DESIGN §2). Serves the fixture's source-fed PARAMETERS
+# from the manifest `inputs` arrays. CONST: empty `refresh_times` ⇒
 # `provider_is_const` is true ⇒ materialized once at build time, contributes no
-# tstops. `provider_sample` returns the full `<Loader>.<var> => field` table;
-# `simulate` extracts each variable's field by name. [lon,lat] = [4,2]; Julia is
+# tstops. `provider_sample` returns the full `<name> => field` table; `simulate`
+# extracts each variable's field by name. [lon,lat] = [4,2]; Julia is
 # column-major, so row = lon index, column = lat index — the same numeric values
-# the const-array runner used, re-keyed onto the declared loader names.
+# the const-array runner used.
+#
+# esm 1.0.0: a data source exposes no variables of its own, so a provider is
+# keyed by the CONSUMING PARAMETER's flattened name (`<Model>.<param>`) rather
+# than by `<Loader>.<var>` (esm-spec §8.5).
 # ---------------------------------------------------------------------------- #
 struct _StubLoaderProvider
     fields::Dict{String,Array{Float64}}
@@ -49,19 +53,19 @@ _ESS_IC.provider_sample(p::_StubLoaderProvider, ::Real) = p.fields
 
 const _LOADED_PROVIDER_FIELDS = Dict{String,Array{Float64}}(
     # Initial-condition fields — RHS of the scoped-reference `ic` equations.
-    "InitialConditions.O3_init"  => [38.0 42.0; 39.0 43.0; 41.0 45.0; 43.0 47.0],
-    "InitialConditions.NO_init"  => [0.10 0.12; 0.11 0.13; 0.09 0.14; 0.12 0.15],
-    "InitialConditions.NO2_init" => [1.0  1.2;  1.1  1.3;  0.9  1.4;  1.2  1.5],
-    # Meteorology wind field bound to Advection.u_wind by `variable_map`.
-    "Meteorology.u_wind" => [2.0 2.2; 2.1 2.3; 2.2 2.4; 2.3 2.5],
-    # Per-species western-inflow fields (over the lat boundary) bound to
-    # Advection.*_inflow by `variable_map` (spec §11.5 "BCs from data").
-    "BoundaryConditions.O3_inflow"  => [35.0, 36.0],
-    "BoundaryConditions.NO_inflow"  => [0.20, 0.25],
-    "BoundaryConditions.NO2_inflow" => [1.5, 1.6],
+    "ChemistryICs.O3_init"  => [38.0 42.0; 39.0 43.0; 41.0 45.0; 43.0 47.0],
+    "ChemistryICs.NO_init"  => [0.10 0.12; 0.11 0.13; 0.09 0.14; 0.12 0.15],
+    "ChemistryICs.NO2_init" => [1.0  1.2;  1.1  1.3;  0.9  1.4;  1.2  1.5],
+    # Wind field: the Advection model's own parameter, read from Meteorology.
+    "Advection.u_wind" => [2.0 2.2; 2.1 2.3; 2.2 2.4; 2.3 2.5],
+    # Per-species western-inflow fields (over the lat boundary): Advection's own
+    # parameters, read from BoundaryConditions (spec §11.5 "BCs from data").
+    "Advection.O3_inflow"  => [35.0, 36.0],
+    "Advection.NO_inflow"  => [0.20, 0.25],
+    "Advection.NO2_inflow" => [1.5, 1.6],
 )
 
-# `providers` maps each declared loader variable to the stub that serves it. One
+# `providers` maps each source-fed parameter to the stub that serves it. One
 # stub object backs every variable; it is sampled once per variable at build time.
 function _loaded_providers()
     stub = _StubLoaderProvider(_LOADED_PROVIDER_FIELDS)

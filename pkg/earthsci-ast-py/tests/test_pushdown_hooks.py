@@ -302,28 +302,33 @@ def _l1_doc():
 
 def test_desugar_semiring_guard_blocks_non_additive():
     doc = _l1_doc()
-    vs = doc["models"]["ISRM"]["variables"]
-    for name, v in vs.items():
-        expr = v.get("expression")
-        if isinstance(expr, dict) and expr.get("reduce") == "+":
-            expr["reduce"] = "max"  # same shape, different semiring
+    # An observed unknown's defining expression is its bare-variable-LHS
+    # equation's RHS from esm 1.0.0 -- there is no `variables[v].expression` to
+    # reach into.
+    for eq in doc["models"]["ISRM"]["equations"]:
+        rhs = eq.get("rhs")
+        if isinstance(rhs, dict) and rhs.get("reduce") == "+":
+            rhs["reduce"] = "max"  # same shape, different semiring
     assert desugar_pushdown(doc, model_name="ISRM") is doc
 
 
 def test_desugar_no_models_or_unknown_model_is_noop():
-    assert desugar_pushdown({"esm": "0.9.0"}) == {"esm": "0.9.0"}
+    assert desugar_pushdown({"esm": "1.0.0"}) == {"esm": "1.0.0"}
     doc = _l1_doc()
     assert desugar_pushdown(doc, model_name="NoSuchModel") is doc
 
 
 def test_pushdown_provider_gates_from_record_and_template():
     doc = desugar_pushdown(_l1_doc(), model_name="ISRM")
-    providers = {f"MockSR.{v}": object() for v in ["SOA", "pNO3"]}
-    providers["MockPts.lon"] = object()  # not coupled onto a gated array
+    # A provider key is "<Source>.<parameter>": from esm 1.0.0 the parameter IS
+    # the loaded field, so it is the parameter -- not a loader variable -- that
+    # a provider serves and that the rewrite record gates.
+    providers = {f"MockSR.SR_{v}": object() for v in ["SOA", "pNO3"]}
+    providers["MockPts.emis_lon"] = object()  # not one of the gated arrays
     gates = _pushdown_provider_gates(doc, providers)
-    assert sorted(gates) == ["MockSR.SOA", "MockSR.pNO3"]
-    g = gates["MockSR.SOA"]
-    # the loader template's fixed layer survives; the STALE gated_by name is
+    assert sorted(gates) == ["MockSR.SR_SOA", "MockSR.SR_pNO3"]
+    g = gates["MockSR.SR_SOA"]
+    # the source template's fixed layer survives; the STALE gated_by name is
     # replaced by the record's generated set. The template is parsed through the
     # shared §8.9.2 selector vocabulary, so the emitted `fixed` is the spec's
     # SCALAR index (the authored `{"fixed": [0]}` list spelling is still
@@ -333,19 +338,22 @@ def test_pushdown_provider_gates_from_record_and_template():
         {"gated_by": "pd_support__src_cells"},
         "all",
     ]
-    assert g["applies_to"] == ["SOA"]
+    # `applies_to` names the MODEL ARRAY the fetched slab binds to. From 1.0.0
+    # that is the consuming PARAMETER: it IS the loaded field, so there is no
+    # coupling edge and no loader-variable name standing in for it.
+    assert g["applies_to"] == ["SR_SOA"]
     assert _pushdown_provider_gates(doc, None) == {}
     assert _pushdown_provider_gates(_l1_doc(), providers) == {}  # no record
 
 
 def test_pushdown_provider_gates_template_axis_mismatch_raises():
     doc = desugar_pushdown(_l1_doc(), model_name="ISRM")
-    tpl = doc["data_loaders"]["MockSR"]["metadata"]["x_esd"]["gated_select"]
+    tpl = doc["data_sources"]["MockSR"]["metadata"]["x_esd"]["gated_select"]
     tpl["axes"] = ["all", {"fixed": [0]}, {"gated_by": "stale"}]  # gated at nonfixed pos 1
     from earthsci_ast.pushdown_rewrite import PushdownRewriteError
 
     with pytest.raises(PushdownRewriteError, match="disagree"):
-        _pushdown_provider_gates(doc, {"MockSR.SOA": object()})
+        _pushdown_provider_gates(doc, {"MockSR.SR_SOA": object()})
 
 
 def test_inject_pushdown_aliases():

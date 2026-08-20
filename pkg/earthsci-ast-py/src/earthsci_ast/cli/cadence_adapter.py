@@ -35,7 +35,7 @@ from earthsci_ast.cli._adapter_main import adapter_main
 
 
 def _load_model(repo_root: Path, fixture_rel: str, model_name: str) -> dict[str, Any]:
-    # model_from_doc attaches the document's top-level `data_loaders` so the
+    # model_from_doc attaches the document's top-level `data_sources` so the
     # loader-seeded cadence refinement (§5.7.2) can resolve a discrete variable's
     # data_ingest source loader.
     doc = json.loads((repo_root / fixture_rel).read_text())

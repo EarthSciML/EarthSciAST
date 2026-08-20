@@ -109,9 +109,9 @@ end
         "domain" => Dict{String,Any}("independent_variable" => "time"),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
             "variables" => Dict{String,Any}(
-                "a" => Dict{String,Any}("type" => "state", "units" => "K"),
-                "b" => Dict{String,Any}("type" => "state", "units" => "kg"),
-                "c" => Dict{String,Any}("type" => "state")))))
+                "a" => Dict{String,Any}("type" => "unknown", "units" => "K"),
+                "b" => Dict{String,Any}("type" => "unknown", "units" => "kg"),
+                "c" => Dict{String,Any}("type" => "unknown")))))
     var_map = Dict("M.a" => 1, "M.b" => 2, "M.c" => 3)
     meta = derive_output_meta(doc)
     @test meta.time_dim == "time"

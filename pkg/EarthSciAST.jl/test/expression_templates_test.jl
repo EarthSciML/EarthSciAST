@@ -361,7 +361,7 @@ end
           "metadata": {"name": "attrs_match", "authors": ["t"]},
           "models": {"m": {
             "variables": {
-              "u": {"type": "state", "units": "1", "default": 0.0},
+              "u": {"type": "unknown", "units": "1", "default": 0.0},
               "y": {"type": "observed", "units": "1",
                 "expression": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
             },
@@ -615,8 +615,8 @@ end
       "models": {
         "m": {
           "variables": {
-            "F_edge": {"type": "state", "units": "1", "default": 1.5, "shape": ["edges"]},
-            "F_cell": {"type": "state", "units": "1", "default": 2.5, "shape": ["cells"]},
+            "F_edge": {"type": "unknown", "units": "1", "default": 1.5, "shape": ["edges"]},
+            "F_cell": {"type": "unknown", "units": "1", "default": 2.5, "shape": ["cells"]},
             "s": {"type": "parameter", "units": "1", "default": 0.5},
             "d": {"type": "observed", "units": "1",
                   "expression": {"op": "div", "args": ["F_cell"]}}
@@ -770,8 +770,8 @@ end
             "m": {
               "expression_template_imports": [{"ref": "meshlib.esm"}],
               "variables": {
-                "F_edge": {"type": "state", "units": "1", "default": 1.5, "shape": ["edges"]},
-                "F_cell": {"type": "state", "units": "1", "default": 2.5, "shape": ["cells"]},
+                "F_edge": {"type": "unknown", "units": "1", "default": 1.5, "shape": ["edges"]},
+                "F_cell": {"type": "unknown", "units": "1", "default": 2.5, "shape": ["cells"]},
                 "d_edge": {"type": "observed", "units": "1",
                            "expression": {"op": "div", "args": ["F_edge"]}},
                 "d_cell": {"type": "observed", "units": "1",

@@ -19,7 +19,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     scalar_esm(rhs) = Dict{String,Any}(
         "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "S"),
         "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}("y" => Dict{String,Any}("type" => "state")),
+            "variables" => Dict{String,Any}("y" => Dict{String,Any}("type" => "unknown")),
             "equations" => Any[Dict{String,Any}("lhs" => _D("y"), "rhs" => rhs)])))
 
     # Chemistry `A --k1--> B` plus an additive `couple` edge Sink.k → Chem.A folding
@@ -115,7 +115,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
             "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "A"),
             "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 3)),
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "state", "shape" => Any["n"])),
+                "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),
                 "equations" => Any[Dict{String,Any}(
                     "lhs" => Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))),
@@ -134,7 +134,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
             "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "G"),
             "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 4)),
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "state", "shape" => Any["n"])),
+                "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),
                 "equations" => Any[Dict{String,Any}(
                     "lhs" => Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))),

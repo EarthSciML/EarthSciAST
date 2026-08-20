@@ -162,7 +162,7 @@ pub trait CadenceProvider {
 /// every variable in `variables` shares `cadence`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoaderBinding {
-    /// The data-loader name (the `refresh.source` of the variables it feeds).
+    /// The data-source name (the `update.source` of the parameters it feeds).
     pub loader: String,
     /// `Const` (no `temporal` — materialize once) or `Discrete` (refresh at the
     /// cadence). A loader never feeds a `Continuous` forcing.
@@ -174,8 +174,8 @@ pub struct LoaderBinding {
 /// Classify every loader-fed variable in `model` as CONST or DISCRETE, grouped by
 /// source loader, using the cadence pass's **declarative** rule.
 ///
-/// Walks `model.variables` for `discrete` variables carrying a `data_ingest`
-/// refresh, resolves each one's source loader, and classifies it with
+/// Walks `model.variables` for PARAMETERS carrying a `data`-kind `update`
+/// (esm-spec §5.4), resolves each one's source, and classifies it with
 /// [`crate::cadence::seed_leaf`] over [`crate::cadence::model_with_loaders`]: a
 /// variable whose source loader declares a `temporal` block seeds `Discrete`
 /// (refreshes at the cadence); without one it seeds `Const` (folds once at bind).
@@ -196,41 +196,20 @@ pub fn classify_loader_bindings(
     let mut by_loader: IndexMap<String, LoaderBinding> = IndexMap::new();
     for (var_name, var) in variables {
         // Only a PARAMETER carries an `update`, and only the `data` kind names a
-        // data source (a `schedule`/`remesh`/`condition`/`crossing` update is
-        // not provider-fed). This is the 1.0.0 spelling of the 0.x `discrete`
-        // variable with a `data_ingest` refresh.
-        if var.get("type").and_then(|v| v.as_str()) != Some("parameter") {
-            continue;
-        }
-        let Some(update) = var.get("update") else {
+        // source (a `schedule` / `remesh` / `condition` / `crossing` update is
+        // not provider-fed). esm-spec §5.4.
+        let Ok(parsed) = serde_json::from_value::<crate::types::ModelVariable>(var.clone()) else {
             continue;
         };
-        // One rule, or an ordered array of them.
-        let rules: Vec<&Value> = match update {
-            Value::Array(rs) => rs.iter().collect(),
-            other => vec![other],
-        };
-        let data_rules: Vec<&&Value> = rules
-            .iter()
-            .filter(|r| r.get("kind").and_then(|v| v.as_str()) == Some("data"))
-            .collect();
-        if data_rules.is_empty() {
+        let sources = parsed.update_sources();
+        let Some(source) = sources.first().copied() else {
             continue;
-        }
-        if data_rules.len() > 1 {
+        };
+        if sources.iter().any(|s| *s != source) {
             return Err(err(format!(
-                "variable {var_name:?}: several `data` update rules name several \
-                 sources; one provider-fed parameter must have exactly one source"
+                "variable {var_name:?}: update rules name several data sources                  ({sources:?}); one parameter is fed by one source"
             )));
         }
-        let source = data_rules[0]
-            .get("source")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                err(format!(
-                    "variable {var_name:?}: a `data` update is missing a string `source`"
-                ))
-            })?;
 
         // Declarative CONST/DISCRETE from the cadence pass (the temporal-block
         // rule lives in `loader_without_temporal`, applied by `seed_leaf`).
@@ -612,9 +591,9 @@ mod tests {
             "models": {"M": {"variables": {
                 "u":    {"type": "unknown", "shape": ["i"], "default": 0.0},
                 "wind": {"type": "parameter", "shape": ["i"],
-                         "default": 0.0, "update": {"kind": "data", "source": "met", "from": {"file_variable": "f"}}},
+                         "update": {"kind": "data", "source": "met", "from": {"file_variable": "F"}}},
                 "elev": {"type": "parameter", "shape": ["i"],
-                         "default": 0.0, "update": {"kind": "data", "source": "topo", "from": {"file_variable": "f"}}}
+                         "update": {"kind": "data", "source": "topo", "from": {"file_variable": "F"}}}
             }}},
             "data_sources": {
                 "met":  {"kind": "grid", "temporal": {"frequency": "PT6H"}},
@@ -642,8 +621,10 @@ mod tests {
         // One loader feeding two variables → one binding listing both.
         let doc = json!({
             "models": {"M": {"variables": {
-                "a": {"type": "parameter", "default": 0.0, "update": {"kind": "data", "source": "met", "from": {"file_variable": "f"}}},
-                "b": {"type": "parameter", "default": 0.0, "update": {"kind": "data", "source": "met", "from": {"file_variable": "f"}}}
+                "a": {"type": "parameter", "shape": [],
+                         "update": {"kind": "data", "source": "met", "from": {"file_variable": "F"}}},
+                "b": {"type": "parameter", "shape": [],
+                         "update": {"kind": "data", "source": "met", "from": {"file_variable": "F"}}}
             }}},
             "data_sources": {"met": {"kind": "grid", "temporal": {"frequency": "PT1H"}}}
         });
@@ -657,13 +638,15 @@ mod tests {
     }
 
     #[test]
-    fn classify_ignores_non_data_ingest_and_plain_vars() {
-        // A `schedule` refresh is not provider-fed; a plain state is not loader-fed.
+    fn classify_ignores_non_data_updates_and_plain_vars() {
+        // A `schedule` update is not provider-fed; an unknown is not source-fed.
         let doc = json!({
             "models": {"M": {"variables": {
                 "u": {"type": "unknown"},
                 "p": {"type": "parameter"},
-                "sched": {"type": "parameter", "shape": [], "default": 0.0, "update": {"kind": "schedule", "times": [1.0, 2.0], "handler": {"handler_id": "h"}}}
+                "sched": {"type": "parameter", "shape": [],
+                          "update": {"kind": "schedule", "times": [1.0, 2.0],
+                                     "handler": {"handler_id": "reload_sched"}}}
             }}},
             "data_sources": {}
         });
@@ -712,9 +695,12 @@ mod tests {
     fn refresh_times_is_sorted_union_over_discrete_only() {
         let doc = json!({
             "models": {"M": {"variables": {
-                "wind": {"type": "parameter", "default": 0.0, "update": {"kind": "data", "source": "met", "from": {"file_variable": "f"}}},
-                "bc":   {"type": "parameter", "default": 0.0, "update": {"kind": "data", "source": "bcs", "from": {"file_variable": "f"}}},
-                "elev": {"type": "parameter", "default": 0.0, "update": {"kind": "data", "source": "topo", "from": {"file_variable": "f"}}}
+                "wind": {"type": "parameter", "shape": [],
+                         "update": {"kind": "data", "source": "met", "from": {"file_variable": "F"}}},
+                "bc":   {"type": "parameter", "shape": [],
+                         "update": {"kind": "data", "source": "bcs", "from": {"file_variable": "F"}}},
+                "elev": {"type": "parameter", "shape": [],
+                         "update": {"kind": "data", "source": "topo", "from": {"file_variable": "F"}}}
             }}},
             "data_sources": {
                 "met":  {"kind": "grid", "temporal": {"frequency": "PT6H"}},
@@ -890,21 +876,77 @@ mod tests {
 
         // (a) The ArrayCompiled model: `wind` appears only in the RHS, resolved by
         // name through the forcing buffer (PR-1). No `data_sources` needed here.
-        let model_json = r#"{
-         "esm": "1.0.0",
-         "metadata": {"name": "r1_forcing"},
-         "models": {"Forced": {
-           "variables": {"u": {"type": "unknown", "shape": ["i"], "default": 0.0}},
-           "equations": [{
-             "lhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i"]}], "wrt": "t"},
-                     "ranges": {"i": [1, 3]}},
-             "rhs": {"op": "aggregate", "args": [], "output_idx": ["i"],
-                     "ranges": {"i": [1, 3]},
-                     "expr": {"op": "index", "args": ["wind", "i"]}}
-           }]
-         }}
-        }"#;
+        let model_json = r#"
+            {
+              "esm": "1.0.0",
+              "metadata": {
+                "name": "r1_forcing"
+              },
+              "models": {
+                "Forced": {
+                  "variables": {
+                    "u": {
+                      "type": "unknown",
+                      "shape": [
+                        "i"
+                      ],
+                      "default": 0.0
+                    }
+                  },
+                  "equations": [
+                    {
+                      "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "expr": {
+                          "op": "D",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i"
+                              ]
+                            }
+                          ],
+                          "wrt": "t"
+                        },
+                        "ranges": {
+                          "i": [
+                            1,
+                            3
+                          ]
+                        }
+                      },
+                      "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                          "i"
+                        ],
+                        "ranges": {
+                          "i": [
+                            1,
+                            3
+                          ]
+                        },
+                        "expr": {
+                          "op": "index",
+                          "args": [
+                            "wind",
+                            "i"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+            "#;
         let file = load(model_json).expect("parse forced model");
         let compiled = ArrayCompiled::from_file(&file).expect("compile forced model");
 
@@ -914,7 +956,7 @@ mod tests {
         let class_doc = json!({
             "models": {"Forced": {"variables": {
                 "wind": {"type": "parameter", "shape": ["i"],
-                         "default": 0.0, "update": {"kind": "data", "source": "met", "from": {"file_variable": "f"}}}
+                         "update": {"kind": "data", "source": "met", "from": {"file_variable": "F"}}}
             }}},
             "data_sources": {"met": {"kind": "grid", "temporal": {"frequency": "PT6H"}}}
         });

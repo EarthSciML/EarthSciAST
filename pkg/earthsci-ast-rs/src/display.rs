@@ -1893,23 +1893,30 @@ impl fmt::Display for EsmFile {
             }
         }
 
-        // Display data loaders
+        // Display data sources. From esm 1.0.0 a source exposes no variables of
+        // its own — the consuming parameter names it — so what is worth showing
+        // is where it reads from and whether it is time-varying.
         if let Some(ref data_sources) = self.data_sources
             && !data_sources.is_empty()
         {
-            writeln!(f, "  Data Loaders:")?;
-            for (name, loader) in data_sources {
-                let kind = match loader.kind {
+            writeln!(f, "  Data Sources:")?;
+            for (name, source) in data_sources {
+                let kind = match source.kind {
                     crate::DataSourceKind::Grid => "grid",
                     crate::DataSourceKind::Points => "points",
                     crate::DataSourceKind::Static => "static",
                 };
-                // A data source declares no variables since 1.0.0 — the
-                // consuming parameter names the file variable it binds.
                 writeln!(
                     f,
-                    "    {}: [{}] {}",
-                    name, kind, loader.source.url_template,
+                    "    {}: [{}] {}{}",
+                    name,
+                    kind,
+                    source.source.url_template,
+                    if source.temporal.is_some() {
+                        " (temporal)"
+                    } else {
+                        ""
+                    },
                 )?;
             }
             writeln!(f)?;

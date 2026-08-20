@@ -56,18 +56,18 @@ fn resolve_tol(
 }
 
 fn resolve_observed(model: &Model, bindings: &mut HashMap<String, f64>) {
-    // An observed unknown's defining expression is its equation's RHS since
-    // 1.0.0 (esm-spec §6.3.1).
-    let defs = earthsci_ast::classify::observed_definitions(model);
-    let n = model.variables.len() + 1;
+    // An OBSERVED unknown's defining expression is its equation's RHS from esm
+    // 1.0.0 (esm-spec §6.3.1), not a field on the variable.
+    let defs = earthsci_ast::classification::observed_definitions(model);
+    let n = defs.len() + 1;
     for _ in 0..n {
         let mut progress = false;
         for (vname, expr) in &defs {
-            if bindings.contains_key(*vname) {
+            if bindings.contains_key(vname) {
                 continue;
             }
             if let Some(val) = eval_expr(expr, bindings) {
-                bindings.insert((*vname).to_string(), val);
+                bindings.insert(vname.clone(), val);
                 progress = true;
             }
         }

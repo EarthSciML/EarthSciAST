@@ -168,16 +168,10 @@ DiscreteMaterializer() =
 #     without a whole-array D.
 # Returns `(equations, folded_array_obs)`.
 function _prepare_model_equations(model::Model)
+    # esm 1.0.0: an observed unknown's defining right-hand side IS an equation
+    # (esm-spec §6.3), so there is no variable-level `expression` left to
+    # synthesize an equation from — the list is already complete.
     equations = model.equations
-    let synth = Equation[]
-        for (name, v) in model.variables
-            (v.type == ObservedVariable && v.expression isa ASTExpr) || continue
-            any(eq -> eq.lhs isa VarExpr && (eq.lhs::VarExpr).name == name,
-                model.equations) && continue
-            push!(synth, Equation(VarExpr(name), v.expression))
-        end
-        isempty(synth) || (equations = vcat(model.equations, synth))
-    end
     equations, folded_array_obs = _fold_elementwise_array_observeds(equations, model)
     let var_shapes = Dict{String,Vector{String}}()
         for (n, v) in model.variables
@@ -232,8 +226,7 @@ function _discover_geometry_vars(model::Model, equations::Vector{Equation},
     defs = Dict{String,ASTExpr}()
     inline_vars = Set{String}()
     if has_setup_geometry
-        pre_state_names = Set{String}(n for (n, v) in model.variables
-                                      if v.type == StateVariable && !(n in vi_vars))
+        pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
         live_param_names = Set{String}(String(k) for k in keys(param_arrays))
         setup_vars, defs, live_tainted =
             _geometry_setup_vars(model, equations, ring_vars,
@@ -274,8 +267,9 @@ function _discover_geometry_vars(model::Model, equations::Vector{Equation},
             end
             changed
         end
+        obs_here = Set{String}(observed_unknowns(model))
         for (name, v) in model.variables
-            (v.type == ObservedVariable && _is_array_shape(v.shape) &&
+            (name in obs_here && _is_array_shape(v.shape) &&
              !(name in setup_vars) && !(name in ring_vars) &&
              name in live_tainted && name in geom_derived && haskey(defs, name) &&
              defs[name] isa OpExpr) || continue
@@ -312,6 +306,7 @@ function _collect_array_inline_vars(model::Model, equations::Vector{Equation},
                                     geom_setup_vars, geom_ring_vars,
                                     geom_inline_vars)
     array_inline_vars = Set{String}()
+    observed_here = Set{String}(observed_unknowns(model))
     for eq in equations
         eq.lhs isa VarExpr || continue
         name = (eq.lhs::VarExpr).name
@@ -319,7 +314,7 @@ function _collect_array_inline_vars(model::Model, equations::Vector{Equation},
          name in geom_inline_vars) && continue
         haskey(model.variables, name) || continue
         v = model.variables[name]
-        (v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
+        (name in observed_here && _is_array_shape(v.shape)) || continue
         (eq.rhs isa OpExpr && ((eq.rhs::OpExpr).op == "arrayop" ||
                                _is_array_producer(eq.rhs))) || continue
         push!(array_inline_vars, name)
@@ -423,10 +418,11 @@ function _collect_materialized_array_obs(model::Model, equations::Vector{Equatio
         end
     end
     out = Set{String}()
+    observed_here = Set{String}(observed_unknowns(model))
     for name in array_inline_vars
         (name in blocked || !(name in live)) && continue
         v = get(model.variables, name, nothing)
-        (v !== nothing && v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
+        (v !== nothing && name in observed_here && _is_array_shape(v.shape)) || continue
         push!(out, name)
     end
     # STRUCTURAL positions (mirrors the scalar slot plan's `_obs_structural_refs!`):
@@ -442,10 +438,8 @@ function _collect_materialized_array_obs(model::Model, equations::Vector{Equatio
             _array_obs_structural_refs!(eq.lhs, out, hits, seen)
             _array_obs_structural_refs!(eq.rhs, out, hits, seen)
         end
-        for (_, v) in model.variables
-            v.expression isa ASTExpr &&
-                _array_obs_structural_refs!(v.expression, out, hits, seen)
-        end
+        # esm 1.0.0: an observed's definition is an equation, so the loop above
+        # has already seen every one of them.
         setdiff!(out, hits)
         get(ENV, "ESS_ARRAY_OBS_DEBUG", "") == "1" && !isempty(hits) &&
             (println(stderr, "[array-obs] structural, kept inline: ",
@@ -594,16 +588,17 @@ function _collect_pia_operand_arrays(model::Model, equations::Vector{Equation},
             _collect_pia_operands!(eq.lhs, pia_names)
             _collect_pia_operands!(eq.rhs, pia_names)
         end
-        for (_, v) in model.variables
-            v.expression isa ASTExpr && _collect_pia_operands!(v.expression, pia_names)
-        end
+        # An observed unknown's definition is an equation from esm 1.0.0, and
+        # the equation loop above already scanned every one of them; there is no
+        # separate variable-level expression left to collect from.
+        obs_defs = observed_definitions(model)
         for name in pia_names
             var = get(model.variables, name, nothing)
+            defn = get(obs_defs, name, nothing)
             mat = if haskey(const_arrays, name)
                 Matrix{Float64}(const_arrays[name])
-            elseif var !== nothing && var.expression isa OpExpr &&
-                   (var.expression::OpExpr).op == "const"
-                _pia_const_matrix((var.expression::OpExpr).value)
+            elseif defn isa OpExpr && (defn::OpExpr).op == "const"
+                _pia_const_matrix((defn::OpExpr).value)
             else
                 throw(TreeWalkError("E_TREEWALK_GEOMETRY_OPERAND",
                     "polygon_intersection_area operand '$(name)' must be a const polygon " *
@@ -645,19 +640,22 @@ function _collect_const_obs_arrays(model::Model, const_arrays::AbstractDict,
                                    register_coord_buffers::Bool)
     const_obs_vars = Set{String}()
     const_obs_arrays = Dict{String,Array{Float64}}()
+    obs_defs = observed_definitions(model)
     for (name, v) in model.variables
-        (v.type == ObservedVariable && _is_array_shape(v.shape) &&
-         _is_const_op(v.expression) && !(name in pia_operand_vars) &&
+        defn = get(obs_defs, name, nothing)
+        (defn !== nothing && _is_array_shape(v.shape) &&
+         _is_const_op(defn) && !(name in pia_operand_vars) &&
          !(name in geom_ring_vars)) || continue
-        const_obs_arrays[name] = _const_op_to_array((v.expression::OpExpr).value)
+        const_obs_arrays[name] = _const_op_to_array((defn::OpExpr).value)
         push!(const_obs_vars, name)
     end
     if register_coord_buffers
         for (name, v) in model.variables
-            (v.type == ObservedVariable && _is_array_shape(v.shape) &&
+            defn = get(obs_defs, name, nothing)
+            (defn !== nothing && _is_array_shape(v.shape) &&
              haskey(const_arrays, name) && !(name in const_obs_vars) &&
              !(name in pia_operand_vars) && !(name in geom_ring_vars) &&
-             !_is_const_op(v.expression)) || continue
+             !_is_const_op(defn)) || continue
             const_obs_arrays[name] = Array{Float64}(const_arrays[name])
             push!(const_obs_vars, name)
         end
@@ -689,8 +687,9 @@ function _register_bare_alias_arrays!(const_obs_arrays::Dict{String,Array{Float6
     for eq in equations
         eq.lhs isa VarExpr && (alias_defs[(eq.lhs::VarExpr).name] = eq.rhs)
     end
+    obs_defs = observed_definitions(model)
     for (name, v) in model.variables
-        (v.type == ObservedVariable && _is_array_shape(v.shape)) || continue
+        (haskey(obs_defs, name) && _is_array_shape(v.shape)) || continue
         (name in const_obs_vars || name in pia_operand_vars ||
          name in geom_ring_vars || name in geom_setup_vars ||
          name in geom_inline_vars || name in array_inline_vars) && continue
@@ -705,10 +704,9 @@ function _register_bare_alias_arrays!(const_obs_arrays::Dict{String,Array{Float6
                 arr = const_obs_arrays[tgt]
             elseif haskey(const_arrays, tgt)
                 arr = Array{Float64}(const_arrays[tgt])
-            elseif haskey(model.variables, tgt) &&
-                   model.variables[tgt].type == ObservedVariable &&
-                   _is_const_op(model.variables[tgt].expression)
-                arr = _const_op_to_array((model.variables[tgt].expression::OpExpr).value)
+            elseif get(obs_defs, tgt, nothing) !== nothing &&
+                   _is_const_op(obs_defs[tgt])
+                arr = _const_op_to_array((obs_defs[tgt]::OpExpr).value)
             end
             arr === nothing || break
             cur = tgt
@@ -742,6 +740,12 @@ function _partition_variables(model::Model;
     param_names = String[]
     observed_names = String[]
     state_var_names = Set{String}()
+    # The unknown split is DERIVED (esm-spec §6.3.1). An ODE state or an
+    # algebraic unknown occupies a partition slot the solver integrates or
+    # solves; an observed unknown is eliminable and gets the observed bucket.
+    # Both were the declared `state` / `observed` types before 1.0.0.
+    observed_here = Set{String}(observed_unknowns(model))
+    unknown_state_names = Set{String}(solver_unknowns(model))
     for (name, v) in model.variables
         # Value-invention outputs (skolem/distinct/rank) are materialized once at
         # setup (RFC §6.1) and never enter the ODE — drop them from every
@@ -767,17 +771,18 @@ function _partition_variables(model::Model;
         # const-op array observeds (in-file ring stacks / source fields) are
         # materialized into const_arrays; build-time data, not a partition member.
         name in const_obs_vars && continue
-        if v.type == StateVariable
+        if name in unknown_state_names
             push!(state_var_names, name)
-        elseif v.type == ParameterVariable || v.type == DiscreteVariable
-            # A DISCRETE variable lowers exactly like a parameter here: it is a
-            # solver-side buffer the refresh machinery writes at each cadence
-            # boundary, never a differentiated slot. Array-shaped ⇒ it must be
-            # backed by a live forcing buffer (`param_arrays`) or const data;
-            # scalar ⇒ an ordinary scalar parameter slot. The taint seed for the
-            # discrete-materialize cut is `keys(param_arrays)` (the buffers
-            # actually supplied), so declaring the forcing changes no cadence
-            # semantics — it only stops the name from looking like a typo.
+        elseif v.type == ParameterVariable
+            # EVERY parameter lowers the same way here — constant, sampled, or
+            # discrete-cadence: it is a solver-side value the update machinery
+            # may rewrite at a cadence boundary, never a differentiated slot.
+            # Array-shaped ⇒ it must be backed by a live forcing buffer
+            # (`param_arrays`) or const data; scalar ⇒ an ordinary scalar
+            # parameter slot. The taint seed for the discrete-materialize cut is
+            # `keys(param_arrays)` (the buffers actually supplied), so declaring
+            # the update changes no cadence semantics — it only stops the name
+            # from looking like a typo.
             if _is_array_shape(v.shape)
                 # An array-shaped parameter is supported only when supplied as
                 # const data (e.g. the polygon operands of an intersect_polygon
@@ -791,7 +796,7 @@ function _partition_variables(model::Model;
             else
                 push!(param_names, name)
             end
-        elseif v.type == ObservedVariable
+        elseif name in observed_here
             if _is_array_shape(v.shape)
                 # An array-shaped observed is supported only for an
                 # intersect_polygon clip ring, materialized into a const_array at
@@ -801,8 +806,6 @@ function _partition_variables(model::Model;
             else
                 push!(observed_names, name)
             end
-        elseif v.type == BrownianVariable
-            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_BROWNIAN", name))
         end
     end
     sort!(param_names)
@@ -1033,7 +1036,7 @@ function _classify_parameters(model::Model, param_names::Vector{String},
     classes = Dict{String,Symbol}()
     in_p = Set{String}(param_names)
     for (name, v) in model.variables
-        (v.type == ParameterVariable || v.type == DiscreteVariable) || continue
+        v.type == ParameterVariable || continue
         classes[name] = if name in reads
             :structural
         elseif name in in_p
@@ -1141,8 +1144,9 @@ end
 function _enumerate_declared_array_cells!(array_cells, model::Model,
                                           index_sets::AbstractDict,
                                           derived_extents::AbstractDict, vi_vars)
+    state_here = Set{String}(solver_unknowns(model))
     for (n, v) in model.variables
-        (v.type == StateVariable && _is_array_shape(v.shape) && !(n in vi_vars)) || continue
+        (n in state_here && _is_array_shape(v.shape) && !(n in vi_vars)) || continue
         (haskey(array_cells, n) && !isempty(array_cells[n])) && continue
         exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
         exts === nothing && continue
@@ -2058,8 +2062,7 @@ function _build_lower_and_classify(model::Model;
     # both sets are empty and the inline sets are untouched (byte-identical pre-cut).
     discrete_vars = Set{String}()
     if materialize_out !== nothing
-        pre_state = Set{String}(n for (n, v) in model.variables
-                                if v.type == StateVariable && !(n in vi_vars))
+        pre_state = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
         scalar_params = Set{String}(n for (n, v) in model.variables
             if v.type == ParameterVariable && !_is_array_shape(v.shape))
         discrete_vars, const_mat_vars = _discrete_materialize_split(
@@ -2322,10 +2325,9 @@ function _build_state_layout(model::Model, cls, parts;
     # in an equation LHS. This handles both declared-shape variables and the
     # common pattern where shape=nothing but equations use D(index(var, k)). An
     # explicit empty shape (`[]`, rank-0) is scalar, not an array.
-    array_var_names_declared = Set{String}(n for (n, v) in model.variables
-                                           if v.type == StateVariable &&
-                                              _is_array_shape(v.shape) &&
-                                              !(n in vi_vars))
+    array_var_names_declared = Set{String}(
+        n for n in solver_unknowns(model)
+        if _is_array_shape(model.variables[n].shape) && !(n in vi_vars))
     # Detect array usage from equations even when shape is not declared.
     array_var_names = _detect_array_vars(parts.equations, parts.state_var_names,
                                          initial_conditions)
@@ -4574,8 +4576,13 @@ function _model_has_surviving_refs(model::Model)
             check(eq.lhs); check(eq.rhs)
         end
     end
+    # A parameter update's `when` / `expression` are expression positions too,
+    # and an unlowered template reference in one is just as surviving.
     for (_, var) in model.variables
-        check(var.expression)
+        var.update === nothing && continue
+        for rule in var.update
+            check(rule.when); check(rule.expression)
+        end
     end
     if !found
         for (_, sub) in model.subsystems

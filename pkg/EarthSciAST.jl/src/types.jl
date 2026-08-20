@@ -18,7 +18,7 @@ disk keep whatever version they declare; this constant is only the default for
 documents the library itself creates (flatten wrappers, MTK/Catalyst export).
 Must track the version on the first line of `esm-spec.md`.
 """
-const ESM_FORMAT_VERSION = "0.8.0"
+const ESM_FORMAT_VERSION = "1.0.0"
 
 # ========================================
 # 1. Expression Type Hierarchy
@@ -643,30 +643,23 @@ Event triggered by discrete triggers whose symbolic `affects` are
 [`AffectEquation`](@ref)s (`lhs` target name, `rhs` new-value expression) —
 the schema's `AffectEquation` shape, shared with `ContinuousEvent`.
 
-`functional_affect` carries the raw schema `functional_affect` handler
-descriptor (`handler_id`, `read_vars`, `read_params`, optional
-`modified_params` / `config`) verbatim, so a handler-based event survives a
-parse → serialize round trip instead of degrading into a bogus `{lhs, rhs}`
-affect equation. The schema (`DiscreteEvent` oneOf) requires exactly one of
-symbolic `affects` or a `functional_affect` descriptor.
+From esm 1.0.0 an event affects **unknowns only** (esm-spec §5.4, §6.3.1). The
+0.x `functional_affect` handler descriptor and the `discrete_parameters` list
+are both gone: a handler's only write channel was `modified_params`, so it now
+lives on the parameter it writes (`update.handler`, [`FunctionalUpdate`](@ref)),
+and a parameter that changes during a run declares its own
+[`ParameterUpdate`](@ref). An `affects` LHS naming a parameter is the
+`event_affects_parameter` diagnostic.
 """
 struct DiscreteEvent <: EventType
     trigger::DiscreteEventTrigger
     affects::Vector{AffectEquation}
     description::Union{String,Nothing}
-    functional_affect::Union{Dict{String,Any},Nothing}
-    # Names the event mutates as *discrete parameters* (MTK `discrete_parameters`).
-    # Every entry must name a declared PARAMETER of the enclosing model — see
-    # `validate_single_event_consistency`, which reports `invalid_discrete_param`
-    # otherwise. Previously parsed-and-dropped, which both lost the field on
-    # round-trip and made the check impossible.
-    discrete_parameters::Union{Vector{String},Nothing}
 
-    # Constructor with optional description / handler descriptor
+    # Constructor with optional description
     DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{AffectEquation};
-                  description=nothing, functional_affect=nothing,
-                  discrete_parameters=nothing) =
-        new(trigger, affects, description, functional_affect, discrete_parameters)
+                  description=nothing) =
+        new(trigger, affects, description)
 end
 
 # ========================================
@@ -674,36 +667,185 @@ end
 # ========================================
 
 """
+    Reference
+
+Academic citation or data source reference.
+"""
+struct Reference
+    doi::Union{String,Nothing}
+    citation::Union{String,Nothing}
+    url::Union{String,Nothing}
+    notes::Union{String,Nothing}
+
+    # Constructor with all optional parameters
+    Reference(; doi=nothing, citation=nothing, url=nothing, notes=nothing) =
+        new(doi, citation, url, notes)
+end
+
+"""
+    Distribution
+
+A parameter's value drawn from a probability distribution rather than fixed
+(esm-spec §6.3, schema `Distribution`). The closed set is `normal`,
+`lognormal`, and `uniform`.
+
+The three kinds spell their parameters differently on the wire, so the struct
+stores them by ROLE and the wire names are restored on emit:
+
+| `kind` | `location` | `scale` | other |
+|---|---|---|---|
+| `normal` | `mean` | `std` | `cov` |
+| `lognormal` | `mu` | `sigma` | `cov` |
+| `uniform` | — | — | `low`, `high` |
+
+A distribution is *univariate* when its location parameter is a number and
+*multivariate* when it is an array, in which case `cov` gives the full
+covariance matrix and the parameter's `shape` must agree. WHEN the value is
+drawn is decided by the parameter's [`ParameterUpdate`](@ref): with no update
+it is sampled once at setup (`sampled_parameters`); with `kind: "wiener"` it is
+resampled every step with √dt scaling (`brownian_parameters`).
+"""
+struct Distribution
+    kind::String
+    location::Union{Float64,Vector{Float64},Nothing}
+    scale::Union{Float64,Vector{Float64},Nothing}
+    cov::Union{Vector{Vector{Float64}},Nothing}
+    low::Union{Float64,Vector{Float64},Nothing}
+    high::Union{Float64,Vector{Float64},Nothing}
+
+    Distribution(kind::AbstractString; location=nothing, scale=nothing,
+                 cov=nothing, low=nothing, high=nothing) =
+        new(String(kind), location, scale, cov, low, high)
+end
+
+"""
+    FunctionalUpdate
+
+A registered handler that computes a parameter's new value when its update
+fires (esm-spec §5.5). This is the 0.x event `functional_affect` relocated onto
+the parameter it writes: a handler's only write channel was `modified_params`,
+so moving it onto the parameter removed the write list rather than relocating
+it. `handler_id` is the sole remaining registration mechanism in the format.
+"""
+struct FunctionalUpdate
+    handler_id::String
+    read_vars::Union{Vector{String},Nothing}
+    read_params::Union{Vector{String},Nothing}
+    config::Union{Dict{String,Any},Nothing}
+
+    FunctionalUpdate(handler_id::AbstractString; read_vars=nothing,
+                     read_params=nothing, config=nothing) =
+        new(String(handler_id), read_vars, read_params, config)
+end
+
+"""
+    DataSourceBinding
+
+Binds a parameter to one file variable of a `data_sources` entry (esm-spec
+§8.5) — the `from` value form of a `data` update. This is the 0.x
+0.x `DataLoaderVariable` minus `units`: the units are the parameter's own, declared
+once on the consumer instead of twice.
+"""
+struct DataSourceBinding
+    file_variable::String
+    unit_conversion::Union{Float64,ASTExpr,Nothing}
+    codes::Union{Dict{String,Any},Nothing}
+    select::Union{Dict{String,Any},Nothing}
+    description::Union{String,Nothing}
+    reference::Union{Reference,Nothing}
+
+    DataSourceBinding(file_variable::AbstractString; unit_conversion=nothing,
+                      codes=nothing, select=nothing, description=nothing,
+                      reference=nothing) =
+        new(String(file_variable), unit_conversion, codes, select, description,
+            reference)
+end
+
+"""
+    PARAMETER_UPDATE_KINDS
+
+The closed set of `update.kind` values (esm-spec §5.4). `wiener` takes no value
+form and requires the parameter's `distribution`; the other five take exactly
+one of `expression` / `from` / `handler`. `schedule`, `data`, and `remesh`
+additionally require the parameter to declare a `shape`, because such a
+parameter is a buffer refilled on a discrete cadence.
+"""
+const PARAMETER_UPDATE_KINDS = ("wiener", "schedule", "condition", "crossing",
+                                "data", "remesh")
+
+"""The update kinds that require the parameter to declare a `shape` (§5.4)."""
+const SHAPE_REQUIRING_UPDATE_KINDS = ("schedule", "data", "remesh")
+
+"""
+    ParameterUpdate
+
+One rule saying WHEN a parameter refreshes and WHAT it refreshes from
+(esm-spec §5.4). One mechanism replaces three the 0.x format kept apart: the
+`brownian` variable type (now `kind: "wiener"`), the `discrete` type's
+`RefreshTrigger` (now `schedule` / `data` / `remesh`), and the
+`discrete_parameters` event lists with their `functional_affect` (now
+`condition` / `crossing`).
+
+Trigger fields by kind: `schedule` uses `times` / `interval` /
+`initial_offset`; `condition` and `crossing` use `when` (plus `direction` for
+`crossing`); `data` uses `source`; `remesh` uses `hook`; `wiener` uses none.
+Value forms: exactly one of `expression`, `from`, `handler` for every kind
+except `wiener`, which resamples the parameter's own `distribution`.
+"""
+struct ParameterUpdate
+    kind::String
+    # schedule
+    times::Union{Vector{Float64},Nothing}
+    interval::Union{Float64,Nothing}
+    initial_offset::Union{Float64,Nothing}
+    # condition / crossing
+    when::Union{ASTExpr,Nothing}
+    direction::Union{String,Nothing}
+    # data
+    source::Union{String,Nothing}
+    # remesh
+    hook::Union{String,Nothing}
+    # value forms — exactly one, except for `wiener` which carries none
+    expression::Union{ASTExpr,Nothing}
+    from::Union{DataSourceBinding,Nothing}
+    handler::Union{FunctionalUpdate,Nothing}
+
+    ParameterUpdate(kind::AbstractString; times=nothing, interval=nothing,
+                    initial_offset=nothing, when=nothing, direction=nothing,
+                    source=nothing, hook=nothing, expression=nothing,
+                    from=nothing, handler=nothing) =
+        new(String(kind), times, interval, initial_offset, when, direction,
+            source, hook, expression, from, handler)
+end
+
+"""
     @enum ModelVariableType
 
-Type enumeration for model variables:
-- StateVariable: differential state variables
-- ParameterVariable: constant parameters
-- ObservedVariable: derived/computed variables
-- BrownianVariable: stochastic noise sources (Wiener processes). The presence
-  of any brownian variable promotes the enclosing model from an ODE system to
-  an SDE system. Maps to MTK `@brownians` and an `SDESystem`.
-- DiscreteVariable: piecewise-constant between refreshes rather than
-  continuously integrated — it holds its value until a `cadence` boundary, a
-  loader refresh, or an event assigns a new one, so the solver never
-  differentiates it. This is the fifth member of the schema's
-  `ModelVariable.type` enum (the spelling for a loader/forcing-fed field,
-  CONFORMANCE_SPEC §5.10.1). It lowers to a solver-side PARAMETER BUFFER: the
-  refresh machinery writes it (`build_evaluator(...; param_arrays = …)`), and
-  the cadence partition (§5.7) seeds it `discrete`, tainting every field that
-  reads it. Declaring it is what distinguishes a real forcing from a typo
-  (esm-spec §4.9.5); a bare undeclared forcing name is indistinguishable from
-  a misspelling.
+The **two** declared variable types of esm 1.0.0 (esm-spec §6.3) — and there is
+no third:
 
-`discrete` is deliberately LAST so the existing members keep their integer
-values.
+- `UnknownVariable`: a quantity the solver solves for. Its behaviour is stated
+  by the model's `equations` and **nowhere else**; there is no `expression`
+  field on a variable.
+- `ParameterVariable`: a quantity supplied to the solver. Its value is
+  `default` or a [`Distribution`](@ref), optionally refreshed by a
+  [`ParameterUpdate`](@ref).
+
+Everything else a solver needs is DERIVED, not declared. Which unknowns are ODE
+states, observed, or algebraic follows from the equations; which parameters are
+Brownian, discrete, sampled, or constant follows from `distribution` and
+`update`. Ask those questions through the classification API of esm-spec
+§6.3.1 — [`ode_states`](@ref), [`observed_unknowns`](@ref),
+[`algebraic_unknowns`](@ref), [`is_ode_state`](@ref),
+[`brownian_parameters`](@ref), [`discrete_parameters`](@ref),
+[`sampled_parameters`](@ref), [`constant_parameters`](@ref),
+[`system_kind`](@ref) — never by reading a declared type. The 0.x members
+`StateVariable`, `ObservedVariable`, `BrownianVariable` and `DiscreteVariable`
+were removed in 1.0.0 with no deprecation path.
 """
 @enum ModelVariableType begin
-    StateVariable
+    UnknownVariable
     ParameterVariable
-    ObservedVariable
-    BrownianVariable
-    DiscreteVariable
 end
 
 """
@@ -723,18 +865,17 @@ op). Columns:
   spelling by contract.
 - `legacy`: parse-only aliases `coerce_model_variable_type` (parse.jl) must
   keep accepting — the pre-schema CamelCase spellings matching the Julia
-  member names.
+  member names. The 0.x wire spellings `state` / `observed` / `brownian` /
+  `discrete` are deliberately NOT aliases: esm 1.0.0 is a clean break, so a
+  document declaring one is rejected rather than silently reinterpreted.
 
 Derived (below): [`_MODEL_VARIABLE_TYPE_WIRE`](@ref) and
 [`_MODEL_VARIABLE_TYPE_FROM_STRING`](@ref). Round-trip and legacy-spelling
 behavior is pinned by test/types_test.jl.
 """
 const MODEL_VARIABLE_TYPE_TABLE = (
-    (enum = StateVariable,     wire = "state",     legacy = ("StateVariable",)),
+    (enum = UnknownVariable,   wire = "unknown",   legacy = ("UnknownVariable",)),
     (enum = ParameterVariable, wire = "parameter", legacy = ("ParameterVariable",)),
-    (enum = ObservedVariable,  wire = "observed",  legacy = ("ObservedVariable",)),
-    (enum = BrownianVariable,  wire = "brownian",  legacy = ("BrownianVariable",)),
-    (enum = DiscreteVariable,  wire = "discrete",  legacy = ("DiscreteVariable",)),
 )
 
 # The table must cover EXACTLY the enum's members, in order — a new member
@@ -772,43 +913,60 @@ end
 """
     ModelVariable
 
-Structure defining a model variable with its type, default value, and optional expression.
+A model variable: an `unknown` the solver solves for, or a `parameter` supplied
+to it (esm-spec §6.3).
 
-Brownian-only fields:
-- `noise_kind`: stochastic process kind (currently only `"wiener"`).
-- `correlation_group`: opaque tag grouping correlated noise sources.
+An unknown carries no `expression` — its behaviour is stated by the model's
+`equations` and nowhere else, so an observed unknown's defining right-hand side
+is reached through [`observed_definitions`](@ref), never off the variable.
+
+Parameter-only value fields:
+- `distribution`: draw the value from a [`Distribution`](@ref) instead of fixing
+  it at `default` (mutually exclusive with `default`).
+- `update`: when the parameter refreshes and what from — a vector of
+  [`ParameterUpdate`](@ref) rules applied in declaration order. `nothing` means
+  the parameter never changes after setup. The wire form is a single object for
+  one rule and an array for two or more (a one-element array is invalid), so
+  `length(update)` alone decides the emitted spelling and the round trip is
+  stable.
 """
 struct ModelVariable
     type::ModelVariableType
     default::Union{Float64,Nothing}
     description::Union{String,Nothing}
-    expression::Union{ASTExpr,Nothing}
     units::Union{String,Nothing}
     default_units::Union{String,Nothing}
-    # Arrayed-variable shape: ordered dimension names drawn from the
-    # enclosing model's domain.spatial. `nothing` means scalar.
-    # See discretization RFC §10.2.
+    # Arrayed-variable shape: ordered index-set names from the document-scoped
+    # `index_sets` registry. `nothing` means scalar; an empty vector is a valid
+    # (scalar) shape a `schedule` / `data` / `remesh` parameter may declare.
     shape::Union{Vector{String},Nothing}
     # Staggered-grid location tag (e.g. "cell_center", "edge_normal",
     # "vertex"). `nothing` means no explicit staggering. See RFC §10.2.
     location::Union{String,Nothing}
-    noise_kind::Union{String,Nothing}
-    correlation_group::Union{String,Nothing}
+    distribution::Union{Distribution,Nothing}
+    update::Union{Vector{ParameterUpdate},Nothing}
 
     # Constructor with optional parameters
     ModelVariable(type::ModelVariableType;
                   default=nothing,
                   description=nothing,
-                  expression=nothing,
                   units=nothing,
                   default_units=nothing,
                   shape=nothing,
                   location=nothing,
-                  noise_kind=nothing,
-                  correlation_group=nothing) =
-        new(type, default, description, expression, units, default_units,
-            shape, location, noise_kind, correlation_group)
+                  distribution=nothing,
+                  update=nothing) =
+        new(type, default, description, units, default_units,
+            shape, location, distribution, _coerce_update_vector(update))
 end
+
+# `update` accepts a single rule or a vector of rules; it is stored as a vector
+# (or `nothing`) so every consumer iterates one shape. The emitted wire form is
+# recovered from the length: one rule ⇒ object, two or more ⇒ array.
+_coerce_update_vector(::Nothing) = nothing
+_coerce_update_vector(u::ParameterUpdate) = ParameterUpdate[u]
+_coerce_update_vector(u::Vector{ParameterUpdate}) = u
+_coerce_update_vector(u::AbstractVector) = ParameterUpdate[x for x in u]
 
 """
     reconstruct(v::ModelVariable; <any ModelVariable field>=…) -> ModelVariable
@@ -823,18 +981,16 @@ function reconstruct(v::ModelVariable;
         type::ModelVariableType = v.type,
         default = v.default,
         description = v.description,
-        expression = v.expression,
         units = v.units,
         default_units = v.default_units,
         shape = v.shape,
         location = v.location,
-        noise_kind = v.noise_kind,
-        correlation_group = v.correlation_group)
+        distribution = v.distribution,
+        update = v.update)
     return ModelVariable(type;
-        default=default, description=description, expression=expression,
+        default=default, description=description,
         units=units, default_units=default_units, shape=shape,
-        location=location, noise_kind=noise_kind,
-        correlation_group=correlation_group)
+        location=location, distribution=distribution, update=update)
 end
 
 """
@@ -1014,11 +1170,12 @@ end
 """
     abstract type SubsystemNode end
 
-Common supertype of the three legal `Model.subsystems` values: a child
-`Model`, a pure-I/O `DataLoader` (RFC pure-io-data-loaders §4.3), or — only
-until references are resolved — a `SubsystemRef`. Exists so
+Common supertype of the legal `Model.subsystems` values: a child `Model` or —
+only until references are resolved — a `SubsystemRef`. Exists so
 `Model.subsystems` can be concretely typed `Dict{String,SubsystemNode}` even
-though `DataLoader` is declared later in this file than `Model`.
+though `SubsystemRef` is declared later in this file than `Model`. From esm
+1.0.0 a data source is an ingest registry entry, not a component, so it is not
+a `SubsystemNode`.
 """
 abstract type SubsystemNode end
 
@@ -1028,7 +1185,7 @@ abstract type SubsystemNode end
 
 Unresolved reference to an external ESM file used as a subsystem (esm-spec §4.7).
 Produced by `coerce_model` for a `{"ref": "..."}` subsystem entry and replaced
-in place by `resolve_subsystem_refs!` with the loaded `Model` or `DataLoader`.
+in place by `resolve_subsystem_refs!` with the loaded `Model`.
 A `SubsystemRef` only survives parsing when references are not resolved (e.g.
 `load(::IO)` without a base path); `load(::String)` always resolves them.
 `bindings` closes the referenced document's open metaparameters at this edge
@@ -1057,9 +1214,8 @@ SubsystemRef(ref::AbstractString) =
 
 ODE-based model component containing variables, equations, and optional subsystems.
 Supports hierarchical composition through subsystems. A subsystem value is a
-child `Model`, a pure-I/O `DataLoader` (RFC pure-io-data-loaders §4.3), or — only
-until references are resolved — a `SubsystemRef`; the field is typed by their
-shared supertype, `Dict{String,SubsystemNode}`.
+child `Model` or — only until references are resolved — a `SubsystemRef`; the
+field is typed by their shared supertype, `Dict{String,SubsystemNode}`.
 """
 struct Model <: SubsystemNode
     variables::Dict{String,ModelVariable}
@@ -1142,22 +1298,6 @@ end
 # ========================================
 # 6. Data and Operator Types
 # ========================================
-
-"""
-    Reference
-
-Academic citation or data source reference.
-"""
-struct Reference
-    doi::Union{String,Nothing}
-    citation::Union{String,Nothing}
-    url::Union{String,Nothing}
-    notes::Union{String,Nothing}
-
-    # Constructor with all optional parameters
-    Reference(; doi=nothing, citation=nothing, url=nothing, notes=nothing) =
-        new(doi, citation, url, notes)
-end
 
 """
     abstract type CouplingEntry end
@@ -1265,15 +1405,14 @@ struct CouplingEvent <: CouplingEntry
     trigger::Union{DiscreteEventTrigger,Nothing}
     affects::Vector{AffectEquation}
     affect_neg::Union{Vector{AffectEquation},Nothing}
-    discrete_parameters::Union{Vector{String},Nothing}
     root_find::Union{String,Nothing}
     reinitialize::Union{Bool,Nothing}
     description::Union{String,Nothing}
 
     CouplingEvent(event_type::String, affects::Vector{AffectEquation};
                   conditions=nothing, trigger=nothing, affect_neg=nothing,
-                  discrete_parameters=nothing, root_find=nothing, reinitialize=nothing, description=nothing) =
-        new(event_type, conditions, trigger, affects, affect_neg, discrete_parameters, root_find, reinitialize, description)
+                  root_find=nothing, reinitialize=nothing, description=nothing) =
+        new(event_type, conditions, trigger, affects, affect_neg, root_find, reinitialize, description)
 end
 
 """
@@ -1281,8 +1420,8 @@ end
 
 Reuse of a coupling-library file (esm-spec §10.9, §10.10). Names a library by
 `ref` and binds each of the library's declared roles to a component in the
-assembly via `bind` (role name → a top-level `models`/`reaction_systems`/
-`data_loaders` key, or a dotted `Parent.Child` subsystem path). At flatten the
+assembly via `bind` (role name → a top-level `models`/`reaction_systems` key,
+or a dotted `Parent.Child` subsystem path). At flatten the
 import expands into concrete `variable_map`/`couple`/`operator_compose`/`event`
 edges by substituting the bound actual for every role-named top-level segment
 (`expand_coupling_imports`); the entry itself round-trips intact.
@@ -1297,27 +1436,30 @@ struct CouplingImport <: CouplingEntry
 end
 
 """
-    DataLoaderSource
+    DataSourceLocation
 
-File discovery configuration for a DataLoader. Describes how to locate data
-files at runtime via a URL template with `{date:<strftime>}`, `{var}`,
-`{sector}`, `{species}`, and custom substitutions. Optional `mirrors` list
-gives ordered fallback templates.
+File discovery configuration for a data source (the schema's
+`DataSource.source` object). Describes how to locate data files at runtime via
+a URL template with `{date:<strftime>}`, `{var}`, `{sector}`, `{species}`, and
+custom substitutions. Optional `mirrors` list gives ordered fallback templates.
 """
-struct DataLoaderSource
+struct DataSourceLocation
     url_template::String
     mirrors::Union{Vector{String},Nothing}
 
-    DataLoaderSource(url_template::String; mirrors=nothing) =
+    DataSourceLocation(url_template::String; mirrors=nothing) =
         new(url_template, mirrors)
 end
 
 """
-    DataLoaderTemporal
+    DataSourceTemporal
 
-Temporal coverage and record layout for a DataLoader.
+Temporal coverage and record layout for a data source (esm-spec §8.3). Its
+PRESENCE is what makes the source time-varying, and so what keeps a parameter
+drawing from it seeded DISCRETE rather than refined to CONST
+(CONFORMANCE_SPEC §5.7.2).
 """
-struct DataLoaderTemporal
+struct DataSourceTemporal
     start::Union{String,Nothing}
     stop::Union{String,Nothing}           # field name "end" in JSON (reserved word in Julia)
     file_period::Union{String,Nothing}
@@ -1325,36 +1467,16 @@ struct DataLoaderTemporal
     records_per_file::Union{Int,String,Nothing}  # integer or "auto"
     time_variable::Union{String,Nothing}
 
-    DataLoaderTemporal(; start=nothing, stop=nothing, file_period=nothing,
+    DataSourceTemporal(; start=nothing, stop=nothing, file_period=nothing,
                        frequency=nothing, records_per_file=nothing,
                        time_variable=nothing) =
         new(start, stop, file_period, frequency, records_per_file, time_variable)
 end
 
 """
-    DataLoaderVariable
+    DataSourceDeterminism
 
-A variable exposed by a DataLoader, mapped from a source-file variable.
-`unit_conversion` may be a numeric factor or an Expression AST.
-"""
-struct DataLoaderVariable
-    file_variable::String
-    units::String
-    unit_conversion::Union{Float64,ASTExpr,Nothing}
-    description::Union{String,Nothing}
-    reference::Union{Reference,Nothing}
-
-    DataLoaderVariable(file_variable::String, units::String;
-                       unit_conversion=nothing,
-                       description=nothing,
-                       reference=nothing) =
-        new(file_variable, units, unit_conversion, description, reference)
-end
-
-"""
-    DataLoaderDeterminism
-
-Reproducibility contract a loader advertises to bindings (esm-spec §8.9.2).
+Reproducibility contract a source advertises to bindings (esm-spec §8.1).
 A binding that cannot honor the declared endian / float_format / integer_width
 MUST reject the file at load.
 
@@ -1363,51 +1485,54 @@ Fields (all optional):
 - `float_format`: "ieee754_single" | "ieee754_double"
 - `integer_width`: 32 | 64
 """
-struct DataLoaderDeterminism
+struct DataSourceDeterminism
     endian::Union{String,Nothing}
     float_format::Union{String,Nothing}
     integer_width::Union{Int,Nothing}
 
-    DataLoaderDeterminism(; endian=nothing, float_format=nothing, integer_width=nothing) =
+    DataSourceDeterminism(; endian=nothing, float_format=nothing, integer_width=nothing) =
         new(endian, float_format, integer_width)
 end
 
 """
-    DataLoader
+    DataSource
 
-Generic, runtime-agnostic description of an external data source. Pure I/O:
-carries enough structural information to locate files, map timestamps to
-files, and describe the data's native grid and variable semantics — rather
-than pointing at a runtime handler or performing any regridding.
-Authentication and algorithm-specific tuning are runtime-only and not part
-of the schema.
+Generic, runtime-agnostic description of an external dataset (esm-spec §8).
+Pure I/O: locate, read, decode, slice, and filter bytes on disk. It performs no
+reprojection and no regridding — transferring native fields onto a consuming
+model's grid is an ordinary coupling expression (§8.6).
+
+**A data source is a REGISTRY ENTRY, not a component** — the 1.0.0 change. It
+is not a `SubsystemNode`: it exposes no variables of its own, cannot be a
+coupling endpoint or a subsystem, and cannot be the path root of a scoped
+reference. A model consumes one by declaring a PARAMETER whose
+[`ParameterUpdate`](@ref) names the source and binds one of its file variables
+([`DataSourceBinding`](@ref)), and that parameter owns the units. The 0.x
+`variables` map is therefore gone from this struct: the binding lives on the
+consumer.
 
 Fields:
 - `kind`: "grid" | "points" | "static" (structural kind; scientific role goes in `metadata.tags`)
-- `source`: `DataLoaderSource` with url_template + optional mirrors
-- `temporal`: optional `DataLoaderTemporal`
-- `determinism`: optional `DataLoaderDeterminism` (esm-spec §8.9.2)
-- `variables`: schema-level variable name → `DataLoaderVariable` (minimum one)
+- `source`: [`DataSourceLocation`](@ref) with url_template + optional mirrors
+- `temporal`: optional [`DataSourceTemporal`](@ref)
+- `determinism`: optional [`DataSourceDeterminism`](@ref)
 - `reference`: optional academic/data-source citation
 - `metadata`: optional free-form map (conventionally carries a `tags` array)
 """
-struct DataLoader <: SubsystemNode
+struct DataSource
     kind::String
-    source::DataLoaderSource
-    temporal::Union{DataLoaderTemporal,Nothing}
-    determinism::Union{DataLoaderDeterminism,Nothing}
-    variables::Dict{String,DataLoaderVariable}
+    source::DataSourceLocation
+    temporal::Union{DataSourceTemporal,Nothing}
+    determinism::Union{DataSourceDeterminism,Nothing}
     reference::Union{Reference,Nothing}
     metadata::Union{Dict{String,Any},Nothing}
 
-    DataLoader(kind::String, source::DataLoaderSource,
-               variables::Dict{String,DataLoaderVariable};
+    DataSource(kind::String, source::DataSourceLocation;
                temporal=nothing,
                determinism=nothing,
                reference=nothing,
                metadata=nothing) =
-        new(kind, source, temporal, determinism,
-            variables, reference, metadata)
+        new(kind, source, temporal, determinism, reference, metadata)
 end
 
 # ========================================
@@ -1581,7 +1706,11 @@ struct EsmFile
     metadata::Metadata
     models::Union{Dict{String,Model},Nothing}
     reaction_systems::Union{Dict{String,ReactionSystem},Nothing}
-    data_loaders::Union{Dict{String,DataLoader},Nothing}
+    # Document-scoped INGEST REGISTRY (esm-spec §8). Not components: a data
+    # source is not a coupling endpoint, not a subsystem, and not the path root
+    # of a scoped reference. A model consumes one through a parameter whose
+    # `update` names it.
+    data_sources::Union{Dict{String,DataSource},Nothing}
     coupling::Vector{CouplingEntry}
     # The single temporal domain shared by every component in the document
     # (esm-spec v0.8.0: top-level `domain`, not a map of named domains). A
@@ -1650,7 +1779,7 @@ struct EsmFile
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
             reaction_systems=nothing,
-            data_loaders=nothing,
+            data_sources=nothing,
             coupling=CouplingEntry[],
             domain=nothing,
             enums=nothing,
@@ -1660,7 +1789,7 @@ struct EsmFile
             metaparameters=nothing,
             component_templates=nothing,
             coordinates=nothing) =
-        new(esm, metadata, models, reaction_systems, data_loaders,
+        new(esm, metadata, models, reaction_systems, data_sources,
             coupling, domain, enums, function_tables,
             Dict{String,IndexSet}(index_sets),
             expression_templates, metaparameters, component_templates,
@@ -1695,8 +1824,8 @@ and its location information.
 struct ReferenceResolution
     variable_name::String
     system_path::Vector{String}
-    system_type::Symbol  # :model, :reaction_system, :data_loader
-    resolved_system::Union{Model,ReactionSystem,DataLoader}
+    system_type::Symbol  # :model | :reaction_system
+    resolved_system::Union{Model,ReactionSystem}
 end
 
 """
@@ -1710,7 +1839,7 @@ form a path through the subsystem hierarchy.
 
 ## Algorithm
 1. Split reference on "." to get segments
-2. First segment must match a top-level system (models, reaction_systems, data_loaders, operators)
+2. First segment must match a top-level system (models, reaction_systems)
 3. Each subsequent segment must match a key in the parent system's subsystems map
 4. Final segment is the variable name to resolve
 
@@ -1772,10 +1901,14 @@ function resolve_qualified_reference(esm_file::EsmFile, reference::String)::Refe
 end
 
 """
-    find_top_level_system(esm_file::EsmFile, name::String) -> (Union{Model,ReactionSystem,DataLoader,Nothing}, Symbol)
+    find_top_level_system(esm_file::EsmFile, name::String) -> (Union{Model,ReactionSystem,Nothing}, Symbol)
 
-Find a top-level system by name in models, reaction_systems, data_loaders, or operators.
+Find a top-level system by name in models or reaction_systems.
 Returns the system and its type, or (nothing, :none) if not found.
+
+`data_sources` is deliberately NOT searched: from esm 1.0.0 a data source is an
+ingest registry entry, not a component, so it can never be the root of a scoped
+reference (esm-spec §8).
 """
 function find_top_level_system(esm_file::EsmFile, name::String)
     # Check models
@@ -1788,44 +1921,25 @@ function find_top_level_system(esm_file::EsmFile, name::String)
         return (esm_file.reaction_systems[name], :reaction_system)
     end
 
-    # Check data_loaders
-    if esm_file.data_loaders !== nothing && haskey(esm_file.data_loaders, name)
-        return (esm_file.data_loaders[name], :data_loader)
-    end
-
     return (nothing, :none)
 end
 
 """
-    find_subsystem(system::Union{Model,ReactionSystem}, name::String) -> Union{Model,ReactionSystem,DataLoader,Nothing}
+    find_subsystem(system::Union{Model,ReactionSystem}, name::String) -> Union{Model,ReactionSystem,Nothing}
 
 Find a subsystem by name within a Model or ReactionSystem.
 Returns the subsystem or nothing if not found.
+
+From esm 1.0.0 a subsystem is always a component (a `Model` or a
+`ReactionSystem`): a data source is a registry entry and can no longer be
+declared as one.
 """
-function find_subsystem(system::Model, name::String)::Union{Model,ReactionSystem,DataLoader,Nothing}
-    # A Model's `subsystems` is a `Dict{String,Any}` and a subsystem may legitimately
-    # be a DataLoader: that is exactly the loader+regridding-model split the
-    # pure-io-data-loaders RFC prescribes, where the model declares the pure-I/O
-    # loader as a subsystem (era5_single.esm's `sl`, geosfp.esm's `GEOSFP_I3`, …) and
-    # couplings name its fields through the parent (`from: "GEOSFP.GEOSFP_I3.PS"`).
-    # Annotating the return as `Union{Model,Nothing}` made that reference throw a
-    # `MethodError: Cannot convert DataLoader to Model` from the conversion the
-    # annotation itself forces — so `validate()` CRASHED on any assembly wiring a
-    # loader field in through its data model (wildlandfire.esm included).
-    #
-    # Same defect as the one already fixed in `variable_exists_in_system(::DataLoader,
-    # …)` below, which handles the top-level half (`from: "GEOSFP.u"`); this is the
-    # subsystem-traversal half, which that fix missed.
+function find_subsystem(system::Model, name::String)::Union{Model,ReactionSystem,Nothing}
     return get(system.subsystems, name, nothing)
 end
 
 function find_subsystem(system::ReactionSystem, name::String)::Union{ReactionSystem,Nothing}
     return get(system.subsystems, name, nothing)
-end
-
-function find_subsystem(system::DataLoader, name::String)
-    # Data loaders don't have subsystems
-    return nothing
 end
 
 """
@@ -1853,17 +1967,6 @@ function variable_exists_in_system(system::ReactionSystem, variable_name::String
     end
 
     return false
-end
-
-function variable_exists_in_system(system::DataLoader, variable_name::String)::Bool
-    # A DataLoader EXPOSES variables (`variables: {u: {file_variable: …}}`), and
-    # `coupling` entries name them (`from: "GEOSFP.u"`). This used to return a
-    # hardcoded `false` — "data loaders are referenced by type/name, not
-    # variables" — which was true before the pure-io-data-loaders RFC gave the
-    # loader a `variables` table, and afterwards made EVERY loader-sourced
-    # coupling reference in the corpus fail to resolve (7 of the 82 valid
-    # fixtures). Same defect as the Go binding's G7.
-    return haskey(system.variables, variable_name)
 end
 
 """
@@ -2165,11 +2268,11 @@ const RECORD_FIELD_TABLES = (
          mode = :default, default = "t", emit = :nondefault),
         (f = :temporal, wire = "temporal", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
     )),
-    (T = :DataLoaderSource, fn = :data_loader_source, rows = (
+    (T = :DataSourceLocation, fn = :data_source_location, rows = (
         (f = :url_template, wire = "url_template", kind = :string, mode = :req, emit = :always, pos = true),
         (f = :mirrors,      wire = "mirrors",      kind = :string_vec, mode = :opt, emit = :nonnothing),
     )),
-    (T = :DataLoaderTemporal, fn = :data_loader_temporal, rows = (
+    (T = :DataSourceTemporal, fn = :data_source_temporal, rows = (
         (f = :start,            wire = "start",            kind = :string, mode = :opt, emit = :nonnothing),
         (f = :stop,             wire = "end",              kind = :string, mode = :opt, emit = :nonnothing),
         (f = :file_period,      wire = "file_period",      kind = :string, mode = :opt, emit = :nonnothing),
@@ -2177,30 +2280,21 @@ const RECORD_FIELD_TABLES = (
         (f = :records_per_file, wire = "records_per_file", kind = :number_or_string, mode = :opt, emit = :nonnothing),
         (f = :time_variable,    wire = "time_variable",    kind = :string, mode = :opt, emit = :nonnothing),
     )),
-    (T = :DataLoaderVariable, fn = :data_loader_variable, rows = (
-        (f = :file_variable,   wire = "file_variable",   kind = :string, mode = :req, emit = :always, pos = true),
-        (f = :units,           wire = "units",           kind = :string, mode = :req, emit = :always, pos = true),
-        (f = :unit_conversion, wire = "unit_conversion", kind = :number_or_expr, mode = :opt, emit = :nonnothing),
-        (f = :description,     wire = "description",     kind = :string, mode = :opt, emit = :nonnothing),
-        (f = :reference,       wire = "reference",       kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
-    )),
-    (T = :DataLoaderDeterminism, fn = :data_loader_determinism, rows = (
+    (T = :DataSourceDeterminism, fn = :data_source_determinism, rows = (
         (f = :endian,        wire = "endian",        kind = :string, mode = :opt, emit = :nonnothing),
         (f = :float_format,  wire = "float_format",  kind = :string, mode = :opt, emit = :nonnothing),
         (f = :integer_width, wire = "integer_width", kind = :int,    mode = :opt, emit = :nonnothing),
     )),
-    (T = :DataLoader, fn = :data_loader, rows = (
+    (T = :DataSource, fn = :data_source, rows = (
         (f = :kind,   wire = "kind",   kind = :string, mode = :req, emit = :always, pos = true),
-        (f = :source, wire = "source", kind = :record, of = :data_loader_source, mode = :req, emit = :always, pos = true),
-        (f = :temporal,    wire = "temporal",    kind = :record, of = :data_loader_temporal, mode = :opt, emit = :nonnothing),
+        (f = :source, wire = "source", kind = :record, of = :data_source_location, mode = :req, emit = :always, pos = true),
+        (f = :temporal,    wire = "temporal",    kind = :record, of = :data_source_temporal, mode = :opt, emit = :nonnothing),
         # Emit-side residue AS A COLUMN: determinism is emitted only when
         # present AND its serialized dict is non-empty (the historical
         # `isempty(det_dict) ||` guard) — a cross-field-free but
         # doubly-conditional policy, so it names a hand-written hook.
-        (f = :determinism, wire = "determinism", kind = :record, of = :data_loader_determinism, mode = :opt,
-         emit = :custom, emit_fn = :_emit_data_loader_determinism),
-        (f = :variables, wire = "variables", kind = :record_map, of = :data_loader_variable,
-         eltype = :DataLoaderVariable, mode = :req, emit = :always, pos = true),
+        (f = :determinism, wire = "determinism", kind = :record, of = :data_source_determinism, mode = :opt,
+         emit = :custom, emit_fn = :_emit_data_source_determinism),
         (f = :reference, wire = "reference", kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
         (f = :metadata,  wire = "metadata",  kind = :raw, mode = :opt, emit = :nonnothing),
     )),
@@ -2248,8 +2342,6 @@ const RECORD_FIELD_TABLES = (
          req_err = "event requires 'affects' field", emit = :always, pos = true),
         (f = :affect_neg, wire = "affect_neg", kind = :record_vec, of = :affect_equation,
          eltype = :AffectEquation, mode = :opt, emit = :nonnothing),
-        (f = :discrete_parameters, wire = "discrete_parameters", kind = :string_vec_strict,
-         mode = :opt, emit = :nonnothing),
         (f = :root_find,    wire = "root_find",    kind = :string, mode = :opt, emit = :nonnothing),
         (f = :reinitialize, wire = "reinitialize", kind = :bool,   mode = :opt, emit = :nonnothing),
         (f = :description,  wire = "description",  kind = :string, mode = :opt, emit = :nonnothing),
@@ -2276,13 +2368,50 @@ const RECORD_FIELD_TABLES = (
         (f = :type, wire = "type", kind = :model_variable_type, mode = :req, emit = :always, pos = true),
         (f = :default,       wire = "default",       kind = :float,  mode = :opt, emit = :nonnothing),
         (f = :description,   wire = "description",   kind = :string, mode = :opt, emit = :nonnothing),
-        (f = :expression,    wire = "expression",    kind = :expr,   mode = :opt, emit = :nonnothing),
         (f = :units,         wire = "units",         kind = :string, mode = :opt, emit = :nonnothing),
         (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
         (f = :shape,         wire = "shape",         kind = :string_vec, mode = :opt, emit = :nonnothing),
         (f = :location,      wire = "location",      kind = :string, mode = :opt, emit = :nonnothing),
-        (f = :noise_kind,    wire = "noise_kind",    kind = :string, mode = :opt, emit = :nonnothing),
-        (f = :correlation_group, wire = "correlation_group", kind = :string, mode = :opt, emit = :nonnothing),
+        # The two parameter value fields of esm 1.0.0 (§6.3). `distribution`
+        # spells its parameters differently per kind and `update` is an
+        # object-or-array union, so both name hand-written hook pairs rather
+        # than a column shape the table can express.
+        (f = :distribution, wire = "distribution", kind = :custom,
+         parse_fn = :coerce_distribution, mode = :opt,
+         emit = :custom, emit_fn = :_emit_distribution),
+        (f = :update, wire = "update", kind = :custom,
+         parse_fn = :_coerce_parameter_update_spec, mode = :opt,
+         emit = :custom, emit_fn = :_emit_parameter_update_spec),
+    )),
+    (T = :FunctionalUpdate, fn = :functional_update, rows = (
+        (f = :handler_id,  wire = "handler_id",  kind = :string_strict, mode = :req_err,
+         req_err = "update handler requires a 'handler_id' field", emit = :always, pos = true),
+        (f = :read_vars,   wire = "read_vars",   kind = :string_vec, mode = :opt, emit = :nonnothing),
+        (f = :read_params, wire = "read_params", kind = :string_vec, mode = :opt, emit = :nonnothing),
+        (f = :config,      wire = "config",      kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :DataSourceBinding, fn = :data_source_binding, rows = (
+        (f = :file_variable,   wire = "file_variable",   kind = :string_strict, mode = :req_err,
+         req_err = "update 'from' requires a 'file_variable' field", emit = :always, pos = true),
+        (f = :unit_conversion, wire = "unit_conversion", kind = :number_or_expr, mode = :opt, emit = :nonnothing),
+        (f = :codes,           wire = "codes",           kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+        (f = :select,          wire = "select",          kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+        (f = :description,     wire = "description",     kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :reference,       wire = "reference",       kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
+    )),
+    (T = :ParameterUpdate, fn = :parameter_update, rows = (
+        (f = :kind, wire = "kind", kind = :string_strict, mode = :req_nullerr,
+         req_err = "parameter update requires a 'kind' field", emit = :always, pos = true),
+        (f = :times,          wire = "times",          kind = :float_vec, mode = :opt, emit = :nonnothing),
+        (f = :interval,       wire = "interval",       kind = :float,  mode = :opt, emit = :nonnothing),
+        (f = :initial_offset, wire = "initial_offset", kind = :float,  mode = :opt, emit = :nonnothing),
+        (f = :when,           wire = "when",           kind = :expr,   mode = :opt, emit = :nonnothing),
+        (f = :direction,      wire = "direction",      kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :source,         wire = "source",         kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :hook,           wire = "hook",           kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :expression,     wire = "expression",     kind = :expr,   mode = :opt, emit = :nonnothing),
+        (f = :from,     wire = "from",    kind = :record, of = :data_source_binding, mode = :opt, emit = :nonnothing),
+        (f = :handler,  wire = "handler", kind = :record, of = :functional_update,   mode = :opt, emit = :nonnothing),
     )),
     (T = :ContinuousEvent, fn = :continuous_event, rows = (
         (f = :conditions, wire = "conditions", kind = :expr_vec, mode = :req_err,
@@ -2296,19 +2425,15 @@ const RECORD_FIELD_TABLES = (
     (T = :DiscreteEvent, fn = :discrete_event, rows = (
         (f = :trigger, wire = "trigger", kind = :record, of = :trigger, mode = :req_err,
          req_err = "DiscreteEvent requires 'trigger' field", emit = :always, pos = true),
-        # `affects` / `functional_affect` are the schema's oneOf pair: parse
-        # accepts either (per-entry lhs/rhs presence pinned by the affects
-        # hook); emit writes exactly one — the affects hook yields to a
-        # present descriptor, whose own hook re-emits it verbatim and refuses
-        # an event carrying both (the historical ArgumentError).
+        # esm 1.0.0: `affects` is the only affect channel. The
+        # `functional_affect` descriptor and the `discrete_parameters` list are
+        # gone — a handler now lives on the parameter it writes
+        # (`update.handler`), and an `affects` LHS naming a parameter is
+        # `event_affects_parameter`.
         (f = :affects, wire = "affects", kind = :custom, parse_fn = :_coerce_discrete_affects,
          mode = :opt_empty, default = :(AffectEquation[]),
-         emit = :custom, emit_fn = :_emit_discrete_event_affects, pos = true),
-        (f = :functional_affect, wire = "functional_affect", kind = :raw, mode = :opt,
-         emit = :custom, emit_fn = :_emit_discrete_event_functional_affect),
+         emit = :always, pos = true),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-        (f = :discrete_parameters, wire = "discrete_parameters", kind = :string_vec_strict,
-         mode = :opt, emit = :nonnothing),
     )),
     (T = :Assertion, fn = :assertion, rows = (
         (f = :variable, wire = "variable", kind = :string, mode = :req, emit = :always, pos = true),
@@ -2362,8 +2487,9 @@ const RECORD_FIELD_TABLES = (
         (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
         (f = :tests, wire = "tests", kind = :record_vec, of = :test, eltype = :InlineTest,
          mode = :opt_empty, default = :(InlineTest[]), emit = :nonempty),
-        # schema §4.7 subsystems: per-entry oneOf [Model, DataLoader,
-        # SubsystemRef], sniffed by the hand-written union hooks.
+        # schema §4.7 subsystems: per-entry oneOf [Model, SubsystemRef],
+        # sniffed by the hand-written union hooks. A data source is a registry
+        # entry from 1.0.0 and can no longer be a subsystem.
         (f = :subsystems, wire = "subsystems", kind = :custom, parse_fn = :_coerce_model_subsystems,
          mode = :opt_empty, default = :(Dict{String,SubsystemNode}()),
          emit = :custom, emit_fn = :_emit_model_subsystems),

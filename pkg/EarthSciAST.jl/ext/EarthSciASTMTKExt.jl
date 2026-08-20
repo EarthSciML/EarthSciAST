@@ -28,8 +28,8 @@ using EarthSciAST
 # extension. Programmatic variable creation via `Symbolics.@variables` builds
 # Julia `Core.Expr` AST, written explicitly throughout (there is no name clash
 # now that the ESM type is `ASTExpr`, not `Expr`).
-using EarthSciAST: FlattenedSystem, ModelVariable, StateVariable,
-    ParameterVariable, ObservedVariable, BrownianVariable,
+using EarthSciAST: FlattenedSystem, ModelVariable, UnknownVariable,
+    ParameterVariable, Distribution, ParameterUpdate,
     NumExpr, IntExpr, VarExpr, OpExpr,
     Equation, AffectEquation, Model, ContinuousEvent, DiscreteEvent,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger,

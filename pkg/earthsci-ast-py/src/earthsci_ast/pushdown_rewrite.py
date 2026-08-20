@@ -41,6 +41,7 @@ import math
 import warnings
 from typing import Any
 
+from .classification import observed_definitions
 from .error_handling import TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE
 from .json_walk import APPLY_OP, ExpressionTemplateError
 
@@ -350,8 +351,9 @@ def _range_from(v: Any) -> str | None:
     return None
 
 
-def _pd_detect_binning(ev: Any, out_set: str):
-    """Is ``ev`` a BINNING aggregate — a ``+``-semiring reduction over TWO 1-D
+def _pd_detect_binning(ev: Any, agg: Any, out_set: str):
+    """Is the observed unknown ``ev`` (declared shape) with defining expression
+    ``agg`` a BINNING aggregate — a ``+``-semiring reduction over TWO 1-D
     index sets whose body carries a rectangle-containment predicate between a
     CELL-indexed rect factor and a RECORD-indexed point factor? BOTH
     orientations are recognised (CONFORMANCE_SPEC §5.5.7):
@@ -371,12 +373,11 @@ def _pd_detect_binning(ev: Any, out_set: str):
     Returns the binding dict — ``c_sym``, ``r_sym``, ``C``, ``R``,
     ``out_is_cell``, ``src_env``, ``tgt_env`` — or ``None``.
     """
-    if not (isinstance(ev, dict) and ev.get("type") == "observed"):
+    if not isinstance(ev, dict):
         return None
     shape = ev.get("shape")
     if not (isinstance(shape, list) and len(shape) == 1 and shape[0] == out_set):
         return None
-    agg = ev.get("expression")
     if not (isinstance(agg, dict) and _is_aggregate_op(agg.get("op"))):
         return None
     oz = _pd_oplus(agg)
@@ -515,32 +516,29 @@ def _pd_expand_for_detection(node: Any, templates: dict | None) -> Any:
         return node
 
 
-def _pd_detection_variables(model: dict) -> dict:
-    """``model["variables"]`` with every surviving ``apply_expression_template``
-    reference in a variable's ``expression`` expanded — the ``Expand(tree)`` view
-    the pattern matcher must see. Returns the variables dict ITSELF (no copy)
-    when there is no registry or no reference, so a template-free document takes
-    the byte-identical pre-existing path."""
-    variables = model.get("variables")
-    if not isinstance(variables, dict):
-        return {}
+def _pd_detection_defs(model: dict) -> dict:
+    """:func:`_pd_observed_defs` with every surviving
+    ``apply_expression_template`` reference expanded — the ``Expand(tree)`` view
+    the pattern matcher must see. From esm 1.0.0 an observed unknown's body is
+    its defining EQUATION's right-hand side, so this — not the variable table —
+    is what the detector matches against. Returns the definition map ITSELF (no
+    copy) when there is no registry or no reference, so a template-free document
+    takes the byte-identical pre-existing path.
+
+    DETECTION ONLY. The emission side re-reads :func:`_pd_observed_defs` so it
+    edits the AUTHORED body (and, for a template-factored one, the call site's
+    ``bindings``) rather than a detached expansion."""
+    defs = _pd_observed_defs(model)
     templates = _pd_templates(model)
-    if templates is None:
-        return variables
-    if not any(
-        isinstance(v, dict) and _pd_has_apply(v.get("expression"))
-        for v in variables.values()
-    ):
-        return variables
-    out = dict(variables)
-    for name, v in variables.items():
-        if not (isinstance(v, dict) and _pd_has_apply(v.get("expression"))):
+    if templates is None or not any(_pd_has_apply(e) for e in defs.values()):
+        return defs
+    out = dict(defs)
+    for name, expr in defs.items():
+        if not _pd_has_apply(expr):
             continue
-        ex = _pd_expand_for_detection(v["expression"], templates)
-        if ex is not v["expression"]:
-            nv = dict(v)
-            nv["expression"] = ex
-            out[name] = nv
+        ex = _pd_expand_for_detection(expr, templates)
+        if ex is not expr:
+            out[name] = ex
     return out
 
 
@@ -571,21 +569,25 @@ PD_UNGATED_CONSEQUENCE = (
 )
 
 
-def _pd_binning_refusal(ev: Any, out_set: str) -> tuple[str, str | None] | None:
+def _pd_binning_refusal(
+    ev: Any, agg: Any, out_set: str
+) -> tuple[str, str | None] | None:
     """Why :func:`_pd_detect_binning` refused ``ev``, for a caller that has
-    ALREADY established ``ev`` sits in the join position.
+    ALREADY established ``ev`` sits in the join position. ``agg`` is ``ev``'s
+    defining equation RHS from the detection view, exactly as
+    :func:`_pd_detect_binning` received it; ``None`` (a variable that is not an
+    observed unknown, so has no definition) is never join-shaped.
 
     ``None`` ⇒ ``ev`` is simply not join-shaped (no diagnostic warranted).
     Otherwise ``(reason, template)``: ``("surviving_template_reference", name)``
     when the body carries a reference that could not be expanded for matching,
     ``("predicate_unparsed", None)`` when a containment ``ifelse`` was found but
     did not read as a rectangle containment in either orientation."""
-    if not (isinstance(ev, dict) and ev.get("type") == "observed"):
+    if not isinstance(ev, dict):
         return None
     shape = ev.get("shape")
     if not (isinstance(shape, list) and len(shape) == 1 and shape[0] == out_set):
         return None
-    agg = ev.get("expression")
     if not (isinstance(agg, dict) and _is_aggregate_op(agg.get("op"))):
         return None
     if _pd_oplus(agg) != ("+", 0.0):
@@ -635,10 +637,47 @@ def _pd_diagnostic_message(d: dict) -> str:
         "Bind the containment's factors through the template's params, or write "
         "the predicate longhand."
     )
+def _pd_observed_defs(model: dict) -> dict:
+    """``{observed unknown -> its defining equation's RHS}`` for ``model``.
+
+    From esm 1.0.0 an observed unknown carries no ``expression`` field: it is
+    DEFINED by the bare-variable-LHS equation whose LHS is its name (esm-spec
+    §6.3.1). The RHS nodes are returned BY REFERENCE, so mutating one in place
+    edits the equation — which is what the rewrites below rely on.
+    """
+    return observed_definitions(model)
+
+
+def _pd_set_observed(model: dict, name: str, expr: dict) -> None:
+    """Rebind ``name``'s defining equation RHS, inserting the equation when the
+    model does not already carry one for it.
+
+    A NEW definition is placed so the bare-variable-LHS equations stay ordered by
+    LHS name: before the first one that sorts after ``name``, else at the end.
+    Equation order carries no meaning (classification is a property of the
+    equation SET), but it must be DETERMINISTIC and identical across bindings,
+    and sorted-by-name is the only order derivable from the document itself
+    rather than from this rewriter's internal traversal. It is also the order the
+    cross-binding goldens in tests/conformance/pushdown carry.
+    """
+    equations = model.get("equations")
+    if not isinstance(equations, list):
+        equations = []
+        model["equations"] = equations
+    for eq in equations:
+        if isinstance(eq, dict) and eq.get("lhs") == name:
+            eq["rhs"] = expr
+            return
+    for i, eq in enumerate(equations):
+        lhs = eq.get("lhs") if isinstance(eq, dict) else None
+        if isinstance(lhs, str) and lhs > name:
+            equations.insert(i, {"lhs": name, "rhs": expr})
+            return
+    equations.append({"lhs": name, "rhs": expr})
 
 
 def _pd_mirror_specs(
-    variables: dict, C: str, R: str, forward_names: set
+    model: dict, obs_defs: dict, C: str, R: str, forward_names: set
 ) -> list[tuple[str, list[str], list[str]]]:
     """The MIRRORED-orientation binning aggregates of a model: per-RECORD
     observeds ``P[r] = Σ_{c∈C} [contains(cell_c, pt_r)]·…`` over the plan's
@@ -651,16 +690,16 @@ def _pd_mirror_specs(
     factors are the document's own const-array rects, unrewritten.
     """
     out: list[tuple[str, list[str], list[str]]] = []
-    for name, v in variables.items():
+    variables = model.get("variables") or {}
+    for name, expr in obs_defs.items():
         if name in forward_names:
             continue
-        bind = _pd_detect_binning(v, R)
+        bind = _pd_detect_binning(variables.get(name), expr, R)
         if bind is None:
             continue
         if bind["out_is_cell"] or bind["C"] != C or bind["R"] != R:
             continue
         # Never stack a second gate on an aggregate that already declares a join.
-        expr = v.get("expression")
         if isinstance(expr, dict) and expr.get("join") is not None:
             continue
         out.append((name, bind["src_env"], bind["tgt_env"]))
@@ -671,14 +710,16 @@ def _pd_mirror_specs(
 def _pd_detect(model: dict, index_sets: Any):
     """Detect the pushdown pattern across a model's observeds.
 
-    Matching runs on the DETECTION view (:func:`_pd_detection_variables`): the
+    Matching runs on the DETECTION view (:func:`_pd_detection_defs`): the
     model's variables with surviving template references expanded, so a binning
     body factored through a template matches exactly as its expansion would.
 
     Returns ``(plan, diagnostics)`` — ``plan`` ``None`` when nothing matches /
     the semiring guard fails, ``diagnostics`` the residual "a join I could not
     read" records (see :func:`_pd_binning_refusal`)."""
-    variables = _pd_detection_variables(model)
+    variables = model.get("variables")
+    if not isinstance(variables, dict):
+        variables = {}
     diags: list[dict] = []
     if not variables:
         return None, diags
@@ -690,10 +731,11 @@ def _pd_detect(model: dict, index_sets: Any):
     src_env = tgt_env = None
     rep_ename = rep_csym = rep_rsym = None
 
-    for cname, cv in variables.items():
-        if not (isinstance(cv, dict) and cv.get("type") == "observed"):
+    observed_defs = _pd_detection_defs(model)
+    for cname, agg in observed_defs.items():
+        cv = variables.get(cname)
+        if not isinstance(cv, dict):
             continue
-        agg = cv.get("expression")
         if not (isinstance(agg, dict) and _is_aggregate_op(agg.get("op"))):
             continue
         oz = _pd_oplus(agg)
@@ -730,14 +772,14 @@ def _pd_detect(model: dict, index_sets: Any):
         ev = variables.get(ename)
         if ev is None:
             continue
-        bind = _pd_detect_binning(ev, c_set)
+        bind = _pd_detect_binning(ev, observed_defs.get(ename), c_set)
         if bind is None or not bind["out_is_cell"]:  # FORWARD arm only
             # `ev` is the rank-1 factor of a `+`-mat-vec against a
             # provider-backed `[c_set, r_set]` array: the join position. If it is
             # ALSO binning-shaped but unreadable, say so — silence here is the
             # ungated whole-array fetch that surfaces hours later.
             if bind is None:
-                why = _pd_binning_refusal(ev, c_set)
+                why = _pd_binning_refusal(ev, observed_defs.get(ename), c_set)
                 if why is not None:
                     diags.append(
                         {
@@ -785,7 +827,8 @@ def _pd_detect(model: dict, index_sets: Any):
     # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
     # cell/record sets. They are collected only once the forward pattern has
     # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
-    mirror_specs = _pd_mirror_specs(variables, C, R, {e[0] for e in e_specs})
+    mirror_specs = _pd_mirror_specs(model, observed_defs, C, R,
+                                    {e[0] for e in e_specs})
     return {
         "C": C,
         "rcv_set": rcv_set,
@@ -941,7 +984,7 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
 
     # --- producer filter comparisons, deep-copied from the representative E
     #     BEFORE E is rewritten (they must keep full-grid rect factor refs) ---
-    repexpr = mv[plan["rep_ename"]]["expression"]
+    repexpr = _pd_observed_defs(d["models"][mname])[plan["rep_ename"]]
     ifcond = _pd_find_ifelse_cond(repexpr.get("expr"))
     if ifcond is None:
         # The body is factored through a template. Read the predicate off the
@@ -962,22 +1005,30 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
     prod_filter = {"op": "*", "args": [copy.deepcopy(c) for c in comps]}
 
     # --- member state var + member_factor param ---
-    mv[memvar] = {"type": "state", "shape": [setname]}
+    # An UNKNOWN, defined by the generated `distinct` producer equation below.
+    # 1.0.0 has no `state` type to declare -- the producer's LHS is what makes
+    # it one (esm-spec §6.3.1).
+    mv[memvar] = {"type": "unknown", "shape": [setname]}
     mv[mfactor] = {"type": "parameter", "default": 0.0, "shape": [setname]}
 
     # --- per-rect cell-gather observeds ---
-    for f in rects:
-        mv[cellgath(f)] = {
-            "type": "observed",
-            "shape": [setname],
-            "expression": {
+    # SORTED by rect name: the generated gathers are declarations, so their
+    # emission order is arbitrary semantically -- and the cross-binding goldens
+    # in tests/conformance/pushdown carry them sorted, which is also the only
+    # order every binding can agree on without sharing tgt_env traversal.
+    for f in sorted(rects):
+        mv[cellgath(f)] = {"type": "unknown", "shape": [setname]}
+        _pd_set_observed(
+            d["models"][mname],
+            cellgath(f),
+            {
                 "op": "aggregate",
                 "output_idx": ["c"],
                 "ranges": {"c": {"from": setname}},
                 "args": [f, mfactor],
                 "expr": _pd_ix(f, _pd_ix(mfactor, "c")),
             },
-        }
+        )
 
     # --- gate the provider-backed arrays onto the derived axis ---
     for a in plan["A_names"]:
@@ -1002,8 +1053,8 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
         # compact cell buffers with full-grid indices. Copying first confines
         # the rewrite to this variable; the emitted JSON is unchanged (sharing
         # is not a document-level property).
-        expr = copy.deepcopy(mv[ename]["expression"])
-        mv[ename]["expression"] = expr
+        expr = copy.deepcopy(_pd_observed_defs(d["models"][mname])[ename])
+        _pd_set_observed(d["models"][mname], ename, expr)
         expr["ranges"][csym]["from"] = setname
         _pd_rewrite_rects(expr, rectmap)
         if "args" in expr:
@@ -1027,14 +1078,15 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
     # const-array factors (the cell axis is not re-pointed), so the mirror also
     # needs no rect gathers.
     for pname, p_src, p_tgt in plan.get("mirror_specs", ()):
-        pexpr = copy.deepcopy(mv[pname]["expression"])  # see the deep-copy note
-        mv[pname]["expression"] = pexpr
+        # see the deep-copy note
+        pexpr = copy.deepcopy(_pd_observed_defs(d["models"][mname])[pname])
+        _pd_set_observed(d["models"][mname], pname, pexpr)
         if "join" not in pexpr:
             pexpr["join"] = [_pd_overlap_clause(p_src, p_tgt)]
 
     # --- restrict the conc reductions to the derived axis ---
     for cname, ssym in plan["conc_specs"]:
-        mv[cname]["expression"]["ranges"][ssym]["from"] = setname
+        _pd_observed_defs(d["models"][mname])[cname]["ranges"][ssym]["from"] = setname
 
     # --- generated `distinct` producer (reuses E's containment + geometry) ---
     prod_args: list[str] = []
@@ -1068,11 +1120,17 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
             "args": prod_args,
         },
     }
+    # PREPENDED, not appended: the producer materialises the derived index set
+    # that every rewritten E / A / conc reduction below now ranges over, so it
+    # reads as "define the support set, then reduce over it" -- and it is the
+    # order the cross-binding goldens in tests/conformance/pushdown carry.
+    # Equation order is not semantically meaningful (classification is a property
+    # of the equation SET), so this is a presentation choice the goldens fix.
     eqs = d["models"][mname].get("equations")
     if not isinstance(eqs, list):
         eqs = []
         d["models"][mname]["equations"] = eqs
-    eqs.append(producer)
+    eqs.insert(0, producer)
 
     # --- inspectable pushdown provenance / gated_select record ---
     md = d.setdefault("metadata", {})
@@ -1215,7 +1273,7 @@ def _pushdown_gate_axes(
     ``gated_axis``); else a rank-``mrank`` all-axes gate with ``gated_by`` at
     ``gaxis``."""
     tpl = None
-    loaders = doc.get("data_loaders")
+    loaders = doc.get("data_sources")
     if isinstance(loaders, dict):
         ld = loaders.get(str(loader))
         if isinstance(ld, dict):
@@ -1230,7 +1288,7 @@ def _pushdown_gate_axes(
         # (CONFORMANCE_SPEC §5.5) — and an unrecognised selector here is an
         # error rather than a silently-widened whole axis.
         axes = parse_select_axes(
-            f"data_loaders.{loader} gated_select template", tpl, gated_by_override=gset
+            f"data_sources.{loader} gated_select template", tpl, gated_by_override=gset
         )
         nonfixed = 0
         gpos = -1
@@ -1242,7 +1300,7 @@ def _pushdown_gate_axes(
             nonfixed += 1
         if gpos != gaxis:
             raise PushdownRewriteError(
-                f"data_loaders.{loader} gated_select template puts the gated axis "
+                f"data_sources.{loader} gated_select template puts the gated axis "
                 f"at non-fixed position {gpos}, but the rewrite record gates model "
                 f"axis {gaxis} — the loader template and the rewritten arrays disagree"
             )
@@ -1256,14 +1314,42 @@ def _pushdown_gate_axes(
     return axes
 
 
+def _pushdown_data_fed_parameters(doc: dict):
+    """``(data_sources key, parameter name, file_variable)`` for every parameter
+    in the document whose ``update`` reads a source (esm-spec §8.5). Sorted, so
+    the derived gate map is identical across bindings and hash seeds."""
+    out = []
+    for _mname, m in (doc.get("models") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        for vname, vdef in (m.get("variables") or {}).items():
+            if not isinstance(vdef, dict) or vdef.get("type") != "parameter":
+                continue
+            update = vdef.get("update")
+            rules = update if isinstance(update, list) else [update]
+            for rule in rules:
+                if not (isinstance(rule, dict) and rule.get("kind") == "data"):
+                    continue
+                source = rule.get("source")
+                binding = rule.get("from")
+                if not isinstance(source, str) or not isinstance(binding, dict):
+                    continue
+                out.append(
+                    (source, str(vname), str(binding.get("file_variable", vname)))
+                )
+    return sorted(set(out))
+
+
 def _pushdown_provider_gates(doc: dict, providers: Any) -> dict[str, dict]:
     """Provider-key ⇒ engine gate, derived from ``doc``'s rewrite record
     (``metadata.x_esd.pushdown.gated_select``).
 
-    A provider is GATED when its key names a ``data_loaders`` variable
-    (``"<Loader>"`` or ``"<Loader>.<var>"``) that a coupling ``variable_map``
-    routes onto one of the record's ``applies_to`` model arrays. The gate's
-    per-NATIVE-axis ``axes`` come from the loader's own
+    A provider is GATED when its key names a data-fed parameter
+    (``"<Source>"`` or ``"<Source>.<parameter>"``) that is one of the record's
+    ``applies_to`` model arrays. From 1.0.0 the routing is the PARAMETER's own
+    ``update`` -- there is no coupling edge from a source -- so the pairs come
+    from the model variables rather than from ``coupling``. The gate's
+    per-NATIVE-axis ``axes`` come from the source's own
     ``metadata.x_esd.gated_select.axes`` template when it declares one (with
     the record's GENERATED set name substituted), else from the model array's
     rank with ``gated_by`` at the record's ``gated_axis``. ``applies_to``
@@ -1285,26 +1371,38 @@ def _pushdown_provider_gates(doc: dict, providers: Any) -> dict[str, dict]:
     if not applies or not gset:
         return gates
 
-    # coupling: "<Loader>.<var>" => the gated model array's LOCAL (tail) name.
+    # "<Source>.<parameter>" => the gated model array's LOCAL name. A data-fed
+    # parameter IS the loaded field from 1.0.0, so this reads the parameters'
+    # `update` blocks; the 0.x coupling `variable_map` pairs are still consulted
+    # for a document that routes an array through one.
+    # A provider key is `"<Source>.<parameter>"`, and the gate's `applies_to`
+    # names the MODEL ARRAY the fetched slab binds to -- the consuming parameter.
+    # In 0.x that array was reached through a coupling `param_to_var`, so the
+    # name was the loader variable's and the alias walk found the model array by
+    # tail; from 1.0.0 the parameter IS the loaded field, so it is named
+    # directly.
     fed: dict[str, str] = {}
+    for source_key, param, _file_variable in _pushdown_data_fed_parameters(doc):
+        if param in applies:
+            fed[f"{source_key}.{param}"] = param
     for frm, to in _pushdown_coupling_pairs(doc):
         if "." not in frm:
             continue
         if to.rsplit(".", 1)[-1] in applies:
-            fed[frm] = to
+            fed[frm] = to.rsplit(".", 1)[-1]
     if not fed:
         return gates
 
     mrank = _pushdown_gated_rank(doc, applies)
     for k0 in providers:
         k = str(k0)
-        if k in fed:  # "<Loader>.<var>" provider
-            loader, tail = k.split(".", 1)
-            lvars = [tail]
-        else:  # whole-loader provider?
+        if k in fed:  # "<Source>.<parameter>" provider
+            loader = k.split(".", 1)[0]
+            lvars = [fed[k]]
+        else:  # whole-source provider?
             loader = k
             lvars = sorted(
-                f.split(".", 1)[1] for f in fed if f.split(".", 1)[0] == k
+                v for f, v in fed.items() if f.split(".", 1)[0] == k
             )
             if not lvars:
                 continue
@@ -1319,15 +1417,20 @@ def _inject_pushdown_aliases(
     """Alias-key injection for the ``prepare`` pushdown path (same-object
     references, no copies): surface each array under (a) the coupling ``to``
     name for every ``variable_map`` ``from`` key present, and (b) every
-    flattened model-variable name whose final dotted segment matches a bare
-    key. Existing keys are never overwritten."""
+    flattened model-variable name whose final dotted segment matches the key's
+    own final segment. Existing keys are never overwritten.
+
+    Rule (b) is keyed on the TAIL rather than on a bare key because from esm
+    1.0.0 a provider key is `"<Source>.<parameter>"` and the flattened consumer
+    is `"<Model>.<parameter>"` -- the same parameter under two prefixes, with no
+    coupling edge between them to carry rule (a). A bare key still matches, so
+    the 0.x shape keeps working."""
     for frm, to in coupling_pairs:
         if frm in dst and to not in dst:
             dst[to] = dst[frm]
     for k in list(dst.keys()):
-        if "." in k:
-            continue
+        tail = k.rsplit(".", 1)[-1]
         for v in run_doc_variables:
-            if "." in v and v.rsplit(".", 1)[-1] == k and v not in dst:
+            if v != k and "." in v and v.rsplit(".", 1)[-1] == tail and v not in dst:
                 dst[v] = dst[k]
     return dst
