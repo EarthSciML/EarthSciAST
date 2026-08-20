@@ -34,7 +34,7 @@ function buildDoublingChainDoc(depth: number): Record<string, unknown> {
     }
   }
   return {
-    esm: '0.4.0',
+    esm: '1.0.0',
     metadata: { name: 'template_sharing_regression', authors: ['t'] },
     reaction_systems: {
       chem: {

@@ -80,8 +80,13 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     expect(errCode(() => loadPath(conf('inject_coupling_entry', 'neg_target_unknown.esm')))).toBe(
       'template_inject_target_unknown',
     )
+    // A key naming a `data_sources` entry: from 1.0.0 a data source is pure
+    // ingest configuration, not a component, so it has no template scope and
+    // no expression positions to rewrite. The dedicated
+    // `template_inject_target_is_loader` code is retired; such a key now
+    // reports as the general "target is not a component" diagnostic.
     expect(errCode(() => loadPath(conf('inject_coupling_entry', 'neg_target_is_loader.esm')))).toBe(
-      'template_inject_target_is_loader',
+      'template_inject_target_not_component',
     )
   })
 

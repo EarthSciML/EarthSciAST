@@ -1,29 +1,30 @@
 /**
  * Migration utilities for ESM format version upgrades.
  *
- * Two kinds of migration are supported, both of which are pure version-MARKER
- * bumps (they change the `esm` field and touch nothing else):
+ * A migration here is a pure version-MARKER bump: it changes the `esm` field
+ * and touches nothing else. That is only ever sound along an ADDITIVE line —
+ * a run of schema releases each of which introduced its changes as additive,
+ * backward-compatible fields, so an older file already loads under the newer
+ * schema without any mechanical transform.
  *
- *   1. The historical `0.0.5 → 0.1.0` step. `0.0.5` predates the additive line
- *      and can migrate ONLY to `0.1.0` (its documented single step). Reaching a
- *      newer schema from `0.0.5` is a two-step upgrade (`0.0.5 → 0.1.0`, then
- *      `0.1.0 → <current>`), never a single jump.
+ * The current additive line is `1.0.0 … <current schema version>`.
  *
- *   2. The **additive line** `0.1.0 … <current schema version>` (currently
- *      0.8.0). Every schema release on this line introduced its changes as
- *      ADDITIVE, backward-compatible fields, so an older file already loads
- *      under the current schema without any mechanical transform. Migrating such
- *      a file to the current schema version is therefore a no-op identity
- *      migration that only advances the `esm` marker — which is exactly what
- *      lets a current-version (0.8.0) file be migrated to 0.8.0 at all.
+ * **There is no migration across the 1.0.0 boundary.** esm 1.0.0 is a clean
+ * break with no deprecation path: the five declared variable types collapse to
+ * two, an observed variable's `expression` becomes an equation, `data_loaders`
+ * becomes a non-component `data_sources` registry, and parameter mutation moves
+ * off events onto the parameter. None of that is a marker bump — every one of
+ * them RESHAPES the document, and several need information (which unknowns are
+ * ODE states) that only the equations carry. A 0.x source therefore yields no
+ * supported targets rather than a bump that would produce a file claiming 1.0.0
+ * while still carrying 0.x shapes. Converting a 0.x document is a rewrite, and
+ * deliberately not offered as an automated one.
  *
  * The single supported target for an additive-line source is the CURRENT schema
- * version (`SCHEMA_VERSION`); arbitrary intermediate targets (e.g. `0.1.0 →
- * 0.2.0`) are deliberately NOT offered — there is no per-minor transform to
- * encode, only "bring this file up to current". Content-level changes (e.g.
- * converting unit conventions) remain modeling decisions, not automated
- * migrations. Sources outside these two cases (newer-than-current, or a
- * non-zero major version) yield no supported targets.
+ * version (`SCHEMA_VERSION`); arbitrary intermediate targets are deliberately
+ * NOT offered — there is no per-minor transform to encode, only "bring this
+ * file up to current". Sources outside that line (newer than current, a
+ * different major, or malformed) yield no supported targets.
  */
 
 import type { EsmFile } from './types.js'
@@ -56,19 +57,16 @@ function compareVersions(a: SemVer, b: SemVer): number {
   return a.major - b.major || a.minor - b.minor || a.patch - b.patch
 }
 
-// The additive line runs from 0.1.0 up to (and including) the current schema
-// version. Parsed once from the library's own `SCHEMA_VERSION` so this table
-// never hand-drifts from the embedded schema (currently 0.8.0).
-const ADDITIVE_FLOOR: SemVer = { major: 0, minor: 1, patch: 0 }
+// The additive line runs from 1.0.0 up to (and including) the current schema
+// version. Parsed once from the library's own `SCHEMA_VERSION` so this never
+// hand-drifts from the embedded schema.
+//
+// The floor is 1.0.0, not 0.1.0: the 0.x line ended at a clean break, so no 0.x
+// version can be carried forward by a marker bump. `isOnAdditiveLine` already
+// requires the majors to agree, which makes a 0.x source ineligible on its own;
+// the floor is stated at 1.0.0 as well so the intent survives the next major.
+const ADDITIVE_FLOOR: SemVer = { major: 1, minor: 0, patch: 0 }
 const CURRENT_VERSION = parseVersion(SCHEMA_VERSION)!
-
-/**
- * Historical, pre-additive-line migrations that are NOT a bump-to-current.
- * `0.0.5` can only ever step to `0.1.0`.
- */
-const LEGACY_MIGRATIONS: Record<string, string[]> = {
-  '0.0.5': ['0.1.0'],
-}
 
 /**
  * True when `version` sits on the additive line `0.1.0 … <current>` and can be
@@ -93,16 +91,12 @@ export function canMigrate(sourceVersion: string, targetVersion: string): boolea
 /**
  * Get the list of schema versions that a given source version can migrate to.
  *
- * - `0.0.5` → `['0.1.0']` (the legacy single step; see the module header).
- * - any version on the additive line `0.1.0 … <current schema version>` →
+ * - any version on the additive line `1.0.0 … <current schema version>` →
  *   `[SCHEMA_VERSION]` (a no-op marker bump to the current schema).
- * - everything else (newer than current, non-zero major, or malformed) → `[]`.
+ * - everything else — including EVERY 0.x version, which 1.0.0's clean break
+ *   puts out of reach of a marker bump — → `[]`.
  */
 export function getSupportedMigrationTargets(sourceVersion: string): string[] {
-  if (sourceVersion in LEGACY_MIGRATIONS) {
-    return LEGACY_MIGRATIONS[sourceVersion]
-  }
-
   const parsed = parseVersion(sourceVersion)
   if (parsed && isOnAdditiveLine(parsed)) {
     return [SCHEMA_VERSION]
@@ -115,12 +109,12 @@ export function getSupportedMigrationTargets(sourceVersion: string): string[] {
  * Migrate an ESM file from its current schema version to the target version.
  *
  * Every supported step is a pure version-marker bump with no structural
- * transform: the legacy `0.0.5 → 0.1.0` step, or an additive-line source
- * (`0.1.0 … <current>`) advanced to the current schema version (see the module
- * header). Any other version pair throws {@link MigrationError}. Content-level
- * changes (e.g. converting unit conventions) are not performed — they are
- * modeling decisions, not mechanical migrations. The input file is never
- * mutated; a new object with the updated `esm` marker is returned.
+ * transform: an additive-line source (`1.0.0 … <current>`) advanced to the
+ * current schema version (see the module header). Any other version pair — a
+ * 0.x source included — throws {@link MigrationError}. Content-level changes
+ * are not performed; they are modeling decisions, not mechanical migrations.
+ * The input file is never mutated; a new object with the updated `esm` marker
+ * is returned.
  */
 export function migrate(file: EsmFile, targetVersion: string): EsmFile {
   const sourceVersion = file.esm

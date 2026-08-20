@@ -79,20 +79,21 @@ describe('resolveSubsystemRefs', () => {
     expect(inner.variables.x).toBeDefined()
   })
 
-  it('resolves a loader-only file ref into a subsystem', async () => {
-    // Referenced file is loader-only: its sole component is `data_loaders`
-    // (no models / no reaction_systems). The schema allows a DataLoader inside
-    // Model.subsystems, so the first loader is inlined under the parent key.
+  it('leaves the ref stub in place for a source-only file', async () => {
+    // Referenced file declares only `data_sources`. In 0.x its first loader was
+    // inlined under the parent key, because the schema then allowed a
+    // DataLoader inside Model.subsystems. From 1.0.0 a data source is ingest
+    // configuration rather than a component and CANNOT be a subsystem, so the
+    // file contributes no component and the `{ref}` stub stays put -- which the
+    // unresolved-ref diagnostic then reports, rather than the reference
+    // silently binding to ingest configuration.
     const refContent = JSON.stringify({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'met' },
-      data_loaders: {
+      data_sources: {
         Weather: {
           kind: 'grid',
           source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
-          variables: {
-            temp: { file_variable: 'T2', units: 'K', description: 'Temperature' },
-          },
         },
       },
     })
@@ -113,10 +114,8 @@ describe('resolveSubsystemRefs', () => {
 
     await resolveSubsystemRefs(file, tmpDir)
     const met = (file.models!.Outer as Model).subsystems!.Met as any
-    expect(met.ref).toBeUndefined()
-    expect(met.kind).toBe('grid')
-    expect(met.source.url_template).toBe('/data/weather_{date:%Y%m%d}.nc')
-    expect(met.variables.temp.file_variable).toBe('T2')
+    expect(met.ref).toBe('./weather.esm.json')
+    expect(met.kind).toBeUndefined()
   })
 
   it('throws RefLoadError when local file is missing', async () => {

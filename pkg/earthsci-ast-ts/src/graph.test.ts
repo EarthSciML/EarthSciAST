@@ -23,12 +23,11 @@ import type {
   Equation,
   Reaction,
   CouplingEntry,
-  ModelVariable,
 } from './types.js'
 
 describe('componentGraph function', () => {
   const mockEsmFile: EsmFile = {
-    esm: '0.1.0',
+    esm: '1.0.0',
     metadata: {
       name: 'Test System',
       description: 'Test component graph',
@@ -40,7 +39,7 @@ describe('componentGraph function', () => {
         variables: {
           u_wind: { type: 'parameter', units: 'm/s', default: 5.0 },
           v_wind: { type: 'parameter', units: 'm/s', default: 3.0 },
-          temperature: { type: 'state', units: 'K', default: 298.15 },
+          temperature: { type: 'unknown', units: 'K', default: 298.15 },
         },
         equations: [
           { lhs: 'du_dt', rhs: '0' },
@@ -50,7 +49,17 @@ describe('componentGraph function', () => {
       Chemistry: {
         reference: { notes: 'Atmospheric chemistry' },
         variables: {
-          O3: { type: 'state', units: 'mol/mol', default: 40e-9 },
+          O3: { type: 'unknown', units: 'mol/mol', default: 40e-9 },
+          // The CONSUMER of the `WeatherData` source below. From 1.0.0 a data
+          // source is reached through a parameter whose `update` names it
+          // (esm-spec §5.5); that parameter is the component-graph-visible end
+          // of the ingest, because the source itself is not a component.
+          T: {
+            type: 'parameter',
+            units: 'K',
+            shape: ['cell'],
+            update: { kind: 'data', source: 'WeatherData', from: { file_variable: 'T2' } },
+          },
         },
         equations: [{ lhs: 'dO3_dt', rhs: '-k1 * O3' }],
       },
@@ -79,16 +88,14 @@ describe('componentGraph function', () => {
         ],
       },
     },
-    data_loaders: {
+    // Ingest configuration, NOT a component: `data_sources` entries expose no
+    // variables of their own and are neither graph nodes nor coupling
+    // endpoints (esm-spec §5.5).
+    data_sources: {
       WeatherData: {
         kind: 'grid',
         source: {
           url_template: '/data/weather.nc',
-        },
-        variables: {
-          temperature: { file_variable: 'T2', units: 'K' },
-          pressure: { file_variable: 'P', units: 'Pa' },
-          humidity: { file_variable: 'Q', units: 'kg/kg' },
         },
       },
     },
@@ -99,8 +106,11 @@ describe('componentGraph function', () => {
         description: 'Couple transport with chemistry',
       },
       {
+        // A variable_map now runs between two COMPONENTS. It used to start at
+        // the data loader (`WeatherData.temperature`), which is no longer a
+        // node, so such an entry would simply be dropped as dangling.
         type: 'variable_map',
-        from: 'WeatherData.temperature',
+        from: 'Transport.temperature',
         to: 'Chemistry.T',
         transform: 'identity',
         description: 'Map temperature data',
@@ -134,7 +144,7 @@ describe('componentGraph function', () => {
   it('should extract all component nodes with metadata', () => {
     const graph = componentGraph(mockEsmFile)
 
-    expect(graph.nodes).toHaveLength(4)
+    expect(graph.nodes).toHaveLength(3)
 
     // Check Transport model node
     const transportNode = graph.nodes.find((n) => n.id === 'Transport')
@@ -149,7 +159,7 @@ describe('componentGraph function', () => {
     const chemistryNode = graph.nodes.find((n) => n.id === 'Chemistry')
     expect(chemistryNode).toBeDefined()
     expect(chemistryNode?.type).toBe('model')
-    expect(chemistryNode?.metadata.var_count).toBe(1) // O3
+    expect(chemistryNode?.metadata.var_count).toBe(2) // O3, T
     expect(chemistryNode?.metadata.eq_count).toBe(1) // dO3_dt
     expect(chemistryNode?.metadata.species_count).toBe(0)
 
@@ -161,13 +171,13 @@ describe('componentGraph function', () => {
     expect(reactionsNode?.metadata.eq_count).toBe(2) // 2 reactions
     expect(reactionsNode?.metadata.species_count).toBe(3) // A, B, C
 
-    // Check WeatherData data loader node
-    const weatherNode = graph.nodes.find((n) => n.id === 'WeatherData')
-    expect(weatherNode).toBeDefined()
-    expect(weatherNode?.type).toBe('data_loader')
-    expect(weatherNode?.metadata.var_count).toBe(3) // temperature, pressure, humidity
-    expect(weatherNode?.metadata.eq_count).toBe(0)
-    expect(weatherNode?.metadata.species_count).toBe(0)
+    // The WeatherData data SOURCE is not a node at all. Until 1.0.0 it was a
+    // `data_loader` component with a variable count of its own; a source is now
+    // document-scoped ingest configuration, and the dependency it creates shows
+    // up as the consuming parameter `Chemistry.T` (counted above) rather than
+    // as a fourth component (esm-spec §5.5).
+    expect(graph.nodes.find((n) => n.id === 'WeatherData')).toBeUndefined()
+    expect(graph.nodes.map((n) => n.type).sort()).toEqual(['model', 'model', 'reaction_system'])
   })
 
   it('should extract coupling edges in Graph format', () => {
@@ -191,7 +201,7 @@ describe('componentGraph function', () => {
     // Check variable_map edge
     const mapEdge = graph.edges.find((e) => e.data.type === 'variable_map')
     expect(mapEdge).toBeDefined()
-    expect(mapEdge?.source).toBe('WeatherData')
+    expect(mapEdge?.source).toBe('Transport')
     expect(mapEdge?.target).toBe('Chemistry')
     expect(mapEdge?.data.label).toBe('temperature')
 
@@ -216,7 +226,7 @@ describe('componentGraph function', () => {
     // generated from the schema is the 2-tuple `[string, string]`, so it did not
     // typecheck. The premise was wrong, not the schema.)
     const file: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'compose-chain' },
       models: {
         A: { variables: {}, equations: [] },
@@ -241,7 +251,7 @@ describe('componentGraph function', () => {
     // Dangling references (a nonexistent component or a subsystem member that
     // is not itself a node) never produce an edge or a phantom endpoint.
     const file: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'dangling' },
       models: {
         A: { variables: {}, equations: [] },
@@ -275,15 +285,14 @@ describe('componentGraph function', () => {
     expect(transportAdjacent).toContain('Chemistry')
     expect(transportAdjacent).toContain('SimpleReactions')
 
-    // Chemistry is connected to Transport and WeatherData
+    // Chemistry is connected to Transport (both the compose and the
+    // variable_map edge run between the two models).
     const chemistryAdjacent = graph.adjacency('Chemistry')
-    expect(chemistryAdjacent).toContain('Transport')
-    expect(chemistryAdjacent).toContain('WeatherData')
+    expect(chemistryAdjacent).toEqual(['Transport'])
 
-    // WeatherData is only connected to Chemistry
-    const weatherAdjacent = graph.adjacency('WeatherData')
-    expect(weatherAdjacent).toContain('Chemistry')
-    expect(weatherAdjacent).toHaveLength(1)
+    // The data SOURCE is not a node, so it is just an unknown key here — the
+    // same answer as for `NonExistent` below (esm-spec §5.5).
+    expect(graph.adjacency('WeatherData')).toEqual([])
 
     // Non-existent node should return empty array
     const nonExistentAdjacent = graph.adjacency('NonExistent')
@@ -297,18 +306,13 @@ describe('componentGraph function', () => {
     const transportPredecessors = graph.predecessors('Transport')
     expect(transportPredecessors).toEqual([])
 
-    // Chemistry has Transport and WeatherData as predecessors
+    // Chemistry has Transport as its only predecessor
     const chemistryPredecessors = graph.predecessors('Chemistry')
-    expect(chemistryPredecessors).toContain('Transport')
-    expect(chemistryPredecessors).toContain('WeatherData')
+    expect(chemistryPredecessors).toEqual(['Transport'])
 
     // SimpleReactions has Transport as predecessor
     const reactionsPredecessors = graph.predecessors('SimpleReactions')
     expect(reactionsPredecessors).toContain('Transport')
-
-    // WeatherData has no predecessors
-    const weatherPredecessors = graph.predecessors('WeatherData')
-    expect(weatherPredecessors).toEqual([])
   })
 
   it('should implement successors method correctly', () => {
@@ -318,11 +322,6 @@ describe('componentGraph function', () => {
     const transportSuccessors = graph.successors('Transport')
     expect(transportSuccessors).toContain('Chemistry')
     expect(transportSuccessors).toContain('SimpleReactions')
-
-    // WeatherData has Chemistry as successor
-    const weatherSuccessors = graph.successors('WeatherData')
-    expect(weatherSuccessors).toContain('Chemistry')
-    expect(weatherSuccessors).toHaveLength(1)
 
     // Chemistry has no successors (end node in these connections)
     const chemistrySuccessors = graph.successors('Chemistry')
@@ -335,7 +334,7 @@ describe('componentGraph function', () => {
 
   it('should handle empty ESM file gracefully', () => {
     const emptyEsmFile: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: {
         name: 'Empty',
         authors: [],
@@ -359,7 +358,7 @@ describe('componentGraph function', () => {
     }
 
     const graph = componentGraph(noCouplingFile)
-    expect(graph.nodes).toHaveLength(4) // All components
+    expect(graph.nodes).toHaveLength(3) // All components (a data source is none)
     expect(graph.edges).toHaveLength(0) // No edges
 
     // All nodes should have no adjacent nodes
@@ -372,14 +371,21 @@ describe('componentGraph function', () => {
 })
 
 describe('expressionGraph function', () => {
+  // Every node kind below is DERIVED from these equations (esm-spec §6.3.1),
+  // not read off a declared type: `u` is a state because equation 0
+  // differentiates it, `w` is observed because equation 1 has it as a BARE LHS
+  // (that equation replaces the removed `variables.w.expression`), and `v` is a
+  // plain parameter. `dv_dt` is declared nowhere — an equation target the model
+  // does not declare, which the builder still gives a node.
   const mockModel: Model = {
     variables: {
-      u: { type: 'state', units: 'm/s', default: 0.0 },
+      u: { type: 'unknown', units: 'm/s', default: 0.0 },
       v: { type: 'parameter', units: 'm/s', default: 1.0 },
-      w: { type: 'observed', units: 'm/s', expression: { op: '+', args: ['u', 'v'] } },
+      w: { type: 'unknown', units: 'm/s' },
     },
     equations: [
-      { lhs: 'du_dt', rhs: { op: '*', args: ['k1', 'u'] } },
+      { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: { op: '*', args: ['k1', 'u'] } },
+      { lhs: 'w', rhs: { op: '+', args: ['u', 'v'] } },
       { lhs: 'dv_dt', rhs: 0 },
     ],
   }
@@ -450,10 +456,11 @@ describe('expressionGraph function', () => {
     expect(wNode?.kind).toBe('observed')
     expect(wNode?.units).toBe('m/s')
 
-    // Check for derived variables from equations
-    const duDtNode = graph.nodes.find((n) => n.name === 'du_dt')
-    expect(duDtNode).toBeDefined()
-    expect(duDtNode?.kind).toBe('state')
+    // Check for derived variables from equations: an equation target the model
+    // does not declare still gets a node, with the synthesized 'state' kind.
+    const dvDtNode = graph.nodes.find((n) => n.name === 'dv_dt')
+    expect(dvDtNode).toBeDefined()
+    expect(dvDtNode?.kind).toBe('state')
 
     const k1Node = graph.nodes.find((n) => n.name === 'k1')
     expect(k1Node).toBeDefined()
@@ -475,16 +482,19 @@ describe('expressionGraph function', () => {
     expect(vToWEdge).toBeDefined()
     expect(vToWEdge?.data.relationship).toBe('multiplicative')
 
-    // Check for edge from equation (k1, u -> du_dt)
-    const k1ToDuDtEdge = graph.edges.find((e) => e.source === 'k1' && e.target === 'du_dt')
-    expect(k1ToDuDtEdge).toBeDefined()
-    expect(k1ToDuDtEdge?.data.relationship).toBe('additive')
-    expect(k1ToDuDtEdge?.data.equation_index).toBe(0)
+    // Check for edge from equation 0, `D(u) ~ k1 * u`. The equation's LHS
+    // TARGET is `u` itself (the derivative wrapper is unwrapped), so the RHS
+    // free variables point at `u` — including `u`'s own self-edge, which is
+    // what a state appearing in its own rate expression means.
+    const k1ToUEdge = graph.edges.find((e) => e.source === 'k1' && e.target === 'u')
+    expect(k1ToUEdge).toBeDefined()
+    expect(k1ToUEdge?.data.relationship).toBe('additive')
+    expect(k1ToUEdge?.data.equation_index).toBe(0)
 
-    const uToDuDtEdge = graph.edges.find((e) => e.source === 'u' && e.target === 'du_dt')
-    expect(uToDuDtEdge).toBeDefined()
-    expect(uToDuDtEdge?.data.relationship).toBe('additive')
-    expect(uToDuDtEdge?.data.equation_index).toBe(0)
+    const uToUEdge = graph.edges.find((e) => e.source === 'u' && e.target === 'u')
+    expect(uToUEdge).toBeDefined()
+    expect(uToUEdge?.data.relationship).toBe('additive')
+    expect(uToUEdge?.data.equation_index).toBe(0)
   })
 
   it('should extract species and parameters from a ReactionSystem', () => {
@@ -636,10 +646,11 @@ describe('expressionGraph function', () => {
     const adjacentToU = graph.adjacency('u')
     expect(adjacentToU.length).toBeGreaterThan(0)
 
-    // Test predecessors and successors
-    const predecessorsOfDuDt = graph.predecessors('du_dt')
-    expect(predecessorsOfDuDt).toContain('k1')
-    expect(predecessorsOfDuDt).toContain('u')
+    // Test predecessors and successors. `u` is the target of equation 0's RHS
+    // variables now that the LHS is `D(u)` rather than a separate `du_dt` name.
+    const predecessorsOfU = graph.predecessors('u')
+    expect(predecessorsOfU).toContain('k1')
+    expect(predecessorsOfU).toContain('u')
 
     const successorsOfU = graph.successors('u')
     expect(successorsOfU.length).toBeGreaterThan(0)
@@ -652,12 +663,17 @@ describe('expressionGraph function', () => {
 
   it('should handle scoped variables in EsmFile', () => {
     const esmFile: EsmFile = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'Test', authors: [] },
       models: {
         ModelA: {
-          variables: { temp: { type: 'state', units: 'K', default: 300 } },
-          equations: [{ lhs: 'dtemp_dt', rhs: { op: '*', args: ['rate', 'temp'] } }],
+          variables: { temp: { type: 'unknown', units: 'K', default: 300 } },
+          equations: [
+            {
+              lhs: { op: 'D', args: ['temp'], wrt: 't' },
+              rhs: { op: '*', args: ['rate', 'temp'] },
+            },
+          ],
         },
         ModelB: {
           variables: { press: { type: 'parameter', units: 'Pa', default: 101325 } },
@@ -685,7 +701,7 @@ describe('expressionGraph function', () => {
 
 describe('Graph export functions', () => {
   const mockEsmFile: EsmFile = {
-    esm: '0.1.0',
+    esm: '1.0.0',
     metadata: {
       name: 'Test System',
       description: 'Test graph export',
@@ -696,27 +712,26 @@ describe('Graph export functions', () => {
         reference: { notes: '3D transport model' },
         variables: {
           u_wind: { type: 'parameter', units: 'm/s', default: 5.0 },
-          O3: { type: 'state', units: 'mol/mol', default: 40e-9 },
+          temperature: { type: 'parameter', units: 'K', default: 298.15 },
+          O3: { type: 'unknown', units: 'mol/mol', default: 40e-9 },
         },
         equations: [{ lhs: 'du_dt', rhs: '0' }],
       },
       Chemistry: {
         reference: { notes: 'Atmospheric chemistry' },
         variables: {
-          NO2: { type: 'state', units: 'mol/mol', default: 20e-9 },
+          NO2: { type: 'unknown', units: 'mol/mol', default: 20e-9 },
         },
         equations: [{ lhs: 'dNO2_dt', rhs: '-k1 * NO2' }],
       },
     },
-    data_loaders: {
+    // Present but node-less: a data source is ingest configuration, not a
+    // component, so it is neither exported nor a coupling endpoint (§5.5).
+    data_sources: {
       WeatherData: {
         kind: 'grid',
         source: {
           url_template: '/data/weather.nc',
-        },
-        variables: {
-          temperature: { file_variable: 'T2', units: 'K' },
-          pressure: { file_variable: 'P', units: 'Pa' },
         },
       },
     },
@@ -728,7 +743,7 @@ describe('Graph export functions', () => {
       },
       {
         type: 'variable_map',
-        from: 'WeatherData.temperature',
+        from: 'Transport.temperature',
         to: 'Chemistry.T',
         transform: 'identity',
         description: 'Map temperature data',
@@ -745,10 +760,13 @@ describe('Graph export functions', () => {
       expect(dotOutput).toContain('rankdir=TB;')
       expect(dotOutput).toContain('}')
 
-      // Check for nodes with correct shapes and colors
+      // Check for nodes with correct shapes and colors. Every COMPONENT node
+      // is a box: with `data_loader` gone the type union is `model |
+      // reaction_system`, and both render as boxes, so a component graph has no
+      // ellipse to assert. (The variable-graph ellipse is covered below.)
       expect(dotOutput).toContain('"Transport"')
       expect(dotOutput).toContain('shape=box')
-      expect(dotOutput).toContain('shape=ellipse')
+      expect(dotOutput).not.toContain('shape=ellipse')
 
       // Check for edges with correct styles
       expect(dotOutput).toContain('->')
@@ -763,10 +781,12 @@ describe('Graph export functions', () => {
     it('should export expression graph as DOT format', () => {
       const model: Model = {
         variables: {
-          CO2: { type: 'state', units: 'ppm', default: 400 },
+          CO2: { type: 'unknown', units: 'ppm', default: 400 },
           H2O: { type: 'parameter', units: 'g/kg', default: 10 },
         },
-        equations: [{ lhs: 'dCO2_dt', rhs: { op: '*', args: ['k', 'CO2'] } }],
+        equations: [
+          { lhs: { op: 'D', args: ['CO2'], wrt: 't' }, rhs: { op: '*', args: ['k', 'CO2'] } },
+        ],
       }
 
       const graph = expressionGraph(model)
@@ -776,6 +796,10 @@ describe('Graph export functions', () => {
       expect(dotOutput).toContain('CO₂')
       expect(dotOutput).toContain('H₂O')
       expect(dotOutput).toContain('->')
+      // The variable graph is where both shapes appear: a state is a box, a
+      // parameter an ellipse.
+      expect(dotOutput).toContain('shape=box')
+      expect(dotOutput).toContain('shape=ellipse')
     })
   })
 
@@ -786,9 +810,11 @@ describe('Graph export functions', () => {
 
       expect(mermaidOutput).toContain('flowchart TD')
 
-      // Check for nodes with correct shapes
+      // Check for nodes with correct shapes. Both component types render as
+      // rectangles; the circle belonged to the retired `data_loader` node type,
+      // so a component graph no longer emits one.
       expect(mermaidOutput).toContain('[') // Rectangle
-      expect(mermaidOutput).toContain('((') // Circle
+      expect(mermaidOutput).not.toContain('((') // No circle: every node is a component
 
       // Check for edges with correct styles
       expect(mermaidOutput).toContain('-->')
@@ -800,21 +826,31 @@ describe('Graph export functions', () => {
     })
 
     it('should export expression graph as Mermaid format', () => {
-      const model: Model = {
-        variables: {
-          // Off-schema `type: 'species'` (not a ModelVariable type):
-          // deliberately exercises the species-shaped Mermaid rendering
-          // path through a model variable.
-          NH3: { type: 'species', units: 'mol/mol', default: 1e-9 } as unknown as ModelVariable,
-        },
-        equations: [{ lhs: 'dNH3_dt', rhs: { op: '*', args: ['rate', 'NH3'] } }],
+      // The species-shaped rendering path, reached the only way it can be:
+      // through a REACTION SYSTEM. This mock used to fake it with an off-schema
+      // `type: 'species'` model variable, which no longer works — a model
+      // variable's node kind is derived from `unknown`/`parameter` plus the
+      // equations, so no declared type can ever make one a species.
+      const reactionSystem: ReactionSystem = {
+        species: { NH3: { units: 'mol/mol', default: 1e-9 } },
+        parameters: { rate: { units: 's-1', default: 1e-3 } },
+        // A sink reaction (NH₃ → ∅) keeps the system well-formed without
+        // introducing a second species to render.
+        reactions: [
+          {
+            id: 'R1',
+            substrates: [{ species: 'NH3', stoichiometry: 1 }],
+            products: null,
+            rate: 'rate',
+          },
+        ],
       }
 
-      const graph = expressionGraph(model)
+      const graph = expressionGraph(reactionSystem)
       const mermaidOutput = toMermaid(graph)
 
       expect(mermaidOutput).toContain('flowchart TD')
-      expect(mermaidOutput).toContain('NH₃')
+      expect(mermaidOutput).toContain('((NH₃))') // Species render as circles
     })
   })
 
@@ -854,9 +890,11 @@ describe('Graph export functions', () => {
     it('should export expression graph as JSON format', () => {
       const model: Model = {
         variables: {
-          CH4: { type: 'state', units: 'ppm', default: 1.8 },
+          CH4: { type: 'unknown', units: 'ppm', default: 1.8 },
         },
-        equations: [{ lhs: 'dCH4_dt', rhs: { op: '*', args: ['sink', 'CH4'] } }],
+        equations: [
+          { lhs: { op: 'D', args: ['CH4'], wrt: 't' }, rhs: { op: '*', args: ['sink', 'CH4'] } },
+        ],
       }
 
       const graph = expressionGraph(model)
@@ -877,7 +915,7 @@ describe('Graph export functions', () => {
 
     it('should handle empty graphs', () => {
       const emptyEsmFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: { name: 'Empty', authors: [] },
       }
 
@@ -895,10 +933,12 @@ describe('Graph export functions', () => {
     it('should format chemical formulas correctly in expression graphs', () => {
       const model: Model = {
         variables: {
-          H2SO4: { type: 'state', units: 'mol/mol', default: 1e-12 },
+          H2SO4: { type: 'unknown', units: 'mol/mol', default: 1e-12 },
           Ca2plus: { type: 'parameter', units: 'mol/mol', default: 1e-6 },
         },
-        equations: [{ lhs: 'dH2SO4_dt', rhs: { op: '*', args: ['k1', 'H2SO4'] } }],
+        equations: [
+          { lhs: { op: 'D', args: ['H2SO4'], wrt: 't' }, rhs: { op: '*', args: ['k1', 'H2SO4'] } },
+        ],
       }
 
       const graph = expressionGraph(model)
@@ -925,11 +965,11 @@ describe('Graph export functions', () => {
 
     it('should format chemical formulas in variable mapping edge labels', () => {
       const mockFile: EsmFile = {
-        esm: '0.1.0',
+        esm: '1.0.0',
         metadata: { name: 'Chemical Test', authors: [] },
         models: {
-          ModelA: { variables: { O3: { type: 'state', units: 'mol/mol' } }, equations: [] },
-          ModelB: { variables: { NO2: { type: 'state', units: 'mol/mol' } }, equations: [] },
+          ModelA: { variables: { O3: { type: 'unknown', units: 'mol/mol' } }, equations: [] },
+          ModelB: { variables: { NO2: { type: 'unknown', units: 'mol/mol' } }, equations: [] },
         },
         coupling: [
           {
@@ -992,11 +1032,11 @@ describe('buildGraph helper', () => {
 
 describe('component_graph (deprecated alias)', () => {
   const mockEsmFile: EsmFile = {
-    esm: '0.1.0',
+    esm: '1.0.0',
     metadata: { name: 'Test', authors: [] },
     models: {
-      Transport: { variables: { u: { type: 'state', default: 0 } }, equations: [] },
-      Chemistry: { variables: { o3: { type: 'state', default: 0 } }, equations: [] },
+      Transport: { variables: { u: { type: 'unknown', default: 0 } }, equations: [] },
+      Chemistry: { variables: { o3: { type: 'unknown', default: 0 } }, equations: [] },
     },
     coupling: [{ type: 'operator_compose', systems: ['Transport', 'Chemistry'] }],
   }
@@ -1027,10 +1067,10 @@ describe('component_graph (deprecated alias)', () => {
 
 describe('expressionGraph mergeCoupled option', () => {
   const mockFile: EsmFile = {
-    esm: '0.1.0',
+    esm: '1.0.0',
     metadata: { name: 'Test', authors: [] },
     models: {
-      A: { variables: { u: { type: 'state', default: 0 } }, equations: [] },
+      A: { variables: { u: { type: 'unknown', default: 0 } }, equations: [] },
       B: { variables: { v: { type: 'parameter', default: 0 } }, equations: [] },
     },
     coupling: [{ type: 'variable_map', from: 'A.u', to: 'B.v', transform: 'identity' }],

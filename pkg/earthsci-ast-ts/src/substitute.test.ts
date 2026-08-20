@@ -191,8 +191,8 @@ describe('substitute', () => {
           subsystems: {
             GasPhase: {
               variables: {
-                O3: { type: 'state', default: 1.0e-8 },
-                NO: { type: 'state', default: 1.0e-10 },
+                O3: { type: 'unknown', default: 1.0e-8 },
+                NO: { type: 'unknown', default: 1.0e-10 },
               },
               equations: [],
             },
@@ -380,7 +380,7 @@ describe('substituteInModel', () => {
   it('substitutes in model equations', () => {
     const model: Model = {
       variables: {
-        x: { type: 'state', units: 'm' },
+        x: { type: 'unknown', units: 'm' },
         k: { type: 'parameter', default: 1.0 },
       },
       equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: ['k', 'x'] } }],
@@ -392,18 +392,21 @@ describe('substituteInModel', () => {
     expect(result.variables).toEqual(model.variables) // Variables unchanged
   })
 
-  it('substitutes in observed variable expressions', () => {
+  it('substitutes in an observed unknown\'s defining equation', () => {
+    // An observed unknown's definition is an EQUATION from esm 1.0.0, so
+    // substituting into the model reaches it through the equation list rather
+    // than through a field on the variable.
     const model: Model = {
       variables: {
-        x: { type: 'state' },
-        y: { type: 'observed', expression: { op: '*', args: ['k', 'x'] } },
+        x: { type: 'unknown' },
+        y: { type: 'unknown' },
       },
-      equations: [],
+      equations: [{ lhs: 'y', rhs: { op: '*', args: ['k', 'x'] } }],
     }
     const bindings = { k: 2.0 }
     const result = substituteInModel(model, bindings)
 
-    expect(result.variables.y?.expression).toEqual({ op: '*', args: [2.0, 'x'] })
+    expect(result.equations[0].rhs).toEqual({ op: '*', args: [2.0, 'x'] })
   })
 })
 

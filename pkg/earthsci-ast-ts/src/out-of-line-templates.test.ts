@@ -56,6 +56,23 @@ function isApply(x: unknown): boolean {
   )
 }
 
+/**
+ * The RHS of the equation that DEFINES the unknown `name` — the equation whose
+ * `lhs` is the bare string `name` (esm-spec §4.4 observed form).
+ *
+ * From esm 1.0.0 a variable has no `expression` field: an unknown's behaviour is
+ * stated by the model's `equations` and nowhere else, so what used to be read as
+ * `model.variables[name].expression` is now this equation's `rhs`. Looking the
+ * equation up BY LHS rather than by index keeps these tests indifferent to the
+ * order in which a fixture happens to list its equations.
+ */
+function definingRhs(model: Record<string, any>, name: string): unknown {
+  const eqs = (model.equations ?? []) as Array<{ lhs: unknown; rhs: unknown }>
+  const eq = eqs.find((e) => e.lhs === name)
+  if (eq === undefined) throw new Error(`no defining equation with lhs '${name}'`)
+  return eq.rhs
+}
+
 describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => {
   // -------------------------------------------------------------------------
   // BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(load(fixture)) is
@@ -63,12 +80,37 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   // NOT regenerated — they are the Option-A image `Expand` must reproduce.
   // -------------------------------------------------------------------------
   describe('bridge: Expand(load) == expanded oracle', () => {
+    /**
+     * A model's `equations` are a SYSTEM, not a sequence: esm assigns no meaning
+     * to their order, and from esm 1.0.0 the fixture/golden pairs no longer even
+     * agree on it. Each former `type: 'observed'` variable became a bare-LHS
+     * equation appended in its own file's `variables` key order, and the goldens
+     * were emitted with those keys sorted while the fixtures kept authored order
+     * — so e.g. aggregate_int_ratio_golden's fixture yields `dx, c0` where its
+     * expanded oracle lists `c0, dx`. Canonicalize each component's equation
+     * list before comparing so the gate pins CONTENT, which is what rule 1 is
+     * about; every other position stays an exact structural match.
+     */
+    const sortEqs = (d: unknown): unknown => {
+      for (const kind of ['models', 'reaction_systems']) {
+        const comps = (d as Record<string, any>)[kind]
+        if (comps === undefined || comps === null || typeof comps !== 'object') continue
+        for (const comp of Object.values(comps as Record<string, any>)) {
+          if (Array.isArray(comp?.equations)) {
+            comp.equations = [...comp.equations].sort((a: unknown, b: unknown) =>
+              JSON.stringify(a) < JSON.stringify(b) ? -1 : 1,
+            )
+          }
+        }
+      }
+      return d
+    }
     const core = (d: Record<string, unknown>): Record<string, unknown> => {
       const out: Record<string, unknown> = {}
       for (const k of ['models', 'reaction_systems', 'coupling', 'index_sets']) {
         if (k in d) out[k] = normj(d[k])
       }
-      return out
+      return sortEqs(out) as Record<string, unknown>
     }
     const cases: [string, string, string][] = [
       ['aggregate_int_ratio_golden', 'fixture.esm', 'expanded.esm'],
@@ -121,7 +163,10 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect(s).toBe(fs.readFileSync(conf('emit_materialized_registry', 'emitted.esm'), 'utf-8'))
     const doc = JSON.parse(s) as Record<string, any>
     const adv = doc.models.Advection
-    expect(doc.esm).toBe('0.9.0') // rule 8 version stamp
+    // Rule 8 version stamp: emitting a surviving reference requires Option B,
+    // i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment — a 1.0.0 source
+    // document must not be stamped back down to an unloadable 0.9.0.
+    expect(doc.esm).toBe('1.0.0')
     expect('expression_template_imports' in adv).toBe(false) // imports consumed
     const reg = adv.expression_templates
     expect(new Set(Object.keys(reg))).toEqual(new Set(['central_D_lon_interior', 'dlon_deg']))
@@ -152,14 +197,15 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   // -------------------------------------------------------------------------
   it('eager_target_bearing: eager expands+lowers, target-free survives', () => {
     const d = loadRefPreserving('eager_target_bearing')
-    const vars = (d.models as Record<string, any>).m.variables
+    const m = (d.models as Record<string, any>).m
     // POSITIVE: deriv_c (D-bearing) eagerly expanded, then the D lowered by the
-    // `central` rule → an aggregate. No surviving ref.
-    const deager = normj(vars.d_eager.expression) as any
+    // `central` rule → an aggregate. No surviving ref. (esm 1.0.0: d_eager is a
+    // plain unknown; the rewritten call site is its defining equation's RHS.)
+    const deager = normj(definingRhs(m, 'd_eager')) as any
     expect(deager.op).toBe('index')
     expect(deager.args[0].op).toBe('aggregate')
     // NEGATIVE: scale_c (target-free) reference SURVIVES.
-    const dsurv = normj(vars.d_survive.expression) as any
+    const dsurv = normj(definingRhs(m, 'd_survive')) as any
     expect(isApply(dsurv.args[0])).toBe(true)
     expect(dsurv.args[0].name).toBe('scale_c')
     // Emit golden.
@@ -174,7 +220,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   // -------------------------------------------------------------------------
   it('opacity_negative: compound rule does not see through a reference', () => {
     const d = loadRefPreserving('opacity_negative')
-    const flux = normj((d.models as Record<string, any>).m.variables.flux.expression) as any
+    const flux = normj(definingRhs((d.models as Record<string, any>).m, 'flux')) as any
     expect(flux.op).toBe('D') // compound did NOT fire (no marker 999)
     expect(isApply(flux.args[0])).toBe(true) // its arg is the surviving reference
     expect(flux.args[0].name).toBe('flux_prod')
@@ -190,7 +236,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   // -------------------------------------------------------------------------
   it('opacity_priority_shadowing: generic fires, compound silently does not', () => {
     const d = loadRefPreserving('opacity_priority_shadowing')
-    const flux = normj((d.models as Record<string, any>).m.variables.flux.expression) as any
+    const flux = normj(definingRhs((d.models as Record<string, any>).m, 'flux')) as any
     expect(flux.op).toBe('*')
     expect(flux.args[0]).toBe(1) // generic marker (NOT compound 999)
     expect(isApply(flux.args[1])).toBe(true) // reference bound WHOLE by metavariable f
@@ -213,7 +259,12 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     }
     expect(err).toBeInstanceOf(EsmMachineryError)
     expect((err as EsmMachineryError).code).toBe('geometry_manifold_invalid')
-    expect((err as EsmMachineryError).message).toContain('area_bad') // offending call site
+    // The offending call site is named by PATH. In esm 1.0.0 `area_bad` is an
+    // unknown defined by the document's second equation, so the path that
+    // localizes the bad instantiation is `models.m.equations/1/rhs` (index 1 —
+    // NOT index 0, which is the admissible `area_ok` call site) rather than the
+    // old `variables.area_bad.expression`.
+    expect((err as EsmMachineryError).message).toContain('models.m.equations/1/rhs')
     expect((err as EsmMachineryError).message).toContain('overlap') // template name
   })
 
@@ -227,10 +278,12 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     expect(normj((merged.sten as any).body)).toEqual({ op: '*', args: [2, 'f'] })
     // references rewritten in lockstep
     const models = root.models as Record<string, any>
-    expect(models.A.variables.za.expression.name).toBe('A.s')
-    expect(models.B.variables.zb.expression.name).toBe('B.s')
-    expect(models.A.variables.ya.expression.name).toBe('sten')
-    expect(models.B.variables.yb.expression.name).toBe('sten')
+    // (esm 1.0.0: za/zb/ya/yb are unknowns whose reference sites are the RHS of
+    // their defining equations, not a variable-level `expression` field.)
+    expect((definingRhs(models.A, 'za') as any).name).toBe('A.s')
+    expect((definingRhs(models.B, 'zb') as any).name).toBe('B.s')
+    expect((definingRhs(models.A, 'ya') as any).name).toBe('sten')
+    expect((definingRhs(models.B, 'yb') as any).name).toBe('sten')
     // per-component blocks surrendered to the merged registry
     expect('expression_templates' in models.A).toBe(false)
     expect('expression_templates' in models.B).toBe(false)

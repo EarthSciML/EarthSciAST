@@ -1,15 +1,19 @@
 /**
  * Tests for the version-migration utilities.
  *
- * Two supported kinds of pure version-marker migration are exercised:
- *   1. the legacy single step `0.0.5 → 0.1.0`, and
- *   2. the additive line `0.1.0 … <current schema version>` → current schema
- *      version (a no-op marker bump).
+ * A migration is a pure version-MARKER bump, sound only along an ADDITIVE line
+ * — a run of releases whose changes were additive, so an older file already
+ * loads under the newer schema. The current line is
+ * `1.0.0 … <current schema version>`.
  *
- * The cross-file `version-compatibility.test.ts` pins the legacy edges
- * (`0.0.5 → 0.1.0` supported; `0.0.5 → 0.2.0`, `0.1.0 → 0.2.0` unsupported;
- * `0.0.5 → 0.8.0` throws); this file additionally covers the additive-line
- * bump-to-current behavior and the reject cases.
+ * Nothing crosses the 1.0.0 boundary. esm 1.0.0 is a clean break: the five
+ * declared variable types collapse to two, an observed variable's `expression`
+ * becomes an equation, `data_loaders` becomes a non-component `data_sources`
+ * registry, and parameter mutation moves off events onto the parameter. Each of
+ * those RESHAPES the document, and several need information only the equations
+ * carry, so a 0.x source has no supported target at all. Offering one would
+ * produce a file claiming 1.0.0 while still carrying 0.x shapes — worse than
+ * refusing, because the claim would be believed.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -22,39 +26,42 @@ const fileAt = (version: string): EsmFile =>
 
 describe('migration', () => {
   describe('getSupportedMigrationTargets', () => {
-    it('keeps the legacy 0.0.5 → 0.1.0 step (and nothing else) for 0.0.5', () => {
-      expect(getSupportedMigrationTargets('0.0.5')).toEqual(['0.1.0'])
+    it('offers no target for any 0.x source, the clean break being uncrossable', () => {
+      for (const source of ['0.0.5', '0.1.0', '0.3.0', '0.8.0', '0.9.0']) {
+        expect(getSupportedMigrationTargets(source)).toEqual([])
+      }
     })
 
     it('offers a no-op bump to the current schema for additive-line sources', () => {
-      for (const source of ['0.1.0', '0.1.5', '0.2.0', '0.3.0', SCHEMA_VERSION]) {
+      for (const source of ['1.0.0', SCHEMA_VERSION]) {
         expect(getSupportedMigrationTargets(source)).toEqual([SCHEMA_VERSION])
       }
     })
 
     it('returns [] for a version newer than the current schema', () => {
-      // 0.99.0 is on the same major but beyond the current additive ceiling.
-      expect(getSupportedMigrationTargets('0.99.0')).toEqual([])
+      // Same major, but beyond the current additive ceiling.
+      expect(getSupportedMigrationTargets('1.99.0')).toEqual([])
     })
 
-    it('returns [] for a non-zero major version', () => {
-      expect(getSupportedMigrationTargets('1.0.0')).toEqual([])
+    it('returns [] for a higher major version', () => {
+      expect(getSupportedMigrationTargets('2.0.0')).toEqual([])
     })
 
     it('returns [] for a malformed version string', () => {
       expect(getSupportedMigrationTargets('not-a-version')).toEqual([])
-      expect(getSupportedMigrationTargets('0.1')).toEqual([])
+      expect(getSupportedMigrationTargets('1.0')).toEqual([])
     })
   })
 
   describe('canMigrate', () => {
-    it('accepts the legacy 0.0.5 → 0.1.0 step', () => {
-      expect(canMigrate('0.0.5', '0.1.0')).toBe(true)
+    it('rejects every 0.x source, whatever the target', () => {
+      expect(canMigrate('0.0.5', '0.1.0')).toBe(false)
+      expect(canMigrate('0.9.0', '1.0.0')).toBe(false)
+      expect(canMigrate('0.9.0', SCHEMA_VERSION)).toBe(false)
     })
 
     it('accepts an additive-line source bumped to the current schema', () => {
-      expect(canMigrate('0.1.0', SCHEMA_VERSION)).toBe(true)
-      expect(canMigrate('0.3.0', SCHEMA_VERSION)).toBe(true)
+      expect(canMigrate('1.0.0', SCHEMA_VERSION)).toBe(true)
     })
 
     it('accepts a current-version file migrated to itself (identity no-op)', () => {
@@ -63,31 +70,26 @@ describe('migration', () => {
 
     it('rejects an additive-line source targeting an intermediate (non-current) version', () => {
       // Only the current schema is a valid target; per-minor jumps are not offered.
-      expect(canMigrate('0.1.0', '0.2.0')).toBe(false)
-      expect(canMigrate('0.0.5', '0.2.0')).toBe(false)
-    })
-
-    it('rejects a single 0.0.5 → current jump (must go via 0.1.0)', () => {
-      expect(canMigrate('0.0.5', SCHEMA_VERSION)).toBe(false)
+      expect(canMigrate('1.0.0', '1.0.1')).toBe(false)
+      expect(canMigrate('1.0.0', '2.0.0')).toBe(false)
     })
   })
 
   describe('migrate', () => {
-    it('bumps the marker for the legacy 0.0.5 → 0.1.0 step without mutating input', () => {
-      const source = fileAt('0.0.5')
-      const migrated = migrate(source, '0.1.0')
-
-      expect(migrated.esm).toBe('0.1.0')
-      expect(migrated).not.toBe(source)
-      expect(source.esm).toBe('0.0.5')
+    it('refuses a 0.x source rather than bumping its marker', () => {
+      const source = fileAt('0.9.0')
+      expect(() => migrate(source, SCHEMA_VERSION)).toThrow(MigrationError)
+      // The input is left alone.
+      expect(source.esm).toBe('0.9.0')
     })
 
     it('bumps an additive-line file up to the current schema version', () => {
-      const source = fileAt('0.3.0')
+      const source = fileAt('1.0.0')
       const migrated = migrate(source, SCHEMA_VERSION)
 
       expect(migrated.esm).toBe(SCHEMA_VERSION)
-      expect(source.esm).toBe('0.3.0')
+      expect(migrated).not.toBe(source)
+      expect(source.esm).toBe('1.0.0')
     })
 
     it('accepts migrating a current-version file to the current schema (no-op)', () => {
@@ -101,7 +103,7 @@ describe('migration', () => {
 
     it('preserves all other fields untouched (marker-only bump)', () => {
       const source = {
-        esm: '0.2.0',
+        esm: '1.0.0',
         metadata: { name: 'keep-me' },
         models: { M: { variables: {}, equations: [] } },
       } as unknown as EsmFile
@@ -113,9 +115,8 @@ describe('migration', () => {
     })
 
     it('throws MigrationError for an unsupported version pair', () => {
-      expect(() => migrate(fileAt('0.0.5'), SCHEMA_VERSION)).toThrow(MigrationError)
-      expect(() => migrate(fileAt('0.1.0'), '0.2.0')).toThrow(MigrationError)
-      expect(() => migrate(fileAt('1.0.0'), SCHEMA_VERSION)).toThrow(MigrationError)
+      expect(() => migrate(fileAt('1.0.0'), '2.0.0')).toThrow(MigrationError)
+      expect(() => migrate(fileAt('0.1.0'), SCHEMA_VERSION)).toThrow(MigrationError)
     })
 
     it("throws when the source file has no 'esm' field", () => {

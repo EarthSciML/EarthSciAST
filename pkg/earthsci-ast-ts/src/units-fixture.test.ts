@@ -17,6 +17,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { evaluateExpression } from './codegen.js'
+import { observedDefinitions, odeStates } from './classification.js'
 import { readFixture } from './test-helpers.js'
 import type { EsmFile, Expr, Model, ModelVariable, Test, Assertion } from './types.js'
 
@@ -46,19 +47,21 @@ function resolveTol(
  * variable; we swallow that as "dependencies not yet resolved" and
  * retry. Cycle-free fixtures converge in at most one pass per observed
  * variable.
+ *
+ * From esm 1.0.0 an observed variable is not a declared type and carries no
+ * `expression`: it is an unknown whose defining equation has a bare-variable
+ * LHS, so the set to resolve and the expression to evaluate both come from
+ * `observedDefinitions` rather than from a `variables[v].type`/`.expression`
+ * pair (esm-spec §6.3.1).
  */
 function resolveObserved(model: Model, bindings: Map<string, number>): void {
-  const variables = model.variables ?? {}
-  const entries = Object.entries(variables)
-  for (let pass = 0; pass <= entries.length; pass++) {
+  const definitions = [...observedDefinitions(model)]
+  for (let pass = 0; pass <= definitions.length; pass++) {
     let progress = false
-    for (const [vname, v] of entries) {
-      const variable = v as ModelVariable
-      if (variable.type !== 'observed') continue
+    for (const [vname, expression] of definitions) {
       if (bindings.has(vname)) continue
-      if (variable.expression === undefined) continue
       try {
-        bindings.set(vname, evaluateExpression(variable.expression as Expr, bindings))
+        bindings.set(vname, evaluateExpression(expression as Expr, bindings))
         progress = true
       } catch (err) {
         if (err instanceof Error && err.message.startsWith('Unbound variable')) {
@@ -90,12 +93,21 @@ function assertWithTolerance(
   expect(Math.abs(actual - expected), label).toBeLessThanOrEqual(abs)
 }
 
+/**
+ * Seed the bindings with every value that is GIVEN rather than computed:
+ * parameters, and the unknowns that are ODE states (their `default` is the
+ * initial condition at t = 0). Observed unknowns are deliberately excluded so
+ * `resolveObserved` computes them from their defining equation — under 1.0.0
+ * both categories declare `type: 'unknown'`, so the split that used to be
+ * `'parameter' | 'state'` vs `'observed'` is now the derived `odeStates` set.
+ */
 function buildBindings(model: Model, t: Test): Map<string, number> {
   const bindings = new Map<string, number>()
+  const states = new Set(odeStates(model))
   for (const [vname, vraw] of Object.entries(model.variables ?? {})) {
     const variable = vraw as ModelVariable
     if (
-      (variable.type === 'parameter' || variable.type === 'state') &&
+      (variable.type === 'parameter' || states.has(vname)) &&
       typeof variable.default === 'number'
     ) {
       bindings.set(vname, variable.default)

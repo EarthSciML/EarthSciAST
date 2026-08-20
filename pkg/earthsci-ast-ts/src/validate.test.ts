@@ -11,13 +11,13 @@ import { readFixture, REPO_ROOT } from './test-helpers.js'
 describe('Structural validation', () => {
   it('should detect equation count mismatch', () => {
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
           variables: {
-            x: { type: 'state', default: 1.0 },
-            y: { type: 'state', default: 2.0 },
+            x: { type: 'unknown', default: 1.0 },
+            y: { type: 'unknown', default: 2.0 },
           },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'y' }],
         },
@@ -37,12 +37,12 @@ describe('Structural validation', () => {
 
   it('should detect undefined variable in equation', () => {
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
           variables: {
-            x: { type: 'state', default: 1.0 },
+            x: { type: 'unknown', default: 1.0 },
           },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'undefined_var' }],
         },
@@ -59,12 +59,12 @@ describe('Structural validation', () => {
 
   it('should detect undefined system in coupling', () => {
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
           variables: {
-            x: { type: 'state', default: 1.0 },
+            x: { type: 'unknown', default: 1.0 },
           },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 1.0 }],
         },
@@ -87,7 +87,7 @@ describe('Structural validation', () => {
 
   it('should detect null reaction', () => {
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       reaction_systems: {
         TestSystem: {
@@ -119,7 +119,7 @@ describe('Structural validation', () => {
 
   it('should detect undefined species in reaction', () => {
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       reaction_systems: {
         TestSystem: {
@@ -151,12 +151,12 @@ describe('Structural validation', () => {
 
   it('should pass validation for valid data', () => {
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
           variables: {
-            x: { type: 'state', default: 1.0 },
+            x: { type: 'unknown', default: 1.0 },
             y: { type: 'parameter', default: 2.0 },
           },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'y' }],
@@ -174,12 +174,12 @@ describe('Structural validation', () => {
 
   it('should include unit_warnings field in ValidationResult', () => {
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
         TestModel: {
           variables: {
-            x: { type: 'state', default: 1.0 },
+            x: { type: 'unknown', default: 1.0 },
           },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 1.0 }],
         },
@@ -200,7 +200,7 @@ describe('Structural validation', () => {
     // 2nd-order A + B -> C with a 1st-order rate constant (1/s) —
     // the reference fixture for the cross-binding dimensional check.
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'BadReactions' },
       reaction_systems: {
         BadReactions: {
@@ -249,7 +249,7 @@ describe('Structural validation', () => {
     // the integrator multiplies by substrate concentrations at evaluation
     // time. So a 2nd-order constant must carry L/mol/s ≡ L/(mol*s) dims.
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'GoodReactions' },
       reaction_systems: {
         GoodReactions: {
@@ -288,7 +288,7 @@ describe('Structural validation', () => {
     // mole-fraction species is well-formed because the rate expression
     // typically carries a number-density factor.
     const data = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'DimlessReactions' },
       reaction_systems: {
         DimlessReactions: {
@@ -343,11 +343,11 @@ describe('Structural validation', () => {
 })
 describe('variable_map expression transforms (schema widening)', () => {
   const exprTransformFile = () => ({
-    esm: '0.8.0',
+    esm: '1.0.0',
     metadata: { name: 'vm_expr_transform' },
     models: {
       Src: {
-        variables: { F: { type: 'state', default: 1.0 } },
+        variables: { F: { type: 'unknown', default: 1.0 } },
         equations: [{ lhs: { op: 'D', args: ['F'], wrt: 't' }, rhs: 0 }],
       },
       Sink: {
@@ -400,85 +400,138 @@ describe('variable_map expression transforms (schema widening)', () => {
 })
 
 describe('scoped-reference split keeps the full variable path (splitScopedRef)', () => {
-  // Regression for the split('.', 2) truncation bug: a 3-segment
-  // data-loader ref like "Weather.deep.path" must report the ENTIRE remainder
-  // ("deep.path") as the missing variable, not the truncated first segment
-  // ("deep"). Mirrors Go's strings.SplitN(from, ".", 2) remainder semantics.
-  it('reports the whole dotted remainder for a 3-segment data-loader from-ref', () => {
-    const data = {
-      esm: '0.8.0',
-      metadata: { name: 'split_scoped_ref' },
-      models: {
-        M: {
-          variables: { x: { type: 'state', default: 0.0 } },
-          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
-        },
+  // Regression for the split('.', 2) truncation bug: the head/remainder split of
+  // a scoped reference must keep EVERY trailing segment — "Meteo.Layer.temp"
+  // splits as ["Meteo", "Layer.temp"], not ["Meteo", "Layer"] — so a deep
+  // reference is navigated all the way down instead of being cut off after one
+  // step. Mirrors Go's strings.SplitN(from, ".", 2) remainder semantics.
+  //
+  // In 0.x this was pinned through a DATA LOADER ref ("Weather.deep.path") and
+  // the `undefined_data_loader_variable` code. From 1.0.0 a data source is not
+  // a coupling endpoint, exposes no variables, and is not a scoped-name path
+  // root (esm-spec §5.5), so that code is retired and the shape it described no
+  // longer exists. The split semantics survive unchanged, and are pinned here
+  // where deep references actually live: a chain of model subsystems.
+  const deepRefFile = (from: string) => ({
+    esm: '1.0.0',
+    metadata: { name: 'split_scoped_ref' },
+    models: {
+      M: {
+        variables: { x: { type: 'unknown', default: 0.0 } },
+        equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
       },
-      data_loaders: {
-        Weather: {
-          kind: 'grid',
-          source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
-          variables: {
-            T: { file_variable: 'T2', units: 'K', description: 'Temperature' },
+      Meteo: {
+        variables: {},
+        equations: [],
+        subsystems: {
+          Layer: {
+            variables: { temp: { type: 'unknown', units: 'K', default: 300 } },
+            equations: [{ lhs: { op: 'D', args: ['temp'], wrt: 't' }, rhs: 0 }],
           },
         },
       },
-      coupling: [
-        {
-          type: 'variable_map',
-          from: 'Weather.deep.path',
-          to: 'M.x',
-          transform: 'param_to_var',
-        },
-      ],
-    }
-
-    const result = validate(data)
-
-    expect(result.is_valid).toBe(false)
-    const err = result.structural_errors.find((e) => e.code === 'undefined_data_loader_variable')
-    expect(err).toBeDefined()
-    expect(err!.path).toBe('/coupling/0/from')
-    // The FIX: full remainder, not the truncated 'deep'.
-    expect(err!.details.variable).toBe('deep.path')
-    expect(err!.details.data_loader).toBe('Weather')
+    },
+    coupling: [{ type: 'variable_map', from, to: 'M.x', transform: 'param_to_var' }],
   })
 
-  it('is unchanged for the common 2-segment data-loader from-ref', () => {
-    const data = {
-      esm: '0.8.0',
-      metadata: { name: 'split_scoped_ref_2seg' },
+  it('navigates the whole dotted remainder of a 3-segment from-ref', () => {
+    // `Meteo.Layer.temp` resolves only if the remainder "Layer.temp" survives
+    // the split intact: truncating to "Layer" would look for a VARIABLE named
+    // "Layer" on `Meteo` and report a spurious unresolved reference.
+    const result = validate(deepRefFile('Meteo.Layer.temp'))
+
+    expect(result.structural_errors.filter((e) => e.code === 'unresolved_scoped_ref')).toEqual([])
+    expect(result.is_valid).toBe(true)
+  })
+
+  it('reports the leaf name and the full reference when a deep ref does not resolve', () => {
+    const result = validate(deepRefFile('Meteo.Layer.missing_var'))
+
+    expect(result.is_valid).toBe(false)
+    const err = result.structural_errors.find((e) => e.code === 'unresolved_scoped_ref')
+    expect(err).toBeDefined()
+    expect(err!.path).toBe('/coupling/0/from')
+    // The undefined NAME is the leaf; the whole dotted path is kept alongside it
+    // so a reader can see which chain was walked.
+    expect(err!.details.variable).toBe('missing_var')
+    expect(err!.details.reference).toBe('Meteo.Layer.missing_var')
+    expect(err!.details.system).toBe('Meteo')
+  })
+
+  it('refuses a data SOURCE as a coupling endpoint (it is not a path root)', () => {
+    // The 1.0.0 replacement for the retired `undefined_data_loader_variable`:
+    // `Weather.T` no longer names anything, because a `data_sources` entry is
+    // not a component and heads no scope. A model consumes it through a
+    // parameter `update`, never through a coupling entry.
+    const result = validate({
+      esm: '1.0.0',
+      metadata: { name: 'source_is_not_an_endpoint' },
       models: {
         M: {
-          variables: { x: { type: 'state', default: 0.0 } },
+          variables: { x: { type: 'unknown', default: 0.0 } },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
         },
       },
-      data_loaders: {
+      data_sources: {
         Weather: {
           kind: 'grid',
           source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
-          variables: {
-            T: { file_variable: 'T2', units: 'K', description: 'Temperature' },
-          },
         },
       },
       coupling: [
-        {
-          type: 'variable_map',
-          from: 'Weather.missing_var',
-          to: 'M.x',
-          transform: 'param_to_var',
-        },
+        { type: 'variable_map', from: 'Weather.T', to: 'M.x', transform: 'param_to_var' },
       ],
-    }
-
-    const result = validate(data)
+    })
 
     expect(result.is_valid).toBe(false)
-    const err = result.structural_errors.find((e) => e.code === 'undefined_data_loader_variable')
+    const err = result.structural_errors.find((e) => e.code === 'unresolved_scoped_ref')
     expect(err).toBeDefined()
-    expect(err!.details.variable).toBe('missing_var')
+    expect(err!.path).toBe('/coupling/0/from')
+    expect(err!.details.reference).toBe('Weather.T')
+    expect(err!.details.system).toBe('Weather')
+  })
+
+  it('reports `data_source_undefined` when a parameter update names no declared source', () => {
+    // The other half of the replacement: naming a source is now a parameter's
+    // `update.source`, and that string is schema-valid whatever it says — so
+    // the existence check is structural.
+    const file = (source: string) => ({
+      esm: '1.0.0',
+      metadata: { name: 'source_ref' },
+      models: {
+        M: {
+          variables: {
+            x: { type: 'unknown', default: 0.0 },
+            T: {
+              type: 'parameter',
+              units: 'K',
+              shape: [],
+              update: { kind: 'data', source, from: { file_variable: 'T2M' } },
+            },
+          },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+      data_sources: {
+        Weather: {
+          kind: 'grid',
+          source: { url_template: '/data/weather_{date:%Y%m%d}.nc' },
+        },
+      },
+    })
+
+    expect(validate(file('Weather')).is_valid).toBe(true)
+
+    const result = validate(file('Nowhere'))
+    expect(result.is_valid).toBe(false)
+    const err = result.structural_errors.find((e) => e.code === 'data_source_undefined')
+    expect(err).toBeDefined()
+    expect(err!.path).toBe('/models/M/variables/T/update')
+    expect(err!.details).toMatchObject({
+      variable: 'T',
+      source: 'Nowhere',
+      available_sources: ['Weather'],
+    })
   })
 })
 
@@ -490,7 +543,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
   // empty-string document-root path, `details.error` shape, and `Invalid JSON: `
   // message prefix.
   it('reports malformed JSON in the json_parse_error envelope', () => {
-    const result = validate('{ "esm": "0.1.0", ')
+    const result = validate('{ "esm": "1.0.0", ')
 
     expect(result.is_valid).toBe(false)
     expect(result.structural_errors).toEqual([])
@@ -505,7 +558,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
   })
 
   it('rejects trailing content after the JSON document', () => {
-    const result = validate('{"esm":"0.1.0","metadata":{"name":"x"}} trailing')
+    const result = validate('{"esm":"1.0.0","metadata":{"name":"x"}} trailing')
 
     expect(result.is_valid).toBe(false)
     expect(result.schema_errors).toHaveLength(1)
@@ -514,12 +567,12 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
 
   it('parses a valid string identically to the equivalent object', () => {
     const obj = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'parse_parity' },
       models: {
         M: {
           variables: {
-            x: { type: 'state', default: 1.0 },
+            x: { type: 'unknown', default: 1.0 },
             k: { type: 'parameter', default: 2.0 },
           },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'k' }],
@@ -550,11 +603,11 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // carries no grid). Fixtures: cadence/pure_pointwise.esm (t),
     // initial_conditions/expression_ignition_front_1d.esm (x).
     const result = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'implicit-coords' },
       models: {
         M: {
-          variables: { u: { type: 'state', units: '1' }, A: { type: 'parameter', default: 1 } },
+          variables: { u: { type: 'unknown', units: '1' }, A: { type: 'parameter', default: 1 } },
           equations: [
             {
               lhs: { op: 'D', args: ['u'], wrt: 't' },
@@ -571,12 +624,12 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
   it('(a) honours a domain that renames the independent variable', () => {
     const result = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'renamed-time' },
       domain: { independent_variable: 'time' },
       models: {
         M: {
-          variables: { u: { type: 'state', units: '1' } },
+          variables: { u: { type: 'unknown', units: '1' } },
           equations: [
             { lhs: { op: 'D', args: ['u'], wrt: 'time' }, rhs: { op: '*', args: [-1, 'time'] } },
           ],
@@ -590,11 +643,11 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // Spec §6.4: "_var" is substituted with each matching state variable when
     // coupled via operator_compose. Fixture: full_coupled.esm.
     const file = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'op-style' },
       models: {
         Transport: {
-          variables: { u: { type: 'state', units: '1' } },
+          variables: { u: { type: 'unknown', units: '1' } },
           equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
           continuous_events: [
             {
@@ -625,7 +678,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // `Meteorology.Temperature.surface_temp` (3 levels) and whose `couple`
     // entry names the SUBSYSTEM `Meteorology.Temperature`.
     const result = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'deep-scope' },
       models: {
         Chem: { variables: { T: { type: 'parameter', units: 'K', default: 300 } }, equations: [] },
@@ -634,7 +687,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
           equations: [],
           subsystems: {
             Temperature: {
-              variables: { surface_temp: { type: 'state', units: 'K' } },
+              variables: { surface_temp: { type: 'unknown', units: 'K' } },
               equations: [{ lhs: { op: 'D', args: ['surface_temp'], wrt: 't' }, rhs: 0 }],
             },
           },
@@ -654,7 +707,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
     // A deep path that does NOT exist is still unresolved.
     const bad = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'deep-scope-bad' },
       models: {
         Chem: { variables: { T: { type: 'parameter', units: 'K', default: 300 } }, equations: [] },
@@ -676,10 +729,16 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // Fixture: events_cross_system.esm — an Arrhenius rate reading another
     // system's temperature.
     const result = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'cross-system-rate' },
       models: {
-        Met: { variables: { T: { type: 'state', units: 'K' } }, equations: [] },
+        // `T` is an unknown, so it needs its own equation: from 1.0.0 the
+        // balance check counts unknowns against equations, and a declared
+        // unknown with no equation is `equation_count_mismatch`.
+        Met: {
+          variables: { T: { type: 'unknown', units: 'K' } },
+          equations: [{ lhs: { op: 'D', args: ['T'], wrt: 't' }, rhs: 0 }],
+        },
       },
       reaction_systems: {
         Chem: {
@@ -701,7 +760,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
     // An unresolvable scoped rate reference is still reported.
     const bad = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'cross-system-rate-bad' },
       reaction_systems: {
         Chem: {
@@ -726,14 +785,14 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // equations, the second of which has a PRODUCT LHS (`H*H*SO4 = Ksp`) that
     // credits no variable under the ODE rule.
     const balanced = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'equilibrium' },
       models: {
         Eq: {
           system_kind: 'nonlinear',
           variables: {
-            H: { type: 'state', units: 'mol/m^3' },
-            SO4: { type: 'state', units: 'mol/m^3' },
+            H: { type: 'unknown', units: 'mol/m^3' },
+            SO4: { type: 'unknown', units: 'mol/m^3' },
             Ksp: { type: 'parameter', units: 'mol^3/m^9', default: 1 },
           },
           equations: [
@@ -749,14 +808,14 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
     // An UNDER-determined algebraic system is still a mismatch: 2 unknowns, 1 eq.
     const underdetermined = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'equilibrium-bad' },
       models: {
         Eq: {
           system_kind: 'nonlinear',
           variables: {
-            H: { type: 'state', units: 'mol/m^3' },
-            SO4: { type: 'state', units: 'mol/m^3' },
+            H: { type: 'unknown', units: 'mol/m^3' },
+            SO4: { type: 'unknown', units: 'mol/m^3' },
           },
           equations: [{ lhs: 'H', rhs: { op: '*', args: [2, 'SO4'] } }],
         },
@@ -775,12 +834,12 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // single-letter names — so an unbound name is still reported even when it
     // sits in the very same body.
     const boundIndex = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'bound-index' },
       models: {
         M: {
           variables: {
-            u: { type: 'state', units: '1', shape: ['cells'] },
+            u: { type: 'unknown', units: '1', shape: ['cells'] },
             k: { type: 'parameter', units: '1/s', default: 1 },
           },
           equations: [
@@ -812,12 +871,12 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     // binder set is derived, not an allowlist. `j` is a single letter and is NOT
     // excused.
     const unbound = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'unbound-index' },
       models: {
         M: {
           variables: {
-            u: { type: 'state', units: '1', shape: ['cells'] },
+            u: { type: 'unknown', units: '1', shape: ['cells'] },
           },
           equations: [
             {
@@ -851,7 +910,7 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
   it('(f) emits the canonical subsystem-ref code', () => {
     const result = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'unresolved-ref' },
       models: {
         Atmosphere: {
@@ -873,11 +932,11 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 
   it('promotes an unparseable unit to unit_parse_error at the variable', () => {
     const result = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'bad-unit' },
       models: {
         TestModel: {
-          variables: { c: { type: 'state', units: 'not_a_unit' } },
+          variables: { c: { type: 'unknown', units: 'not_a_unit' } },
           equations: [{ lhs: { op: 'D', args: ['c'], wrt: 't' }, rhs: 0 }],
         },
       },
@@ -902,12 +961,12 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
 describe('(h) reference integrity covers every expression-bearing field', () => {
   /** Build a one-model file, applying `patch` to the model. */
   const fileWith = (patch: Record<string, unknown>) => ({
-    esm: '0.1.0',
+    esm: '1.0.0',
     metadata: { name: 'sidecars' },
     models: {
       M: {
         variables: {
-          u: { type: 'state', units: '1' },
+          u: { type: 'unknown', units: '1' },
           k: { type: 'parameter', units: '1', default: 1 },
         },
         equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
@@ -923,22 +982,37 @@ describe('(h) reference integrity covers every expression-bearing field', () => 
   // an UNDEFINED name, the JSON Pointer the error must carry].
   const cases: Array<[string, Record<string, unknown>, Record<string, unknown>, string]> = [
     [
-      'an observed variable expression',
+      // 0.x wrote an observed variable's defining expression as a SIDECAR
+      // (`variables.obs.expression`) and that pointer is what this case pinned.
+      // From 1.0.0 an unknown's behaviour is stated by the model's `equations`
+      // and nowhere else, so the same defect now lives at an equation RHS — the
+      // case is kept (the name still has to resolve) with the pointer that
+      // position now carries. Note the extra equation: `obs` is a third unknown
+      // and would otherwise unbalance the model.
+      'an observed unknown`s defining equation',
       {
         variables: {
-          u: { type: 'state', units: '1' },
+          u: { type: 'unknown', units: '1' },
           k: { type: 'parameter', units: '1', default: 1 },
-          obs: { type: 'observed', units: '1', expression: { op: '*', args: [2, 'k'] } },
+          obs: { type: 'unknown', units: '1' },
         },
+        equations: [
+          { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+          { lhs: 'obs', rhs: { op: '*', args: [2, 'k'] } },
+        ],
       },
       {
         variables: {
-          u: { type: 'state', units: '1' },
+          u: { type: 'unknown', units: '1' },
           k: { type: 'parameter', units: '1', default: 1 },
-          obs: { type: 'observed', units: '1', expression: { op: '*', args: [2, 'nope'] } },
+          obs: { type: 'unknown', units: '1' },
         },
+        equations: [
+          { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+          { lhs: 'obs', rhs: { op: '*', args: [2, 'nope'] } },
+        ],
       },
-      '/models/M/variables/obs/expression',
+      '/models/M/equations/1/rhs',
     ],
     [
       'a solver guess',
@@ -1059,17 +1133,23 @@ describe('(h) reference integrity covers every expression-bearing field', () => 
     // being integrated over"), in scope in the integrand AND the bounds — the
     // cumulative form writes `upper: "<var>"`. Its `lower`, however, is an
     // ordinary expression: a free name there is a real reference.
+    // `cumu` is an observed UNKNOWN: 1.0.0 states it with a bare-string equation
+    // LHS rather than a `variables.cumu.expression` sidecar, so the integral now
+    // sits at an equation RHS and the model needs the matching second equation.
     const bound = validate(
       fileWith({
         variables: {
-          u: { type: 'state', units: '1' },
+          u: { type: 'unknown', units: '1' },
           xmin: { type: 'parameter', units: '1', default: 0 },
-          cumu: {
-            type: 'observed',
-            units: '1',
-            expression: { op: 'integral', args: ['u'], var: 's', lower: 'xmin', upper: 's' },
-          },
+          cumu: { type: 'unknown', units: '1' },
         },
+        equations: [
+          { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+          {
+            lhs: 'cumu',
+            rhs: { op: 'integral', args: ['u'], var: 's', lower: 'xmin', upper: 's' },
+          },
+        ],
       }),
     )
     // `s` is bound by `var` — not an undefined variable, and NOT excused by any
@@ -1080,13 +1160,16 @@ describe('(h) reference integrity covers every expression-bearing field', () => 
     const freeBound = undefinedIn(
       fileWith({
         variables: {
-          u: { type: 'state', units: '1' },
-          cumu: {
-            type: 'observed',
-            units: '1',
-            expression: { op: 'integral', args: ['u'], var: 's', lower: 'nope', upper: 's' },
-          },
+          u: { type: 'unknown', units: '1' },
+          cumu: { type: 'unknown', units: '1' },
         },
+        equations: [
+          { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+          {
+            lhs: 'cumu',
+            rhs: { op: 'integral', args: ['u'], var: 's', lower: 'nope', upper: 's' },
+          },
+        ],
       }),
     )
     expect(freeBound).toHaveLength(1)
@@ -1098,59 +1181,39 @@ describe('(h) reference integrity covers every expression-bearing field', () => 
     // `Calendar.x`. Resolving only from the FILE ROOT found no top-level
     // `Calendar` and reported the valid lib_*_subsystem_inclusion fixtures as
     // unresolved scoped refs.
-    const result = validate({
-      esm: '0.1.0',
+    // `w` and the subsystem's `seconds_since_midnight` are observed UNKNOWNS:
+    // each is stated by a bare-LHS equation rather than by a `variables.*
+    // .expression` sidecar, so both components carry one equation per unknown.
+    const ownSubsystemFile = (reference: string) => ({
+      esm: '1.0.0',
       metadata: { name: 'own-subsystem' },
       models: {
         Diurnal: {
           variables: {
-            u: { type: 'state', units: '1' },
-            w: {
-              type: 'observed',
-              units: '1',
-              expression: { op: '*', args: [2, 'Calendar.seconds_since_midnight'] },
-            },
+            u: { type: 'unknown', units: '1' },
+            w: { type: 'unknown', units: '1' },
           },
-          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+          equations: [
+            { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+            { lhs: 'w', rhs: { op: '*', args: [2, reference] } },
+          ],
           subsystems: {
             Calendar: {
               variables: {
-                seconds_since_midnight: { type: 'observed', units: 's', expression: 0 },
+                seconds_since_midnight: { type: 'unknown', units: 's' },
               },
-              equations: [],
+              equations: [{ lhs: 'seconds_since_midnight', rhs: 0 }],
             },
           },
         },
       },
     })
+
+    const result = validate(ownSubsystemFile('Calendar.seconds_since_midnight'))
     expect(result.structural_errors.filter((e) => e.code === 'unresolved_scoped_ref')).toEqual([])
 
     // A name the mounted subsystem does NOT declare is still unresolved.
-    const bad = validate({
-      esm: '0.1.0',
-      metadata: { name: 'own-subsystem-bad' },
-      models: {
-        Diurnal: {
-          variables: {
-            u: { type: 'state', units: '1' },
-            w: {
-              type: 'observed',
-              units: '1',
-              expression: { op: '*', args: [2, 'Calendar.nope'] },
-            },
-          },
-          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
-          subsystems: {
-            Calendar: {
-              variables: {
-                seconds_since_midnight: { type: 'observed', units: 's', expression: 0 },
-              },
-              equations: [],
-            },
-          },
-        },
-      },
-    })
+    const bad = validate(ownSubsystemFile('Calendar.nope'))
     expect(bad.structural_errors.some((e) => e.code === 'unresolved_scoped_ref')).toBe(true)
   })
 })
@@ -1172,39 +1235,56 @@ describe('(h) reference integrity covers every expression-bearing field', () => 
  * declared-vs-computed check is ever lost, these fail loudly rather than the
  * fixture silently going vacuous.
  */
-describe('observed variables: declared units are compared against the computed dimension', () => {
-  const model = (units: string, expression: unknown) => ({
-    esm: '0.1.0',
+describe('observed unknowns: declared units are compared against the computed dimension', () => {
+  // An observed unknown is one whose defining equation has a BARE-STRING LHS
+  // (§6.3.1) — 1.0.0's spelling of what 0.x declared as `type: "observed"` with
+  // an `expression` sidecar. The comparison being guarded is unchanged: the
+  // variable's declared `units` against the dimension its defining RHS computes.
+  const model = (units: string, rhs: unknown) => ({
+    esm: '1.0.0',
     metadata: { name: 'nonvacuous' },
     models: {
       M: {
         variables: {
-          u: { type: 'state', units: 'm/s' },
+          u: { type: 'unknown', units: 'm/s' },
           T: { type: 'parameter', units: 'K', default: 300 },
-          obs: { type: 'observed', units, expression },
+          obs: { type: 'unknown', units },
         },
-        equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+        equations: [
+          { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+          { lhs: 'obs', rhs },
+        ],
       },
     },
   })
   const inconsistencies = (file: object) =>
     validate(file).structural_errors.filter((e) => e.code === 'unit_inconsistency')
 
-  it('accepts an observed variable whose declaration MATCHES its expression', () => {
+  it('accepts an observed unknown whose declaration MATCHES its defining equation', () => {
     expect(inconsistencies(model('m/s', 'u'))).toEqual([])
   })
 
+  // A mismatch is now reported TWICE, from two independent checks that both
+  // bite: the equation's own two sides no longer agree (`/models/M/equations/1`)
+  // AND the declared-vs-computed comparison fails at the variable
+  // (`/models/M/variables/obs`). The second is the one this guard exists for —
+  // the first would still fire from a plain algebraic equation — so both paths
+  // are pinned rather than just a count.
+  const paths = (errors: ReturnType<typeof inconsistencies>) => errors.map((e) => e.path).sort()
+
   it('rejects a corrupted DECLARATION (declared unit no longer matches the expression)', () => {
-    const errors = inconsistencies(model('kg', 'u'))
-    expect(errors).toHaveLength(1)
-    expect(errors[0].path).toBe('/models/M/variables/obs')
+    expect(paths(inconsistencies(model('kg', 'u')))).toEqual([
+      '/models/M/equations/1',
+      '/models/M/variables/obs',
+    ])
   })
 
   it('rejects a corrupted EXPRESSION (expression no longer computes the declared unit)', () => {
     // `u * T` is m·K/s, not m/s.
-    const errors = inconsistencies(model('m/s', { op: '*', args: ['u', 'T'] }))
-    expect(errors).toHaveLength(1)
-    expect(errors[0].path).toBe('/models/M/variables/obs')
+    expect(paths(inconsistencies(model('m/s', { op: '*', args: ['u', 'T'] })))).toEqual([
+      '/models/M/equations/1',
+      '/models/M/variables/obs',
+    ])
   })
 })
 
@@ -1216,12 +1296,12 @@ describe('observed variables: declared units are compared against the computed d
 describe('(h) reference integrity covers the non-model expression sites', () => {
   it('checks a test assertion reference (site 8)', () => {
     const withTests = (reference: unknown) => ({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'assertion-ref' },
       models: {
         TestModel: {
           variables: {
-            y: { type: 'state', units: '1' },
+            y: { type: 'unknown', units: '1' },
             k: { type: 'parameter', units: '1/s', default: 1 },
           },
           equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: 0 }],
@@ -1248,55 +1328,69 @@ describe('(h) reference integrity covers the non-model expression sites', () => 
     expect(errors[0].path).toBe('/models/TestModel/tests/0/assertions/0/reference')
   })
 
-  it('checks a data loader unit_conversion (site 9)', () => {
-    const withLoader = (unit_conversion: unknown) => ({
-      esm: '0.1.0',
+  it('checks a data-source binding unit_conversion (site 9)', () => {
+    // In 0.x `unit_conversion` hung off a data LOADER variable
+    // (`/data_loaders/L/variables/v/unit_conversion`). From 1.0.0 the source
+    // exposes no variables at all: the CONSUMING parameter binds a
+    // `file_variable` through `update.from` and owns both the units and the
+    // conversion. Same expression position, new home — and the check must
+    // follow it there, or every conversion in the format goes unchecked again.
+    const withConversion = (unit_conversion: unknown) => ({
+      esm: '1.0.0',
       metadata: { name: 'unit-conv' },
       models: {
         TestModel: {
           variables: {
-            y: { type: 'state', units: '1' },
+            y: { type: 'unknown', units: '1' },
             k: { type: 'parameter', units: '1', default: 1 },
+            v: {
+              type: 'parameter',
+              units: '1',
+              // A `data` update makes the parameter a buffer, so `shape` is
+              // required; an empty shape is the scalar case.
+              shape: [],
+              update: {
+                kind: 'data',
+                source: 'L',
+                from: { file_variable: 'v', unit_conversion },
+              },
+            },
           },
           equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: 0 }],
         },
       },
-      data_loaders: {
-        L: {
-          kind: 'grid',
-          source: { url_template: 'file:///d.nc' },
-          variables: { v: { file_variable: 'v', units: '1', unit_conversion } },
-        },
+      data_sources: {
+        L: { kind: 'grid', source: { url_template: 'file:///d.nc' } },
       },
     })
     // A plain numeric factor carries no references.
-    expect(validate(withLoader(2.5)).structural_errors).toEqual([])
-    // A declared name resolves (the loader may scale by a model's parameter).
+    expect(validate(withConversion(2.5)).structural_errors).toEqual([])
+    // A declared name resolves (the conversion may scale by a model's parameter).
     expect(
-      validate(withLoader({ op: '*', args: ['k', 2] })).structural_errors.filter(
+      validate(withConversion({ op: '*', args: ['k', 2] })).structural_errors.filter(
         (e) => e.code === 'undefined_variable',
       ),
     ).toEqual([])
 
     const errors = validate(
-      withLoader({ op: '*', args: ['k', 'undefined_xyz'] }),
+      withConversion({ op: '*', args: ['k', 'undefined_xyz'] }),
     ).structural_errors.filter((e) => e.code === 'undefined_variable')
     expect(errors).toHaveLength(1)
-    expect(errors[0].path).toBe('/data_loaders/L/variables/v/unit_conversion')
+    expect(errors[0].path).toBe('/models/TestModel/variables/v/update/from/unit_conversion')
   })
 
   it('checks the two coupling expression slots (sites 10 & 11)', () => {
     const base = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'coupling-expr' },
       models: {
         TestModel: {
-          variables: { y: { type: 'state', units: '1' } },
+          variables: { y: { type: 'unknown', units: '1' } },
           equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: 0 }],
         },
         Other: {
           variables: {
-            w: { type: 'state', units: '1' },
+            w: { type: 'unknown', units: '1' },
             p: { type: 'parameter', units: '1', default: 1 },
           },
           equations: [{ lhs: { op: 'D', args: ['w'], wrt: 't' }, rhs: 0 }],
@@ -1346,11 +1440,11 @@ describe('(k) complete declaration-site set', () => {
     // made from OUTSIDE the component. Missing it falsely rejected
     // `tests/coupling/callback_examples.esm`.
     const file = (couplingVarName: string) => ({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'callback-decl' },
       models: {
         WeatherModel: {
-          variables: { temp: { type: 'state', units: 'K' } },
+          variables: { temp: { type: 'unknown', units: 'K' } },
           equations: [
             {
               lhs: { op: 'D', args: ['temp'], wrt: 't' },
@@ -1392,15 +1486,18 @@ describe('(k) complete declaration-site set', () => {
   it('emits `details.variable` — not `variable_name` — at the new (h) sites', () => {
     // CONFORMANCE_SPEC row (j): the corpus settled on `variable`.
     const result = validate({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'details-key' },
       models: {
         M: {
           variables: {
-            u: { type: 'state', units: '1' },
-            obs: { type: 'observed', units: '1', expression: { op: '*', args: [2, 'nope'] } },
+            u: { type: 'unknown', units: '1' },
+            obs: { type: 'unknown', units: '1' },
           },
-          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+          equations: [
+            { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+            { lhs: 'obs', rhs: { op: '*', args: [2, 'nope'] } },
+          ],
         },
       },
     })
@@ -1410,38 +1507,59 @@ describe('(k) complete declaration-site set', () => {
   })
 })
 
-describe('an observed variable defined as the constant 0 is not "missing" its expression', () => {
-  // `!variable.expression` is true for the NUMBER ZERO. `0.0` is a perfectly
-  // legal Expression, so `tests/valid/events_cross_system.esm` — whose
-  // `temperature_factor` is exactly `0.0` — was reported as missing_observed_expr.
-  const withExpression = (expression: unknown) => ({
-    esm: '0.1.0',
+describe('an unknown defined as the constant 0 is not "missing" its defining equation', () => {
+  // The original bug was a truthiness test: `!variable.expression` is true for
+  // the NUMBER ZERO, so an observed variable defined as exactly `0.0` — e.g.
+  // `temperature_factor` in `tests/valid/events_cross_system.esm` — was reported
+  // as `missing_observed_expr`.
+  //
+  // 1.0.0 retires that code along with the `expression` sidecar it read: an
+  // unknown is DEFINED by an equation, and the discriminating power the code had
+  // now lives in `equation_count_mismatch`'s `missing_equations_for`, which names
+  // exactly the unknowns nothing defines. The falsy-zero trap is unchanged in
+  // kind (an equation whose RHS is `0` still defines its LHS), so the guard is
+  // kept, retargeted at the check that replaced it.
+  const withRhs = (rhs: unknown) => ({
+    esm: '1.0.0',
     metadata: { name: 'falsy-zero' },
     models: {
       M: {
         variables: {
-          u: { type: 'state', units: '1' },
-          obs: { type: 'observed', units: '1', expression },
+          u: { type: 'unknown', units: '1' },
+          obs: { type: 'unknown', units: '1' },
         },
-        equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+        equations: [
+          { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 },
+          { lhs: 'obs', rhs },
+        ],
       },
     },
   })
-  const missing = (file: object) =>
-    validate(file).structural_errors.filter((e) => e.code === 'missing_observed_expr')
+  const mismatches = (file: object) =>
+    validate(file).structural_errors.filter((e) => e.code === 'equation_count_mismatch')
 
-  it('accepts the constant 0', () => {
-    expect(missing(withExpression(0))).toEqual([])
-    expect(missing(withExpression(0.0))).toEqual([])
+  it('accepts the constant 0 as a defining right-hand side', () => {
+    expect(mismatches(withRhs(0))).toEqual([])
+    expect(mismatches(withRhs(0.0))).toEqual([])
+    expect(validate(withRhs(0)).is_valid).toBe(true)
   })
 
-  it('still rejects a genuinely absent expression', () => {
-    // An observed variable with NO `expression` is caught at the SCHEMA layer
-    // (which requires the field), and structural checks only run once the schema
-    // is clean — so assert the rejection, not the structural code specifically.
-    // The point is that the fix admits `0` without admitting "absent".
-    const file = withExpression(undefined)
-    delete (file.models.M.variables.obs as { expression?: unknown }).expression
+  it('still reports an unknown that no equation defines', () => {
+    // Drop the defining equation entirely: `obs` is now an unknown with nothing
+    // to state it, which is the 1.0.0 shape of "an observed variable with no
+    // expression" — an equation-balance error that NAMES the offending unknown.
+    const file = withRhs(0)
+    file.models.M.equations.pop()
+
+    const errors = mismatches(file)
+    expect(errors).toHaveLength(1)
+    expect(errors[0].path).toBe('/models/M')
+    expect(errors[0].message).toBe('Number of equations (1) does not match number of unknowns (2)')
+    expect(errors[0].details).toEqual({
+      unknowns: ['u', 'obs'],
+      equations: 1,
+      missing_equations_for: ['obs'],
+    })
     expect(validate(file).is_valid).toBe(false)
   })
 })

@@ -30,33 +30,34 @@ import type { EsmFile, Model, ReactionSystem } from './types.js'
  *                  one constraint_equation, subsystems:
  *       RSub (inline reaction system)                     -> descended
  *       RRef ({ref})                                      -> leaf, not descended
+ *
+ * There is no data-loader subsystem: from esm 1.0.0 a data source is ingest
+ * configuration rather than a component, so it cannot appear in `subsystems` at
+ * all, and `kind` is no longer a reference-stub discriminator.
  */
 const file: EsmFile = {
-  esm: '0.1.0',
+  esm: '1.0.0',
   metadata: { name: 'traverse-fixture' },
   models: {
     M1: {
       variables: {
-        x: { type: 'state' },
+        x: { type: 'unknown' },
         k: { type: 'parameter' },
-        y: { type: 'observed', expression: { op: '*', args: ['k', 'x'] } },
+        // An observed unknown: defined by the bare-LHS equation below.
+        y: { type: 'unknown' },
       },
-      equations: [{ lhs: { op: 'D', args: ['x'] }, rhs: 'k' }],
+      equations: [
+        { lhs: { op: 'D', args: ['x'] }, rhs: 'k' },
+        { lhs: 'y', rhs: { op: '*', args: ['k', 'x'] } },
+      ],
       subsystems: {
         Sub: {
-          variables: { z: { type: 'state' } },
+          variables: { z: { type: 'unknown' } },
           equations: [{ lhs: { op: 'D', args: ['z'] }, rhs: 'z' }],
         } as Model,
         // Reference stub with a bogus nested subsystem to prove non-descent.
         Ext: {
           ref: './external.esm',
-          subsystems: { Ghost: { variables: {}, equations: [] } },
-        } as any,
-        // Data-loader stub (discriminated by `kind`), likewise not descended.
-        Load: {
-          kind: 'grid',
-          source: { url_template: 'x' },
-          variables: {},
           subsystems: { Ghost: { variables: {}, equations: [] } },
         } as any,
       },
@@ -105,11 +106,8 @@ function collect(opts?: { recurse?: boolean }): ComponentVisit[] {
 }
 
 describe('isReferenceStub', () => {
-  it('flags `ref` includes and `kind` data loaders, not real components', () => {
+  it('flags `ref` includes, not real components', () => {
     expect(isReferenceStub({ ref: './x.esm' })).toBe(true)
-    expect(
-      isReferenceStub({ kind: 'grid', source: { url_template: 'x' }, variables: {} } as any),
-    ).toBe(true)
     expect(isReferenceStub(M1)).toBe(false)
     expect(isReferenceStub(R1)).toBe(false)
   })
@@ -135,17 +133,15 @@ describe('forEachComponent (recurse: true)', () => {
     // Inline subsystems appear with dot-composed names, pre-order.
     expect(names).toContain('M1.Sub')
     expect(names).toContain('R1.RSub')
-    // Reference/kind stubs are still visited as leaves...
+    // Reference stubs are still visited as leaves...
     expect(names).toContain('M1.Ext')
-    expect(names).toContain('M1.Load')
     expect(names).toContain('R1.RRef')
   })
 
-  it('does NOT descend into ref/kind stubs (opaque leaves)', () => {
+  it('does NOT descend into ref stubs (opaque leaves)', () => {
     const names = collect({ recurse: true }).map((v) => v.scopedName)
-    // The bogus `Ghost` subsystem hung off each stub must never be visited.
+    // The bogus `Ghost` subsystem hung off the stub must never be visited.
     expect(names).not.toContain('M1.Ext.Ghost')
-    expect(names).not.toContain('M1.Load.Ghost')
   })
 
   it('emits the full expected visit set in pre-order', () => {
@@ -153,7 +149,6 @@ describe('forEachComponent (recurse: true)', () => {
       'M1',
       'M1.Sub',
       'M1.Ext',
-      'M1.Load',
       'MRef',
       'R1',
       'R1.RSub',
@@ -166,7 +161,6 @@ describe('forEachComponent (recurse: true)', () => {
     expect(byName.get('M1.Sub')).toMatchObject({ kind: 'models', isReference: false })
     expect(byName.get('R1.RSub')).toMatchObject({ kind: 'reaction_systems', isReference: false })
     expect(byName.get('M1.Ext')).toMatchObject({ isReference: true })
-    expect(byName.get('M1.Load')).toMatchObject({ isReference: true })
   })
 })
 
@@ -179,7 +173,9 @@ describe('forEachModelVariable', () => {
       types.push(variable.type)
     })
     expect(names).toEqual(['x', 'k', 'y'])
-    expect(types).toEqual(['state', 'parameter', 'observed'])
+    // Two declared types only; `y` being OBSERVED is derived from its equation,
+    // not from anything on the variable.
+    expect(types).toEqual(['unknown', 'parameter', 'unknown'])
   })
 })
 
@@ -187,7 +183,8 @@ describe('forEachEquation', () => {
   it('covers Model.equations', () => {
     const seen: number[] = []
     forEachEquation(M1, (_eq, i) => seen.push(i))
-    expect(seen).toEqual([0])
+    // Two now: the state's derivative equation and the observed's defining one.
+    expect(seen).toEqual([0, 1])
   })
 
   it('covers ReactionSystem.constraint_equations', () => {

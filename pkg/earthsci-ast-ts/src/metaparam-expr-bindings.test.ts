@@ -97,7 +97,7 @@ describe('metaparameter-expression helpers (§9.7.6)', () => {
 
 function libGrid() {
   return {
-    esm: '0.8.0',
+    esm: '1.0.0',
     metadata: { name: 'lib_grid' },
     metaparameters: { GX: { type: 'integer', default: 2 } },
     index_sets: { cells: { kind: 'interval', size: 'GX' } },
@@ -109,7 +109,7 @@ function libGrid() {
 
 function modelImporting(binding: unknown) {
   return {
-    esm: '0.8.0',
+    esm: '1.0.0',
     metadata: { name: 'model_import' },
     metaparameters: {
       NX: { type: 'integer', default: 3 },
@@ -148,7 +148,7 @@ describe('import-edge metaparameter-expression bindings (§9.7.6 site 1)', () =>
 
 function childRegrid() {
   return {
-    esm: '0.8.0',
+    esm: '1.0.0',
     metadata: { name: 'child_regrid' },
     metaparameters: {
       NX: { type: 'integer', default: 2 },
@@ -177,7 +177,7 @@ function childRegrid() {
 // the existing site-3 conformance fixture (wrapper_n4.esm -> problem.esm).
 function parentMount(bindings: unknown) {
   return {
-    esm: '0.8.0',
+    esm: '1.0.0',
     metadata: { name: 'parent_mount' },
     metaparameters: {
       NX: { type: 'integer', default: 18 },

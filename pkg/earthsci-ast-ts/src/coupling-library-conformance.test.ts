@@ -128,12 +128,15 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     expect(Object.keys(oc.translate)).toEqual(['SourceModel.flux'])
     expect(oc.translate['SourceModel.flux'].var).toBe('SinkModel.flux')
 
-    // event: conditions, affects (lhs + rhs), discrete_parameters.
+    // event: conditions and affects (lhs + rhs). There is no
+    // `discrete_parameters` list to rewrite any more -- 1.0.0 removed it along
+    // with the event `functional_affect`, parameter mutation having moved onto
+    // the parameter's own `update` block.
     const ev = expanded.find((e) => e.type === 'event')
     expect(ev.conditions[0].args[0]).toBe('SourceModel.sigma')
     expect(ev.affects[0].lhs).toBe('SinkModel.r')
     expect(ev.affects[0].rhs.args[0].args[0]).toBe('SinkModel.r')
-    expect(ev.discrete_parameters).toEqual(['SinkModel.r'])
+    expect(ev.discrete_parameters).toBeUndefined()
   })
 
   // --- Invalid libraries (defect in the library; driven via flatten) ------

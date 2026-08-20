@@ -16,21 +16,28 @@ describe('Structural validation integration', () => {
     expect(result.structural_errors).toHaveLength(1)
     expect(result.structural_errors[0].code).toBe('equation_count_mismatch')
     expect(result.structural_errors[0].path).toBe('/models/TestModel')
-    expect(result.structural_errors[0].details.state_variables).toEqual(['x', 'y'])
-    expect(result.structural_errors[0].details.ode_equations).toBe(1)
+    // esm-spec 4.9.4: the balance is UNKNOWNS vs EQUATIONS, so the details name
+    // `unknowns` / `equations` rather than the 0.x `state_variables` /
+    // `ode_equations`. `missing_equations_for` still names the unknowns nothing
+    // defines -- the residue the retired `missing_observed_expr` used to name.
+    expect(result.structural_errors[0].message).toBe(
+      'Number of equations (1) does not match number of unknowns (2)',
+    )
+    expect(result.structural_errors[0].details.unknowns).toEqual(['x', 'y'])
+    expect(result.structural_errors[0].details.equations).toBe(1)
     expect(result.structural_errors[0].details.missing_equations_for).toEqual(['y'])
   })
 
   it('should validate a correct model', () => {
     const validData = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: {
         name: 'ValidTest',
       },
       models: {
         TestModel: {
           variables: {
-            x: { type: 'state', default: 0.0 },
+            x: { type: 'unknown', default: 0.0 },
             k: { type: 'parameter', default: 1.0 },
           },
           equations: [
@@ -53,7 +60,7 @@ describe('Structural validation integration', () => {
   it('should detect undefined species in reaction system', async () => {
     // Read a reaction system file and modify it to have undefined species
     const validReactionData = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: {
         name: 'InvalidReactionTest',
       },

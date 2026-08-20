@@ -1,41 +1,95 @@
 /**
- * Brownian (SDE) round-trip tests — see tests/fixtures/sde/*.
+ * Brownian (SDE) support — see tests/fixtures/sde/*.
+ *
+ * From esm 1.0.0 there is no `brownian` variable TYPE. A noise source is a
+ * PARAMETER carrying a `distribution` plus `update: {kind: "wiener"}`: the
+ * distribution is what gets resampled, every step, with √dt increment scaling.
+ * Whether a parameter is Brownian is therefore DERIVED (`brownianParameters`,
+ * esm-spec §6.3.1), and correlated noise is one vector-valued parameter whose
+ * distribution carries a `cov` matrix rather than the opaque `correlation_group`
+ * tag the 0.x schema used and never supplied a matrix for.
  */
 import { describe, it, expect } from 'vitest'
 import { load } from './parse.js'
 import { save } from './serialize.js'
 import { flatten } from './flatten.js'
+import { brownianParameters, parameterClass, systemKind } from './classification.js'
 import { readFixture } from './test-helpers.js'
 import type { Model } from './types.js'
 
 describe('Brownian (SDE) support', () => {
-  it('round-trips the Ornstein–Uhlenbeck fixture preserving brownian fields', () => {
+  it('round-trips the Ornstein–Uhlenbeck fixture preserving the wiener parameter', () => {
     const fixture = readFixture('fixtures', 'sde', 'ornstein_uhlenbeck.esm')
     const parsed = load(fixture)
-    const bw = (parsed.models!.OU as Model).variables.Bw
-    expect(bw.type).toBe('brownian')
-    expect((bw as any).noise_kind).toBe('wiener')
+    const model = parsed.models!.OU as Model
+    const bw = model.variables.Bw
+
+    // Declared as a plain parameter; its Brownian-ness is derived.
+    expect(bw.type).toBe('parameter')
+    expect(bw.distribution).toEqual({ kind: 'normal', mean: 0.0, std: 1.0 })
+    expect(bw.update).toEqual({ kind: 'wiener' })
+    expect(parameterClass(bw)).toBe('brownian')
+    expect(brownianParameters(model)).toEqual(['Bw'])
+
+    // One wiener parameter is what makes the enclosing model an SDE.
+    expect(systemKind(model)).toBe('sde')
 
     const out = save(parsed)
     const reparsed = load(out)
     expect((reparsed.models!.OU as Model).variables.Bw).toEqual(bw)
   })
 
-  it('flatten surfaces brownian variables in a dedicated collection', () => {
+  it('does not mistake the other parameters for noise sources', () => {
+    const fixture = readFixture('fixtures', 'sde', 'ornstein_uhlenbeck.esm')
+    const model = load(fixture).models!.OU as Model
+
+    // `sigma` carries the noise AMPLITUDE and is an ordinary constant; only the
+    // parameter with the `wiener` update is Brownian.
+    expect(parameterClass(model.variables.sigma)).toBe('constant')
+    expect(parameterClass(model.variables.theta)).toBe('constant')
+  })
+
+  it('flatten surfaces brownian parameters in a dedicated collection', () => {
     const fixture = readFixture('fixtures', 'sde', 'correlated_noise.esm')
     const parsed = load(fixture)
     const flat = flatten(parsed)
-    expect(flat.brownianVariables.sort()).toEqual(['TwoBody.Bx', 'TwoBody.By'])
+    expect(flat.brownianVariables.sort()).toEqual(['TwoBody.B'])
   })
 
-  it('schema rejects noise_kind on a non-brownian variable', () => {
+  it('schema rejects a wiener update on an UNKNOWN', () => {
+    // `distribution` and `update` are parameter-only: an unknown's behaviour is
+    // stated by the equations and nowhere else.
     const bad = JSON.stringify({
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'Bad' },
       models: {
         M: {
-          variables: { x: { type: 'state', noise_kind: 'wiener' } },
+          variables: {
+            x: {
+              type: 'unknown',
+              units: '1',
+              distribution: { kind: 'normal', mean: 0.0, std: 1.0 },
+              update: { kind: 'wiener' },
+            },
+          },
           equations: [],
+        },
+      },
+    })
+    expect(() => load(bad)).toThrow()
+  })
+
+  it('schema rejects a wiener update with no distribution to resample', () => {
+    const bad = JSON.stringify({
+      esm: '1.0.0',
+      metadata: { name: 'Bad' },
+      models: {
+        M: {
+          variables: {
+            x: { type: 'unknown', units: '1' },
+            w: { type: 'parameter', units: '1/s^0.5', update: { kind: 'wiener' } },
+          },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'w' }],
         },
       },
     })

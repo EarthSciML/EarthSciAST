@@ -28,12 +28,12 @@ describe('Reaction system ODE derivation', () => {
 
       // Check variables
       expect(model.variables.A).toEqual({
-        type: 'state',
+        type: 'unknown',
         units: 'mol/L',
         default: 1.0,
       })
       expect(model.variables.B).toEqual({
-        type: 'state',
+        type: 'unknown',
         units: 'mol/L',
         default: 0.0,
       })

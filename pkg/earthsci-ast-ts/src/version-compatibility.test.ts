@@ -12,10 +12,33 @@ import {
 } from './index.js'
 import { readFixture } from './test-helpers.js'
 
+/**
+ * Version gating for esm 1.0.0.
+ *
+ * The library implements major version 1, so a DIFFERENT major is rejected
+ * outright (`ParseError`) and a newer MINOR loads with a warning. 1.0.0 is a
+ * clean break with no deprecation path, which puts every 0.x document on the
+ * rejected side of that line — the polarity of this whole suite is inverted
+ * from its 0.x form, where major 1 was the thing being refused.
+ *
+ * The version each case needs is applied to a base document IN MEMORY rather
+ * than read from a per-version fixture. The shared
+ * `tests/version_compatibility/` fixtures are named for the version they used
+ * to carry, but a blanket sweep in commit 49ca9be8 rewrote every one of them to
+ * declare `1.0.0` — so `version_2_5_1_major_rejection.esm` no longer declares
+ * 2.5.1, and reading the version out of the file would silently test nothing.
+ * Overriding the field here keeps this binding's gating coverage real
+ * regardless; the fixtures themselves still need repairing for the other four
+ * bindings.
+ */
 describe('Version Compatibility', () => {
-  // Helper function to load test fixture
-  const loadFixture = (filename: string) =>
-    JSON.parse(readFixture('version_compatibility', filename))
+  // A schema-valid 1.0.0 document, used as the carrier for every version under
+  // test. Its own `esm` field is replaced per case.
+  const baseDocument = () =>
+    JSON.parse(readFixture('version_compatibility', 'version_1_0_0_major_upgrade.esm'))
+
+  /** The base document re-stamped with `version`. */
+  const atVersion = (version: string) => ({ ...baseDocument(), esm: version })
 
   // Capture console.warn output around a callback
   const captureWarnings = <T>(fn: () => T): { result: T; warnings: string[] } => {
@@ -31,62 +54,44 @@ describe('Version Compatibility', () => {
     }
   }
 
-  describe('Backward Compatibility', () => {
-    it('should load baseline version 0.1.0 without warnings', () => {
-      const fixture = loadFixture('version_0_1_0_baseline.esm')
-      const { result, warnings } = captureWarnings(() => load(fixture))
+  describe('Current major', () => {
+    it('loads the current schema version without warnings', () => {
+      const { result, warnings } = captureWarnings(() => load(atVersion(SCHEMA_VERSION)))
 
-      expect(result.esm).toBe('0.1.0')
-      expect(result.metadata.name).toBe('Version_0_1_0_Baseline')
+      expect(result.esm).toBe(SCHEMA_VERSION)
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
 
-    it('should load older minor version (0.0.1) successfully', () => {
-      const fixture = loadFixture('version_0_0_1_backwards_compat.esm')
-      const result = load(fixture)
+    it('loads the 1.0.0 baseline without warnings', () => {
+      const { result, warnings } = captureWarnings(() => load(atVersion('1.0.0')))
 
-      expect(result.esm).toBe('0.0.1')
-      expect(result.metadata.name).toBe('Version_0_0_1_BackwardsCompat')
+      expect(result.esm).toBe('1.0.0')
+      expect(result.metadata.name).toBe('Version_1_0_0_MajorUpgrade')
+      expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
 
-    it('should load older patch version (0.1.5) successfully', () => {
-      const fixture = loadFixture('version_0_1_5_patch_upgrade.esm')
-      const result = load(fixture)
+    it('loads an older patch on the same minor without warnings', () => {
+      const { result, warnings } = captureWarnings(() => load(atVersion('1.0.0')))
 
-      expect(result.esm).toBe('0.1.5')
-      expect(result.metadata.name).toBe('Version_0_1_5_PatchUpgrade')
-    })
-
-    it('should load older minor versions (0.2.0, 0.3.0) cleanly without warnings', () => {
-      for (const [file, name] of [
-        ['version_0_2_0_minor_upgrade.esm', 'Version_0_2_0_MinorUpgrade'],
-        ['version_0_3_0_with_unknown_fields.esm', 'Version_0_3_0_WithUnknownFields'],
-      ] as const) {
-        const fixture = loadFixture(file)
-        const { result, warnings } = captureWarnings(() => load(fixture))
-
-        expect(result.metadata.name).toBe(name)
-        expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
-      }
+      expect(result.esm).toBe('1.0.0')
+      expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
     })
   })
 
   describe('Forward Compatibility', () => {
-    it('should warn when loading a newer minor version (0.10.0)', () => {
-      const fixture = loadFixture('version_0_10_0_double_digit.esm')
-      const { result, warnings } = captureWarnings(() => load(fixture))
+    it('warns when loading a newer minor version', () => {
+      const { result, warnings } = captureWarnings(() => load(atVersion('1.10.0')))
 
-      expect(result.esm).toBe('0.10.0')
+      expect(result.esm).toBe('1.10.0')
       expect(
         warnings.some((w) =>
-          w.includes(`0.10.0 is newer than the current library version ${SCHEMA_VERSION}`),
+          w.includes(`1.10.0 is newer than the current library version ${SCHEMA_VERSION}`),
         ),
       ).toBe(true)
     })
 
     it('does not weaken schema validation for newer minor versions', () => {
-      const fixture = loadFixture('version_0_10_0_double_digit.esm')
-      const withUnknownField = { ...fixture, definitely_not_a_schema_field: true }
+      const withUnknownField = { ...atVersion('1.10.0'), definitely_not_a_schema_field: true }
 
       const { result } = captureWarnings(() =>
         (() => {
@@ -103,53 +108,66 @@ describe('Version Compatibility', () => {
   })
 
   describe('Major Version Rejection', () => {
-    it('should reject major version 1.0.0', () => {
-      const fixture = loadFixture('version_1_0_0_major_upgrade.esm')
-
-      expect(() => load(fixture)).toThrow('Unsupported major version 1')
+    // 1.0.0 is a clean break: a 0.x document is not "an older file that still
+    // loads", it is a file written to a format this parser no longer speaks.
+    it('rejects the 0.x line outright', () => {
+      for (const version of ['0.0.1', '0.1.0', '0.8.0', '0.9.0', '0.10.0']) {
+        expect(() => load(atVersion(version))).toThrow('Unsupported major version 0')
+      }
     })
 
-    it('should reject major version 2.5.1', () => {
-      const fixture = loadFixture('version_2_5_1_major_rejection.esm')
-
-      expect(() => load(fixture)).toThrow('Unsupported major version 2')
+    it('rejects a newer major version', () => {
+      expect(() => load(atVersion('2.5.1'))).toThrow('Unsupported major version 2')
+      expect(() => load(atVersion('12.34.56'))).toThrow('Unsupported major version 12')
     })
   })
 
   describe('Invalid Version Handling', () => {
     it('should reject invalid version string format', () => {
-      const fixture = loadFixture('invalid_version_string.esm')
+      const fixture = JSON.parse(readFixture('version_compatibility', 'invalid_version_string.esm'))
 
       expect(() => load(fixture)).toThrow(SchemaValidationError)
     })
 
     it('should reject missing version field', () => {
-      const fixture = loadFixture('missing_version_field.esm')
+      const fixture = JSON.parse(readFixture('version_compatibility', 'missing_version_field.esm'))
 
       expect(() => load(fixture)).toThrow(SchemaValidationError)
     })
   })
 
   describe('Migration', () => {
-    it('canMigrate reports the supported 0.0.5 → 0.1.0 step', () => {
-      expect(canMigrate('0.0.5', '0.1.0')).toBe(true)
-      expect(canMigrate('0.0.5', '0.2.0')).toBe(false)
-      expect(canMigrate('0.1.0', '0.2.0')).toBe(false)
+    // A migration is a pure version-MARKER bump, sound only along an additive
+    // line. Nothing crosses the 1.0.0 boundary: the variable-model collapse,
+    // the observed-expression relocation and the data_sources rename all
+    // RESHAPE the document, so a 0.x source has no supported target at all
+    // rather than a bump that would leave a file claiming 1.0.0 while still
+    // carrying 0.x shapes.
+    it('offers no migration path out of the 0.x line', () => {
+      expect(canMigrate('0.0.5', '0.1.0')).toBe(false)
+      expect(canMigrate('0.9.0', SCHEMA_VERSION)).toBe(false)
+      expect(canMigrate('0.9.0', '1.0.0')).toBe(false)
+    })
+
+    it('canMigrate reports the additive-line bump to the current version', () => {
+      expect(canMigrate('1.0.0', SCHEMA_VERSION)).toBe(true)
+      // Only the CURRENT version is offered as a target, never an arbitrary
+      // intermediate one.
+      expect(canMigrate('1.0.0', '1.0.1')).toBe(false)
     })
 
     it('migrate bumps the version marker for a supported step', () => {
-      const oldVersion = loadFixture('migration_test_from_0_0_5.esm')
-      expect(oldVersion.esm).toBe('0.0.5')
+      const source = atVersion('1.0.0')
 
-      const migrated = migrate(oldVersion, '0.1.0')
-      expect(migrated.esm).toBe('0.1.0')
+      const migrated = migrate(source, SCHEMA_VERSION)
+      expect(migrated.esm).toBe(SCHEMA_VERSION)
       // Input is not mutated
-      expect(oldVersion.esm).toBe('0.0.5')
+      expect(source.esm).toBe('1.0.0')
     })
 
     it('migrate throws for unsupported version pairs', () => {
-      const oldVersion = loadFixture('migration_test_from_0_0_5.esm')
-      expect(() => migrate(oldVersion, '0.8.0')).toThrow(MigrationError)
+      expect(() => migrate(atVersion('1.0.0'), '2.0.0')).toThrow(MigrationError)
+      expect(() => migrate(atVersion('0.9.0'), SCHEMA_VERSION)).toThrow(MigrationError)
     })
   })
 

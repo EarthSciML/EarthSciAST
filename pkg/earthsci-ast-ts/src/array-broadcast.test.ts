@@ -19,11 +19,13 @@ import type { EsmFile, Expression } from './types.js'
 /** A one-state model whose single equation is `D(x) ~ rhs`. */
 function scalarModel(rhs: Expression): EsmFile {
   return {
-    esm: '0.1.0',
+    esm: '1.0.0',
     metadata: { name: 'BroadcastFnTest' },
     models: {
       TestModel: {
-        variables: { x: { type: 'state', units: 'm', default: 1.0 } },
+        // `x` is an ODE state because the equation below differentiates it —
+        // 1.0.0 declares only `unknown`/`parameter` and derives the rest.
+        variables: { x: { type: 'unknown', units: 'm', default: 1.0 } },
         equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs }],
       },
     },
@@ -32,31 +34,36 @@ function scalarModel(rhs: Expression): EsmFile {
 
 /**
  * A `[lon,lat,lev]` state `dp` driven by `rhs`, plus one observed operand per
- * entry of `operandShapes`. Each operand's defining expression is an
- * `aggregate` over its own axes — the spelling that DECLARES a frame without
- * itself being an array-level expression.
+ * entry of `operandShapes`. Each operand is DEFINED by an `aggregate` over its
+ * own axes — the spelling that declares a frame without itself being an
+ * array-level expression.
+ *
+ * From 1.0.0 that definition is a bare-variable-LHS EQUATION rather than a
+ * `variables[v].expression`, which is also what keeps the model balanced: one
+ * equation per unknown. The `D(dp)` equation stays at index 0, because the
+ * findings below are pinned by JSON Pointer.
  */
 function arrayModel(rhs: Expression, operandShapes: Record<string, string[]>): EsmFile {
   const variables: Record<string, unknown> = {
-    dp: { type: 'state', units: '1', shape: ['lon', 'lat', 'lev'], default: 0.0 },
+    dp: { type: 'unknown', units: '1', shape: ['lon', 'lat', 'lev'], default: 0.0 },
   }
+  const equations: unknown[] = [{ lhs: { op: 'D', args: ['dp'], wrt: 't' }, rhs }]
   for (const [name, shape] of Object.entries(operandShapes)) {
     const idx = shape.map((_, i) => `i${i}`)
-    variables[name] = {
-      type: 'observed',
-      units: '1',
-      shape,
-      expression: {
+    variables[name] = { type: 'unknown', units: '1', shape }
+    equations.push({
+      lhs: name,
+      rhs: {
         op: 'aggregate',
         args: [],
         output_idx: idx,
         ranges: Object.fromEntries(idx.map((s, i) => [s, { from: shape[i] }])),
         expr: { op: '*', args: [1, idx[0]] },
       },
-    }
+    })
   }
   return {
-    esm: '0.9.0',
+    esm: '1.0.0',
     metadata: { name: 'ArrayShapeTest' },
     index_sets: {
       lon: { kind: 'interval', size: 3 },
@@ -67,7 +74,7 @@ function arrayModel(rhs: Expression, operandShapes: Record<string, string[]>): E
     models: {
       M: {
         variables,
-        equations: [{ lhs: { op: 'D', args: ['dp'], wrt: 't' }, rhs }],
+        equations,
       },
     },
   } as unknown as EsmFile
@@ -174,25 +181,27 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     },
   )
 
-  it('checks broadcast nodes OUTSIDE equations too (an observed expression)', () => {
+  it('checks broadcast nodes OUTSIDE `equations` too (a solver guess)', () => {
+    // The site used to be an observed variable's `expression`; 1.0.0 moved that
+    // definition into the equation list, so the surviving non-equation
+    // expression positions are the ones `forEachExpressionScope` enumerates —
+    // guesses, event triggers/affects, inline-test references. A `guesses`
+    // entry stands in for all of them: what is pinned is that the checker rides
+    // that enumeration rather than walking `equations` alone.
     const file = {
-      esm: '0.1.0',
+      esm: '1.0.0',
       metadata: { name: 'Sidecar' },
       models: {
         M: {
           variables: {
-            x: { type: 'state', units: 'm', default: 1.0 },
-            y: {
-              type: 'observed',
-              units: 'm',
-              expression: { op: 'broadcast', fn: 'nope', args: ['x'] },
-            },
+            x: { type: 'unknown', units: 'm', default: 1.0 },
           },
           equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 0 }],
+          guesses: { x: { op: 'broadcast', fn: 'nope', args: ['x'] } },
         },
       },
     } as unknown as EsmFile
-    expect(findings(file)).toContain('invalid_broadcast_fn @ /models/M/variables/y/expression')
+    expect(findings(file)).toContain('invalid_broadcast_fn @ /models/M/guesses/x')
   })
 })
 
