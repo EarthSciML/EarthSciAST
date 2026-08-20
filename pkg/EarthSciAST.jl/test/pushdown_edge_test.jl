@@ -74,6 +74,14 @@ function EA.provider_sample(m::MockSR, ::Real; selection=nothing)
     return out
 end
 
+# esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression`. `obs_v` declares the
+# observed as a plain `unknown` and pushes its DEFINING bare-variable-LHS
+# equation onto `eqs` — the pair the classification derivation reads back.
+function obs_v(eqs, name, shape, expr)
+    push!(eqs, Dict("lhs"=>name, "rhs"=>expr))
+    return Dict("type"=>"unknown", "shape"=>shape)
+end
+
 @testset "projection-pushdown const-tier edge — L1 milestone (Phase 2b)" begin
 
     # ---- geometry: a 3×3 grid of 2×2 cells; cell k=(row-1)*3+col ------------
@@ -174,8 +182,11 @@ end
         args=["TotalPM25","TotalPop","MortalityRate"])
 
     param(shape) = Dict("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-    obs(shape, expr) = Dict("type"=>"observed", "shape"=>shape, "expression"=>expr)
     scal(v) = Dict("type"=>"parameter", "default"=>v)
+    # esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression`. Each `obs_v` call
+    # below declares a plain `unknown` and appends its DEFINING bare-variable-LHS
+    # equation here; the collected definitions join the model's `equations`.
+    obs_eqs = Any[]
 
     variables = Dict{String,Any}(
         "X"=>param(["emis_records"]), "Y"=>param(["emis_records"]),
@@ -193,28 +204,28 @@ end
         "SR_PrimaryPM25"=>param(["emis_src_cells","rcv_cells"]),
         "src_cell_of_ppl"=>param(["emis_src_cells"]),
         "emis_src_cell_member"=>Dict("type"=>"unknown", "shape"=>["emis_src_cells"]),
-        "cell_W"=>obs(["emis_src_cells"], _cell_edge("W")),
-        "cell_S"=>obs(["emis_src_cells"], _cell_edge("S")),
-        "cell_E"=>obs(["emis_src_cells"], _cell_edge("E")),
-        "cell_N"=>obs(["emis_src_cells"], _cell_edge("N")),
-        "E_VOC"=>obs(["emis_src_cells"], _E_agg("is_VOC")),
-        "E_NOx"=>obs(["emis_src_cells"], _E_agg("is_NOx")),
-        "E_NH3"=>obs(["emis_src_cells"], _E_agg("is_NH3")),
-        "E_SOx"=>obs(["emis_src_cells"], _E_agg("is_SOx")),
-        "E_PM25"=>obs(["emis_src_cells"], _E_agg("is_PM25")),
-        "conc_SOA"=>obs(["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
-        "conc_pNO3"=>obs(["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
-        "conc_pNH4"=>obs(["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
-        "conc_pSO4"=>obs(["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
-        "conc_PrimaryPM25"=>obs(["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
-        "TotalPM25"=>obs(["rcv_cells"], _agg(["rcv"],
+        "cell_W"=>obs_v(obs_eqs, "cell_W", ["emis_src_cells"], _cell_edge("W")),
+        "cell_S"=>obs_v(obs_eqs, "cell_S", ["emis_src_cells"], _cell_edge("S")),
+        "cell_E"=>obs_v(obs_eqs, "cell_E", ["emis_src_cells"], _cell_edge("E")),
+        "cell_N"=>obs_v(obs_eqs, "cell_N", ["emis_src_cells"], _cell_edge("N")),
+        "E_VOC"=>obs_v(obs_eqs, "E_VOC", ["emis_src_cells"], _E_agg("is_VOC")),
+        "E_NOx"=>obs_v(obs_eqs, "E_NOx", ["emis_src_cells"], _E_agg("is_NOx")),
+        "E_NH3"=>obs_v(obs_eqs, "E_NH3", ["emis_src_cells"], _E_agg("is_NH3")),
+        "E_SOx"=>obs_v(obs_eqs, "E_SOx", ["emis_src_cells"], _E_agg("is_SOx")),
+        "E_PM25"=>obs_v(obs_eqs, "E_PM25", ["emis_src_cells"], _E_agg("is_PM25")),
+        "conc_SOA"=>obs_v(obs_eqs, "conc_SOA", ["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
+        "conc_pNO3"=>obs_v(obs_eqs, "conc_pNO3", ["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
+        "conc_pNH4"=>obs_v(obs_eqs, "conc_pNH4", ["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
+        "conc_pSO4"=>obs_v(obs_eqs, "conc_pSO4", ["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
+        "conc_PrimaryPM25"=>obs_v(obs_eqs, "conc_PrimaryPM25", ["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
+        "TotalPM25"=>obs_v(obs_eqs, "TotalPM25", ["rcv_cells"], _agg(["rcv"],
             Dict("rcv"=>Dict("from"=>"rcv_cells")),
             _op("*", "fact", _op("+", _ix("conc_SOA","rcv"), _ix("conc_pNO3","rcv"),
                 _ix("conc_pNH4","rcv"), _ix("conc_pSO4","rcv"),
                 _ix("conc_PrimaryPM25","rcv")));
             args=["conc_SOA","conc_pNO3","conc_pNH4","conc_pSO4","conc_PrimaryPM25"])),
-        "deathsK"=>obs(["rcv_cells"], _deaths("rr_K")),
-        "deathsL"=>obs(["rcv_cells"], _deaths("rr_L")),
+        "deathsK"=>obs_v(obs_eqs, "deathsK", ["rcv_cells"], _deaths("rr_K")),
+        "deathsL"=>obs_v(obs_eqs, "deathsL", ["rcv_cells"], _deaths("rr_L")),
         "fact"=>scal(FACT), "pop_scale"=>scal(POP_SCALE), "mort_scale"=>scal(MORT_SCALE),
         "rr_K"=>scal(RR_K), "rr_L"=>scal(RR_L))
 
@@ -241,7 +252,7 @@ end
             "emis_src_cells" => Dict("kind"=>"derived", "from_faq"=>"emis_src_cells_faq",
                                      "member_factor"=>"src_cell_of_ppl")),
         "models" => Dict("ISRM" => Dict("variables"=>variables,
-                                        "equations"=>[producer_eq])))
+                                        "equations"=>vcat(obs_eqs, Any[producer_eq]))))
 
     # const arrays supplied by the caller (Hook 3: X/Y and cell rects are cheap;
     # the runner projects them — SR is the only gated, deferred fetch)

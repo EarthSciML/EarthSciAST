@@ -4,7 +4,8 @@
 #
 # REPRODUCES (does NOT fix) the ISRM diagnostic-observed build-time blowup.
 #
-# The ISRM diagnostics TotalPM25 / deathsK / deathsL are ObservedVariables whose
+# The ISRM diagnostics TotalPM25 / deathsK / deathsL are OBSERVED UNKNOWNS (esm
+# 1.0.0 §6.3.1: `unknown`s defined by a bare-variable-LHS equation) whose
 # field is materialised at build time by
 #   _observed_field  (src/pde_inline_tests.jl)
 #     -> evaluate_cellwise  (src/pde_inline_tests.jl:110)

@@ -314,7 +314,7 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
             if !isempty(blocks)
                 comp_tpls = Dict{String,Any}(k => v for (k, v) in blocks)
             end
-            bump && (esm_stamp = "0.9.0")
+            bump && (esm_stamp = _esm_stamp_floor(get(root, "esm", nothing)))
             expanded = root
         end
     else

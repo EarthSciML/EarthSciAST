@@ -73,6 +73,12 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         "X" => PX, "Y" => PY, "W" => CW, "S" => CS, "E" => CE, "N" => CN)
 
     # ---- candidate set construction: O(N log N) STRtree, |cands| == npts ---
+    # WARM UP on a tiny same-typed input first (the same JIT-vs-runtime
+    # discipline the value-invention timing below already uses): the assertion
+    # is about the SCALING of the candidate pass, not about compile time.
+    ESS._overlap_candidate_set(["X", "Y"], ["W", "S", "E", "N"],
+        Dict{String,Any}("X" => [0.5], "Y" => [0.5], "W" => [0.0], "S" => [0.0],
+                         "E" => [1.0], "N" => [1.0]); eps=0.0)
     tcands = @elapsed cands =
         ESS._overlap_candidate_set(["X", "Y"], ["W", "S", "E", "N"], const_arrays; eps=0.0)
     # each point centre intersects exactly ONE closed cell envelope
@@ -276,7 +282,10 @@ end
 
     # ---- (B) FORWARD orientation, through the pushdown REWRITE -------------
     _param(shape) = Dict("type" => "parameter", "default" => 0.0, "shape" => shape)
-    _obs(shape, e) = Dict("type" => "observed", "shape" => shape, "expression" => e)
+    # esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression` — an observed
+    # unknown is declared `unknown` and DEFINED by a bare-variable-LHS equation.
+    _unk(shape) = Dict("type" => "unknown", "shape" => shape)
+    _defeq(name, e) = Dict{String,Any}("lhs" => name, "rhs" => e)
     _binagg = Dict("op" => "aggregate", "output_idx" => ["c"], "reduce" => "+",
         "ranges" => Dict("c" => Dict("from" => "cells"), "r" => Dict("from" => "points")),
         "args" => ["W", "S", "E", "N", "X", "Y", "annual"],
@@ -302,13 +311,15 @@ end
                 "W" => _param(["cells"]), "S" => _param(["cells"]),
                 "E" => _param(["cells"]), "N" => _param(["cells"]),
                 "SR" => _param(["cells", "rcv_cells"]),
-                "Emis" => _obs(["cells"], _binagg),
-                "conc" => _obs(["rcv_cells"], _concagg)),
-            "equations" => Any[])))
+                "Emis" => _unk(["cells"]),
+                "conc" => _unk(["rcv_cells"])),
+            "equations" => Any[_defeq("Emis", _binagg), _defeq("conc", _concagg)])))
 
     rw = ESS.desugar_pushdown(fwd_doc; model_name="Fwd")
     @test rw !== fwd_doc
-    Emis_expr = rw["models"]["Fwd"]["variables"]["Emis"]["expression"]
+    # the rewrite mutates the DEFINING EQUATION's rhs, not a variable field
+    Emis_expr = first(eq["rhs"] for eq in rw["models"]["Fwd"]["equations"]
+                      if get(eq, "lhs", nothing) == "Emis")
     # the rewritten binning aggregate carries the DERIVED gate, over the
     # generated compact-axis envelopes (not the full-grid rects)
     @test haskey(Emis_expr, "join")

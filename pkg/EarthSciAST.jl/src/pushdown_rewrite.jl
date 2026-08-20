@@ -750,6 +750,76 @@ function _pd_assert_rects_rebound(expr, Ename::AbstractString,
         "through the template's params, or write the binning body longhand."))
 end
 
+"""
+    _pd_definitions(eqs) -> Dict{String,Int}
+
+Each name DEFINED by a bare-variable-LHS equation, mapped to that equation's
+position in `eqs`.
+
+esm 1.0.0 moved an observed unknown's defining right-hand side out of
+`variables[v]["expression"]` and into the model's `equations` (esm-spec §6.3.1),
+so the desugar reads and rewrites a definition through this index exactly where
+it used to reach into the declaration. The FIRST definition of a name wins,
+matching the classification.
+"""
+function _pd_definitions(eqs)
+    idx = Dict{String,Int}()
+    eqs isa AbstractVector || return idx
+    for (i, eq) in enumerate(eqs)
+        eq isa AbstractDict || continue
+        lhs = get(eq, "lhs", nothing)
+        lhs isa AbstractString || continue
+        haskey(idx, String(lhs)) || (idx[String(lhs)] = i)
+    end
+    return idx
+end
+
+"""
+    _pd_defining_rhs(eqs, defs, name) -> Any
+
+The defining right-hand side of `name`, erroring with the desugar's own message
+rather than a bare `KeyError` when the model does not define it.
+"""
+function _pd_defining_rhs(eqs, defs::Dict{String,Int}, name::AbstractString)
+    i = get(defs, String(name), nothing)
+    i === nothing && error("pushdown desugar: '$(name)' has no defining equation " *
+                           "(an observed unknown is defined by a bare-variable-LHS " *
+                           "equation, esm-spec 6.3.1)")
+    return eqs[i]["rhs"]
+end
+
+"""
+    _pd_canonicalize_equations!(model)
+
+Order the rewritten model's `equations` deterministically: every equation whose
+LHS is NOT a bare variable keeps its relative order and comes first (the
+generated `distinct` producer is the only such equation the desugar adds), then
+the bare-variable DEFINITIONS sorted by the name they define.
+
+Equation order carries no semantics — classification is a property of the
+equation SET, which `tests/conformance/classification/observed_chain` pins — but
+the rewrite appends definitions while walking a `Dict`, so without a canonical
+order the emitted document would vary with Julia's hash seed. The shared
+`tests/conformance/pushdown/` goldens are committed in exactly this order.
+"""
+function _pd_canonicalize_equations!(model::AbstractDict)
+    eqs = get(model, "equations", nothing)
+    eqs isa AbstractVector || return model
+    others = Any[]
+    defs = Tuple{String,Any}[]
+    for eq in eqs
+        lhs = eq isa AbstractDict ? get(eq, "lhs", nothing) : nothing
+        if lhs isa AbstractString
+            push!(defs, (String(lhs), eq))
+        else
+            push!(others, eq)
+        end
+    end
+    sort!(defs; by = first)
+    model["equations"] = Any[others...; (e for (_, e) in defs)...]
+    return model
+end
+
 # Apply the desugar to the raw document, returning a NEW mutable dict tree.
 # `reg` is the component template registry (`nothing` when the document carries
 # no surviving `apply_expression_template` references) — needed to read the
@@ -775,9 +845,18 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
 
     mv = d["models"][mname]["variables"]
 
+    # esm 1.0.0: a definition is an EQUATION, so the equations array is fetched
+    # (and created when absent) before any read, and indexed by defined name.
+    eqs = get(d["models"][mname], "equations", nothing)
+    if !(eqs isa AbstractVector)
+        eqs = Any[]
+        d["models"][mname]["equations"] = eqs
+    end
+    defs = _pd_definitions(eqs)
+
     # --- producer filter comparisons, deep-copied from the representative E
     #     BEFORE E is rewritten (they must keep full-grid rect factor refs) ---
-    repexpr = mv[plan.rep_ename]["expression"]
+    repexpr = _pd_defining_rhs(eqs, defs, plan.rep_ename)
     ifcond = _pd_dict_find_ifelse_cond(get(repexpr, "expr", nothing))
     if ifcond === nothing
         # The body is factored through a template. Read the predicate off the
@@ -795,19 +874,25 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     comps = get(ifcond, "op", nothing) in ("and", "*") ? ifcond["args"] : Any[ifcond]
     prod_filter = Dict{String,Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
 
-    # --- member state var + member_factor param ---
-    mv[memvar]  = Dict{String,Any}("type" => "state", "shape" => Any[setname])
+    # --- member unknown + member_factor param ---
+    # The member buffer is an `unknown`: the generated producer equation below
+    # DEFINES it, and that equation is what makes it one (esm-spec §6.3.1).
+    mv[memvar]  = Dict{String,Any}("type" => "unknown", "shape" => Any[setname])
     mv[mfactor] = Dict{String,Any}("type" => "parameter", "default" => 0.0, "shape" => Any[setname])
 
     # --- per-rect cell-gather observeds: cell_F[c] = index(F, index(member_factor, c)) ---
-    for F in rects
-        mv[cellgath(F)] = Dict{String,Any}(
-            "type" => "observed", "shape" => Any[setname],
-            "expression" => Dict{String,Any}(
+    # Declaration and DEFINING EQUATION, emitted in sorted name order so the
+    # rewritten document does not depend on `rects`' construction order.
+    for F in sort(rects)
+        name = cellgath(F)
+        mv[name] = Dict{String,Any}("type" => "unknown", "shape" => Any[setname])
+        push!(eqs, Dict{String,Any}(
+            "lhs" => name,
+            "rhs" => Dict{String,Any}(
                 "op" => "aggregate", "output_idx" => Any["c"],
                 "ranges" => Dict{String,Any}("c" => Dict{String,Any}("from" => setname)),
                 "args" => Any[F, mfactor],
-                "expr" => _pd_ix(F, _pd_ix(mfactor, "c"))))
+                "expr" => _pd_ix(F, _pd_ix(mfactor, "c")))))
     end
 
     # --- gate the provider-backed arrays onto the derived axis ---
@@ -834,8 +919,8 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
         # buffers with full-grid indices. Copying first confines the rewrite to
         # this variable; the emitted JSON is unchanged (sharing is not a
         # document-level property).
-        expr = deepcopy(mv[Ename]["expression"])
-        mv[Ename]["expression"] = expr
+        expr = deepcopy(_pd_defining_rhs(eqs, defs, Ename))
+        eqs[defs[Ename]]["rhs"] = expr
         expr["ranges"][csym]["from"] = setname
         _pd_rewrite_rects!(expr, rectmap)
         haskey(expr, "args") && (expr["args"] = Any[get(rectmap, string(s), s) for s in expr["args"]])
@@ -856,14 +941,14 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     # nobody reads. Its envelopes stay the document's own const-array factors
     # (the cell axis is not re-pointed), so the mirror also needs no rect gathers.
     for (Pname, p_src, p_tgt) in plan.mirror_specs
-        pexpr = deepcopy(mv[Pname]["expression"])       # see the deep-copy note above
-        mv[Pname]["expression"] = pexpr
+        pexpr = deepcopy(_pd_defining_rhs(eqs, defs, Pname))   # see the deep-copy note above
+        eqs[defs[Pname]]["rhs"] = pexpr
         haskey(pexpr, "join") || (pexpr["join"] = Any[_pd_overlap_clause(p_src, p_tgt)])
     end
 
     # --- restrict the conc reductions to the derived axis ---
     for (cname, ssym) in plan.conc_specs
-        mv[cname]["expression"]["ranges"][ssym]["from"] = setname
+        _pd_defining_rhs(eqs, defs, cname)["ranges"][ssym]["from"] = setname
     end
 
     # --- generated `distinct` producer (reuses E's containment + geometry) ---
@@ -881,12 +966,8 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
             "key" => Dict{String,Any}("op" => "skolem", "label" => "cell",
                                       "args" => Any[plan.rep_csym]),
             "args" => Any[unique(vcat(plan.src_env, plan.tgt_env))...]))
-    eqs = get(d["models"][mname], "equations", nothing)
-    if !(eqs isa AbstractVector)
-        eqs = Any[]
-        d["models"][mname]["equations"] = eqs
-    end
-    push!(eqs, producer)
+    pushfirst!(eqs, producer)
+    _pd_canonicalize_equations!(d["models"][mname])
 
     # --- inspectable pushdown provenance / gated_select record ---
     # Stashed under `metadata.x_esd` — the spec's free-form extension point

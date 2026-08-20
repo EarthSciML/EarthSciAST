@@ -1392,8 +1392,24 @@ function _validate_geometry_manifolds_refaware(root, registries)
             memo = IdDict{Any,Nothing}()
             for (k, v) in pairs(comp)
                 string(k) == "expression_templates" && continue
-                _validate_manifolds_in_refs(v, reg.named, manifold_bearing,
-                    "$compkind.$(string(cname)).$(string(k))", memo)
+                base = "$compkind.$(string(cname)).$(string(k))"
+                # An equation whose LHS is a bare variable DEFINES that variable
+                # (esm-spec §6.3.1), so label the site with the name as well as
+                # the index. Before 1.0.0 the body lived at
+                # `variables/<name>/expression` and the pointer named the
+                # variable by construction; keeping the name here is what stops
+                # the diagnostic losing that when the body moved.
+                if string(k) in ("equations", "initialization_equations") && _is_array(v)
+                    for (i, eq) in enumerate(v)
+                        lhs = _is_object(eq) ? _raw_get(eq, "lhs") : nothing
+                        label = lhs isa AbstractString ? "$(base)/$(i-1)[$(lhs)]" :
+                                                         "$(base)/$(i-1)"
+                        _validate_manifolds_in_refs(eq, reg.named, manifold_bearing,
+                                                    label, memo)
+                    end
+                else
+                    _validate_manifolds_in_refs(v, reg.named, manifold_bearing, base, memo)
+                end
             end
         end
     end
@@ -2369,6 +2385,40 @@ function _expand_coupling_transform_refs!(root)
 end
 
 """
+    TEMPLATE_MACHINERY_MIN_ESM
+
+The format version at which the Option-B template machinery landed. A document
+carrying a surviving `apply_expression_template` reference or a materialized
+`expression_templates` block is stamped to AT LEAST this (esm-spec §9.6.4 rule
+8).
+"""
+const TEMPLATE_MACHINERY_MIN_ESM = "0.9.0"
+
+"""
+    _esm_stamp_floor(declared) -> String
+
+The version to stamp on an emitted document: its own `esm` when that already
+meets [`TEMPLATE_MACHINERY_MIN_ESM`](@ref), else the floor.
+
+The stamp is a MINIMUM — "a consumer needs at least this" — so it may only ever
+RAISE a version. Writing the floor unconditionally would downgrade an esm 1.0.0
+document to `0.9.0`, whose schema does not describe it at all: 1.0.0 declares
+`unknown` variables and a `data_sources` registry that 0.9.0 has no place for.
+"""
+function _esm_stamp_floor(declared)
+    declared isa AbstractString || return TEMPLATE_MACHINERY_MIN_ESM
+    parse_v(v) = try
+        Tuple(parse(Int, p) for p in split(split(String(v), '-')[1], '.'))
+    catch
+        nothing
+    end
+    d = parse_v(declared)
+    f = parse_v(TEMPLATE_MACHINERY_MIN_ESM)
+    (d === nothing || f === nothing) && return TEMPLATE_MACHINERY_MIN_ESM
+    return d >= f ? String(declared) : TEMPLATE_MACHINERY_MIN_ESM
+end
+
+"""
     emit_document(raw_source, base_path) -> Dict{String,Any}
 
 Produce the reference-preserving, self-contained emitted document (esm-spec
@@ -2389,7 +2439,7 @@ function emit_document(raw_source, base_path::AbstractString)
     # native tree. The processed path already returns one.
     root = loaded === src ? _to_ordered(loaded)::OrderedDict{String,Any} : loaded
     _blocks, bump = _materialize_components!(root, authored)
-    bump && (root["esm"] = "0.9.0")
+    bump && (root["esm"] = _esm_stamp_floor(get(root, "esm", nothing)))
     return root
 end
 

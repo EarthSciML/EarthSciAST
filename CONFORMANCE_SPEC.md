@@ -1082,6 +1082,29 @@ and pure: re-running it on its own output returns that output unchanged (the
 provenance record `metadata.x_esd.pushdown` is the guard), and the input document
 is never mutated.
 
+**Equation order in the rewritten model is CANONICAL, and the order is
+normative.** After the rewrite, a model's `equations` array holds, in this order:
+
+1. every equation whose LHS is **not** a bare variable — the derivative
+   equations and the generated `distinct` producer — each keeping its relative
+   input order;
+2. every **definition** (bare-variable LHS), sorted by the defined name,
+   lexicographically by UTF-8 code point.
+
+This is a requirement, not an artifact of one implementation. The rewrite
+generates member buffers and per-rect cell gathers while walking the model's
+variable collection, and a binding whose variable map is a hash map (Julia's
+`Dict`, Go's `map`, Rust's `HashMap`) would otherwise emit them in an order that
+varies with the hash seed — making the emitted document unstable run to run, let
+alone across languages. Canonicalizing is the only way the
+`tests/conformance/pushdown/` goldens can be compared as ordered arrays at all.
+
+A binding whose collections happen to preserve insertion order must still apply
+this ordering rather than relying on append order: appending is deterministic
+for that binding but does not agree with the others. Comparing the `equations`
+array as an unordered multiset is NOT an acceptable substitute — it would accept
+exactly the hash-order instability this rule exists to exclude.
+
 **The BINNING aggregate.** The pattern's core is a `+`-semiring aggregate over
 exactly two 1-D index sets — a CELL set `C` and a RECORD set `R` — whose body
 carries a rectangle-containment predicate between four CELL-indexed rect-bound

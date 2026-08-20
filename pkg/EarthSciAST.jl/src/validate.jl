@@ -2638,8 +2638,7 @@ function _check_event_affects_unknowns!(errors::Vector{StructuralError},
     return errors
 end
 
-_event_name(event)::Union{String,Nothing} =
-    hasproperty(event, :name) ? getproperty(event, :name) : nothing
+_event_name(event)::Union{String,Nothing} = event.name
 
 function _event_trigger_kind(event)::Union{String,Nothing}
     isa(event, DiscreteEvent) || return nothing

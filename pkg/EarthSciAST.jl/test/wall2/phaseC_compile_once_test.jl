@@ -26,7 +26,7 @@ using EarthSciAST
 
 const ESM = EarthSciAST
 
-# ---- hand-built aggregate AST (faithful to the ISRM ObservedVariable field) ----
+# ---- hand-built aggregate AST (faithful to the ISRM observed-unknown field) ----
 _v(n) = VarExpr(String(n))
 _num(x) = NumExpr(Float64(x))
 _op(op, args...; kw...) = OpExpr(String(op), ESM.ASTExpr[args...]; kw...)

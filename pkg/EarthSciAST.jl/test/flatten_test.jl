@@ -304,12 +304,13 @@ end
                                     description="receiving target"),
         )
         sink = Model(sink_vars, [Equation(_deriv("u"), _V("F_in"))])
-        # Src: observed F = 4.0.
+        # Src: observed F = 4.0. esm 1.0.0 §6.3 — an observed unknown is an
+        # `unknown` DEFINED by a bare-variable-LHS equation, not a declared type
+        # with an `expression` field.
         src_vars = Dict{String, ModelVariable}(
-            "F" => ModelVariable(ObservedVariable, units="1",
-                                 expression=_N(4.0)),
+            "F" => ModelVariable(UnknownVariable, units="1"),
         )
-        src = Model(src_vars, Equation[])
+        src = Model(src_vars, [Equation(_V("F"), _N(4.0))])
         # transform = 2*Src.F + Sink.offset — fully-scoped refs per §10.4.
         transform = _op("+", _op("*", _N(2.0), _V("Src.F")), _V("Sink.offset"))
         coupling = CouplingEntry[
@@ -326,9 +327,16 @@ end
         # ...and becomes an observed whose defining expression IS the transform.
         @test haskey(flat.observed_variables, "Sink.F_in")
         obs = flat.observed_variables["Sink.F_in"]
-        @test obs.type == ObservedVariable
+        # esm 1.0.0: there is no `observed` declared type and no variable-level
+        # `expression` — the promoted target is a plain `unknown` and its
+        # DEFINITION is the synthesized equation asserted just below.
+        @test obs.type == UnknownVariable
         @test obs.units == "1"
-        @test obs.expression == transform
+        # And the DERIVED classification agrees: reassembled as one model, the
+        # defining equation is what makes `Sink.F_in` an observed unknown.
+        @test "Sink.F_in" in observed_unknowns(Model(
+            merge(Dict(flat.state_variables), Dict(flat.parameters),
+                  Dict(flat.observed_variables)), flat.equations))
         # A defining equation Sink.F_in ~ transform is synthesized.
         defeq = _find_eq(flat, "Sink.F_in")
         @test defeq !== nothing
@@ -346,9 +354,9 @@ end
         )
         sink = Model(sink_vars, [Equation(_deriv("u"), _V("F_in"))])
         src_vars = Dict{String, ModelVariable}(
-            "F" => ModelVariable(ObservedVariable, units="1", expression=_N(4.0)),
+            "F" => ModelVariable(UnknownVariable, units="1"),
         )
-        src = Model(src_vars, Equation[])
+        src = Model(src_vars, [Equation(_V("F"), _N(4.0))])
         # Bogus transform: never references Src.F.
         transform = _op("*", _N(2.0), _V("Sink.u"))
         file = EarthSciAST.EsmFile("0.8.0",
@@ -534,10 +542,10 @@ end
             "x" => ModelVariable(UnknownVariable; default=1.0))
         sub = Model(sub_vars, Equation[])
 
+        # esm 1.0.0 §6.3: `y` is an `unknown` DEFINED by `y ~ Sub.x`.
         parent_vars = Dict{String, ModelVariable}(
-            "y" => ModelVariable(ObservedVariable;
-                expression=_V("Sub.x")))
-        parent = Model(parent_vars, Equation[],
+            "y" => ModelVariable(UnknownVariable))
+        parent = Model(parent_vars, [Equation(_V("y"), _V("Sub.x"))],
             subsystems=Dict{String, Model}("Sub" => sub))
 
         file = EarthSciAST.EsmFile("0.1.0",
@@ -682,19 +690,27 @@ end
         @test oagg.ranges["i"] isa E.IndexSetRef
     end
 
-    @testset "flatten preserves DiscreteEvent.functional_affect (regression)" begin
+    @testset "flatten preserves a DiscreteEvent's trigger/affects/description" begin
+        # 1.0.0 SEMANTICS CHANGE (esm-spec §8): `functional_affect` (and
+        # `discrete_parameters`) are gone from events — an event affects
+        # UNKNOWNS only. The regression this pins is therefore now stated over
+        # the fields that remain: flatten must carry the trigger, the
+        # (namespaced) affects and the description through untouched.
         E = EarthSciAST
-        fa = Dict{String,Any}("handler" => "reset", "args" => Any["x"])
         ev = DiscreteEvent(
             PeriodicTrigger(1.0),
             [AffectEquation("x", _N(0.0))];
-            description="periodic reset", functional_affect=fa)
+            description="periodic reset")
         vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default=1.0))
         model = Model(vars, [Equation(_deriv("x"), _V("x"))]; discrete_events=[ev])
         flat = flatten(model; name="M")
         @test length(flat.discrete_events) == 1
-        @test flat.discrete_events[1].functional_affect == fa
-        @test flat.discrete_events[1].description == "periodic reset"
+        fev = flat.discrete_events[1]
+        @test fev.trigger isa PeriodicTrigger && fev.trigger.period == 1.0
+        @test length(fev.affects) == 1
+        @test fev.affects[1].lhs == "M.x"
+        @test fev.affects[1].rhs == _N(0.0)
+        @test fev.description == "periodic reset"
     end
 
     @testset "current-format version defaults (ESM_FORMAT_VERSION)" begin
@@ -705,7 +721,7 @@ end
         @test flat isa FlattenedSystem
         doc = E.flattened_to_esm(flat)
         @test doc["esm"] == E.ESM_FORMAT_VERSION
-        @test E.ESM_FORMAT_VERSION == "0.8.0"
+        @test E.ESM_FORMAT_VERSION == "1.0.0"
     end
 
     @testset "Flatten valid fixtures smoke test" begin

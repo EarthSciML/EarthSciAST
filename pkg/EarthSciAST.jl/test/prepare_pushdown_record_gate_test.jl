@@ -17,9 +17,12 @@
 #   * `observed_field(prep, insp, name)` reads the results back through the
 #     prepared document's own graph.
 #
-# The fixture mirrors isrm.esm's structure: data_sources + variable_map
-# coupling + a clean model with in-model LCC projection observeds, at the
-# reusable 9-cell L1 scale with the L1 oracle numerics.
+# The fixture mirrors isrm.esm's structure: `data_sources` + a clean model with
+# in-model LCC projection observeds, at the reusable 9-cell L1 scale with the L1
+# oracle numerics. esm 1.0.0 (§8): a data source is INGEST CONFIGURATION, not a
+# component — it exposes no `variables` and is not a coupling endpoint, so the
+# consuming PARAMETER carries `update: {kind: data, source, from.file_variable}`
+# and the provider is keyed by that parameter's flattened name (`ISRM.SR_SOA`).
 
 module PreparePushdownRecordGateTests
 
@@ -41,6 +44,14 @@ function _agg(output_idx, ranges, expr; reduce=nothing, args=String[], extra...)
         d[String(k)] = v
     end
     return d
+end
+
+# esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression`. `obs_v` declares the
+# observed as a plain `unknown` and pushes its DEFINING bare-variable-LHS
+# equation onto `eqs`, which is what `observed_definitions` reads back.
+function obs_v(eqs, name, shape, expr)
+    push!(eqs, Dict("lhs"=>name, "rhs"=>expr))
+    return Dict("type"=>"unknown", "shape"=>shape)
 end
 
 # ---- Lambert conformal conic (unit sphere), plain Julia ORACLE --------------
@@ -182,43 +193,54 @@ end
         args=["TotalPM25","TotalPop","MortalityRate"])
 
     param(shape) = Dict("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-    obs(shape, expr) = Dict("type"=>"observed", "shape"=>shape, "expression"=>expr)
     scal(v) = Dict("type"=>"parameter", "default"=>v)
+    # A data-fed parameter (esm 1.0.0 §8): the CONSUMER names the source and the
+    # file variable, owns the units, and MUST declare a shape.
+    dparam(shape, src, fv) = Dict("type"=>"parameter", "default"=>0.0,
+        "shape"=>shape, "units"=>"1",
+        "update"=>Dict("kind"=>"data", "source"=>src,
+                       "from"=>Dict("file_variable"=>fv)))
+    # the observeds' DEFINING equations, collected as the declarations are built
+    obs_eqs = Any[]
 
     variables = Dict{String,Any}(
-        "emis_lon"=>param(["emis_records"]), "emis_lat"=>param(["emis_records"]),
-        "X"=>obs(["emis_records"], _proj_obs(_Xbody)),
-        "Y"=>obs(["emis_records"], _proj_obs(_Ybody)),
-        "emis_annual"=>param(["emis_records"]),
-        "is_VOC"=>param(["emis_records"]), "is_NOx"=>param(["emis_records"]),
-        "is_NH3"=>param(["emis_records"]), "is_SOx"=>param(["emis_records"]),
-        "is_PM25"=>param(["emis_records"]),
+        "emis_lon"=>dparam(["emis_records"], "MockPts", "lon"),
+        "emis_lat"=>dparam(["emis_records"], "MockPts", "lat"),
+        "X"=>obs_v(obs_eqs, "X", ["emis_records"], _proj_obs(_Xbody)),
+        "Y"=>obs_v(obs_eqs, "Y", ["emis_records"], _proj_obs(_Ybody)),
+        "emis_annual"=>dparam(["emis_records"], "MockPts", "annual"),
+        "is_VOC"=>dparam(["emis_records"], "MockPts", "vVOC"),
+        "is_NOx"=>dparam(["emis_records"], "MockPts", "vNOx"),
+        "is_NH3"=>dparam(["emis_records"], "MockPts", "vNH3"),
+        "is_SOx"=>dparam(["emis_records"], "MockPts", "vSOx"),
+        "is_PM25"=>dparam(["emis_records"], "MockPts", "vPM25"),
         "src_W"=>param(["src_cells"]), "src_S"=>param(["src_cells"]),
         "src_E"=>param(["src_cells"]), "src_N"=>param(["src_cells"]),
-        "TotalPop"=>param(["rcv_cells"]), "MortalityRate"=>param(["rcv_cells"]),
-        "SR_SOA"=>param(["src_cells","rcv_cells"]),
-        "SR_pNO3"=>param(["src_cells","rcv_cells"]),
-        "SR_pNH4"=>param(["src_cells","rcv_cells"]),
-        "SR_pSO4"=>param(["src_cells","rcv_cells"]),
-        "SR_PrimaryPM25"=>param(["src_cells","rcv_cells"]),
-        "E_VOC"=>obs(["src_cells"], _E_agg("is_VOC")),
-        "E_NOx"=>obs(["src_cells"], _E_agg("is_NOx")),
-        "E_NH3"=>obs(["src_cells"], _E_agg("is_NH3")),
-        "E_SOx"=>obs(["src_cells"], _E_agg("is_SOx")),
-        "E_PM25"=>obs(["src_cells"], _E_agg("is_PM25")),
-        "conc_SOA"=>obs(["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
-        "conc_pNO3"=>obs(["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
-        "conc_pNH4"=>obs(["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
-        "conc_pSO4"=>obs(["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
-        "conc_PrimaryPM25"=>obs(["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
-        "TotalPM25"=>obs(["rcv_cells"], _agg(["rcv"],
+        "TotalPop"=>dparam(["rcv_cells"], "MockSR", "TotalPop"),
+        "MortalityRate"=>dparam(["rcv_cells"], "MockSR", "MortalityRate"),
+        "SR_SOA"=>dparam(["src_cells","rcv_cells"], "MockSR", "SOA"),
+        "SR_pNO3"=>dparam(["src_cells","rcv_cells"], "MockSR", "pNO3"),
+        "SR_pNH4"=>dparam(["src_cells","rcv_cells"], "MockSR", "pNH4"),
+        "SR_pSO4"=>dparam(["src_cells","rcv_cells"], "MockSR", "pSO4"),
+        "SR_PrimaryPM25"=>dparam(["src_cells","rcv_cells"], "MockSR", "PrimaryPM25"),
+        "E_VOC"=>obs_v(obs_eqs, "E_VOC", ["src_cells"], _E_agg("is_VOC")),
+        "E_NOx"=>obs_v(obs_eqs, "E_NOx", ["src_cells"], _E_agg("is_NOx")),
+        "E_NH3"=>obs_v(obs_eqs, "E_NH3", ["src_cells"], _E_agg("is_NH3")),
+        "E_SOx"=>obs_v(obs_eqs, "E_SOx", ["src_cells"], _E_agg("is_SOx")),
+        "E_PM25"=>obs_v(obs_eqs, "E_PM25", ["src_cells"], _E_agg("is_PM25")),
+        "conc_SOA"=>obs_v(obs_eqs, "conc_SOA", ["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
+        "conc_pNO3"=>obs_v(obs_eqs, "conc_pNO3", ["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
+        "conc_pNH4"=>obs_v(obs_eqs, "conc_pNH4", ["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
+        "conc_pSO4"=>obs_v(obs_eqs, "conc_pSO4", ["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
+        "conc_PrimaryPM25"=>obs_v(obs_eqs, "conc_PrimaryPM25", ["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
+        "TotalPM25"=>obs_v(obs_eqs, "TotalPM25", ["rcv_cells"], _agg(["rcv"],
             Dict("rcv"=>Dict("from"=>"rcv_cells")),
             _op("*", "fact", _op("+", _ix("conc_SOA","rcv"), _ix("conc_pNO3","rcv"),
                 _ix("conc_pNH4","rcv"), _ix("conc_pSO4","rcv"),
                 _ix("conc_PrimaryPM25","rcv")));
             args=["conc_SOA","conc_pNO3","conc_pNH4","conc_pSO4","conc_PrimaryPM25"])),
-        "deathsK"=>obs(["rcv_cells"], _deaths("rr_K")),
-        "deathsL"=>obs(["rcv_cells"], _deaths("rr_L")),
+        "deathsK"=>obs_v(obs_eqs, "deathsK", ["rcv_cells"], _deaths("rr_K")),
+        "deathsL"=>obs_v(obs_eqs, "deathsL", ["rcv_cells"], _deaths("rr_L")),
         "lcc_n"=>scal(C.n), "lcc_rf"=>scal(C.rf), "lcc_rho0"=>scal(C.ρ0),
         "lcc_lam0"=>scal(C.λ0), "lcc_qp"=>scal(pi/4), "lcc_d2r"=>scal(pi/180),
         "fact"=>scal(FACT), "pop_scale"=>scal(POP_SCALE), "mort_scale"=>scal(MORT_SCALE),
@@ -228,13 +250,12 @@ end
     # (fixed layer + a STALE gated_by name the record must override); the point
     # loader has none. `esio_format` is absent — providers are mocks here, so
     # nothing consults it (providers_from_document is the EarthSciIO ext's job).
-    loader_var(fv) = Dict{String,Any}("file_variable" => fv, "units" => "1")
+    # esm 1.0.0 §8: a data source exposes NO `variables` — it is ingest config
+    # only. The bindings live on the consuming parameters above (`dparam`).
     data_sources = Dict{String,Any}(
         "MockSR" => Dict{String,Any}(
             "kind" => "static",
             "source" => Dict{String,Any}("url_template" => "mock://sr"),
-            "variables" => Dict{String,Any}(
-                fv => loader_var(fv) for fv in vcat(LVARS, ["TotalPop", "MortalityRate"])),
             "metadata" => Dict{String,Any}("x_esd" => Dict{String,Any}(
                 "gated_select" => Dict{String,Any}(
                     "axes" => Any[Dict("fixed"=>[0]),
@@ -242,26 +263,9 @@ end
                     "applies_to" => Any[LVARS...])))),
         "MockPts" => Dict{String,Any}(
             "kind" => "points",
-            "source" => Dict{String,Any}("url_template" => "mock://pts"),
-            "variables" => Dict{String,Any}(
-                fv => loader_var(fv) for fv in
-                    ["lon", "lat", "annual", "vVOC", "vNOx", "vNH3", "vSOx", "vPM25"])))
-    coupling = Any[]
-    for (frm, to) in vcat(
-        [("MockSR.$v", "ISRM.SR_$v") for v in LVARS],
-        [("MockSR.TotalPop", "ISRM.TotalPop"),
-         ("MockSR.MortalityRate", "ISRM.MortalityRate"),
-         ("MockPts.lon", "ISRM.emis_lon"), ("MockPts.lat", "ISRM.emis_lat"),
-         ("MockPts.annual", "ISRM.emis_annual"),
-         ("MockPts.vVOC", "ISRM.is_VOC"), ("MockPts.vNOx", "ISRM.is_NOx"),
-         ("MockPts.vNH3", "ISRM.is_NH3"), ("MockPts.vSOx", "ISRM.is_SOx"),
-         ("MockPts.vPM25", "ISRM.is_PM25")])
-        push!(coupling, Dict{String,Any}("type" => "variable_map",
-                                         "from" => frm, "to" => to,
-                                         "transform" => "param_to_var"))
-    end
-    # is_* are PARAMETERS here (loader-fed masks), unlike isrm.esm's observeds —
-    # exercises the coupling alias path on more than just coordinates.
+            "source" => Dict{String,Any}("url_template" => "mock://pts")))
+    # is_* are data-fed PARAMETERS here (loader masks), unlike isrm.esm's
+    # observeds — exercises the binding path on more than just coordinates.
 
     doc = Dict{String,Any}(
         "esm" => "0.9.0",
@@ -271,9 +275,8 @@ end
             "rcv_cells"    => Dict("kind"=>"interval", "size"=>N_RCV),
             "emis_records" => Dict("kind"=>"interval", "size"=>N_REC)),
         "data_sources" => data_sources,
-        "coupling" => coupling,
         "models" => Dict{String,Any}("ISRM" =>
-            Dict{String,Any}("variables"=>variables, "equations"=>Any[])))
+            Dict{String,Any}("variables"=>variables, "equations"=>obs_eqs)))
 
     # ---- idempotency guard: a desugared document does NOT re-desugar --------
     td = EA.desugar_pushdown(doc; model_name="ISRM")
@@ -282,18 +285,20 @@ end
     SET = td["metadata"]["x_esd"]["pushdown"]["gated_select"]["gated_by"]
     @test SET == "pd_support__src_cells"
 
-    # ---- providers: mocks only, keyed by the document's loader variables ----
+    # ---- providers: mocks only, keyed by the CONSUMING PARAMETER's flattened
+    #      name (esm 1.0.0: a source is not a component, so there is no
+    #      "<Loader>.<var>" endpoint to key on) ------------------------------
     gmocks = Dict(v => MockGatedP1(fullSR[v], Any[]) for v in LVARS)
     providers = Dict{String,Any}(
-        "MockSR.TotalPop" => MockConstP1(TotalPop),
-        "MockSR.MortalityRate" => MockConstP1(MortalityRate),
-        "MockPts.lon" => MockConstP1(lon), "MockPts.lat" => MockConstP1(lat),
-        "MockPts.annual" => MockConstP1(emis_annual),
-        "MockPts.vVOC" => MockConstP1(is_VOC), "MockPts.vNOx" => MockConstP1(is_NOx),
-        "MockPts.vNH3" => MockConstP1(is_NH3), "MockPts.vSOx" => MockConstP1(is_SOx),
-        "MockPts.vPM25" => MockConstP1(is_PM25))
+        "ISRM.TotalPop" => MockConstP1(TotalPop),
+        "ISRM.MortalityRate" => MockConstP1(MortalityRate),
+        "ISRM.emis_lon" => MockConstP1(lon), "ISRM.emis_lat" => MockConstP1(lat),
+        "ISRM.emis_annual" => MockConstP1(emis_annual),
+        "ISRM.is_VOC" => MockConstP1(is_VOC), "ISRM.is_NOx" => MockConstP1(is_NOx),
+        "ISRM.is_NH3" => MockConstP1(is_NH3), "ISRM.is_SOx" => MockConstP1(is_SOx),
+        "ISRM.is_PM25" => MockConstP1(is_PM25))
     for v in LVARS
-        providers["MockSR.$v"] = gmocks[v]
+        providers["ISRM.SR_$v"] = gmocks[v]
     end
 
     # src rects ride const_arrays under their BARE authored names (the alias

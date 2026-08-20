@@ -630,10 +630,15 @@ struct ContinuousEvent <: EventType
     conditions::Vector{ASTExpr}
     affects::Vector{AffectEquation}
     description::Union{String,Nothing}
+    # Human-readable identifier (schema `ContinuousEvent.name`). Carried so an
+    # authored event survives parse → emit, and so the
+    # `event_affects_parameter` diagnostic can name the offending event.
+    name::Union{String,Nothing}
 
-    # Constructor with optional description
-    ContinuousEvent(conditions::Vector{ASTExpr}, affects::Vector{AffectEquation}; description=nothing) =
-        new(conditions, affects, description)
+    # Constructor with optional description / name
+    ContinuousEvent(conditions::Vector{ASTExpr}, affects::Vector{AffectEquation};
+                    description=nothing, name=nothing) =
+        new(conditions, affects, description, name)
 end
 
 """
@@ -655,11 +660,15 @@ struct DiscreteEvent <: EventType
     trigger::DiscreteEventTrigger
     affects::Vector{AffectEquation}
     description::Union{String,Nothing}
+    # Human-readable identifier (schema `DiscreteEvent.name`). Carried so an
+    # authored event survives parse → emit, and so the
+    # `event_affects_parameter` diagnostic can name the offending event.
+    name::Union{String,Nothing}
 
-    # Constructor with optional description
+    # Constructor with optional description / name
     DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{AffectEquation};
-                  description=nothing) =
-        new(trigger, affects, description)
+                  description=nothing, name=nothing) =
+        new(trigger, affects, description, name)
 end
 
 # ========================================
@@ -2421,6 +2430,7 @@ const RECORD_FIELD_TABLES = (
          eltype = :AffectEquation, mode = :opt_empty, default = :(AffectEquation[]),
          emit = :always, pos = true),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :name, wire = "name", kind = :string, mode = :opt, emit = :nonnothing),
     )),
     (T = :DiscreteEvent, fn = :discrete_event, rows = (
         (f = :trigger, wire = "trigger", kind = :record, of = :trigger, mode = :req_err,
@@ -2430,10 +2440,16 @@ const RECORD_FIELD_TABLES = (
         # gone — a handler now lives on the parameter it writes
         # (`update.handler`), and an `affects` LHS naming a parameter is
         # `event_affects_parameter`.
+        # `:custom` names a hand-written hook on BOTH sides. Parse keeps the
+        # per-entry lhs/rhs presence check; emit must name a hook too, because
+        # `_record_emit_expr` has no `:custom` case and would otherwise emit the
+        # `AffectEquation` structs verbatim — a JSON3 field dump carrying `wrt`,
+        # `label`, `output`, … that no longer validates against the schema.
         (f = :affects, wire = "affects", kind = :custom, parse_fn = :_coerce_discrete_affects,
          mode = :opt_empty, default = :(AffectEquation[]),
-         emit = :always, pos = true),
+         emit = :custom, emit_fn = :_emit_discrete_event_affects, pos = true),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :name, wire = "name", kind = :string, mode = :opt, emit = :nonnothing),
     )),
     (T = :Assertion, fn = :assertion, rows = (
         (f = :variable, wire = "variable", kind = :string, mode = :req, emit = :always, pos = true),

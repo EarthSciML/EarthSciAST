@@ -299,10 +299,13 @@ end
                                    "name" => "krate", "bindings" => Dict("kk" => "k")))],
             )),
             "models" => Dict("Src" => Dict(
+                # esm 1.0.0: an observed unknown is DEFINED BY its equation
+                # (esm-spec §6.3.1), not by a field on the declaration.
                 "variables" => Dict("Tsrc" => Dict(
-                    "type" => "observed", "units" => "K",
-                    "expression" => Dict("op" => "+", "args" => [290.0, 10.0]))),
-                "equations" => Any[])),
+                    "type" => "unknown", "units" => "K")),
+                "equations" => Any[Dict(
+                    "lhs" => "Tsrc",
+                    "rhs" => Dict("op" => "+", "args" => [290.0, 10.0]))])),
             "coupling" => [Dict("type" => "variable_map",
                                 "from" => "Src.Tsrc", "to" => "Chem.T",
                                 "transform" => "param_to_var")],
@@ -357,9 +360,10 @@ end
                 ),
                 "Src" => Dict(
                     "variables" => Dict("Tsrc" => Dict(
-                        "type" => "observed", "units" => "K",
-                        "expression" => Dict("op" => "+", "args" => [290.0, 10.0]))),
-                    "equations" => Any[]),
+                        "type" => "unknown", "units" => "K")),
+                    "equations" => Any[Dict(
+                        "lhs" => "Tsrc",
+                        "rhs" => Dict("op" => "+", "args" => [290.0, 10.0]))]),
             ),
             "coupling" => [Dict("type" => "variable_map",
                                 "from" => "Src.Tsrc", "to" => "M.T",

@@ -414,10 +414,6 @@
               }
             ]
           }
-        },
-        {
-          "lhs": "temperature_factor",
-          "rhs": 0.0
         }
       ]
     }

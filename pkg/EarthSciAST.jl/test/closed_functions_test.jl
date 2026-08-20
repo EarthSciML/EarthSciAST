@@ -66,9 +66,11 @@ end
                     @test isfile(expected)
 
                     # Parser must accept the fixture (i.e. the `fn` op AST is
-                    # valid under the v0.3.0 schema).
+                    # valid under the current schema). The shared corpus tracks
+                    # the format version, so pin it against the constant rather
+                    # than a frozen string.
                     file = EarthSciAST.load(canonical)
-                    @test file.esm == "0.3.0"
+                    @test file.esm == EarthSciAST.ESM_FORMAT_VERSION
 
                     spec = JSON3.read(read(expected, String))
                     fn_name = String(spec.function)

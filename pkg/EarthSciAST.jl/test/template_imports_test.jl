@@ -41,6 +41,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     end
     _golden(path) = _normj(JSON3.read(read(path, String)))
 
+    # esm 1.0.0: an observed unknown's defining right-hand side is an ordinary
+    # bare-variable-LHS EQUATION, not a field on the declaration (esm-spec
+    # §6.3.1). These are RAW (unparsed) documents, so the lookup is by hand.
+    function _defrhs(doc, model::AbstractString, name::AbstractString)
+        eqs = doc["models"][model]["equations"]
+        for eq in eqs
+            get(eq, "lhs", nothing) == name && return eq["rhs"]
+        end
+        error("no defining equation for '$name' in model '$model'")
+    end
+
     _err_code(f) = try
         f()
         nothing
@@ -92,18 +103,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # whose metadata prose legitimately spells the literal `[1.0,8.0]`), and
         # the in-aggregate ratio operands are narrowed to Int64 (like the
         # standalone dx), so inside and outside now agree.
-        c0 = tree["models"]["M"]["variables"]["c0"]["expression"]
+        c0 = _defrhs(tree, "M", "c0")
         @test !occursin("1.0", JSON3.write(c0))   # no widened float in the subtree
         agg_ratio = c0["args"][1]["args"][2]["expr"]["args"][2]  # {op:/,args:[1,8]}
         @test agg_ratio["op"] == "/"
         @test agg_ratio["args"][1] isa Int64 && agg_ratio["args"][2] isa Int64
         @test agg_ratio["args"][1] == 1 && agg_ratio["args"][2] == 8
-        dx = tree["models"]["M"]["variables"]["dx"]["expression"]
+        dx = _defrhs(tree, "M", "dx")
         @test dx["args"][1] isa Int64 && dx["args"][2] isa Int64
 
         # (d) Value preservation: 1/8 is true float division = 0.125.
         f = EarthSciAST.load(fixture)
-        dxv = f.models["M"].variables["dx"].expression
+        dxv = observed_definition(f.models["M"], "dx")
         @test EarthSciAST.evaluate_expr(dxv, Dict{String,Float64}()) == 0.125
     end
 
@@ -122,9 +133,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # Winner sanity, independent of the goldens: earlier import wins the
         # equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
         d1 = _expand_raw(conf("import_order_determinism", "fixture_import_order.esm"))
-        @test d1["models"]["M"]["variables"]["y"]["expression"]["args"][1] == 2
+        @test _defrhs(d1, "M", "y")["args"][1] == 2
         d2 = _expand_raw(conf("import_order_determinism", "fixture_priority_override.esm"))
-        @test d2["models"]["M"]["variables"]["y"]["expression"]["args"][1] == 5
+        @test _defrhs(d2, "M", "y")["args"][1] == 5
     end
 
     @testset "valid suite: library file + minimal consumer" begin
@@ -147,7 +158,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                                       "template_import_minimal.esm"))
         end
         @test m.index_sets["cells"].size == 8     # §9.7.5 merge into consumer
-        y = m.models["M"].variables["y"].expression
+        y = observed_definition(m.models["M"], "y")
         @test y isa OpExpr && y.op == "*"
         @test y.args[2] isa IntExpr && y.args[2].value == 8
     end
@@ -158,14 +169,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             f = EarthSciAST.load(conf("metaparameter_resolutions", wrapper))
             sub = f.models["Sweep"].subsystems["Problem"]
             # Expression position: bare "N" substituted as an integer literal.
-            @test sub.variables["npts"].expression isa IntExpr
-            @test sub.variables["npts"].expression.value == n
+            @test observed_definition(sub, "npts") isa IntExpr
+            @test observed_definition(sub, "npts").value == n
             # Expression-position division stays an AST division (no folding).
-            half = sub.variables["half"].expression
+            half = observed_definition(sub, "half")
             @test half isa OpExpr && half.op == "/"
             @test half.args[1].value == n
             # Structural site: the aggregate dense range folded exactly.
-            ramp = sub.variables["ramp"].expression
+            ramp = observed_definition(sub, "ramp")
             @test ramp.op == "aggregate"
             @test ramp.ranges["i"] == [1, div(n, 2)]
             # Typed round-trip matches the golden.
@@ -201,8 +212,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # index set) and fired ONLY on its own instance's field.
         @test f.index_sets["meshA.x"].size == 16
         @test f.index_sets["meshB.x"].size == 8
-        va = f.models["TwoGrids"].variables["div_A"].expression
-        vb = f.models["TwoGrids"].variables["div_B"].expression
+        va = observed_definition(f.models["TwoGrids"], "div_A")
+        vb = observed_definition(f.models["TwoGrids"], "div_B")
         @test va.op == "*" && vb.op == "*"     # both div nodes lowered
         @test va.args[1].op == "/" && va.args[1].args[2].value == 16   # (1/16)*F_A
         @test vb.args[1].op == "/" && vb.args[1].args[2].value == 8    # (1/8)*F_B
@@ -226,7 +237,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test f.index_sets["nz_of_row"].offsets == "meshA_count"
         @test f.index_sets["nz_of_row"].values == "meshA_cols"
         # ...and in the rule body (args and index gathers alike).
-        total = f.models["Sparse"].variables["total"].expression
+        total = observed_definition(f.models["Sparse"], "total")
         @test total.op == "aggregate"
         argnames = String[a.name for a in total.args]   # typed VarExpr leaves
         @test "meshA_cols" in argnames && "meshA_w" in argnames
@@ -250,7 +261,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # the §9.6.3 equal-priority tie breaks by that order, so instance a
         # (NC = 6) wins: y = 6 * x, not 9 * x.
         d = _expand_raw(conf("import_rename_diamond", "fixture.esm"))
-        @test d["models"]["Diamond"]["variables"]["y"]["expression"]["args"][1] == 6
+        @test _defrhs(d, "Diamond", "y")["args"][1] == 6
         f = EarthSciAST.load(conf("import_rename_diamond", "fixture.esm"))
         @test f.index_sets["a.cells"].size == 6
         @test f.index_sets["b.cells"].size == 9
@@ -259,10 +270,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
         problem = conf("metaparameter_resolutions", "problem.esm")
         fdef = EarthSciAST.load(problem)
-        @test fdef.models["Problem"].variables["npts"].expression.value == 2  # default
+        @test observed_definition(fdef.models["Problem"], "npts").value == 2  # default
         fapi = EarthSciAST.load(problem; metaparameters=Dict("N" => 6))
-        @test fapi.models["Problem"].variables["npts"].expression.value == 6  # API > default
-        @test fapi.models["Problem"].variables["ramp"].expression.ranges["i"] == [1, 3]
+        @test observed_definition(fapi.models["Problem"], "npts").value == 6  # API > default
+        @test observed_definition(fapi.models["Problem"], "ramp").ranges["i"] == [1, 3]
         # Binding a name the document does not declare is an error.
         @test _err_code(() -> EarthSciAST.load(problem;
             metaparameters=Dict("Q" => 1))) == "template_import_unknown_name"
@@ -358,10 +369,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             @test got == want
             got == want && push!(seen_codes, want)
         end
-        # The fixture set exercises the full §9.6.6 §9.7 code table (the 12th,
-        # template_import_unresolved, is exercised below — a missing file is
-        # not representable as a fixture).
-        for code in ["template_import_version_too_old", "template_import_not_library",
+        # The fixture set exercises the §9.6.6 / §9.7 code table. Two codes are
+        # not representable as a fixture here and are covered separately:
+        # `template_import_unresolved` (a missing FILE) below, and
+        # `template_import_version_too_old`, whose fixture was retired with esm
+        # 1.0.0 — the corpus is all `esm: "1.0.0"`, so no document in it can
+        # declare a pre-0.8.0 version and still be schema-valid. The rule itself
+        # is still pinned, directly on `reject_template_imports_pre_v08`, by the
+        # "version gate helper" testset below.
+        for code in ["template_import_not_library",
                      "subsystem_ref_is_template_library", "template_import_cycle",
                      "template_import_name_conflict", "template_import_unknown_name",
                      "template_import_index_set_conflict",
@@ -714,17 +730,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 "M": {
                   "variables": {
                     "x": {"type": "unknown", "units": "1", "default": 0.5},
-                    "agg": {"type": "observed", "units": "1",
-                      "expression": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
-                        "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
-                        "expr": {"op": "*", "args": ["x", "i"]}}},
-                    "ma": {"type": "observed", "units": "1",
-                      "expression": {"op": "makearray", "args": [],
-                        "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
-                        "values": [1.5]}}
+                    "agg": {"type": "unknown", "units": "1"},
+                    "ma": {"type": "unknown", "units": "1"}
                   },
                   "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                                 "rhs": {"op": "-", "args": ["x"]}}]
+                                 "rhs": {"op": "-", "args": ["x"]}},
+                                {"lhs": "agg",
+                                 "rhs": {"op": "aggregate", "output_idx": ["i"], "args": ["x"],
+                                   "ranges": {"i": [1, {"op": "-", "args": ["N", 1]}]},
+                                   "expr": {"op": "*", "args": ["x", "i"]}}},
+                                {"lhs": "ma",
+                                 "rhs": {"op": "makearray", "args": [],
+                                   "regions": [[[{"op": "/", "args": ["N", 2]}, "N"]]],
+                                   "values": [1.5]}}]
                 }
               }
             }
@@ -732,8 +750,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             f = EarthSciAST.load(p)
             @test f.index_sets["cells"].size == 12
             m = f.models["M"]
-            @test m.variables["agg"].expression.ranges["i"] == [1, 5]
-            ma = m.variables["ma"].expression
+            @test observed_definition(m, "agg").ranges["i"] == [1, 5]
+            ma = observed_definition(m, "ma")
             @test ma.regions == [[[3, 6]]]
         end
     end
@@ -750,17 +768,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 "M": {
                   "variables": {
                     "x": {"type": "unknown", "units": "1", "default": 0.5},
-                    "dlon": {"type": "observed", "units": "1",
-                             "expression": {"op": "/", "args": [360, "N"]}}
+                    "dlon": {"type": "unknown", "units": "1"}
                   },
                   "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                                 "rhs": {"op": "-", "args": ["x"]}}]
+                                 "rhs": {"op": "-", "args": ["x"]}},
+                                {"lhs": "dlon",
+                                 "rhs": {"op": "/", "args": [360, "N"]}}]
                 }
               }
             }
             """)
             f = EarthSciAST.load(p)
-            dlon = f.models["M"].variables["dlon"].expression
+            dlon = observed_definition(f.models["M"], "dlon")
             @test dlon isa OpExpr && dlon.op == "/"
             @test dlon.args[1].value == 360
             @test dlon.args[2] isa IntExpr && dlon.args[2].value == 144
@@ -785,17 +804,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 "c3": {"params": [], "body": 3}
               },
               "variables": {"x": {"type": "unknown", "units": "1", "default": 0.5},
-                            "y": {"type": "observed", "units": "1",
-                                  "expression": {"op": "apply_expression_template",
-                                                 "args": [], "name": "c1", "bindings": {}}}},
+                            "y": {"type": "unknown", "units": "1"}},
               "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                             "rhs": {"op": "-", "args": ["x"]}}]
+                             "rhs": {"op": "-", "args": ["x"]}},
+                            {"lhs": "y",
+                             "rhs": {"op": "apply_expression_template",
+                                     "args": [], "name": "c1", "bindings": {}}}]
             }
           }
         }
         """)
         out = EarthSciAST.Expand(lower_expression_templates(doc))
-        y = _normj(out["models"]["M"]["variables"]["y"]["expression"])
+        y = _normj(_defrhs(out, "M", "y"))
         @test y == Dict{String,Any}("op" => "+", "args" => Any[1,
                      Dict{String,Any}("op" => "+", "args" => Any[2, 3])])
 
@@ -922,10 +942,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                "expression_template_imports": [{"ref": "tpl/lib.esm"}],
                "variables": {
                  "u": {"type": "unknown", "units": "1", "default": 1.5},
-                 "w": {"type": "observed", "units": "1",
-                       "expression": {"op": "scale_by_n", "args": ["u"]}}},
+                 "w": {"type": "unknown", "units": "1"}},
                "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                              "rhs": {"op": "-", "args": ["u"]}}],
+                              "rhs": {"op": "-", "args": ["u"]}},
+                             {"lhs": "w",
+                              "rhs": {"op": "scale_by_n", "args": ["u"]}}],
                "subsystems": {"Inner": {"ref": "inner.esm"}}}}}""",
             "https://esm.invalid/models/tpl/lib.esm" => """
             {"esm": "0.8.0", "metadata": {"name": "url_outer_lib"},
@@ -958,13 +979,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                      [{"ref": "https://esm.invalid/lib/stencil.esm"}],
                    "variables": {
                      "x": {"type": "unknown", "units": "1", "default": 1.5},
-                     "y": {"type": "observed", "units": "1",
-                           "expression": {"op": "scale_by_n", "args": ["x"]}}},
+                     "y": {"type": "unknown", "units": "1"}},
                    "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                                  "rhs": {"op": "-", "args": ["x"]}}]}}}""")
+                                  "rhs": {"op": "-", "args": ["x"]}},
+                                 {"lhs": "y",
+                                  "rhs": {"op": "scale_by_n", "args": ["x"]}}]}}}""")
                 f = EarthSciAST.load(consumer)
                 @test f.index_sets["cells"].size == 8
-                y = f.models["M"].variables["y"].expression
+                y = observed_definition(f.models["M"], "y")
                 @test y isa OpExpr && y.op == "*"
                 @test "https://esm.invalid/shared/grid.esm" in _fetched
 
@@ -993,7 +1015,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 fw = EarthSciAST.load(wrapper)
                 sub = fw.models["Top"].subsystems["S"]
                 @test sub isa EarthSciAST.Model
-                w = sub.variables["w"].expression
+                w = observed_definition(sub, "w")
                 @test w isa OpExpr && w.op == "*"   # template lowered via URL base
                 inner = sub.subsystems["Inner"]
                 @test inner isa EarthSciAST.Model

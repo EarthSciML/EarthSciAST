@@ -47,6 +47,14 @@ function _agg(output_idx, ranges, expr; reduce=nothing, args=String[], extra...)
     return d
 end
 
+# esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression`. `obs_v` declares the
+# observed as a plain `unknown` and pushes its DEFINING bare-variable-LHS
+# equation onto `eqs`, which is what `observed_definitions` reads back.
+function obs_v(eqs, name, shape, expr)
+    push!(eqs, Dict("lhs"=>name, "rhs"=>expr))
+    return Dict("type"=>"unknown", "shape"=>shape)
+end
+
 # GATED PROVIDER MOCK — records every call; slices the synthetic SR per selection.
 # (Uniquely named to coexist with pushdown_edge_test.jl's MockSR under runtests.)
 mutable struct MockSRAuto
@@ -153,8 +161,9 @@ end
             args=["TotalPM25","TotalPop","MortalityRate"])
 
         param(shape) = Dict("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-        obs(shape, expr) = Dict("type"=>"observed", "shape"=>shape, "expression"=>expr)
         scal(v) = Dict("type"=>"parameter", "default"=>v)
+        # the observeds' DEFINING equations, collected as the declarations are built
+        obs_eqs = Any[]
 
         variables = Dict{String,Any}(
             "X"=>param(["emis_records"]), "Y"=>param(["emis_records"]),
@@ -172,25 +181,25 @@ end
             "SR_pSO4"=>param(["src_cells","rcv_cells"]),
             "SR_PrimaryPM25"=>param(["src_cells","rcv_cells"]),
             # E over the FULL cell domain (binning aggregate).
-            "E_VOC"=>obs(["src_cells"], _E_agg("is_VOC")),
-            "E_NOx"=>obs(["src_cells"], _E_agg("is_NOx")),
-            "E_NH3"=>obs(["src_cells"], _E_agg("is_NH3")),
-            "E_SOx"=>obs(["src_cells"], _E_agg("is_SOx")),
-            "E_PM25"=>obs(["src_cells"], _E_agg("is_PM25")),
+            "E_VOC"=>obs_v(obs_eqs, "E_VOC", ["src_cells"], _E_agg("is_VOC")),
+            "E_NOx"=>obs_v(obs_eqs, "E_NOx", ["src_cells"], _E_agg("is_NOx")),
+            "E_NH3"=>obs_v(obs_eqs, "E_NH3", ["src_cells"], _E_agg("is_NH3")),
+            "E_SOx"=>obs_v(obs_eqs, "E_SOx", ["src_cells"], _E_agg("is_SOx")),
+            "E_PM25"=>obs_v(obs_eqs, "E_PM25", ["src_cells"], _E_agg("is_PM25")),
             # conc = Σ_{s∈src_cells} SR[s,rcv]·E[s].
-            "conc_SOA"=>obs(["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
-            "conc_pNO3"=>obs(["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
-            "conc_pNH4"=>obs(["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
-            "conc_pSO4"=>obs(["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
-            "conc_PrimaryPM25"=>obs(["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
-            "TotalPM25"=>obs(["rcv_cells"], _agg(["rcv"],
+            "conc_SOA"=>obs_v(obs_eqs, "conc_SOA", ["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
+            "conc_pNO3"=>obs_v(obs_eqs, "conc_pNO3", ["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
+            "conc_pNH4"=>obs_v(obs_eqs, "conc_pNH4", ["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
+            "conc_pSO4"=>obs_v(obs_eqs, "conc_pSO4", ["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
+            "conc_PrimaryPM25"=>obs_v(obs_eqs, "conc_PrimaryPM25", ["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
+            "TotalPM25"=>obs_v(obs_eqs, "TotalPM25", ["rcv_cells"], _agg(["rcv"],
                 Dict("rcv"=>Dict("from"=>"rcv_cells")),
                 _op("*", "fact", _op("+", _ix("conc_SOA","rcv"), _ix("conc_pNO3","rcv"),
                     _ix("conc_pNH4","rcv"), _ix("conc_pSO4","rcv"),
                     _ix("conc_PrimaryPM25","rcv")));
                 args=["conc_SOA","conc_pNO3","conc_pNH4","conc_pSO4","conc_PrimaryPM25"])),
-            "deathsK"=>obs(["rcv_cells"], _deaths("rr_K")),
-            "deathsL"=>obs(["rcv_cells"], _deaths("rr_L")),
+            "deathsK"=>obs_v(obs_eqs, "deathsK", ["rcv_cells"], _deaths("rr_K")),
+            "deathsL"=>obs_v(obs_eqs, "deathsL", ["rcv_cells"], _deaths("rr_L")),
             "fact"=>scal(FACT), "pop_scale"=>scal(POP_SCALE), "mort_scale"=>scal(MORT_SCALE),
             "rr_K"=>scal(RR_K), "rr_L"=>scal(RR_L))
 
@@ -201,7 +210,8 @@ end
                 "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),
                 "rcv_cells"    => Dict("kind"=>"interval", "size"=>N_RCV),
                 "emis_records" => Dict("kind"=>"interval", "size"=>N_REC)),
-            "models" => Dict("ISRM" => Dict("variables"=>variables, "equations"=>[])))
+            "models" => Dict("ISRM" => Dict("variables"=>variables,
+                                            "equations"=>obs_eqs)))
     end
 
     # generated (deterministic) names
@@ -238,7 +248,9 @@ end
     @test tvars[MF]["type"] == "parameter"
     @test tvars[MF]["shape"] == [SET]
     @test haskey(tvars, MEMV)
-    @test tvars[MEMV]["type"] == "state"
+    # esm 1.0.0 (§5.4): "state" is no longer a declarable type — the producer's
+    # member variable is an `unknown`, made a state/observed by its equation.
+    @test tvars[MEMV]["type"] == "unknown"
 
     # (c) the `distinct` producer aggregate
     teqs = td["models"]["ISRM"]["equations"]

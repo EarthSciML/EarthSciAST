@@ -74,7 +74,7 @@ end
         @test r3.t == fresh3.t && r3.u == fresh3.u
     end
 
-    @testset "parameters belong to prepare; simulate(prep; parameters=…) throws" begin
+    @testset "a :numeric override rides `p`; a build-consumed one is refused" begin
         prep = prepare(scalar_esm("k"); parameters = Dict("M.k" => 2.5))
         r = ESM_P.simulate(prep, (0.0, 3.0); alg = Tsit5())
         @test isapprox(r["M.y"][end], 7.5; rtol = 1e-5)
@@ -82,16 +82,34 @@ end
         r1c = ESM_P.simulate(scalar_esm("k"), (0.0, 3.0); alg = Tsit5(),
                              parameters = Dict("M.k" => 2.5))
         @test r.u == r1c.u
-        # Overrides are baked into the build → the per-run call must refuse them.
+
+        # `M.k` is an ordinary scalar that lives in the runtime `p`, so its
+        # class is `:numeric` and a per-run override is a `p` SWAP, not a
+        # rebuild — cheap and AD-transparent (`remake_parameters`). This
+        # assertion used to pin the opposite, because `prepare()` originally
+        # refused EVERY per-run override; `18fd10f02` narrowed the refusal to
+        # the classes whose values are consumed at BUILD time and did not update
+        # this file with it. The refusal itself is pinned by class in
+        # `parameter_classes_test.jl`.
+        @test prep.param_classes["M.k"] === :numeric
+        r_swap = ESM_P.simulate(prep, (0.0, 3.0); alg = Tsit5(),
+                                parameters = Dict("M.k" => 1.0))
+        @test isapprox(r_swap["M.y"][end], 3.0; rtol = 1e-5)   # D(y)=k, k=1
+        # The swap is per-run: the prepared value is untouched by it.
+        @test isapprox(ESM_P.simulate(prep, (0.0, 3.0); alg = Tsit5())["M.y"][end],
+                       7.5; rtol = 1e-5)
+
+        # A name the prepared model does not carry is still refused rather than
+        # silently dropped.
         err = try
             ESM_P.simulate(prep, (0.0, 1.0); alg = Tsit5(),
-                           parameters = Dict("M.k" => 1.0))
+                           parameters = Dict("M.nope" => 1.0))
             nothing
         catch e
             e
         end
         @test err isa ESM_P.SimulateError
-        @test occursin("prepare", sprint(showerror, err))
+
         # An explicitly EMPTY parameters dict is fine (the delegating path sends one).
         @test ESM_P.simulate(prep, (0.0, 1.0); alg = Tsit5(),
                              parameters = Dict{String,Float64}()).success

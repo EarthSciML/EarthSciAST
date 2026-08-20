@@ -75,9 +75,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test _err_code(() -> EarthSciAST.load(
             conf("inject_coupling_entry", "neg_target_unknown.esm"))) ==
               "template_inject_target_unknown"
+        # esm 1.0.0 retires `template_inject_target_is_loader`: a data source is
+        # not a component, so it cannot be referenced by a coupling entry at all
+        # and a key naming one is reported as `template_inject_target_unknown`
+        # or `..._not_component` like any other non-component key (the schema's
+        # `expression_template_imports` description states this).
         @test _err_code(() -> EarthSciAST.load(
-            conf("inject_coupling_entry", "neg_target_is_loader.esm"))) ==
-              "template_inject_target_is_loader"
+            conf("inject_coupling_entry", "neg_target_is_loader.esm"))) in
+              ("template_inject_target_not_component",
+               "template_inject_target_unknown")
     end
 
     @testset "form C — test/analysis injection (§6.6.6 / §9.7.10)" begin

@@ -114,16 +114,19 @@ end
                          MortalityRate[rcv] * MORT_SCALE / 100000 for rcv in 1:N_RCV]
 
     gmocks = Dict(v => MockGatedN1(fullSR[v], Any[]) for v in LVARS)
+    # esm 1.0.0 (esm-spec §8.5): a data source exposes no variables of its own,
+    # so a provider is keyed by the CONSUMING PARAMETER's flattened name
+    # (`ISRM.emis_lon`), not by `<Source>.<file_variable>` (`MockPts.lon`).
     providers = Dict{String,Any}(
-        "MockSR.TotalPop" => MockConstN1(TotalPop),
-        "MockSR.MortalityRate" => MockConstN1(MortalityRate),
-        "MockPts.lon" => MockConstN1(lon), "MockPts.lat" => MockConstN1(lat),
-        "MockPts.annual" => MockConstN1(emis_annual),
-        "MockPts.vVOC" => MockConstN1(is_VOC), "MockPts.vNOx" => MockConstN1(is_NOx),
-        "MockPts.vNH3" => MockConstN1(is_NH3), "MockPts.vSOx" => MockConstN1(is_SOx),
-        "MockPts.vPM25" => MockConstN1(is_PM25))
+        "ISRM.TotalPop" => MockConstN1(TotalPop),
+        "ISRM.MortalityRate" => MockConstN1(MortalityRate),
+        "ISRM.emis_lon" => MockConstN1(lon), "ISRM.emis_lat" => MockConstN1(lat),
+        "ISRM.emis_annual" => MockConstN1(emis_annual),
+        "ISRM.is_VOC" => MockConstN1(is_VOC), "ISRM.is_NOx" => MockConstN1(is_NOx),
+        "ISRM.is_NH3" => MockConstN1(is_NH3), "ISRM.is_SOx" => MockConstN1(is_SOx),
+        "ISRM.is_PM25" => MockConstN1(is_PM25))
     for v in LVARS
-        providers["MockSR.$v"] = gmocks[v]
+        providers["ISRM.SR_$v"] = gmocks[v]
     end
     ca = Dict{String,Any}("src_W"=>W, "src_S"=>Sv, "src_E"=>Ev, "src_N"=>Nv)
 

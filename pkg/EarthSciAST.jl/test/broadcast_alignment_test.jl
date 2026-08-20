@@ -43,7 +43,27 @@ _bc_eq(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
 
 const _BC_SETS = ("lon" => 3, "lat" => 2, "lev" => 2)
 
+# esm 1.0.0: an observed unknown is DEFINED BY A BARE-VARIABLE-LHS EQUATION, not
+# by a field on its declaration (esm-spec §6.3.1). `_bc_obs` declares one and
+# stashes its defining RHS under a private key; `_bc_doc` lifts every such key
+# into the model's `equations` in sorted name order, so the builders below stay
+# as compact as they were while the emitted document is 1.0.0-shaped and
+# deterministic.
+const _BC_DEFKEY = "__defining_rhs__"
+
+_bc_obs(shape, expr; units = "1") = shape === nothing ?
+    Dict{String,Any}("type" => "unknown", "units" => units, _BC_DEFKEY => expr) :
+    Dict{String,Any}("type" => "unknown", "units" => units,
+                     "shape" => Any[shape...], _BC_DEFKEY => expr)
+
 function _bc_doc(name, vars, eqs; sets = _BC_SETS)
+    vars = Dict{String,Any}(k => copy(v) for (k, v) in vars)
+    eqs = Any[eqs...]
+    for vn in sort!(collect(String.(keys(vars))))
+        v = vars[vn]
+        haskey(v, _BC_DEFKEY) || continue
+        push!(eqs, _bc_eq(vn, pop!(v, _BC_DEFKEY)))
+    end
     Dict{String,Any}(
         "esm" => "0.6.0",
         "metadata" => Dict{String,Any}("name" => name),
@@ -73,20 +93,16 @@ function _bc_vars()
     Dict{String,Any}(
         "dp" => Dict{String,Any}("type" => "unknown", "units" => "1",
             "shape" => Any["lon", "lat", "lev"], "default" => 0),
-        "w1" => Dict{String,Any}("type" => "observed", "units" => "1",
-            "shape" => Any["lat"],
-            "expression" => _bc_agg(("j",), ("j" => "lat",), _bc_op("*", 10, "j"))),
-        "w2" => Dict{String,Any}("type" => "observed", "units" => "1",
-            "shape" => Any["lon", "lat"],
-            "expression" => _bc_agg(("i", "j"), ("i" => "lon", "j" => "lat"),
-                                    _bc_op("+", "i", _bc_op("*", 10, "j")))),
-        "wT" => Dict{String,Any}("type" => "observed", "units" => "1",
-            "shape" => Any["lat", "lon"],
-            "expression" => _bc_agg(("j", "i"), ("i" => "lon", "j" => "lat"),
-                                    _bc_op("+", "i", _bc_op("*", 10, "j")))),
-        "z1" => Dict{String,Any}("type" => "observed", "units" => "1",
-            "shape" => Any["lev"],
-            "expression" => _bc_agg(("k",), ("k" => "lev",), _bc_op("*", 100, "k"))))
+        "w1" => _bc_obs(("lat",),
+            _bc_agg(("j",), ("j" => "lat",), _bc_op("*", 10, "j"))),
+        "w2" => _bc_obs(("lon", "lat"),
+            _bc_agg(("i", "j"), ("i" => "lon", "j" => "lat"),
+                    _bc_op("+", "i", _bc_op("*", 10, "j")))),
+        "wT" => _bc_obs(("lat", "lon"),
+            _bc_agg(("j", "i"), ("i" => "lon", "j" => "lat"),
+                    _bc_op("+", "i", _bc_op("*", 10, "j")))),
+        "z1" => _bc_obs(("lev",),
+            _bc_agg(("k",), ("k" => "lev",), _bc_op("*", 100, "k"))))
 end
 
 # `D(dp) = <rhs>` over the #100 variable set, under a given model name.
@@ -117,9 +133,7 @@ _bc_oracle(name, body) = _bc_model(name, _bc_agg(("i", "j", "k"),
         "dp" => Dict{String,Any}("type" => "unknown", "units" => "1",
             "shape" => Any["lon", "lat", "lev"], "default" => 1),
         "a" => Dict{String,Any}("type" => "parameter", "units" => "1", "default" => -0.3),
-        "div_h" => Dict{String,Any}("type" => "observed", "units" => "1",
-            "shape" => Any["lon", "lat", "lev"],
-            "expression" => _bc_op("*", "a", "dp")))
+        "div_h" => _bc_obs(("lon", "lat", "lev"), _bc_op("*", "a", "dp")))
     bc = _bc_rhs(_bc_doc("N", vars, Any[_bc_eq(_bc_D("dp"), _bc_bcast("-", "div_h"))]))
     pl = _bc_rhs(_bc_doc("N", vars, Any[_bc_eq(_bc_D("dp"), _bc_op("-", "div_h"))]))
     @test bc == pl
@@ -206,9 +220,8 @@ end
 
 @testset "operand over an index set ABSENT from the result is a hard error" begin
     vars = _bc_vars()
-    vars["wq"] = Dict{String,Any}("type" => "observed", "units" => "1",
-        "shape" => Any["qux"],
-        "expression" => _bc_agg(("q",), ("q" => "qux",), _bc_op("*", 7, "q")))
+    vars["wq"] = _bc_obs(("qux",),
+        _bc_agg(("q",), ("q" => "qux",), _bc_op("*", 7, "q")))
     doc = _bc_doc("X", vars, Any[_bc_eq(_bc_D("dp"), _bc_op("*", "w1", "wq"))];
                   sets = (_BC_SETS..., "qux" => 4))
 
@@ -266,17 +279,19 @@ end
         @test isempty([e for e in _bc_validate(mk(node)).structural_errors
                        if e.error_type == "invalid_broadcast_fn"])
     end
-    # The contract is enforced in NESTED positions too (an observed's
-    # `expression`, not only an equation RHS).
+    # The contract is enforced in NESTED positions too. From esm 1.0.0 an
+    # observed unknown's body IS an equation, so the finding is reported at that
+    # equation's RHS rather than at a `variables/y/expression` that no longer
+    # exists. `_bc_doc` appends the lifted definition after the authored
+    # equations, so it is equations/1.
     nested = _bc_doc("F", Dict{String,Any}(
         "x" => Dict{String,Any}("type" => "unknown", "units" => "1", "default" => 0.7),
-        "y" => Dict{String,Any}("type" => "observed", "units" => "1",
-            "expression" => _bc_op("+", 1, _bc_bcast("nope", "x")))),
+        "y" => _bc_obs(nothing, _bc_op("+", 1, _bc_bcast("nope", "x")))),
         Any[_bc_eq(_bc_D("x"), "y")])
     res = _bc_validate(nested)
     hits = [e for e in res.structural_errors if e.error_type == "invalid_broadcast_fn"]
     @test length(hits) == 1
-    @test hits[1].path == "/models/F/variables/y/expression"
+    @test hits[1].path == "/models/F/equations/1/rhs"
 end
 
 @testset "broadcast `fn` contract — build-time rejection" begin

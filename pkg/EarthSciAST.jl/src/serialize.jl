@@ -641,6 +641,12 @@ function _emit_model_guesses(m::Model)
 end
 
 
+# DiscreteEvent `affects`: always emitted (an event with no affects round-trips
+# as `[]`), each entry through the shared AffectEquation serializer so its `rhs`
+# is a serialized Expression rather than a raw `OpExpr` struct.
+_emit_discrete_event_affects(e::DiscreteEvent) =
+    Any[serialize_affect_equation(a) for a in e.affects]
+
 # Assertion `reference`: an Expression AST serializes through the standard
 # serializer; the from_file shape round-trips its keys verbatim.
 function _emit_assertion_reference(a::Assertion)

@@ -348,6 +348,11 @@ function build_mirror_doc()
         Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
         _op("ifelse", _pd_contain(), 1.0, 0.0);
         reduce="+", args=["src_W","src_S","src_E","src_N","px","py"]))
+    # `plume_top` and `in_grid` are declared AFTER build_gated_dense_doc has
+    # already split its own observeds, so they still carry the private defining
+    # key and need a second lift. Without this the two mirror artifacts diverge
+    # from the committed corpus while the other five stay deep-equal.
+    _split_observeds!(d["models"]["Binned"])
     return d
 end
 

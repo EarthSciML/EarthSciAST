@@ -63,8 +63,8 @@
         },
         "coupling_force": {
           "type": "unknown",
-          "units": "1/s^2",
-          "description": "Coupling force (mass-scaled): kc*(x2-x1)"
+          "units": "m/s^2",
+          "description": "Coupling force (mass-scaled): kc*(x2-x1). Declared m/s^2, an ACCELERATION, which is what \"mass-scaled force\" means and what the definition computes: kc is 1/s^2 and (x2-x1) is m. It was declared 1/s^2 -- kc's own units rather than the product's. Latent before 1.0.0 because the quantity was an `observed` variable whose `expression` the unit checker did not walk; it is now an ordinary unknown defined by an equation, and the equation is dimensionally checked."
         }
       },
       "equations": [

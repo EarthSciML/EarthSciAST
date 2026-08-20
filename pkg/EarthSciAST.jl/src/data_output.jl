@@ -486,9 +486,12 @@ the flattened run document by [`derive_output_meta`](@ref).
 * `var_attrs::Dict{String,Dict{String,Any}}` — base variable name → CF variable
   attributes retained from the doc (`units`, `standard_name`, `description` when
   present). Keyed like `var_dims`.
-* `var_types::Dict{String,String}` — base variable name → declared kind
-  (`"state"` / `"observed"` / …), so observed fields can be gated on the caller's
-  request list (RFC decision 8). Keyed like `var_dims`.
+* `var_types::Dict{String,String}` — base variable name → its DERIVED kind
+  (`"observed"` for an unknown a bare-variable-LHS equation defines, else the
+  declared `"unknown"` / `"parameter"`), so observed fields can be gated on the
+  caller's request list (RFC decision 8). Derived rather than read off the
+  declaration because esm 1.0.0 declares only two types (esm-spec §6.3.1).
+  Keyed like `var_dims`.
 * `coordinates::Dict{String,Any}` — the additive `coordinates` registry (§8.3),
   verbatim: entry name → `{values|source, standard_name, units, axis}`. Empty when
   the document declares none.
@@ -607,17 +610,56 @@ function derive_output_meta(doc::AbstractDict)
             for k in ("units", "standard_name", "description")
                 haskey(v, k) && v[k] !== nothing && (a[k] = v[k])
             end
+            # The kind recorded here is the DERIVED role, not the declared type
+            # (esm-spec §6.3.1). From esm 1.0.0 every solved-for quantity
+            # declares `type: "unknown"`, so gating observed output on the
+            # declared string would gate on a constant and write every observed
+            # unconditionally. An unknown DEFINED by a bare-variable-LHS
+            # equation is the observed one.
             vt = get(v, "type", nothing)
+            vt = (vt == "unknown" && vn in _output_observed_names(model)) ?
+                 "observed" : (vt === nothing ? nothing : String(vt))
 
             for key in keys_for_var
                 shp isa AbstractVector && (vdims[key] = String[String(s) for s in shp])
                 isempty(a) || (vattrs[key] = copy(a))
-                vt === nothing || (vtypes[key] = String(vt))
+                vt === nothing || (vtypes[key] = vt)
             end
         end
     end
 
     return OutputMeta(sname, idx, vdims, vattrs, vtypes, cdict, tdim)
+end
+
+"""
+    _output_observed_names(model) -> Set{String}
+
+The OBSERVED unknowns of a RAW (unparsed) model dict: those an equation defines
+with a bare-variable LHS (esm-spec §6.3.1). Memoised on the model dict, because
+`derive_output_meta` asks once per variable.
+
+This is the raw-JSON twin of `observed_unknowns`; `derive_output_meta` walks the
+document rather than the typed IR (it needs the `coordinates` registry and the
+index-set sizes the typed IR does not surface), so it cannot call the typed
+classification directly.
+"""
+function _output_observed_names(model)
+    cached = get(model, "_output_observed", nothing)
+    cached === nothing || return cached
+    vars = get(model, "variables", nothing)
+    out = Set{String}()
+    if vars isa AbstractDict
+        for eq in get(model, "equations", ())
+            eq isa AbstractDict || continue
+            lhs = get(eq, "lhs", nothing)
+            lhs isa AbstractString || continue
+            v = get(vars, String(lhs), nothing)
+            (v isa AbstractDict && get(v, "type", nothing) == "unknown") || continue
+            push!(out, String(lhs))
+        end
+    end
+    model isa AbstractDict && (model["_output_observed"] = out)
+    return out
 end
 
 """

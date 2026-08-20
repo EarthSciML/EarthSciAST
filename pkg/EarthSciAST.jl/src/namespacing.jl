@@ -271,7 +271,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
             for a in ev.affects
         ]
         push!(continuous_events,
-              ContinuousEvent(new_conds, new_affects; description=ev.description))
+              ContinuousEvent(new_conds, new_affects; description=ev.description,
+                              name=ev.name))
     end
 
     for ev in model.discrete_events
@@ -287,7 +288,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
             ev.trigger
         end
         push!(discrete_events,
-              DiscreteEvent(new_trigger, new_affects; description=ev.description))
+              DiscreteEvent(new_trigger, new_affects; description=ev.description,
+                            name=ev.name))
     end
 
     for (sub_name, sub_model) in model.subsystems

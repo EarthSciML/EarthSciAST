@@ -4,9 +4,12 @@
 #    exactly covered by the parse-side key table (`OPEXPR_WIRE_KEYS`), the
 #    `reconstruct(::OpExpr)` kwargs, and `serialize_expression`'s emitted
 #    keys — adding a struct field without updating every site fails here.
-# 2. Schema `functional_affect` handler descriptors round-trip verbatim
-#    (they previously degraded into a bogus `{lhs: handler_id, rhs: 0.0}`
-#    affect equation).
+# 2. A parameter's `update` round-trips verbatim, handler descriptor and all
+#    (esm 1.0.0 §5.4/§5.5 relocated the 0.x event `functional_affect` onto the
+#    parameter it writes; the descriptor previously degraded into a bogus
+#    `{lhs: handler_id, rhs: 0.0}` affect equation), and the object-or-array
+#    wire spelling of `update` is recovered from the rule count so the round
+#    trip is stable.
 # 3. Non-string categorical `index_sets` members round-trip with their
 #    original JSON types (previously re-emitted stringified).
 
@@ -209,32 +212,150 @@ const ESM = EarthSciAST
     end
 end
 
-@testset "functional_affect handler descriptor round trip" begin
+@testset "parameter update handler descriptor round trip" begin
+    # esm 1.0.0 (§5.4, §5.5): the 0.x event `functional_affect` descriptor moved
+    # onto the PARAMETER it writes, as `update.handler`. The 0.x
+    # `modified_params` list is gone — the parameter owning the update IS the
+    # write target — and so is the event-side `discrete_parameters` list, which
+    # the `discrete_parameters(model)` derivation replaces. (Events, which may
+    # affect UNKNOWNS only per §6.3.1, are exercised in the next testset.)
     doc = """
     {
-      "esm": "0.8.0",
-      "metadata": { "name": "fa_round_trip" },
+      "esm": "1.0.0",
+      "metadata": { "name": "handler_round_trip" },
       "models": {
         "M": {
           "variables": {
             "x": { "type": "unknown", "default": 1.5 },
-            "K": { "type": "parameter", "default": 2.5 }
+            "K": {
+              "type": "parameter",
+              "default": 2.5,
+              "update": {
+                "kind": "condition",
+                "when": { "op": ">", "args": ["x", 1.0] },
+                "handler": {
+                  "handler_id": "hourly_update",
+                  "read_vars": ["x"],
+                  "read_params": ["K"],
+                  "config": { "factor": 1.5 }
+                }
+              }
+            }
           },
+          "equations": [
+            { "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+              "rhs": { "op": "*", "args": [-0.5, "x"] } }
+          ]
+        }
+      }
+    }
+    """
+    file = load(IOBuffer(doc))
+    model = file.models["M"]
+
+    # The handler descriptor is preserved verbatim on the typed parameter
+    # update, and no placeholder affect equation is invented for it.
+    K = model.variables["K"]
+    @test K.type == ParameterVariable
+    @test K.update !== nothing && length(K.update) == 1
+    rule = K.update[1]
+    @test rule.kind == "condition"
+    @test rule.when isa OpExpr && (rule.when::OpExpr).op == ">"
+    @test rule.handler isa ESM.FunctionalUpdate
+    @test rule.handler.handler_id == "hourly_update"
+    @test rule.handler.read_vars == ["x"]
+    @test rule.handler.read_params == ["K"]
+    @test rule.handler.config["factor"] == 1.5
+
+    # The event-side lists are gone from the type entirely: `DiscreteEvent` has
+    # neither a `functional_affect` descriptor nor a `discrete_parameters` list.
+    @test !(:functional_affect in fieldnames(DiscreteEvent))
+    @test !(:discrete_parameters in fieldnames(DiscreteEvent))
+
+    # The 0.x per-event `discrete_parameters` list is now derived from the
+    # parameters' own `update` blocks.
+    @test ESM.discrete_parameters(model) == ["K"]
+    @test isempty(ESM.brownian_parameters(model))
+
+    # Serialize: the parameter re-emits its `update` with the handler intact,
+    # and — a SINGLE rule — as the OBJECT form, not a one-element array
+    # (§5.4: a one-element array is invalid, so the length recovers the wire
+    # spelling and the round trip is stable).
+    buf = IOBuffer()
+    save(file, buf)
+    first_bytes = String(take!(buf))
+    out = JSON3.read(first_bytes)
+    upd = out.models.M.variables.K.update
+    @test upd isa JSON3.Object
+    @test upd.kind == "condition"
+    @test upd.handler.handler_id == "hourly_update"
+    @test upd.handler.config.factor == 1.5
+    @test !haskey(upd, :modified_params)
+
+    # Idempotence: the saved form reloads and re-saves byte-equivalently
+    # (parsed-JSON equality, matching the conformance round-trip contract).
+    reloaded = load(IOBuffer(first_bytes))
+    buf2 = IOBuffer()
+    save(reloaded, buf2)
+    @test JSON3.read(String(take!(buf2))) == out
+
+    # Two or more rules take the ARRAY form; one rule never does. Both spellings
+    # are asserted directly on `serialize_model_variable` so the object/array
+    # decision is pinned independently of any document that happens to use it.
+    one_rule = ModelVariable(ParameterVariable; default = 2.5,
+        update = ParameterUpdate("condition";
+            when = OpExpr(">", ESM.ASTExpr[VarExpr("x"), NumExpr(1.0)]),
+            handler = ESM.FunctionalUpdate("h")))
+    @test ESM.serialize_model_variable(one_rule)["update"] isa AbstractDict
+
+    two_rules = ModelVariable(ParameterVariable; default = 2.5,
+        shape = String[],
+        update = ParameterUpdate[
+            ParameterUpdate("schedule"; interval = 3600.5,
+                            expression = NumExpr(0.5)),
+            ParameterUpdate("condition";
+                when = OpExpr(">", ESM.ASTExpr[VarExpr("x"), NumExpr(1.0)]),
+                handler = ESM.FunctionalUpdate("h")),
+        ])
+    emitted = ESM.serialize_model_variable(two_rules)["update"]
+    @test emitted isa AbstractVector && length(emitted) == 2
+    @test emitted[1]["kind"] == "schedule"
+    @test emitted[2]["handler"]["handler_id"] == "h"
+
+    # An event that writes the PARAMETER instead of the unknown is the
+    # `event_affects_parameter` defect (§5.4/§6.3.1) — the replacement for the
+    # 0.x `discrete_parameters` write channel, which no longer exists.
+    bad_model = ESM.Model(
+        Dict("x" => ModelVariable(UnknownVariable; default = 1.5),
+             "K" => ModelVariable(ParameterVariable; default = 2.5)),
+        [ESM.Equation(OpExpr("D", ESM.ASTExpr[VarExpr("x")]; wrt = "t"),
+                      NumExpr(0.5))];
+        discrete_events = [DiscreteEvent(PeriodicTrigger(1.5),
+                                         [AffectEquation("K", NumExpr(0.5))])])
+    bad_file = EsmFile(ESM.ESM_FORMAT_VERSION, ESM.Metadata("bad_event");
+                       models = Dict("M" => bad_model))
+    codes = [e.error_type for e in validate(bad_file).structural_errors]
+    @test "event_affects_parameter" in codes
+end
+
+@testset "discrete-event affects round trip (symbolic affect on an unknown)" begin
+    # esm 1.0.0 (§5.4): `affects` is a discrete event's ONLY affect channel, and
+    # every entry must reach the wire as the schema's `AffectEquation`
+    # (`{lhs: <name>, rhs: <Expression>}`). This is what the 0.x
+    # "symbolic-affect event has no descriptor" clause becomes now that the
+    # descriptor is gone from events entirely.
+    doc = """
+    {
+      "esm": "1.0.0",
+      "metadata": { "name": "affect_round_trip" },
+      "models": {
+        "M": {
+          "variables": { "x": { "type": "unknown", "default": 1.5 } },
           "equations": [
             { "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
               "rhs": { "op": "*", "args": [-0.5, "x"] } }
           ],
           "discrete_events": [
-            {
-              "trigger": { "type": "periodic", "interval": 3600.5 },
-              "functional_affect": {
-                "handler_id": "hourly_update",
-                "read_vars": ["x"],
-                "read_params": ["K"],
-                "modified_params": ["K"],
-                "config": { "factor": 1.5 }
-              }
-            },
             {
               "trigger": { "type": "preset_times", "times": [1.5, 2.5] },
               "affects": [ { "lhs": "x", "rhs": 0.5 } ]
@@ -245,54 +366,27 @@ end
     }
     """
     file = load(IOBuffer(doc))
-    events = file.models["M"].discrete_events
-    @test length(events) == 2
+    event = only(file.models["M"].discrete_events)
+    @test length(event.affects) == 1
+    @test event.affects[1].lhs == "x"
+    @test event.affects[1].rhs == NumExpr(0.5)
 
-    # The handler descriptor is preserved verbatim on the typed event, and no
-    # placeholder affect equation is invented for it.
-    fa_event = events[1]
-    @test isempty(fa_event.affects)
-    @test fa_event.functional_affect isa Dict{String,Any}
-    @test fa_event.functional_affect["handler_id"] == "hourly_update"
-    @test fa_event.functional_affect["read_vars"] == ["x"]
-    @test fa_event.functional_affect["read_params"] == ["K"]
-    @test fa_event.functional_affect["modified_params"] == ["K"]
-    @test fa_event.functional_affect["config"]["factor"] == 1.5
+    # Emit: the affect must land as the wire shape, exactly as a
+    # ContinuousEvent's does — no placeholder, no raw struct dump.
+    emitted = ESM.serialize_discrete_event(event)
+    @test !haskey(emitted, "functional_affect")
+    @test emitted["affects"] == Any[Dict{String,Any}("lhs" => "x", "rhs" => 0.5)]
 
-    # A symbolic-affect event has no descriptor.
-    @test events[2].functional_affect === nothing
-    @test length(events[2].affects) == 1
-
-    # Serialize: the handler event re-emits `functional_affect` (and no bogus
-    # {lhs: handler_id, rhs: 0.0} affects); the symbolic event emits affects.
+    # Full save → load idempotence (the saved form must itself be schema-valid).
     buf = IOBuffer()
     save(file, buf)
     first_bytes = String(take!(buf))
     out = JSON3.read(first_bytes)
-    ev1, ev2 = out.models.M.discrete_events
-    @test !haskey(ev1, :affects)
-    @test ev1.functional_affect.handler_id == "hourly_update"
-    @test ev1.functional_affect.config.factor == 1.5
-    @test !haskey(ev2, :functional_affect)
-    @test ev2.affects[1].lhs == "x"
-
-    # Idempotence: the saved form reloads and re-saves byte-equivalently
-    # (parsed-JSON equality, matching the conformance round-trip contract).
-    reloaded = load(IOBuffer(first_bytes))
+    @test out.models.M.discrete_events[1].affects[1].lhs == "x"
+    @test out.models.M.discrete_events[1].affects[1].rhs == 0.5
     buf2 = IOBuffer()
-    save(reloaded, buf2)
+    save(load(IOBuffer(first_bytes)), buf2)
     @test JSON3.read(String(take!(buf2))) == out
-
-    # A hand-built event carrying BOTH affects and a descriptor violates the
-    # schema oneOf and is refused at serialize time.
-    bad = DiscreteEvent(
-        PeriodicTrigger(1.5),
-        [AffectEquation("x", NumExpr(0.5))];
-        functional_affect = Dict{String,Any}("handler_id" => "h",
-                                             "read_vars" => Any[],
-                                             "read_params" => Any[]),
-    )
-    @test_throws ArgumentError ESM.serialize_discrete_event(bad)
 end
 
 @testset "index_sets non-string members round trip (members_raw)" begin

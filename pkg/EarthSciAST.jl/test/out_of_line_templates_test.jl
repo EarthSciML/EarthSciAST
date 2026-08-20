@@ -14,6 +14,16 @@ using EarthSciAST: lower_expression_templates, resolve_template_machinery,
 
 include("testutils.jl")
 
+# esm 1.0.0 (esm-spec §6.3.1): an observed unknown's defining right-hand side is
+# a bare-variable-LHS EQUATION, not a field on the declaration. These documents
+# are RAW (unparsed), so the lookup is by hand.
+function _ool_defrhs(model, name::AbstractString)
+    for eq in model["equations"]
+        get(eq, "lhs", nothing) == name && return eq["rhs"]
+    end
+    error("no defining equation for '$name'")
+end
+
 @testset "out-of-line expression templates (Option B, esm-spec §9.6.4)" begin
     conf(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                               "expression_templates", parts...)
@@ -92,7 +102,12 @@ include("testutils.jl")
         @test s == read(conf("emit_materialized_registry", "emitted.esm"), String)
         doc = JSON3.read(s)
         adv = doc["models"]["Advection"]
-        @test doc["esm"] == "0.9.0"                          # rule 8 version stamp
+        # Rule 8's stamp is a MINIMUM ("a consumer needs at least this"), so it
+        # only ever raises: a 1.0.0 source keeps 1.0.0 rather than being
+        # downgraded to a schema that cannot describe it.
+        @test doc["esm"] == EarthSciAST.ESM_FORMAT_VERSION
+        @test EarthSciAST._esm_stamp_floor("0.8.0") == "0.9.0"   # below the floor: raised
+        @test EarthSciAST._esm_stamp_floor("1.0.0") == "1.0.0"   # at/above: untouched
         @test !haskey(adv, "expression_template_imports")     # imports consumed
         reg = adv["expression_templates"]
         @test Set(string.(keys(reg))) == Set(["central_D_lon_interior", "dlon_deg"])  # match-less only
@@ -124,14 +139,14 @@ include("testutils.jl")
     @testset "eager_target_bearing: eager expands+lowers, target-free survives" begin
         loaded = _load("eager_target_bearing")
         d = loaded
-        vars = d["models"]["m"]["variables"]
+        m = d["models"]["m"]
         # POSITIVE: deriv_c (D-bearing) reference eagerly expanded, then the D
         # lowered by the `central` rule → an aggregate. No surviving ref.
-        deager = _normj(vars["d_eager"]["expression"])
+        deager = _normj(_ool_defrhs(m, "d_eager"))
         @test deager["op"] == "index"
         @test deager["args"][1]["op"] == "aggregate"
         # NEGATIVE: scale_c (target-free) reference SURVIVES.
-        dsurv = _normj(vars["d_survive"]["expression"])
+        dsurv = _normj(_ool_defrhs(m, "d_survive"))
         @test _isapply(dsurv["args"][1]) && dsurv["args"][1]["name"] == "scale_c"
         # Emit golden.
         @test _emit("eager_target_bearing") ==
@@ -145,7 +160,7 @@ include("testutils.jl")
     @testset "opacity_negative: compound rule does not see through a reference" begin
         loaded = _load("opacity_negative")
         d = loaded
-        flux = _normj(d["models"]["m"]["variables"]["flux"]["expression"])
+        flux = _normj(_ool_defrhs(d["models"]["m"], "flux"))
         @test flux["op"] == "D"                    # compound did NOT fire (no marker 999)
         @test _isapply(flux["args"][1])            # its arg is the surviving reference
         @test flux["args"][1]["name"] == "flux_prod"
@@ -161,7 +176,7 @@ include("testutils.jl")
     @testset "opacity_priority_shadowing: generic fires, compound silently does not" begin
         loaded = _load("opacity_priority_shadowing")
         d = loaded
-        flux = _normj(d["models"]["m"]["variables"]["flux"]["expression"])
+        flux = _normj(_ool_defrhs(d["models"]["m"], "flux"))
         @test flux["op"] == "*"
         @test flux["args"][1] == 1                 # generic marker (NOT compound 999)
         @test _isapply(flux["args"][2])            # reference bound WHOLE by metavariable f
@@ -195,10 +210,10 @@ include("testutils.jl")
         @test Set(keys(merged)) == Set(["sten", "A.s", "B.s"])     # dedup + rename
         @test _normj(merged["sten"]["body"]) == Dict("op" => "*", "args" => Any[2, "f"])
         # references rewritten in lockstep
-        @test root["models"]["A"]["variables"]["za"]["expression"]["name"] == "A.s"
-        @test root["models"]["B"]["variables"]["zb"]["expression"]["name"] == "B.s"
-        @test root["models"]["A"]["variables"]["ya"]["expression"]["name"] == "sten"
-        @test root["models"]["B"]["variables"]["yb"]["expression"]["name"] == "sten"
+        @test _ool_defrhs(root["models"]["A"], "za")["name"] == "A.s"
+        @test _ool_defrhs(root["models"]["B"], "zb")["name"] == "B.s"
+        @test _ool_defrhs(root["models"]["A"], "ya")["name"] == "sten"
+        @test _ool_defrhs(root["models"]["B"], "yb")["name"] == "sten"
         # per-component blocks surrendered to the merged registry
         @test !haskey(root["models"]["A"], "expression_templates")
         @test !haskey(root["models"]["B"], "expression_templates")

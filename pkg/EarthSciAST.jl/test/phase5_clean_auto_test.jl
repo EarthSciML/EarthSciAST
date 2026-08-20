@@ -107,6 +107,14 @@ function _lcc_inv(x, y, c)
     return (rad2deg(lonr), rad2deg(latr))
 end
 
+# esm 1.0.0 (§5.4/§6.3.1): a variable has NO `expression`. `obs_v` declares the
+# observed as a plain `unknown` and pushes its DEFINING bare-variable-LHS
+# equation onto `eqs`, which is what `observed_definitions` reads back.
+function obs_v(eqs, name, shape, expr)
+    push!(eqs, Dict("lhs"=>name, "rhs"=>expr))
+    return Dict("type"=>"unknown", "shape"=>shape)
+end
+
 # GATED PROVIDER MOCK — records every call; slices the synthetic SR per selection.
 mutable struct MockSRP5
     full::Dict{String,Array{Float64,3}}
@@ -247,15 +255,16 @@ end
             args=["TotalPM25","TotalPop","MortalityRate"])
 
         param(shape) = Dict("type"=>"parameter", "default"=>0.0, "shape"=>shape)
-        obs(shape, expr) = Dict("type"=>"observed", "shape"=>shape, "expression"=>expr)
         scal(v) = Dict("type"=>"parameter", "default"=>v)
+        # the observeds' DEFINING equations, collected as the declarations are built
+        obs_eqs = Any[]
 
         variables = Dict{String,Any}(
             # RAW geographic coordinates (the ONLY emission-coordinate inputs).
             "lon"=>param(["emis_records"]), "lat"=>param(["emis_records"]),
             # PROJECTED coordinates — DERIVED in-model by the LCC forward map.
-            "X"=>obs(["emis_records"], _proj_obs(_Xbody)),
-            "Y"=>obs(["emis_records"], _proj_obs(_Ybody)),
+            "X"=>obs_v(obs_eqs, "X", ["emis_records"], _proj_obs(_Xbody)),
+            "Y"=>obs_v(obs_eqs, "Y", ["emis_records"], _proj_obs(_Ybody)),
             "emis_annual"=>param(["emis_records"]),
             "is_VOC"=>param(["emis_records"]), "is_NOx"=>param(["emis_records"]),
             "is_NH3"=>param(["emis_records"]), "is_SOx"=>param(["emis_records"]),
@@ -268,24 +277,24 @@ end
             "SR_pNH4"=>param(["src_cells","rcv_cells"]),
             "SR_pSO4"=>param(["src_cells","rcv_cells"]),
             "SR_PrimaryPM25"=>param(["src_cells","rcv_cells"]),
-            "E_VOC"=>obs(["src_cells"], _E_agg("is_VOC")),
-            "E_NOx"=>obs(["src_cells"], _E_agg("is_NOx")),
-            "E_NH3"=>obs(["src_cells"], _E_agg("is_NH3")),
-            "E_SOx"=>obs(["src_cells"], _E_agg("is_SOx")),
-            "E_PM25"=>obs(["src_cells"], _E_agg("is_PM25")),
-            "conc_SOA"=>obs(["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
-            "conc_pNO3"=>obs(["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
-            "conc_pNH4"=>obs(["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
-            "conc_pSO4"=>obs(["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
-            "conc_PrimaryPM25"=>obs(["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
-            "TotalPM25"=>obs(["rcv_cells"], _agg(["rcv"],
+            "E_VOC"=>obs_v(obs_eqs, "E_VOC", ["src_cells"], _E_agg("is_VOC")),
+            "E_NOx"=>obs_v(obs_eqs, "E_NOx", ["src_cells"], _E_agg("is_NOx")),
+            "E_NH3"=>obs_v(obs_eqs, "E_NH3", ["src_cells"], _E_agg("is_NH3")),
+            "E_SOx"=>obs_v(obs_eqs, "E_SOx", ["src_cells"], _E_agg("is_SOx")),
+            "E_PM25"=>obs_v(obs_eqs, "E_PM25", ["src_cells"], _E_agg("is_PM25")),
+            "conc_SOA"=>obs_v(obs_eqs, "conc_SOA", ["rcv_cells"], _conc_agg("SR_SOA","E_VOC")),
+            "conc_pNO3"=>obs_v(obs_eqs, "conc_pNO3", ["rcv_cells"], _conc_agg("SR_pNO3","E_NOx")),
+            "conc_pNH4"=>obs_v(obs_eqs, "conc_pNH4", ["rcv_cells"], _conc_agg("SR_pNH4","E_NH3")),
+            "conc_pSO4"=>obs_v(obs_eqs, "conc_pSO4", ["rcv_cells"], _conc_agg("SR_pSO4","E_SOx")),
+            "conc_PrimaryPM25"=>obs_v(obs_eqs, "conc_PrimaryPM25", ["rcv_cells"], _conc_agg("SR_PrimaryPM25","E_PM25")),
+            "TotalPM25"=>obs_v(obs_eqs, "TotalPM25", ["rcv_cells"], _agg(["rcv"],
                 Dict("rcv"=>Dict("from"=>"rcv_cells")),
                 _op("*", "fact", _op("+", _ix("conc_SOA","rcv"), _ix("conc_pNO3","rcv"),
                     _ix("conc_pNH4","rcv"), _ix("conc_pSO4","rcv"),
                     _ix("conc_PrimaryPM25","rcv")));
                 args=["conc_SOA","conc_pNO3","conc_pNH4","conc_pSO4","conc_PrimaryPM25"])),
-            "deathsK"=>obs(["rcv_cells"], _deaths("rr_K")),
-            "deathsL"=>obs(["rcv_cells"], _deaths("rr_L")),
+            "deathsK"=>obs_v(obs_eqs, "deathsK", ["rcv_cells"], _deaths("rr_K")),
+            "deathsL"=>obs_v(obs_eqs, "deathsL", ["rcv_cells"], _deaths("rr_L")),
             # scalar LCC constants (build-time-available const params).
             "lcc_n"=>scal(C.n), "lcc_rf"=>scal(C.rf), "lcc_rho0"=>scal(C.ρ0),
             "lcc_lam0"=>scal(C.λ0), "lcc_qp"=>scal(pi/4), "lcc_d2r"=>scal(pi/180),
@@ -299,7 +308,8 @@ end
                 "src_cells"    => Dict("kind"=>"interval", "size"=>GRID),
                 "rcv_cells"    => Dict("kind"=>"interval", "size"=>N_RCV),
                 "emis_records" => Dict("kind"=>"interval", "size"=>N_REC)),
-            "models" => Dict("ISRM" => Dict("variables"=>variables, "equations"=>[])))
+            "models" => Dict("ISRM" => Dict("variables"=>variables,
+                                            "equations"=>obs_eqs)))
     end
 
     # generated (deterministic) construct names
@@ -322,7 +332,9 @@ end
     @test !haskey(doc["index_sets"], SET)
     @test !haskey(doc["models"]["ISRM"]["variables"], MF)
     @test !haskey(doc["models"]["ISRM"]["variables"], MEMV)
-    @test isempty(doc["models"]["ISRM"]["equations"])
+    # ...only the observeds' own DEFINING equations (esm 1.0.0 §6.3.1), no
+    # `distinct` producer — the rewrite is what generates that.
+    @test all(eq -> eq["lhs"] isa AbstractString, doc["models"]["ISRM"]["equations"])
 
     # ============================================================
     # ASSERTION 1 — the auto-rewrite GENERATED the four Phase-2b constructs.
@@ -334,7 +346,9 @@ end
     @test ds["kind"] == "derived" && ds["from_faq"] == FAQ && ds["member_factor"] == MF
     tvars = td["models"]["ISRM"]["variables"]
     @test tvars[MF]["type"] == "parameter" && tvars[MF]["shape"] == [SET]
-    @test tvars[MEMV]["type"] == "state"
+    # esm 1.0.0 (§5.4): "state" is no longer a declarable type — the producer's
+    # member variable is an `unknown`, made a state/observed by its equation.
+    @test tvars[MEMV]["type"] == "unknown"
     teqs = td["models"]["ISRM"]["equations"]
     prod_eqs = [eq for eq in teqs if get(get(eq, "rhs", Dict()), "id", nothing) == FAQ]
     @test length(prod_eqs) == 1
@@ -346,9 +360,13 @@ end
     gs = td["metadata"]["x_esd"]["pushdown"]["gated_select"]
     @test gs["gated_by"] == SET && Set(gs["applies_to"]) == Set(PATHS)
     @test tvars["SR_SOA"]["shape"] == [SET, "rcv_cells"] && tvars["E_VOC"]["shape"] == [SET]
-    # the LCC projection observeds survive the rewrite, still over emis_records
-    @test tvars["X"]["type"] == "observed" && tvars["X"]["shape"] == ["emis_records"]
-    @test tvars["Y"]["type"] == "observed"
+    # the LCC projection observeds survive the rewrite, still over emis_records.
+    # esm 1.0.0: OBSERVED is derived — an `unknown` with a bare-LHS defining
+    # equation — so the check is the declaration PLUS the surviving definition.
+    _tdef(n) = any(eq -> get(eq, "lhs", nothing) == n, teqs)
+    @test tvars["X"]["type"] == "unknown" && tvars["X"]["shape"] == ["emis_records"]
+    @test tvars["Y"]["type"] == "unknown"
+    @test _tdef("X") && _tdef("Y")
 
     # ============================================================
     # ASSERTION 2 — Part A: build-time LCC projection produces X/Y for VI, and

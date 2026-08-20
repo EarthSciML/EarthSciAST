@@ -4543,11 +4543,11 @@
           "type": "parameter",
           "units": "m",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "E"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "E_NH3": {
@@ -4589,11 +4589,11 @@
           "type": "parameter",
           "units": "1",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "MortalityRate"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "N": {
@@ -4605,11 +4605,11 @@
           "type": "parameter",
           "units": "m",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "N"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "S": {
@@ -4621,11 +4621,11 @@
           "type": "parameter",
           "units": "m",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "S"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "SR_PrimaryPM25": {
@@ -4638,11 +4638,11 @@
           "type": "parameter",
           "units": "ug/m^3/(kg/yr)",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "PrimaryPM25"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "SR_SOA": {
@@ -4655,11 +4655,11 @@
           "type": "parameter",
           "units": "ug/m^3/(kg/yr)",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "SOA"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "SR_pNH4": {
@@ -4672,11 +4672,11 @@
           "type": "parameter",
           "units": "ug/m^3/(kg/yr)",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "pNH4"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "SR_pNO3": {
@@ -4689,11 +4689,11 @@
           "type": "parameter",
           "units": "ug/m^3/(kg/yr)",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "pNO3"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "SR_pSO4": {
@@ -4706,11 +4706,11 @@
           "type": "parameter",
           "units": "ug/m^3/(kg/yr)",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "pSO4"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "TotalPM25": {
@@ -4730,11 +4730,11 @@
           "type": "parameter",
           "units": "1",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "TotalPop"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "W": {
@@ -4746,11 +4746,11 @@
           "type": "parameter",
           "units": "m",
           "update": {
-            "kind": "data",
-            "source": "ISRM_SR",
             "from": {
               "file_variable": "W"
-            }
+            },
+            "kind": "data",
+            "source": "ISRM_SR"
           }
         },
         "X": {
@@ -4832,11 +4832,11 @@
           "type": "parameter",
           "units": "kg/yr",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "ann_value"
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         },
         "emis_lat": {
@@ -4848,11 +4848,11 @@
           "type": "parameter",
           "units": "degree",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "lat"
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         },
         "emis_lon": {
@@ -4864,11 +4864,11 @@
           "type": "parameter",
           "units": "degree",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "lon"
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         },
         "fact": {
@@ -4936,7 +4936,7 @@
           "units": "degree"
         },
         "lcc_R": {
-          "default": 6370997.0,
+          "default": 6.370997e6,
           "description": "LCC sphere radius (NEI2016). (Named lcc_R, not R, to avoid the reserved physical-constant name R = ideal gas constant.)",
           "type": "parameter",
           "units": "m"
@@ -5049,11 +5049,11 @@
           "type": "parameter",
           "units": "1",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "poll"
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         },
         "pop_scale": {
@@ -5127,8 +5127,6 @@
           "type": "parameter",
           "units": "m",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "stkdiam",
               "unit_conversion": {
@@ -5138,7 +5136,9 @@
                 ],
                 "op": "*"
               }
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         },
         "stkhgt": {
@@ -5150,8 +5150,6 @@
           "type": "parameter",
           "units": "m",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "stkhgt",
               "unit_conversion": {
@@ -5161,7 +5159,9 @@
                 ],
                 "op": "*"
               }
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         },
         "stktemp": {
@@ -5173,8 +5173,6 @@
           "type": "parameter",
           "units": "K",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "stktemp",
               "unit_conversion": {
@@ -5196,7 +5194,9 @@
                 ],
                 "op": "+"
               }
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         },
         "stkvel": {
@@ -5208,8 +5208,6 @@
           "type": "parameter",
           "units": "m/s",
           "update": {
-            "kind": "data",
-            "source": "EGU_Emis",
             "from": {
               "file_variable": "stkvel",
               "unit_conversion": {
@@ -5219,7 +5217,9 @@
                 ],
                 "op": "*"
               }
-            }
+            },
+            "kind": "data",
+            "source": "EGU_Emis"
           }
         }
       }

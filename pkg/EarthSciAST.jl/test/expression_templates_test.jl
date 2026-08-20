@@ -58,6 +58,15 @@ const ARRHENIUS_FIXTURE_JSON = """
 }
 """
 
+# The defining right-hand side of `name` in a RAW (unparsed) model dict — the
+# 1.0.0 replacement for `variables[name]["expression"]` (esm-spec §6.3.1).
+function _et_defrhs(model, name::AbstractString)
+    for eq in model["equations"]
+        get(eq, "lhs", nothing) == name && return eq["rhs"]
+    end
+    error("no defining equation for '$name'")
+end
+
 @testset "expression_templates / apply_expression_template (esm-giy)" begin
     @testset "expansion at load time strips templates and produces inline AST" begin
         # esm-spec §9.6.4 Option B: by DEFAULT references survive into the typed
@@ -277,10 +286,16 @@ end
         raw = JSON3.read(read(joinpath(_conf(fix), "fixture.esm"), String))
         return _lowerx(raw)
     end
-    function _expanded_vars(fix)
+    # esm 1.0.0 (esm-spec §6.3.1): an observed unknown is DEFINED BY a
+    # bare-variable-LHS EQUATION, so the lowered image is compared as
+    # variables + equations, and a rewritten body is read out of its defining
+    # equation rather than off the declaration.
+    function _expanded_model(fix)
         exp = JSON3.read(read(joinpath(_conf(fix), "expanded.esm"), String))
-        return _normj(exp.models.m.variables)
+        return (_normj(exp.models.m.variables), _normj(exp.models.m.equations))
     end
+    _lowered_model(out) = (_normj(out["models"]["m"]["variables"]),
+                           _normj(out["models"]["m"]["equations"]))
 
     @testset "godunov compound rule beats inner derivative (priority + outermost-first)" begin
         # Anti-regression for the old innermost-first/bottom-up single pass:
@@ -289,12 +304,11 @@ end
         # rule can lower either inner D. The expanded form is `godunov_coef * u`
         # — crucially with NO `inv_dx` (which only the per-derivative rule emits).
         out = _lower_conf("godunov_beats_inner_deriv")
-        got = _normj(out["models"]["m"]["variables"])
-        @test got == _expanded_vars("godunov_beats_inner_deriv")
+        @test _lowered_model(out) == _expanded_model("godunov_beats_inner_deriv")
         # Guard the rewritten EXPRESSION subtree only (the variables dict still
         # declares an `inv_dx` parameter): the compound rule's product appears,
         # the per-derivative rule's `inv_dx` product does not.
-        expr_json = JSON3.write(got["grad_mag"]["expression"])
+        expr_json = JSON3.write(_et_defrhs(out["models"]["m"], "grad_mag"))
         @test !occursin("inv_dx", expr_json)
         @test occursin("godunov_coef", expr_json)
     end
@@ -304,9 +318,8 @@ end
         # stencil (pass 2). Exercises the bounded fixpoint: a produced body is
         # re-scanned only in a SUBSEQUENT pass.
         out = _lower_conf("fixpoint_nested_deriv")
-        got = _normj(out["models"]["m"]["variables"])
-        @test got == _expanded_vars("fixpoint_nested_deriv")
-        expr_json = JSON3.write(got["lap"]["expression"])
+        @test _lowered_model(out) == _expanded_model("fixpoint_nested_deriv")
+        expr_json = JSON3.write(_et_defrhs(out["models"]["m"], "lap"))
         @test !occursin("laplacian", expr_json)
         @test !occursin("\"D\"", expr_json)
     end
@@ -362,10 +375,11 @@ end
           "models": {"m": {
             "variables": {
               "u": {"type": "unknown", "units": "1", "default": 0.0},
-              "y": {"type": "observed", "units": "1",
-                "expression": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
+              "y": {"type": "unknown", "units": "1"}
             },
-            "equations": [],
+            "equations": [
+                {"lhs": "y", "rhs": {"op": "custom_scheme", "args": ["u"], "attrs": {"gamma": 1.4}}}
+              ],
             "expression_templates": {
               "lower_custom": {
                 "params": ["f", "g"],
@@ -377,7 +391,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out["models"]["m"]["variables"]["y"]["expression"])
+        expr = _normj(_et_defrhs(out["models"]["m"], "y"))
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[1.4, "u"])
     end
 end
@@ -397,12 +411,11 @@ end
             "variables": {
               "pa": {"type": "parameter"},
               "pb": {"type": "parameter"},
-              "area": {"type": "observed",
-                "expression": {"op": "apply_expression_template", "args": [],
-                  "name": "overlap_area",
-                  "bindings": {"K_manifold": "planar", "a": "pa", "b": "pb"}}}
+              "area": {"type": "unknown"}
             },
-            "equations": [],
+            "equations": [
+                {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [], "name": "overlap_area", "bindings": {"K_manifold": "planar", "a": "pa", "b": "pb"}}}
+              ],
             "expression_templates": {
               "overlap_area": {
                 "params": ["K_manifold", "a", "b"],
@@ -414,7 +427,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out["models"]["M"]["variables"]["area"]["expression"])
+        expr = _normj(_et_defrhs(out["models"]["M"], "area"))
         @test expr == Dict{String,Any}(
             "op" => "polygon_intersection_area",
             "manifold" => "planar",
@@ -430,12 +443,11 @@ end
             "variables": {
               "pa": {"type": "parameter"},
               "pb": {"type": "parameter"},
-              "scaled": {"type": "observed",
-                "expression": {"op": "apply_expression_template", "args": [],
-                  "name": "outer",
-                  "bindings": {"K": "spherical", "p": "pa", "q": "pb"}}}
+              "scaled": {"type": "unknown"}
             },
-            "equations": [],
+            "equations": [
+                {"lhs": "scaled", "rhs": {"op": "apply_expression_template", "args": [], "name": "outer", "bindings": {"K": "spherical", "p": "pa", "q": "pb"}}}
+              ],
             "expression_templates": {
               "inner": {
                 "params": ["m", "x", "y"],
@@ -454,7 +466,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out["models"]["M"]["variables"]["scaled"]["expression"])
+        expr = _normj(_et_defrhs(out["models"]["M"], "scaled"))
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[
             Dict{String,Any}("op" => "polygon_intersection_area",
                              "manifold" => "spherical",
@@ -471,12 +483,11 @@ end
             "variables": {
               "pa": {"type": "parameter"},
               "pb": {"type": "parameter"},
-              "area": {"type": "observed",
-                "expression": {"op": "apply_expression_template", "args": [],
-                  "name": "overlap_area",
-                  "bindings": {"K_manifold": "bogus", "a": "pa", "b": "pb"}}}
+              "area": {"type": "unknown"}
             },
-            "equations": [],
+            "equations": [
+                {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [], "name": "overlap_area", "bindings": {"K_manifold": "bogus", "a": "pa", "b": "pb"}}}
+              ],
             "expression_templates": {
               "overlap_area": {
                 "params": ["K_manifold", "a", "b"],
@@ -509,12 +520,11 @@ end
             "variables": {
               "pa": {"type": "parameter"},
               "pb": {"type": "parameter"},
-              "area": {"type": "observed",
-                "expression": {"op": "apply_expression_template", "args": [],
-                  "name": "shadowed",
-                  "bindings": {"planar": "spherical", "x": "pa", "y": "pb"}}}
+              "area": {"type": "unknown"}
             },
-            "equations": [],
+            "equations": [
+                {"lhs": "area", "rhs": {"op": "apply_expression_template", "args": [], "name": "shadowed", "bindings": {"planar": "spherical", "x": "pa", "y": "pb"}}}
+              ],
             "expression_templates": {
               "shadowed": {
                 "params": ["planar", "x", "y"],
@@ -526,7 +536,7 @@ end
         }
         """
         out = _lowerx(JSON3.read(src))
-        expr = _normj(out["models"]["M"]["variables"]["area"]["expression"])
+        expr = _normj(_et_defrhs(out["models"]["M"], "area"))
         @test expr["manifold"] == "spherical"
     end
 end
@@ -541,9 +551,8 @@ end
     out = _lowerx(raw)
     expanded = JSON3.read(read(joinpath(case, "expanded.esm"), String))
     @test _normj(out["models"]) == _normj(expanded.models)
-    vars = _normj(out["models"]["Overlap"]["variables"])
-    @test vars["area_planar"]["expression"]["manifold"] == "planar"
-    @test vars["area_spherical"]["expression"]["manifold"] == "spherical"
+    @test _normj(_et_defrhs(out["models"]["Overlap"], "area_planar"))["manifold"] == "planar"
+    @test _normj(_et_defrhs(out["models"]["Overlap"], "area_spherical"))["manifold"] == "spherical"
 end
 
 @testset "match-pattern scoping constraints (where, esm-spec §9.6.1)" begin
@@ -562,34 +571,35 @@ end
         raw = JSON3.read(read(joinpath(_conf2(fix), "fixture.esm"), String))
         return _lowerx(raw)
     end
-    _golden_vars(fix) = _nw(JSON3.read(read(joinpath(_conf2(fix), "expanded.esm"),
-                                            String)).models.m.variables)
+    _golden_model(fix) = let exp = JSON3.read(read(joinpath(_conf2(fix), "expanded.esm"),
+                                                   String))
+        (_nw(exp.models.m.variables), _nw(exp.models.m.equations))
+    end
+    _lowered2(out) = (_nw(out["models"]["m"]["variables"]),
+                      _nw(out["models"]["m"]["equations"]))
 
     @testset "constrained_match_scope: positive + negative in one document" begin
         out = _lower2("constrained_match_scope")
-        got = _nw(out["models"]["m"]["variables"])
-        @test got == _golden_vars("constrained_match_scope")
+        @test _lowered2(out) == _golden_model("constrained_match_scope")
         # div(F_edge) rewritten; div(F_cell) constraint-excluded, survives.
-        @test got["div_edge"]["expression"]["op"] == "*"
-        @test got["div_cell"]["expression"]["op"] == "div"
+        @test _et_defrhs(out["models"]["m"], "div_edge")["op"] == "*"
+        @test _et_defrhs(out["models"]["m"], "div_cell")["op"] == "div"
     end
 
     @testset "two_div_two_meshes: identical patterns, disjoint shape scopes" begin
         out = _lower2("two_div_two_meshes")
-        got = _nw(out["models"]["m"]["variables"])
-        @test got == _golden_vars("two_div_two_meshes")
+        @test _lowered2(out) == _golden_model("two_div_two_meshes")
         # Each div lowered by ITS mesh's rule — not both by the
         # first-declared rule (the pre-`where` declaration-order behavior).
-        @test got["div_a"]["expression"]["args"][1] == "inv_area_a"
-        @test got["div_b"]["expression"]["args"][1] == "inv_area_b"
+        @test _et_defrhs(out["models"]["m"], "div_a")["args"][1] == "inv_area_a"
+        @test _et_defrhs(out["models"]["m"], "div_b")["args"][1] == "inv_area_b"
     end
 
     @testset "per-variable selectivity via ground args (sanctioned mechanism)" begin
         out = _lower2("per_variable_scheme_literal_args")
-        got = _nw(out["models"]["m"]["variables"])
-        @test got == _golden_vars("per_variable_scheme_literal_args")
-        @test got["du"]["expression"]["args"][1] == "upwind_coef"
-        @test got["dv"]["expression"]["args"][1] == "central_coef"
+        @test _lowered2(out) == _golden_model("per_variable_scheme_literal_args")
+        @test _et_defrhs(out["models"]["m"], "du")["args"][1] == "upwind_coef"
+        @test _et_defrhs(out["models"]["m"], "dv")["args"][1] == "central_coef"
     end
 
     @testset "unknown index set in a constraint rejected at registration" begin
@@ -618,10 +628,11 @@ end
             "F_edge": {"type": "unknown", "units": "1", "default": 1.5, "shape": ["edges"]},
             "F_cell": {"type": "unknown", "units": "1", "default": 2.5, "shape": ["cells"]},
             "s": {"type": "parameter", "units": "1", "default": 0.5},
-            "d": {"type": "observed", "units": "1",
-                  "expression": {"op": "div", "args": ["F_cell"]}}
+            "d": {"type": "unknown", "units": "1"}
           },
-          "equations": [],
+          "equations": [
+              {"lhs": "d", "rhs": {"op": "div", "args": ["F_cell"]}}
+            ],
           "expression_templates": $templates_json
         }
       }
@@ -647,7 +658,7 @@ end
         }
         """)
         out = _lowerx(JSON3.read(src))
-        expr = _nw(out["models"]["m"]["variables"]["d"]["expression"])
+        expr = _nw(_et_defrhs(out["models"]["m"], "d"))
         @test expr["op"] == "*"
         @test expr["args"][1] == "s"   # plain rule fired, not the fancy one
     end
@@ -667,7 +678,7 @@ end
         """), "{\"op\": \"div\", \"args\": [\"F_cell\"]}" =>
               "{\"op\": \"div\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}")
         out = _lowerx(JSON3.read(src))
-        expr = _nw(out["models"]["m"]["variables"]["d"]["expression"])
+        expr = _nw(_et_defrhs(out["models"]["m"], "d"))
         @test expr["op"] == "div"   # never rewritten; not an error
     end
 
@@ -731,7 +742,7 @@ end
         }
         """)
         out = _lowerx(JSON3.read(src))
-        expr = _nw(out["models"]["m"]["variables"]["d"]["expression"])
+        expr = _nw(_et_defrhs(out["models"]["m"], "d"))
         @test expr["op"] == "div"   # constraint unsatisfied; rule never fires
     end
 end
@@ -772,20 +783,21 @@ end
               "variables": {
                 "F_edge": {"type": "unknown", "units": "1", "default": 1.5, "shape": ["edges"]},
                 "F_cell": {"type": "unknown", "units": "1", "default": 2.5, "shape": ["cells"]},
-                "d_edge": {"type": "observed", "units": "1",
-                           "expression": {"op": "div", "args": ["F_edge"]}},
-                "d_cell": {"type": "observed", "units": "1",
-                           "expression": {"op": "div", "args": ["F_cell"]}}
+                "d_edge": {"type": "unknown", "units": "1"},
+                "d_cell": {"type": "unknown", "units": "1"}
               },
-              "equations": []
+              "equations": [
+                  {"lhs": "d_edge", "rhs": {"op": "div", "args": ["F_edge"]}},
+                  {"lhs": "d_cell", "rhs": {"op": "div", "args": ["F_cell"]}}
+                ]
             }
           }
         }
         """)
         f = EarthSciAST.load(model_path)
-        vars = f.models["m"].variables
-        @test (vars["d_edge"].expression::OpExpr).op == "*"     # constrained rule fired
-        @test (vars["d_cell"].expression::OpExpr).op == "div"   # excluded, survives load
+        m = f.models["m"]
+        @test (observed_definition(m, "d_edge")::OpExpr).op == "*"    # constrained rule fired
+        @test (observed_definition(m, "d_cell")::OpExpr).op == "div"  # excluded, survives load
         @test f.index_sets["edges"].size == 6                   # merged registry
     end
 end
