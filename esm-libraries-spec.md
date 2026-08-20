@@ -398,9 +398,9 @@ UnitWarning:
 | `coupling_import_unknown_role` | A `bind` key names a role the referenced library does not declare |
 | `coupling_import_role_unbound` | A role the referenced library declares has no `bind` entry (binding is total) |
 | `coupling_import_bind_not_a_component` | A `bind` value does not resolve to a top-level or subsystem component in the assembly |
-| `invalid_discrete_param` | `discrete_parameters` entry does not match a declared parameter |
+| `event_affects_parameter` | An event `affects` LHS names a parameter; parameter mutation belongs in the parameter's own `update` (esm-spec §5.4) |
 | `null_reaction` | Reaction has both `substrates: null` and `products: null` |
-| `missing_observed_expr` | Observed variable is missing its `expression` field |
+| `data_source_undefined` | A parameter's `update.source` names no declared `data_sources` entry |
 | `event_var_undeclared` | Variable in event affects/conditions is not declared |
 | `unresolved_subsystem_ref` | Subsystem reference points to a local file that does not exist (canonical; RETIRES `ref_not_found` — CONFORMANCE_SPEC §7.1.3f) |
 | `ref_unreachable` | Subsystem reference URL is unreachable or returned a non-200 status |

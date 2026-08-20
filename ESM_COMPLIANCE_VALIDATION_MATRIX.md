@@ -365,9 +365,9 @@ Where:
 | VALID-03-B-005 | MUST use undefined_system code | esm-libraries-spec.md:280 | Yes | validation |
 | VALID-03-B-006 | MUST use undefined_operator code | esm-libraries-spec.md:281 | Yes | validation |
 | VALID-03-B-007 | MUST use unresolved_scoped_ref code | esm-libraries-spec.md:282 | Yes | validation |
-| VALID-03-B-008 | MUST use invalid_discrete_param code | esm-libraries-spec.md:283 | Yes | validation |
+| VALID-03-B-008 | MUST use event_affects_parameter code | esm-libraries-spec.md:283 | Yes | validation |
 | VALID-03-B-009 | MUST use null_reaction code | esm-libraries-spec.md:284 | Yes | validation |
-| VALID-03-B-010 | MUST use missing_observed_expr code | esm-libraries-spec.md:285 | Yes | validation |
+| VALID-03-B-010 | MUST use data_source_undefined code | esm-libraries-spec.md:285 | Yes | validation |
 | VALID-03-B-011 | MUST use event_var_undeclared code | esm-libraries-spec.md:286 | Yes | validation |
 
 ---

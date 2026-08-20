@@ -32,13 +32,13 @@
       {
         "path": "/models/TestModel",
         "code": "equation_count_mismatch",
-        "message": "Number of ODE equations (1) does not match number of state variables (2)",
+        "message": "Number of equations (1) does not match number of unknowns (2)",
         "details": {
-          "state_variables": [
+          "unknowns": [
             "x",
             "y"
           ],
-          "ode_equations": 1,
+          "equations": 1,
           "missing_equations_for": [
             "y"
           ]
@@ -93,28 +93,120 @@
     ],
     "is_valid": false
   },
-  "missing_observed_expr.esm": {
+  "data_source_missing_kind.esm": {
     "schema_errors": [
       {
-        "path": "/models/TestModel/variables/total_rate",
-        "message": "must have required property 'expression'",
+        "path": "/data_sources/BadLoader",
+        "message": "Required property 'kind' is missing",
         "keyword": "required"
       }
     ],
     "structural_errors": [],
     "is_valid": false,
-    "structural_coverage_intended": [
+    "notes": "esm 1.0.0 (RFC unified-variable-model D2): `data_loaders` is now `data_sources`, a document-scoped ingest registry rather than a component. A source entry still requires `kind`."
+  },
+  "data_source_missing_source.esm": {
+    "schema_errors": [
       {
-        "path": "/models/TestModel/variables/total_rate",
-        "code": "missing_observed_expr",
-        "message": "Observed variable is missing its expression field",
+        "path": "/data_sources/BadLoader",
+        "message": "Required property 'source' is missing",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "A source entry still requires `source`. Renamed from data_loader_missing_loader_id.esm, which already tested `source` rather than the long-gone `loader_id`."
+  },
+  "data_source_legacy_variables.esm": {
+    "schema_errors": [
+      {
+        "path": "/data_sources/BadLoader",
+        "message": "Additional property 'variables' is not allowed",
+        "keyword": "additionalProperties"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "LEGACY-SHAPE REJECTION, and the load-bearing one for D2. A data source no longer declares the fields it provides: the consuming PARAMETER carries `update: {kind: \"data\", source, from}` and owns the units (esm-spec 5.4, 8). A source still carrying a `variables` map is rejected by DataSource's additionalProperties:false. Repurposed from data_loader_missing_provides.esm, whose diagnostic ('variables' missing) 1.0.0 inverts."
+  },
+  "data_source_invalid_type.esm": {
+    "schema_errors": [
+      {
+        "path": "/data_sources/BadLoader/kind",
+        "message": "Value 'invalid_kind' not in enum: [grid, points, static]",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "The `kind` enum is unchanged by 1.0.0; only the block it lives in was renamed."
+  },
+  "data_source_legacy_spatial.esm": {
+    "schema_errors": [
+      {
+        "path": "/data_sources/BadSpatial",
+        "message": "Additional property 'spatial' is not allowed",
+        "keyword": "additionalProperties"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "Legacy-shape rejection (RFC pure-io-data-loaders 4.1, bead ess-v9a.8): the source `spatial` block (former DataLoaderSpatial) was removed. There is no replacement descriptor ON THE SOURCE -- esm-spec 8.4 dropped the native-grid descriptor in v0.8.0, and grid geometry a source reads (coordinates, connectivity, metric arrays) now arrives as ordinary PARAMETERS bound to its file variables, consumed downstream by `aggregate` FAQs. A source still carrying `spatial` is rejected by DataSource's additionalProperties:false. Parallel to interpolation_method_invalid.esm."
+  },
+  "data_source_config_schema_violation.esm": {
+    "schema_errors": [
+      {
+        "path": "/data_sources/BadConfig/source",
+        "message": "Expected object, got string",
+        "keyword": "type"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "`source` is an object (url_template and friends), not a bare path string."
+  },
+  "data_source_update_missing_shape.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/TestModel/variables/T",
+        "message": "Required property 'shape' is missing",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "A parameter whose `update.kind` is `schedule`, `data` or `remesh` MUST declare `shape` (esm-schema.json ModelVariable allOf; esm-spec 5.4): the runtime has to size the buffer it refreshes into before the first refresh happens. Repurposed from data_loader_provides_missing_units.esm -- units now live on the parameter, where they are already required of every variable, so that fixture's diagnostic no longer has a home of its own."
+  },
+  "data_source_binding_missing_file_variable.esm": {
+    "schema_errors": [
+      {
+        "path": "/models/TestModel/variables/T/update/from",
+        "message": "Required property 'file_variable' is missing",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "A `from` binding must name the FILE variable it reads; the parameter's own name is the model-side name and cannot stand in for it. Repurposed from data_loader_provides_missing_description.esm ('description' was, and remains, optional)."
+  },
+  "data_source_undefined_reference.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel/variables/external_temp/update",
+        "code": "data_source_undefined",
+        "message": "Parameter update names data source 'UndefinedSource', which the document does not declare",
         "details": {
-          "variable": "total_rate",
-          "type": "observed"
+          "variable": "external_temp",
+          "source": "UndefinedSource",
+          "available_sources": [
+            "WeatherData"
+          ]
         }
       }
     ],
-    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
+    "is_valid": false,
+    "notes": "STRUCTURAL, no longer schema-layer. The 0.x fixture pinned 'a coupling references an undefined loader variable', but it was itself schema-invalid, so the structural finding was unreachable (audit 2026-07-14, finding F4). From 1.0.0 a data source is not a coupling endpoint at all, so the only way to name one wrongly is through `update.source` -- which is schema-valid by construction (any string) and therefore genuinely reaches structural validation. The unreachable coverage this file was written for is thereby RESTORED rather than merely recorded."
   },
   "unresolved_scoped_ref.esm": {
     "schema_errors": [],
@@ -153,18 +245,20 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/discrete_events/0/discrete_parameters",
-        "code": "invalid_discrete_param",
-        "message": "Discrete parameter 'undefined_param' in event is not declared as a parameter",
+        "path": "/models/TestModel/discrete_events/0/affects/0",
+        "code": "event_affects_parameter",
+        "message": "Event 'parameter_update' affects 'valid_param', which is a parameter; an event may affect unknowns only",
         "details": {
-          "parameter": "undefined_param",
+          "variable": "valid_param",
+          "variable_type": "parameter",
           "event_name": "parameter_update",
           "event_type": "discrete",
-          "expected_in": "parameters"
+          "remedy": "declare the change as the parameter's own update (esm-spec 5.4)"
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": "esm 1.0.0 (RFC unified-variable-model D5): `discrete_parameters` and the event `functional_affect` are gone and events affect UNKNOWNS only. A parameter that changes during a run carries its own `update` block. The fixture's defect is unchanged -- an event writing a parameter -- but the diagnostic is now `event_affects_parameter`, reached through `affects` rather than through a `discrete_parameters` list that no longer exists."
   },
   "undefined_system.esm": {
     "schema_errors": [],
@@ -186,14 +280,14 @@
       {
         "path": "/models/TestModel",
         "code": "equation_count_mismatch",
-        "message": "Number of ODE equations (1) does not match number of state variables (3)",
+        "message": "Number of equations (1) does not match number of unknowns (3)",
         "details": {
-          "state_variables": [
+          "unknowns": [
             "x",
             "y",
             "z"
           ],
-          "ode_equations": 1,
+          "equations": 1,
           "missing_equations_for": [
             "y",
             "z"
@@ -209,15 +303,12 @@
       {
         "path": "/models/TestModel",
         "code": "equation_count_mismatch",
-        "message": "Number of ODE equations (2) does not match number of state variables (1)",
+        "message": "Number of equations (2) does not match number of unknowns (1)",
         "details": {
-          "state_variables": [
+          "unknowns": [
             "x"
           ],
-          "ode_equations": 2,
-          "extra_equations_for": [
-            "y"
-          ]
+          "equations": 2
         }
       }
     ],
@@ -501,66 +592,6 @@
     ],
     "is_valid": false
   },
-  "missing_observed_expr_single.esm": {
-    "schema_errors": [
-      {
-        "path": "/models/TestModel/variables/total",
-        "message": "must have required property 'expression'",
-        "keyword": "required"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "structural_coverage_intended": [
-      {
-        "path": "/models/TestModel/variables/total",
-        "code": "missing_observed_expr",
-        "message": "Observed variable is missing its expression field",
-        "details": {
-          "variable": "total",
-          "type": "observed"
-        }
-      }
-    ],
-    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
-  },
-  "missing_observed_expr_multiple.esm": {
-    "schema_errors": [
-      {
-        "path": "/models/TestModel/variables/total",
-        "message": "must have required property 'expression'",
-        "keyword": "required"
-      },
-      {
-        "path": "/models/TestModel/variables/ratio",
-        "message": "must have required property 'expression'",
-        "keyword": "required"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "structural_coverage_intended": [
-      {
-        "path": "/models/TestModel/variables/total",
-        "code": "missing_observed_expr",
-        "message": "Observed variable is missing its expression field",
-        "details": {
-          "variable": "total",
-          "type": "observed"
-        }
-      },
-      {
-        "path": "/models/TestModel/variables/ratio",
-        "code": "missing_observed_expr",
-        "message": "Observed variable is missing its expression field",
-        "details": {
-          "variable": "ratio",
-          "type": "observed"
-        }
-      }
-    ],
-    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
-  },
   "event_var_undeclared_condition.esm": {
     "schema_errors": [
       {
@@ -609,19 +640,21 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/models/TestModel/discrete_events/0/discrete_parameters",
-        "code": "invalid_discrete_param",
-        "message": "Discrete parameter 'x' is not declared as a parameter (found as state variable)",
+        "path": "/models/TestModel/discrete_events/0/affects/0",
+        "code": "event_affects_parameter",
+        "message": "Event 'invalid_discrete_update' affects 'k', which is a parameter; an event may affect unknowns only",
         "details": {
-          "parameter": "x",
+          "variable": "k",
+          "variable_type": "parameter",
           "event_name": "invalid_discrete_update",
           "event_type": "discrete",
-          "found_type": "state",
-          "expected_in": "parameters"
+          "trigger_type": "periodic",
+          "remedy": "declare the change as update: {kind: \"schedule\", interval: 60.0} on 'k' (esm-spec 5.4)"
         }
       }
     ],
-    "is_valid": false
+    "is_valid": false,
+    "notes": "The PERIODIC companion to invalid_discrete_param.esm: same diagnostic reached from a `periodic` trigger rather than a `condition` one. This pair is what pins that `event_affects_parameter` keys off the AFFECTS TARGET and not off the trigger kind -- and the periodic case is the one 1.0.0 has an exact replacement for, since a fixed-interval rewrite of a parameter IS `update: {kind: \"schedule\", interval}`. Filename kept: it is hard-referenced by pkg/earthsci-ast-rs/tests/structural_validation.rs (include_str!) and pkg/earthsci-ast-go/pkg/esm/audit_regressions_test.go."
   },
   "multiple_errors_combined.esm": {
     "schema_errors": [
@@ -642,15 +675,17 @@
       {
         "path": "/models/BadModel",
         "code": "equation_count_mismatch",
-        "message": "Number of ODE equations (1) does not match number of state variables (2)",
+        "message": "Number of equations (1) does not match number of unknowns (3)",
         "details": {
-          "state_variables": [
+          "unknowns": [
             "x",
-            "y"
+            "y",
+            "observed_without_expr"
           ],
-          "ode_equations": 1,
+          "equations": 1,
           "missing_equations_for": [
-            "y"
+            "y",
+            "observed_without_expr"
           ]
         }
       },
@@ -662,15 +697,6 @@
           "variable": "undefined_rate",
           "equation_index": 0,
           "expected_in": "variables"
-        }
-      },
-      {
-        "path": "/models/BadModel/variables/observed_without_expr",
-        "code": "missing_observed_expr",
-        "message": "Observed variable is missing its expression field",
-        "details": {
-          "variable": "observed_without_expr",
-          "type": "observed"
         }
       },
       {
@@ -904,153 +930,29 @@
     "is_valid": false,
     "notes": "Empty string validation may be implementation-specific. Some validators may accept empty strings, others may reject them."
   },
-  "data_loader_missing_type.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadLoader",
-        "message": "Required property 'kind' is missing",
-        "keyword": "required"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: tests missing 'kind' (formerly 'type')."
-  },
-  "data_loader_missing_loader_id.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadLoader",
-        "message": "Required property 'source' is missing",
-        "keyword": "required"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: loader_id no longer exists; tests missing 'source'."
-  },
-  "data_loader_missing_provides.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadLoader",
-        "message": "Required property 'variables' is missing",
-        "keyword": "required"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: 'provides' renamed to 'variables'."
-  },
-  "data_loader_invalid_type.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadLoader/kind",
-        "message": "Value 'invalid_kind' not in enum: [grid, points, static]",
-        "keyword": "enum"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: tests invalid 'kind' enum value."
-  },
-  "data_loader_undefined_reference.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/WeatherData",
-        "message": "must NOT have additional properties",
-        "keyword": "additionalProperties"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "structural_coverage_intended": [
-      {
-        "path": "/coupling/0",
-        "code": "data_loader_variable_missing",
-        "message": "Data loader variable 'undefined_variable' referenced in coupling is not provided",
-        "details": {
-          "variable": "undefined_variable",
-          "data_loader": "WeatherData",
-          "coupling_type": "variable_map",
-          "available_variables": [
-            "T",
-            "P"
-          ]
-        }
-      }
-    ],
-    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
-  },
   "interpolation_method_invalid.esm": {
     "schema_errors": [
       {
-        "path": "/data_loaders/BadInterpolation",
+        "path": "/data_sources/BadInterpolation",
         "message": "Additional property 'regridding' is not allowed",
         "keyword": "additionalProperties"
       }
     ],
     "structural_errors": [],
     "is_valid": false,
-    "notes": "Legacy-shape rejection (RFC pure-io-data-loaders §4.1): the loader 'regridding' block was removed (regridding is now a per-variable model concern). A loader still carrying 'regridding' is rejected as an unknown property by DataLoader's additionalProperties:false."
-  },
-  "data_loader_legacy_spatial.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadSpatial",
-        "message": "Additional property 'spatial' is not allowed",
-        "keyword": "additionalProperties"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Legacy-shape rejection (RFC pure-io-data-loaders 4.1, bead ess-v9a.8): the loader 'spatial' block (former DataLoaderSpatial) was removed; the native grid is now a GDD Grid under 'grid' and regridding is a per-variable model concern. A loader still carrying 'spatial' is rejected as an unknown property by DataLoader's additionalProperties:false. Parallel to interpolation_method_invalid.esm (the 'regridding' rejection)."
+    "notes": "Legacy-shape rejection (RFC pure-io-data-loaders 4.1): the source `regridding` block was removed (regridding is a model concern -- esm-spec 8.6). A source still carrying `regridding` is rejected as an unknown property by DataSource's additionalProperties:false."
   },
   "temporal_resolution_invalid.esm": {
     "schema_errors": [
       {
-        "path": "/data_loaders/BadTemporal/temporal/records_per_file",
+        "path": "/data_sources/BadTemporal/temporal/records_per_file",
         "message": "Value 'not_auto' is not a positive integer and not the literal \"auto\"",
         "keyword": "oneOf"
       }
     ],
     "structural_errors": [],
     "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: tests invalid temporal.records_per_file value."
-  },
-  "data_loader_config_schema_violation.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadConfig/source",
-        "message": "Expected object, got string",
-        "keyword": "type"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: 'config' field removed; tests invalid 'source' type (should be object)."
-  },
-  "data_loader_provides_missing_units.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadProvides/variables/T",
-        "message": "Required property 'units' is missing",
-        "keyword": "required"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: 'provides' renamed to 'variables'."
-  },
-  "data_loader_provides_missing_description.esm": {
-    "schema_errors": [
-      {
-        "path": "/data_loaders/BadProvides/variables/T",
-        "message": "Required property 'file_variable' is missing",
-        "keyword": "required"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false,
-    "notes": "Repurposed for new DataLoader shape: 'description' is still optional in new 'variables'; this fixture now tests missing 'file_variable' instead."
+    "notes": "`temporal.records_per_file` is a positive integer or the literal \"auto\". Unchanged by 1.0.0; only the enclosing block was renamed data_loaders -> data_sources."
   },
   "missing_required_fields.esm": {
     "schema_errors": [
@@ -1153,14 +1055,34 @@
   "complete_error_coverage.esm": {
     "schema_errors": [
       {
-        "path": "/models/BadModel/variables/observed_without_expr",
-        "message": "must have required property 'expression'",
-        "keyword": "required"
+        "path": "/models/BadModel",
+        "message": "Additional property 'type' is not allowed",
+        "keyword": "additionalProperties"
       },
       {
         "path": "/models/BadModel/equations/0",
-        "message": "must be object",
+        "message": "Expected object, got string",
         "keyword": "type"
+      },
+      {
+        "path": "/models/BadModel/continuous_events/0",
+        "message": "Required property 'conditions' is missing",
+        "keyword": "required"
+      },
+      {
+        "path": "/models/BadModel/discrete_events/0/trigger",
+        "message": "Expected object, got string",
+        "keyword": "type"
+      },
+      {
+        "path": "/data_sources/TestDataLoader",
+        "message": "Additional property 'grid' is not allowed",
+        "keyword": "additionalProperties"
+      },
+      {
+        "path": "/coupling/0",
+        "message": "Required property 'systems' is missing",
+        "keyword": "required"
       }
     ],
     "structural_errors": [],
@@ -1169,15 +1091,17 @@
       {
         "path": "/models/BadModel",
         "code": "equation_count_mismatch",
-        "message": "Number of ODE equations (1) does not match number of state variables (2)",
+        "message": "Number of equations (1) does not match number of unknowns (3)",
         "details": {
-          "state_variables": [
+          "unknowns": [
             "x",
-            "y"
+            "y",
+            "observed_without_expr"
           ],
-          "ode_equations": 1,
+          "equations": 1,
           "missing_equations_for": [
-            "y"
+            "y",
+            "observed_without_expr"
           ]
         }
       },
@@ -1199,15 +1123,6 @@
           "variable": "undefined_var",
           "equation_index": 0,
           "expected_in": "variables"
-        }
-      },
-      {
-        "path": "/models/BadModel/variables/observed_without_expr",
-        "code": "missing_observed_expr",
-        "message": "Observed variable is missing its expression field",
-        "details": {
-          "variable": "observed_without_expr",
-          "type": "observed"
         }
       },
       {
@@ -1235,14 +1150,15 @@
         }
       },
       {
-        "path": "/models/BadModel/discrete_events/0",
-        "code": "invalid_discrete_param",
-        "message": "Discrete parameter 'undefined_discrete_param' in event is not declared as a parameter",
+        "path": "/models/BadModel/discrete_events/0/affects/1",
+        "code": "event_affects_parameter",
+        "message": "Event 'bad_discrete_event' affects 'bad_rate_param', which is a parameter; an event may affect unknowns only",
         "details": {
-          "parameter": "undefined_discrete_param",
+          "variable": "bad_rate_param",
+          "variable_type": "parameter",
           "event_name": "bad_discrete_event",
           "event_type": "discrete",
-          "expected_in": "parameters"
+          "remedy": "declare the change as the parameter's own update (esm-spec 5.4)"
         }
       },
       {
@@ -1302,11 +1218,11 @@
           "system": "NonExistentSystem",
           "coupling_type": "variable_map",
           "reference": "NonExistentSystem.var",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       }
     ],
-    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4. Refreshed for esm 1.0.0: the `missing_observed_expr` finding is GONE (the variable `expression` field it named no longer exists), and `observed_without_expr` now shows up in the equation balance instead -- it is an unknown with no defining equation, which is what unknown_without_equation.esm pins in isolation. The event finding moved from `invalid_discrete_param` to `event_affects_parameter`."
   },
   "malformed_json.esm": {
     "parse_error": true,
@@ -1341,13 +1257,13 @@
     "schema_errors": [
       {
         "path": "",
-        "message": "Must satisfy at least one of: required property 'models', required property 'reaction_systems', required property 'data_loaders', required property 'expression_templates', required property 'coupling_roles'",
+        "message": "Must satisfy at least one of: required property 'models', required property 'reaction_systems', required property 'data_sources', required property 'expression_templates', required property 'coupling_roles'",
         "keyword": "anyOf"
       }
     ],
     "structural_errors": [],
     "is_valid": false,
-    "notes": "Genuine no-subsystem negative (RFC pure-io-data-loaders 4.4, bead ess-v9a.8): a document declaring none of models / reaction_systems / data_loaders fails the top-level anyOf. Refreshed for ess-v9a.8 -- the prior fixture was a loader-only document kept invalid only incidentally by a stray top-level 'domain' key, and this entry listed pre-pure-IO 'type: netcdf' / 'path' / 'provides_vars' loader errors (from before the 4.1 pure-IO migration) that no longer apply."
+    "notes": "Genuine no-subsystem negative: a document declaring none of models / reaction_systems / data_sources / expression_templates / coupling_roles fails the top-level anyOf. A bare `data_sources` block IS valid (a source-catalog file, esm-spec 3.1 and tests/valid/data_sources_only.esm) -- it is ingest configuration rather than a component, so it satisfies the anyOf without being referenceable as a subsystem. This negative deliberately carries none of the branches."
   },
   "invalid_trigger_type.esm": {
     "schema_errors": [
@@ -1526,7 +1442,7 @@
           "system": "NonExistentModel",
           "coupling_type": "variable_map",
           "reference": "NonExistentModel.valid_var",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       },
       {
@@ -1576,7 +1492,7 @@
         "details": {
           "system": "NonExistentModel",
           "coupling_type": "operator_compose",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       },
       {
@@ -1586,7 +1502,7 @@
         "details": {
           "system": "NonExistentModel",
           "coupling_type": "couple",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       }
     ],
@@ -1616,7 +1532,7 @@
           "system": "NonExistentSystem",
           "coupling_type": "variable_map",
           "reference": "NonExistentSystem.some_var",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       },
       {
@@ -1707,7 +1623,7 @@
         "details": {
           "system": "NonExistentSystem",
           "coupling_type": "couple",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       },
       {
@@ -1726,8 +1642,23 @@
   "event_error_conditions.esm": {
     "schema_errors": [
       {
-        "path": "/models/ErrorTestModel/discrete_events/1/trigger",
-        "message": "must have required property",
+        "path": "/models/ErrorTestModel/discrete_events/1/trigger/type",
+        "message": "Value 'invalid_trigger_type' matches no DiscreteTrigger branch",
+        "keyword": "oneOf"
+      },
+      {
+        "path": "/models/ErrorTestModel/discrete_events/2/trigger",
+        "message": "Required property 'interval' is missing",
+        "keyword": "required"
+      },
+      {
+        "path": "/models/ErrorTestModel/discrete_events/3/trigger/times",
+        "message": "Array is empty",
+        "keyword": "minItems"
+      },
+      {
+        "path": "/models/ErrorTestModel/discrete_events/4",
+        "message": "Required property 'affects' is missing",
         "keyword": "required"
       }
     ],
@@ -1741,7 +1672,7 @@
         "details": {
           "variable": "undefined_variable",
           "event_type": "continuous",
-          "location": "condition"
+          "location": "conditions"
         }
       },
       {
@@ -1759,44 +1690,31 @@
         "code": "invalid_pre_usage",
         "message": "Pre() operator is not allowed in event conditions, only in affect equations",
         "details": {
-          "location": "condition"
+          "location": "conditions"
         }
       },
       {
-        "path": "/models/ErrorTestModel/continuous_events/3",
-        "code": "undeclared_discrete_parameter",
-        "message": "Event modifies parameter 'valid_param' but parameter is not listed in discrete_parameters",
+        "path": "/models/ErrorTestModel/continuous_events/3/affects/0",
+        "code": "event_affects_parameter",
+        "message": "Event 'continuous_event_writes_parameter' affects 'valid_param', which is a parameter; an event may affect unknowns only",
         "details": {
-          "parameter": "valid_param"
+          "variable": "valid_param",
+          "variable_type": "parameter",
+          "event_name": "continuous_event_writes_parameter",
+          "event_type": "continuous",
+          "remedy": "declare the change as update: {kind: \"crossing\", when, direction} on 'valid_param' (esm-spec 5.4)"
         }
       },
       {
-        "path": "/models/ErrorTestModel/discrete_events/0",
-        "code": "invalid_discrete_param",
-        "message": "discrete_parameters includes undefined parameter 'nonexistent_param'",
+        "path": "/models/ErrorTestModel/discrete_events/0/affects/0",
+        "code": "event_affects_parameter",
+        "message": "Event 'discrete_event_writes_parameter' affects 'valid_param', which is a parameter; an event may affect unknowns only",
         "details": {
-          "parameter": "nonexistent_param",
-          "event_type": "discrete"
-        }
-      },
-      {
-        "path": "/models/ErrorTestModel/discrete_events/4",
-        "code": "event_var_undeclared",
-        "message": "Functional affect read_vars includes undefined variable 'undefined_variable'",
-        "details": {
-          "variable": "undefined_variable",
+          "variable": "valid_param",
+          "variable_type": "parameter",
+          "event_name": "discrete_event_writes_parameter",
           "event_type": "discrete",
-          "location": "functional_affect.read_vars"
-        }
-      },
-      {
-        "path": "/models/ErrorTestModel/discrete_events/4",
-        "code": "undefined_parameter",
-        "message": "Functional affect modified_params includes undefined parameter 'another_undefined_param'",
-        "details": {
-          "parameter": "another_undefined_param",
-          "event_type": "discrete",
-          "location": "functional_affect.modified_params"
+          "remedy": "declare the change as update: {kind: \"condition\", when} on 'valid_param' (esm-spec 5.4)"
         }
       },
       {
@@ -1809,15 +1727,18 @@
         }
       },
       {
-        "path": "/coupling/1",
-        "code": "undeclared_discrete_parameter",
-        "message": "Cross-system event modifies parameter but missing discrete_parameters declaration",
+        "path": "/coupling/1/affects/0",
+        "code": "event_affects_parameter",
+        "message": "Cross-system event affects 'ErrorTestModel.valid_param', which is a parameter; an event may affect unknowns only",
         "details": {
-          "coupling_type": "event"
+          "variable": "ErrorTestModel.valid_param",
+          "variable_type": "parameter",
+          "coupling_type": "event",
+          "event_type": "discrete"
         }
       }
     ],
-    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4."
+    "notes": "SCHEMA-LAYER REJECTION. This file is not schema-valid, so structural validation never runs on it and the structural findings it was written to pin are UNREACHABLE. They are recorded below under `structural_coverage_intended`. Restoring that coverage means MODERNISING the fixture to the current schema shape (esm-schema.json), not relaxing a checker. Audit 2026-07-14, finding F4. Refreshed for esm 1.0.0 (RFC unified-variable-model D5): the two `undeclared_discrete_parameter` findings and the one `invalid_discrete_param` finding collapse into `event_affects_parameter` -- there is no `discrete_parameters` list to be missing from any more, so an event touching a parameter is wrong outright rather than wrong-unless-declared. The two `functional_affect` findings are gone with the construct: discrete_events/4 now trips the SCHEMA instead, since `affects` is required once `functional_affect` is not an alternative. The continuous/discrete pair at continuous_events/3 and discrete_events/0 is deliberate -- it pins that the diagnostic is about the AFFECTS TARGET and fires from either event kind, and each remedy names the `update.kind` that expresses that same intent legally."
   },
   "scoped_ref_errors.esm": {
     "schema_errors": [
@@ -1849,7 +1770,7 @@
           "system": "NonExistentSystem",
           "coupling_type": "variable_map",
           "reference": "NonExistentSystem.some_var",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       }
     ]
@@ -1873,7 +1794,7 @@
         "details": {
           "system": "NonExistentSystem",
           "coupling_type": "operator_compose",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       },
       {
@@ -1913,7 +1834,7 @@
         "details": {
           "system": "NonExistentSystem",
           "coupling_type": "couple",
-          "expected_in": "models, reaction_systems, data_loaders"
+          "expected_in": "models, reaction_systems"
         }
       },
       {
@@ -2543,7 +2464,7 @@
     "schema_errors": [],
     "structural_errors": [
       {
-        "path": "/data_loaders/L/variables/v/unit_conversion",
+        "path": "/models/TestModel/variables/v/update/from/unit_conversion",
         "code": "undefined_variable",
         "message": "Variable \"undefined_xyz\" referenced in unit_conversion expression but not declared",
         "details": {
@@ -2861,13 +2782,88 @@
         "details": {
           "variable": "dp",
           "operand": "z1",
-          "operand_shape": ["lev"],
-          "result_shape": ["lon", "lat"],
+          "operand_shape": [
+            "lev"
+          ],
+          "result_shape": [
+            "lon",
+            "lat"
+          ],
           "missing_index_set": "lev"
         }
       }
     ],
     "is_valid": false,
-    "notes": "esm-spec \u00a74.3.4 (issue #100). Operands of a BARE array-level expression align by index-set NAME: an operand declared over a SUBSET of the result's index sets broadcasts along the missing ones, and axis order is immaterial. An operand carrying an index set the result does NOT have \u2014 `z1: [lev]` against `dp: [lon,lat]` \u2014 has no axis to align to, so it is a hard structural error rather than a positional flatten. Both shapes are declared, so the finding is static; the file is SCHEMA-VALID on purpose."
+    "notes": "esm-spec §4.3.4 (issue #100). Operands of a BARE array-level expression align by index-set NAME: an operand declared over a SUBSET of the result's index sets broadcasts along the missing ones, and axis order is immaterial. An operand carrying an index set the result does NOT have — `z1: [lev]` against `dp: [lon,lat]` — has no axis to align to, so it is a hard structural error rather than a positional flatten. Both shapes are declared, so the finding is static; the file is SCHEMA-VALID on purpose."
+  },
+  "unknown_without_equation.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "equation_count_mismatch",
+        "message": "Number of equations (1) does not match number of unknowns (2)",
+        "details": {
+          "unknowns": [
+            "x",
+            "total_rate"
+          ],
+          "equations": 1,
+          "missing_equations_for": [
+            "total_rate"
+          ]
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code."
+  },
+  "unknown_without_equation_single.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "equation_count_mismatch",
+        "message": "Number of equations (1) does not match number of unknowns (2)",
+        "details": {
+          "unknowns": [
+            "x",
+            "total"
+          ],
+          "equations": 1,
+          "missing_equations_for": [
+            "total"
+          ]
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code."
+  },
+  "unknown_without_equation_multiple.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/TestModel",
+        "code": "equation_count_mismatch",
+        "message": "Number of equations (3) does not match number of unknowns (5)",
+        "details": {
+          "unknowns": [
+            "x",
+            "y",
+            "total",
+            "ratio",
+            "valid_observed"
+          ],
+          "equations": 3,
+          "missing_equations_for": [
+            "total",
+            "ratio"
+          ]
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Renamed from missing_observed_expr*.esm. 1.0.0 removes the variable `expression` field, and with it the `missing_observed_expr` diagnostic: an observed unknown is DEFINED BY AN EQUATION, so an observed with nothing defining it is no longer a malformed declaration but an UNBALANCED SYSTEM, caught by equation_count_mismatch (esm-spec 4.9.4). The defect the fixture was written to pin survives the format change exactly; only the layer reporting it moves, from schema to structural. `missing_equations_for` is what preserves the fixture's original discriminating power -- it names the very unknowns that used to be named by the removed code."
   }
 }

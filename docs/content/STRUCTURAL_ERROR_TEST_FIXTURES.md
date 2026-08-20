@@ -152,14 +152,18 @@ The following structural error codes are covered by test fixtures in `/tests/inv
 **Description**: Occurs when an event's `affects` LHS names a parameter. From esm 1.0.0 an event may write UNKNOWNS only; a parameter that changes during a run declares an `update` block on itself (esm-spec §5.4). The former `missing_observed_expr` check is gone with the `observed` type — an unknown's defining expression is an ordinary equation, and a missing one is an `equation_count_mismatch`, not a missing field.
 
 **Test Fixtures**:
-- `missing_observed_expr.esm` - Single observed variable without expression
-- `missing_observed_expr_single.esm` - Another single case variant
-- `missing_observed_expr_multiple.esm` - Multiple observed variables without expressions
+- `invalid_discrete_param.esm` - A `condition`-triggered event writes a parameter
+- `invalid_discrete_param_not_parameter.esm` - The `periodic`-triggered companion; the
+  pair pins that the diagnostic keys off the AFFECTS TARGET, not the trigger kind
 
 **Triggering Conditions**:
-- An event `affects` entry whose `lhs` names a `parameter`
-- Observed variable with null or empty expression
-- Parameter mutation written as an event affect instead of a parameter `update`
+- An event `affects` entry whose `lhs` names a `parameter`, in a model
+  `continuous_events` / `discrete_events` block or in an `event` coupling entry
+
+**Not this code**: an unknown with no defining equation. That was
+`missing_observed_expr` while `observed` was a declared type carrying an
+`expression` field; from 1.0.0 it is an unbalanced system, reported as
+`equation_count_mismatch` and pinned by `unknown_without_equation*.esm`.
 
 ### 11. event_var_undeclared
 

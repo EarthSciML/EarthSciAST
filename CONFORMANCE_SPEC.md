@@ -355,8 +355,7 @@ Display formatting tests expect this output structure:
       "graph_type": "system",
       "nodes": [
         {"id": "SimpleOzone", "type": "reaction_system", "properties": {...}},
-        {"id": "Advection", "type": "model", "properties": {...}},
-        {"id": "GEOSFP", "type": "data_loader", "properties": {...}}
+        {"id": "Advection", "type": "model", "properties": {...}}
       ],
       "edges": [
         {
@@ -698,7 +697,7 @@ on hash-table iteration order or a language-native hash value.
    the value-invention front-door (the same CONST/DISCRETE point as the `assign`
    buffer it consumes) and dropped from the ODE; `num`/`den`/`centroid` are pure
    functions of the inputs and the rule-5/rule-6 orders, hence byte/tolerance-
-   identical across bindings. A grouped/derived buffer reading live ODE `state` is
+   identical across bindings. A grouped/derived buffer reading a live ODE state is
    rejected by §5.7.6 guard 2 (its inputs MUST be CONST/DISCRETE).
 
 #### 5.5.2 The hash-randomization footguns this neutralizes
@@ -1111,9 +1110,10 @@ parameter shaped `[C, out]`, the rewrite emits:
    `join.overlap` clause, the containment comparisons as its `filter`, and
    `key: skolem(label:"cell", args:[<cell symbol>])` — the skolem is what makes
    the produced member set CELL-oriented;
-3. a `state` member variable and (4) a `parameter` member factor, both shaped on
-   the derived set;
-4. one `observed` cell-gather per rect bound,
+3. an `unknown` member variable and (4) a `parameter` member factor, both shaped
+   on the derived set;
+4. one observed cell-gather per rect bound (an `unknown` defined by a
+   bare-variable equation),
    `pd_cell__<C>__<F>[c] = F[member_factor[c]]`, shaped on the derived set;
 5. `E`'s reduction axis and declared shape re-pointed onto the derived set, its
    rect references rewritten to the gathers of (4), **and the derived
@@ -2474,7 +2474,7 @@ Validation tests must use these standardized error codes:
 | Code | Category | Description |
 |---|---|---|
 | `schema_validation_failed` | Schema | JSON Schema validation error |
-| `equation_count_mismatch` | Structural | State variables vs ODE equations mismatch |
+| `equation_count_mismatch` | Structural | Unknowns vs equations mismatch (esm-spec §4.9.4). Since 1.0.0 there is no declared `state` type to count: ODE-state-ness is derived from the equations being counted (§6.3.1), so the balance is over ALL unknowns and ALL equations. |
 | `undefined_variable` | Structural | Equation references undeclared variable |
 | `undefined_species` | Structural | Reaction references undeclared species |
 | `undefined_parameter` | Structural | Rate expression references undeclared parameter |

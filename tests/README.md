@@ -23,7 +23,7 @@ tests/
 │   ├── undefined_species.esm
 │   ├── undefined_parameter.esm
 │   ├── null_reaction.esm
-│   ├── missing_observed_expr.esm
+│   ├── unknown_without_equation.esm
 │   ├── unresolved_scoped_ref.esm
 │   ├── event_var_undeclared.esm
 │   └── event_error_conditions.esm # Invalid event configurations for error testing
@@ -85,7 +85,7 @@ Based on libraries specification Section 3.4:
 - `undefined_system`: Coupling references nonexistent system
 - `unresolved_scoped_ref`: Invalid scoped reference path
 - `null_reaction`: Reaction with both null substrates and products
-- `missing_observed_expr`: Observed variable missing expression
+- `equation_count_mismatch`: unknowns and equations do not balance (esm-spec §4.9.4) — including an unknown with no defining equation, which 0.x reported as the now-removed `missing_observed_expr`
 - `event_var_undeclared`: Event affects undeclared variable
 
 ## Conformance Requirements

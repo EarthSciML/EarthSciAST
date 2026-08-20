@@ -65,7 +65,7 @@ Based on libraries spec Section 3.4:
 | `unresolved_scoped_ref` | `invalid/unresolved_scoped_ref.esm` | ✅ Created |
 | `invalid_discrete_param` | N/A | ❌ Missing |
 | `null_reaction` | `invalid/null_reaction.esm` | ✅ Created |
-| `missing_observed_expr` | `invalid/missing_observed_expr.esm` | ✅ Created |
+| `equation_count_mismatch` (unknown with no defining equation) | `invalid/unknown_without_equation.esm` | ✅ Created |
 | `event_var_undeclared` | `invalid/event_var_undeclared.esm` | ✅ Created |
 
 **Error Code Coverage: 7/11 Created, 4/11 Missing**
