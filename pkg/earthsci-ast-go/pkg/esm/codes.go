@@ -55,19 +55,43 @@ const (
 	// it does not invalidate the document.
 	CodeDuplicateReactionSpecies = "duplicate_reaction_species"
 
-	CodeMissingLoaderKind                 = "missing_loader_kind"
-	CodeMissingLoaderSourceURLTemplate    = "missing_loader_source_url_template"
-	CodeMissingLoaderVariables            = "missing_loader_variables"
-	CodeMissingLoaderVariableFileVariable = "missing_loader_variable_file_variable"
-	CodeMissingLoaderVariableUnits        = "missing_loader_variable_units"
+	// A data SOURCE (esm-spec §8) still owes a `kind` and a locatable `source`.
+	// The three former per-variable codes are gone with the `variables` map: from
+	// 1.0.0 a source declares no fields at all, so `file_variable` and `units`
+	// are the consuming parameter's business — the first through its
+	// `update.from`, the second through the units every variable already
+	// declares.
+	CodeMissingDataSourceKind        = "missing_data_source_kind"
+	CodeMissingDataSourceURLTemplate = "missing_data_source_url_template"
 )
 
-// --- Spec enum literal: ModelVariable.Type (esm-spec §4). ---
+// --- Spec enum literal: ModelVariable.Type (esm-spec §5.4). esm 1.0.0 declares
+// exactly TWO types. `state`, `observed`, `brownian` and `discrete` are GONE
+// with no deprecation path: an unknown's role follows from the EQUATIONS and a
+// parameter's cadence from its `distribution`/`update`, both recovered by the
+// §6.3.1 classification functions in classification.go. ---
 const (
-	VarTypeState     = "state"
-	VarTypeObserved  = "observed"
+	VarTypeUnknown   = "unknown"
 	VarTypeParameter = "parameter"
-	VarTypeBrownian  = "brownian"
+)
+
+// --- Spec enum literal: ParameterUpdate.Kind (esm-spec §5.4). Six kinds; only
+// `wiener` takes no value form. ---
+const (
+	UpdateKindWiener    = "wiener"
+	UpdateKindSchedule  = "schedule"
+	UpdateKindCondition = "condition"
+	UpdateKindCrossing  = "crossing"
+	UpdateKindData      = "data"
+	UpdateKindRemesh    = "remesh"
+)
+
+// --- Spec enum literal: Distribution.Kind (esm-spec §5.4). A CLOSED registry:
+// a binding implements exactly these three and rejects anything else. ---
+const (
+	DistributionNormal    = "normal"
+	DistributionLognormal = "lognormal"
+	DistributionUniform   = "uniform"
 )
 
 // --- Spec enum literal: AST op names used across more than one file

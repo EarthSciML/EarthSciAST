@@ -262,53 +262,10 @@ func (r *Reaction) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Custom JSON unmarshaling for ModelVariable
-func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
-	type TempModelVariable struct {
-		Type             string          `json:"type"`
-		Units            *string         `json:"units,omitempty"`
-		DefaultUnits     *string         `json:"default_units,omitempty"`
-		Default          json.RawMessage `json:"default,omitempty"`
-		Description      *string         `json:"description,omitempty"`
-		Expression       json.RawMessage `json:"expression,omitempty"`
-		Shape            []string        `json:"shape,omitempty"`
-		Location         string          `json:"location,omitempty"`
-		NoiseKind        string          `json:"noise_kind,omitempty"`
-		CorrelationGroup string          `json:"correlation_group,omitempty"`
-	}
-
-	var temp TempModelVariable
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	mv.Type = temp.Type
-	mv.Units = temp.Units
-	mv.DefaultUnits = temp.DefaultUnits
-	mv.Description = temp.Description
-	mv.Shape = temp.Shape
-	mv.Location = temp.Location
-	mv.NoiseKind = temp.NoiseKind
-	mv.CorrelationGroup = temp.CorrelationGroup
-
-	// Decode `default` through UnmarshalExpression so an integer-valued default
-	// (`"default": 1`) keeps its int wire shape instead of collapsing to
-	// float64 and re-emitting as "1.0", per RFC §5.4.1 int/float distinction.
-	def, err := unmarshalOptionalExpression(temp.Default)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal default: %w", err)
-	}
-	mv.Default = def
-
-	// Unmarshal Expression if present
-	expr, err := unmarshalOptionalExpression(temp.Expression)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal expression: %w", err)
-	}
-	mv.Expression = expr
-
-	return nil
-}
+// The ModelVariable decoder lives in variable_model.go, beside the 1.0.0
+// type it decodes: it has to keep two wire distinctions (an int-valued
+// `default`, a present-but-empty `shape`) that are properties of that type
+// rather than of the generic decode path.
 
 // Custom JSON unmarshaling for Species. Decodes `default` through
 // UnmarshalExpression so an integer-valued default keeps its int wire shape
@@ -391,18 +348,16 @@ func (m *Model) UnmarshalJSON(data []byte) error {
 // Custom JSON unmarshaling for EventCoupling
 func (ec *EventCoupling) UnmarshalJSON(data []byte) error {
 	type TempEventCoupling struct {
-		Type               string                `json:"type"`
-		EventType          string                `json:"event_type"`
-		Name               string                `json:"name"`
-		Conditions         []json.RawMessage     `json:"conditions,omitempty"`
-		Trigger            *DiscreteEventTrigger `json:"trigger,omitempty"`
-		Affects            []AffectEquation      `json:"affects"`
-		FunctionalAffect   *FunctionalAffect     `json:"functional_affect,omitempty"`
-		AffectNeg          []AffectEquation      `json:"affect_neg,omitempty"`
-		DiscreteParameters []string              `json:"discrete_parameters,omitempty"`
-		RootFind           *string               `json:"root_find,omitempty"`
-		Reinitialize       *bool                 `json:"reinitialize,omitempty"`
-		Description        *string               `json:"description,omitempty"`
+		Type         string                `json:"type"`
+		EventType    string                `json:"event_type"`
+		Name         string                `json:"name"`
+		Conditions   []json.RawMessage     `json:"conditions,omitempty"`
+		Trigger      *DiscreteEventTrigger `json:"trigger,omitempty"`
+		Affects      []AffectEquation      `json:"affects"`
+		AffectNeg    []AffectEquation      `json:"affect_neg,omitempty"`
+		RootFind     *string               `json:"root_find,omitempty"`
+		Reinitialize *bool                 `json:"reinitialize,omitempty"`
+		Description  *string               `json:"description,omitempty"`
 	}
 
 	var temp TempEventCoupling
@@ -415,9 +370,7 @@ func (ec *EventCoupling) UnmarshalJSON(data []byte) error {
 	ec.Name = temp.Name
 	ec.Trigger = temp.Trigger
 	ec.Affects = temp.Affects
-	ec.FunctionalAffect = temp.FunctionalAffect
 	ec.AffectNeg = temp.AffectNeg
-	ec.DiscreteParameters = temp.DiscreteParameters
 	ec.RootFind = temp.RootFind
 	ec.Reinitialize = temp.Reinitialize
 	ec.Description = temp.Description
@@ -437,31 +390,9 @@ func (ec *EventCoupling) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Custom JSON unmarshaling for DataLoaderVariable (handles Expression union
-// in unit_conversion: number | ExpressionNode).
-func (v *DataLoaderVariable) UnmarshalJSON(data []byte) error {
-	type TempDataLoaderVariable struct {
-		FileVariable   string          `json:"file_variable"`
-		Units          string          `json:"units"`
-		UnitConversion json.RawMessage `json:"unit_conversion,omitempty"`
-		Description    *string         `json:"description,omitempty"`
-		Reference      *Reference      `json:"reference,omitempty"`
-	}
-	var temp TempDataLoaderVariable
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-	v.FileVariable = temp.FileVariable
-	v.Units = temp.Units
-	v.Description = temp.Description
-	v.Reference = temp.Reference
-	conv, err := unmarshalOptionalExpression(temp.UnitConversion)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal unit_conversion: %w", err)
-	}
-	v.UnitConversion = conv
-	return nil
-}
+// The 0.x `DataLoaderVariable` decoder is gone with the type. Its successor,
+// DataSourceBinding, carries its own UnmarshalJSON in variable_model.go
+// alongside the rest of the 1.0.0 variable model.
 
 // Custom JSON unmarshaling for VariableMapCoupling (handles the transform
 // union: legacy string kind | ExpressionNode object). A string transform is
@@ -526,7 +457,7 @@ func (esm *ESMFile) UnmarshalJSON(data []byte) error {
 		Metadata        Metadata                  `json:"metadata"`
 		Models          map[string]Model          `json:"models,omitempty"`
 		ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
-		DataLoaders     map[string]DataLoader     `json:"data_loaders,omitempty"`
+		DataSources     map[string]DataSource     `json:"data_sources,omitempty"`
 		Enums           map[string]map[string]int `json:"enums,omitempty"`
 		Coupling        json.RawMessage           `json:"coupling,omitempty"`
 		CouplingRoles   map[string]CouplingRole   `json:"coupling_roles,omitempty"`
@@ -545,7 +476,7 @@ func (esm *ESMFile) UnmarshalJSON(data []byte) error {
 	esm.Metadata = temp.Metadata
 	esm.Models = temp.Models
 	esm.ReactionSystems = temp.ReactionSystems
-	esm.DataLoaders = temp.DataLoaders
+	esm.DataSources = temp.DataSources
 	esm.Enums = temp.Enums
 	esm.CouplingRoles = temp.CouplingRoles
 	esm.Domain = temp.Domain

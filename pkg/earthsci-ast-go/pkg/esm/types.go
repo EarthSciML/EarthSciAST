@@ -131,40 +131,6 @@ type AffectEquation struct {
 // 2. Model Components
 // ========================================
 
-// ModelVariable represents a variable in a mathematical model.
-//
-// Type "brownian" denotes a stochastic noise source (Wiener process); the
-// presence of any brownian variable promotes the enclosing model from an ODE
-// system to an SDE system. NoiseKind and CorrelationGroup apply only to
-// brownian variables.
-type ModelVariable struct {
-	Type    string  `json:"type"` // "state", "parameter", "observed", or "brownian"
-	Units   *string `json:"units,omitempty"`
-	Default any     `json:"default,omitempty"`
-	// DefaultUnits declares the units the scalar `default` is expressed in when
-	// they differ from `units`. The value is converted at load. A conversion that
-	// is AFFINE (degC↔K) cannot be expressed as a scalar factor, so declaring one
-	// here is a `unit_inconsistency` — see checkDefaultUnits.
-	DefaultUnits *string    `json:"default_units,omitempty"`
-	Description  *string    `json:"description,omitempty"`
-	Expression   Expression `json:"expression,omitempty"` // for observed variables
-	// Shape lists index-set names for arrayed variables, drawn from the
-	// document-scoped `index_sets` registry (ESMFile.IndexSets). Nil means
-	// scalar. As of v0.8.0 the iteration domains named here live at document
-	// scope, not on the model. See RFC semiring-faq-unified-ir §5.2 / §6.1.
-	Shape []string `json:"shape,omitempty"`
-	// Location tags the variable's staggered-grid location
-	// (e.g., "cell_center", "edge_normal", "vertex"). Empty means
-	// no explicit staggering. See discretization RFC §10.2.
-	Location string `json:"location,omitempty"`
-	// NoiseKind is brownian-only: kind of stochastic process. Currently only
-	// "wiener" is supported.
-	NoiseKind string `json:"noise_kind,omitempty"`
-	// CorrelationGroup is brownian-only: optional opaque tag grouping
-	// correlated noise sources.
-	CorrelationGroup string `json:"correlation_group,omitempty"`
-}
-
 // Model represents an ODE system
 type Model struct {
 	Reference        *Reference               `json:"reference,omitempty"`
@@ -385,15 +351,10 @@ type Analysis struct {
 // 4. Events
 // ========================================
 
-// FunctionalAffect represents a registered functional affect handler for
-// discrete events that require complex behavior beyond symbolic expressions
-type FunctionalAffect struct {
-	HandlerID      string         `json:"handler_id"`
-	ReadVars       []string       `json:"read_vars"`
-	ReadParams     []string       `json:"read_params"`
-	ModifiedParams []string       `json:"modified_params,omitempty"`
-	Config         map[string]any `json:"config,omitempty"`
-}
+// The 0.x `FunctionalAffect` type is GONE (esm-spec 5.4, RFC
+// unified-variable-model D5). A handler's only write channel was
+// `modified_params`, so in 1.0.0 it lives on the parameter it writes, as
+// `update.handler` -- see FunctionalUpdate in variable_model.go.
 
 // DiscreteEventTrigger represents different trigger types for discrete events
 type DiscreteEventTrigger struct {
@@ -405,14 +366,16 @@ type DiscreteEventTrigger struct {
 }
 
 // DiscreteEvent represents a discrete event
+// An event may affect UNKNOWNS ONLY (esm-spec 5). From 1.0.0 a parameter
+// carries its own `update`, so there is no `discrete_parameters` list and no
+// `functional_affect` here; an affects LHS naming a parameter is
+// `event_affects_parameter`.
 type DiscreteEvent struct {
-	Name               string               `json:"name,omitempty"`
-	Trigger            DiscreteEventTrigger `json:"trigger"`
-	Affects            []AffectEquation     `json:"affects,omitempty"`
-	FunctionalAffect   *FunctionalAffect    `json:"functional_affect,omitempty"`
-	DiscreteParameters []string             `json:"discrete_parameters,omitempty"`
-	Reinitialize       *bool                `json:"reinitialize,omitempty"`
-	Description        *string              `json:"description,omitempty"`
+	Name         string               `json:"name,omitempty"`
+	Trigger      DiscreteEventTrigger `json:"trigger"`
+	Affects      []AffectEquation     `json:"affects,omitempty"`
+	Reinitialize *bool                `json:"reinitialize,omitempty"`
+	Description  *string              `json:"description,omitempty"`
 }
 
 // ContinuousEvent represents a continuous event
@@ -427,43 +390,64 @@ type ContinuousEvent struct {
 }
 
 // ========================================
-// 5. Data Loaders and Operators
+// 5. Data Sources
 // ========================================
 
-// DataLoader is a runtime-agnostic description of an external data source.
-// It is pure I/O: it carries enough structural information to locate files,
-// map timestamps to files, and describe variable semantics — rather than
-// pointing at a runtime handler. Reprojection and regridding are the
-// responsibility of downstream rules, not the loader.
-type DataLoader struct {
-	Kind        string                        `json:"kind"` // "grid", "points", or "static" (esm-spec §8.9)
-	Source      DataLoaderSource              `json:"source"`
-	Temporal    *DataLoaderTemporal           `json:"temporal,omitempty"`
-	Determinism *DataLoaderDeterminism        `json:"determinism,omitempty"`
-	Variables   map[string]DataLoaderVariable `json:"variables"`
-	Reference   *Reference                    `json:"reference,omitempty"`
-	Metadata    map[string]any                `json:"metadata,omitempty"`
+// DataSource is a named external data source reduced to pure I/O: it locates,
+// reads, decodes, slices and filters bytes on disk (esm-spec §8).
+//
+// From esm 1.0.0 it is NOT a component. It cannot be a coupling endpoint, a
+// subsystem, or the path root of a scoped reference, and — the load-bearing
+// change — it exposes NO variables. A model consumes it by declaring a
+// parameter whose `update` names this source and binds one of its
+// `file_variable`s; that parameter owns the units, declared once instead of
+// twice. Grid geometry a source reads (coordinates, connectivity, metric
+// arrays) arrives the same way, as ordinary parameters, and is transformed
+// downstream by `aggregate` FAQs rather than by a descriptor here.
+type DataSource struct {
+	Kind        string                 `json:"kind"` // "grid", "points", or "static" (esm-spec §8.9)
+	Source      DataSourceLocation     `json:"source"`
+	Temporal    *DataSourceTemporal    `json:"temporal,omitempty"`
+	Determinism *DataSourceDeterminism `json:"determinism,omitempty"`
+	// ReaderOptions are format-specific DECODE options passed to the reader
+	// verbatim. They say how bytes become an array, never what the array means.
+	ReaderOptions map[string]any `json:"reader_options,omitempty"`
+	// Select is the source-level default slice, overridable per binding.
+	Select any `json:"select,omitempty"`
+	// RecordFilter narrows which records are read.
+	RecordFilter any `json:"record_filter,omitempty"`
+	// Extent bounds the region read.
+	Extent    any            `json:"extent,omitempty"`
+	Reference *Reference     `json:"reference,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
-// DataLoaderDeterminism is the reproducibility contract a loader advertises
+// HasTemporal reports whether the source declares a `temporal` block. This is
+// the whole of the cadence source-seed refinement (CONFORMANCE_SPEC §5.7.2): a
+// `data`-updated parameter reading a source WITH temporal stays DISCRETE, one
+// reading a source WITHOUT it refines to CONST. `temporal` is optional and its
+// absence means non-time-varying.
+func (d *DataSource) HasTemporal() bool { return d != nil && d.Temporal != nil }
+
+// DataSourceDeterminism is the reproducibility contract a source advertises
 // to bindings (esm-spec §8.9.2). A binding that cannot honor the declared
 // contract MUST reject the file at load.
-type DataLoaderDeterminism struct {
+type DataSourceDeterminism struct {
 	Endian       *string `json:"endian,omitempty"`        // "little" | "big"
 	FloatFormat  *string `json:"float_format,omitempty"`  // "ieee754_single" | "ieee754_double"
 	IntegerWidth *int    `json:"integer_width,omitempty"` // 32 | 64
 }
 
-// DataLoaderSource describes file discovery for a data source. URL templates
+// DataSourceLocation describes file discovery for a data source. URL templates
 // use Jinja-style substitutions for dates, variable names, and similar.
-type DataLoaderSource struct {
+type DataSourceLocation struct {
 	URLTemplate string   `json:"url_template"`
 	Mirrors     []string `json:"mirrors,omitempty"`
 }
 
-// DataLoaderTemporal describes the temporal coverage and record layout.
+// DataSourceTemporal describes the temporal coverage and record layout.
 // RecordsPerFile may be an int or the string "auto"; represented as interface{}.
-type DataLoaderTemporal struct {
+type DataSourceTemporal struct {
 	Start          *string `json:"start,omitempty"`
 	End            *string `json:"end,omitempty"`
 	FilePeriod     *string `json:"file_period,omitempty"`
@@ -472,15 +456,10 @@ type DataLoaderTemporal struct {
 	TimeVariable   *string `json:"time_variable,omitempty"`
 }
 
-// DataLoaderVariable describes one variable exposed by a data loader.
-// UnitConversion is either a number or an Expression AST node.
-type DataLoaderVariable struct {
-	FileVariable   string     `json:"file_variable"`
-	Units          string     `json:"units"`
-	UnitConversion any        `json:"unit_conversion,omitempty"`
-	Description    *string    `json:"description,omitempty"`
-	Reference      *Reference `json:"reference,omitempty"`
-}
+// The 0.x `DataLoaderVariable` is GONE with the source-side `variables` map: a
+// source declares no fields, so the file-variable binding lives on the
+// consuming parameter as `update.from` — see DataSourceBinding in
+// variable_model.go, which is this type minus `units`.
 
 // The top-level `operators` and `registered_functions` blocks (and the `call`
 // AST op that referenced them) were removed in v0.3.0 by the closed function
@@ -577,18 +556,16 @@ func (c CallbackCoupling) CouplingType() string { return c.Type }
 
 // EventCoupling represents event-based coupling
 type EventCoupling struct {
-	Type               string                `json:"type"`       // "event"
-	EventType          string                `json:"event_type"` // "continuous" or "discrete"
-	Name               string                `json:"name"`
-	Conditions         []Expression          `json:"conditions,omitempty"` // for continuous events
-	Trigger            *DiscreteEventTrigger `json:"trigger,omitempty"`    // for discrete events
-	Affects            []AffectEquation      `json:"affects,omitempty"`
-	FunctionalAffect   *FunctionalAffect     `json:"functional_affect,omitempty"`
-	AffectNeg          []AffectEquation      `json:"affect_neg,omitempty"`
-	DiscreteParameters []string              `json:"discrete_parameters,omitempty"`
-	RootFind           *string               `json:"root_find,omitempty"`
-	Reinitialize       *bool                 `json:"reinitialize,omitempty"`
-	Description        *string               `json:"description,omitempty"`
+	Type         string                `json:"type"`       // "event"
+	EventType    string                `json:"event_type"` // "continuous" or "discrete"
+	Name         string                `json:"name"`
+	Conditions   []Expression          `json:"conditions,omitempty"` // for continuous events
+	Trigger      *DiscreteEventTrigger `json:"trigger,omitempty"`    // for discrete events
+	Affects      []AffectEquation      `json:"affects,omitempty"`
+	AffectNeg    []AffectEquation      `json:"affect_neg,omitempty"`
+	RootFind     *string               `json:"root_find,omitempty"`
+	Reinitialize *bool                 `json:"reinitialize,omitempty"`
+	Description  *string               `json:"description,omitempty"`
 }
 
 func (e EventCoupling) CouplingType() string { return e.Type }
@@ -715,7 +692,7 @@ type ESMFile struct {
 	Metadata        Metadata                  `json:"metadata" validate:"required"`
 	Models          map[string]Model          `json:"models,omitempty"`
 	ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
-	DataLoaders     map[string]DataLoader     `json:"data_loaders,omitempty"`
+	DataSources     map[string]DataSource     `json:"data_sources,omitempty"`
 	// Enums holds file-local symbol → positive-integer mappings used by the
 	// `enum` AST op (esm-spec §9.3). Each entry is an enum name; its value is
 	// a map from symbolic names (strings) to positive integers. Lowering
@@ -809,7 +786,7 @@ func (e *ESMFile) ValidateStruct() error {
 		return err
 	}
 
-	// At least one of models, reaction_systems, or data_loaders must be present.
+	// At least one of models, reaction_systems, or data_sources must be present.
 	//
 	// This is the invariant for an ASSEMBLY document — one that declares
 	// components. It is NOT universal: the schema's root `anyOf` also admits two
@@ -821,13 +798,13 @@ func (e *ESMFile) ValidateStruct() error {
 	// the RAW document, which is what ValidateFile does (see isLibraryDocumentJSON).
 	// Callers holding only a typed ESMFile keep the strict invariant.
 	// The five top-level PAYLOAD keys of the schema's `anyOf`: models,
-	// reaction_systems, data_loaders, expression_templates, coupling_roles. A
+	// reaction_systems, data_sources, expression_templates, coupling_roles. A
 	// template-library file's payload is its `expression_templates` registry
 	// (§9.7.1) — omitting it here rejected every library file at serialization,
 	// which is how the emitter came to drop the registry in the first place.
-	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 && len(e.DataLoaders) == 0 &&
+	if len(e.Models) == 0 && len(e.ReactionSystems) == 0 && len(e.DataSources) == 0 &&
 		len(e.CouplingRoles) == 0 && len(e.ExpressionTemplates) == 0 {
-		return fmt.Errorf("at least one of 'models', 'reaction_systems', 'data_loaders', " +
+		return fmt.Errorf("at least one of 'models', 'reaction_systems', 'data_sources', " +
 			"'expression_templates', or 'coupling_roles' must be present")
 	}
 

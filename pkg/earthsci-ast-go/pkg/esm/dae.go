@@ -196,17 +196,12 @@ func factorTrivialDAE(model *Model, indep string) (int, error) {
 			}
 			model.Equations[j] = out
 		}
-		for vname, v := range model.Variables {
-			if v.Expression == nil {
-				continue
-			}
-			out, err := Substitute(v.Expression, bindings)
-			if err != nil {
-				return factored, err
-			}
-			v.Expression = out
-			model.Variables[vname] = v
-		}
+		// A second substitution pass over the variables' own definitions used to be
+		// needed here, because an observed variable carried its defining
+		// expression in `variables[v].expression`. esm 1.0.0 removed that field:
+		// every definition is now an EQUATION, so the loop above already
+		// substitutes into all of them and a separate pass would have nothing to
+		// visit.
 		model.Equations = append(model.Equations[:idx], model.Equations[idx+1:]...)
 		factored++
 	}
