@@ -43,8 +43,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       needs_release: ${{ steps.analysis.outputs.needs_release }}
-      version_bump: ${{ steps.analysis.outputs.version_bump }}
-      changed_packages: ${{ steps.analysis.outputs.changed_packages }}
       new_version: ${{ steps.analysis.outputs.new_version }}
       release_notes: ${{ steps.analysis.outputs.release_notes }}
     steps:
@@ -58,153 +56,86 @@ jobs:
     - name: Release analysis
       id: analysis
       run: |
-        # Get last release tag
-        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-        echo "Last tag: $LAST_TAG"
+        set -euo pipefail
 
-        # Determine a valid git ref for diff/log commands
-        # When no tags exist, LAST_TAG is "v0.0.0" which isn't a real ref
-        if git rev-parse "$LAST_TAG" >/dev/null 2>&1; then
-          LAST_REF="$LAST_TAG"
-        else
-          # Use the repo's initial commit so diffs cover the full history
-          LAST_REF=$(git rev-list --max-parents=0 HEAD | head -1)
-          echo "No existing tag found, using initial commit: $LAST_REF"
-        fi
+        # The package manifests are the SINGLE SOURCE OF TRUTH for the release
+        # version. The previous implementation guessed a version by bumping the
+        # last git tag according to commit-message keywords, which was wrong in
+        # three separate ways:
+        #   * `git describe` finds no reachable tag (history was rebased), so it
+        #     silently fell back to v0.0.0 and re-derived every release from zero;
+        #   * a single `!:` anywhere in the log forced a major bump, so the first
+        #     release would have been v1.0.0 regardless of what the manifests said;
+        #   * it then rewrote the manifests to match its guess and committed that
+        #     to main, racing every human push.
+        # Reading the version out of the manifests instead makes the release
+        # reproducible and lets a human decide the number in a reviewed commit.
+        VERSION=$(grep -m1 '^version = ' pkg/EarthSciAST.jl/Project.toml | sed 's/.*"\(.*\)".*/\1/')
+        echo "Manifest version: $VERSION"
 
-        # Check for changes in package directories since last tag
-        CHANGED_PACKAGES='[]'
-        NEEDS_RELEASE="false"
+        # Every binding must agree, or we would publish five different versions
+        # under one tag.
+        PY_VERSION=$(grep -m1 '^version = ' pkg/earthsci-ast-py/pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+        RS_VERSION=$(grep -m1 '^version = ' pkg/earthsci-ast-rs/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+        TS_VERSION=$(node -p "require('./pkg/earthsci-ast-ts/package.json').version")
 
-        if [ "${{ github.event.inputs.force_release }}" = "true" ]; then
-          NEEDS_RELEASE="true"
-          CHANGED_PACKAGES='["EarthSciAST.jl", "earthsci-ast-ts", "earthsci-ast-py", "earthsci-ast-rs"]'
-        elif git diff --name-only ${LAST_REF}..HEAD | grep -E '^pkg/'; then
-          echo "Changes detected in packages"
-          NEEDS_RELEASE="true"
-
-          # Detect which specific packages changed
-          CHANGED_PACKAGES=$(git diff --name-only ${LAST_REF}..HEAD | \
-            grep -E '^pkg/' | \
-            cut -d'/' -f2 | \
-            sort -u | \
-            jq -R -s -c 'split("\n") | map(select(length > 0))')
-        fi
-
-        echo "needs_release=$NEEDS_RELEASE" >> $GITHUB_OUTPUT
-        echo "changed_packages=$CHANGED_PACKAGES" >> $GITHUB_OUTPUT
-
-        # Determine version bump type
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          VERSION_BUMP="${{ github.event.inputs.version_type }}"
-        else
-          # Auto-detect from commit messages
-          COMMIT_MESSAGES=$(git log ${LAST_REF}..HEAD --oneline)
-          if echo "$COMMIT_MESSAGES" | grep -i "BREAKING CHANGE\|!:"; then
-            VERSION_BUMP="major"
-          elif echo "$COMMIT_MESSAGES" | grep -i "^feat\|^feature"; then
-            VERSION_BUMP="minor"
-          else
-            VERSION_BUMP="patch"
+        MISMATCH=""
+        for pair in "julia:$VERSION" "python:$PY_VERSION" "rust:$RS_VERSION" "typescript:$TS_VERSION"; do
+          name=${pair%%:*}; got=${pair#*:}
+          if [ "$got" != "$VERSION" ]; then
+            MISMATCH="$MISMATCH $name=$got"
           fi
+        done
+        if [ -n "$MISMATCH" ]; then
+          echo "::error::Package versions disagree (expected $VERSION):$MISMATCH"
+          exit 1
         fi
+        echo "All bindings agree on $VERSION"
 
-        echo "version_bump=$VERSION_BUMP" >> $GITHUB_OUTPUT
-        echo "Version bump: $VERSION_BUMP"
+        echo "new_version=$VERSION" >> $GITHUB_OUTPUT
 
-        # Calculate new version
-        LAST_VERSION=${LAST_TAG#v}
-        IFS='.' read -ra VERSION_PARTS <<< "$LAST_VERSION"
-        MAJOR=${VERSION_PARTS[0]:-0}
-        MINOR=${VERSION_PARTS[1]:-0}
-        PATCH=${VERSION_PARTS[2]:-0}
-
-        case $VERSION_BUMP in
-          major)
-            MAJOR=$((MAJOR + 1))
-            MINOR=0
-            PATCH=0
-            ;;
-          minor)
-            MINOR=$((MINOR + 1))
-            PATCH=0
-            ;;
-          patch)
-            PATCH=$((PATCH + 1))
-            ;;
-          prerelease)
-            PRERELEASE_TYPE="${{ github.event.inputs.prerelease_type }}"
-            PATCH=$((PATCH + 1))
-            NEW_VERSION="$MAJOR.$MINOR.$PATCH-${PRERELEASE_TYPE}.1"
-            echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-            echo "New prerelease version: $NEW_VERSION"
-            # Check if the computed tag already exists
-            if git tag -l "v$NEW_VERSION" | grep -q "v$NEW_VERSION"; then
-              echo "::warning::Tag v$NEW_VERSION already exists — skipping release"
-              echo "needs_release=false" >> $GITHUB_OUTPUT
-            fi
-            exit 0
-            ;;
-        esac
-
-        NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-        echo "New version: $NEW_VERSION"
-
-        # Check if the computed tag already exists
-        if git tag -l "v$NEW_VERSION" | grep -q "v$NEW_VERSION"; then
-          echo "::warning::Tag v$NEW_VERSION already exists — skipping release"
+        # Already released? Then this push is ordinary work, not a release.
+        if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+          echo "::notice::Tag v$VERSION already exists — no release for this push."
           echo "needs_release=false" >> $GITHUB_OUTPUT
           exit 0
         fi
 
-        # Generate release notes
-        cat > /tmp/release_notes.md << EOF
-        # Release v$NEW_VERSION
+        echo "needs_release=true" >> $GITHUB_OUTPUT
 
-        ## Changes since $LAST_TAG:
+        # Changelog range: the previous release tag if there is one, else the
+        # last 50 commits. An unbounded log over all history produced a release
+        # body so large it blew the argv limit in the finalize step.
+        PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
+        if [ -n "$PREV_TAG" ] && git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+          RANGE="$PREV_TAG..HEAD"
+        else
+          RANGE=""
+        fi
 
-        $(git log ${LAST_REF}..HEAD --pretty=format:"- %s (%h)" --no-merges)
-
-        ## Changed Packages:
-
-        $(echo "$CHANGED_PACKAGES" | jq -r '.[]' | sed 's/^/- /')
-
-        ## Package Versions:
-        - Julia EarthSciAST.jl: v$NEW_VERSION
-        - TypeScript @earthsciml/ast: v$NEW_VERSION
-        - Python earthsci-ast: v$NEW_VERSION
-        - Rust earthsci-ast: v$NEW_VERSION
-
-        ## Installation:
-
-        ### Quick Install (Binaries)
-        \`\`\`bash
-        curl -sSL https://github.com/${{ github.repository }}/releases/latest/download/update.sh | bash
-        \`\`\`
-
-        ### Package Managers
-        \`\`\`bash
-        # Julia
-        using Pkg; Pkg.add("EarthSciAST")
-
-        # TypeScript/JavaScript
-        npm install @earthsciml/ast
-
-        # Python
-        pip install earthsci-ast
-
-        # Rust
-        cargo add earthsci-ast
-        \`\`\`
-
-        EOF
-
-        # Encode release notes for GitHub output
         {
-          echo 'release_notes<<EOF'
-          cat /tmp/release_notes.md
-          echo EOF
+          echo "release_notes<<ESM_RELEASE_NOTES_EOF"
+          echo "# Release v$VERSION"
+          echo ""
+          echo "## Changes"
+          echo ""
+          if [ -n "$RANGE" ]; then
+            git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges | head -100
+          else
+            git log --pretty=format:"- %s (%h)" --no-merges -n 50
+          fi
+          echo ""
+          echo ""
+          echo "## Installation"
+          echo ""
+          echo '```bash'
+          echo 'using Pkg; Pkg.add("EarthSciAST")   # Julia'
+          echo 'npm install @earthsciml/ast          # TypeScript'
+          echo 'pip install earthsci-ast             # Python'
+          echo 'cargo add earthsci-ast               # Rust'
+          echo 'go get github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go'
+          echo '```'
+          echo "ESM_RELEASE_NOTES_EOF"
         } >> $GITHUB_OUTPUT
 
   # Security scan before release
@@ -279,7 +210,7 @@ jobs:
         path: pre-release-security-scan.json
         retention-days: 90
 
-  # Create the release and update package versions
+  # Create the release
   create-release:
     needs: [release-analysis, security-scan]
     runs-on: ubuntu-latest
@@ -293,64 +224,33 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 0
 
-    - name: Update package versions
-      run: |
-        NEW_VERSION="${{ needs.release-analysis.outputs.new_version }}"
-
-        # Update Julia Project.toml
-        if [ -f "pkg/EarthSciAST.jl/Project.toml" ]; then
-          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" pkg/EarthSciAST.jl/Project.toml
-        fi
-
-        # Update TypeScript package.json
-        if [ -f "pkg/earthsci-ast-ts/package.json" ]; then
-          cd pkg/earthsci-ast-ts
-          npm version $NEW_VERSION --no-git-tag-version
-          cd ../..
-        fi
-
-        # Update Python pyproject.toml
-        if [ -f "pkg/earthsci-ast-py/pyproject.toml" ]; then
-          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" pkg/earthsci-ast-py/pyproject.toml
-        fi
-
-        # Update Rust Cargo.toml
-        if [ -f "pkg/earthsci-ast-rs/Cargo.toml" ]; then
-          sed -i "s/version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" pkg/earthsci-ast-rs/Cargo.toml
-        fi
-
-    - name: Commit version updates
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        # Stage only tracked manifests the version bump touched; never sweep up
-        # build artifacts or other stray files from the runner's working tree.
-        git add -u pkg/
-        git commit -m "Release v${{ needs.release-analysis.outputs.new_version }}" || exit 0
-
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
+      uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: v${{ needs.release-analysis.outputs.new_version }}
-        release_name: Release v${{ needs.release-analysis.outputs.new_version }}
+        name: Release v${{ needs.release-analysis.outputs.new_version }}
         body: ${{ needs.release-analysis.outputs.release_notes }}
         draft: false
         prerelease: ${{ contains(needs.release-analysis.outputs.new_version, '-') }}
 
-    - name: Push changes
-      uses: ad-m/github-push-action@master
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        branch: main
-        tags: true
 
-  # Note: package-specific publish jobs (npm, PyPI, crates.io, Julia registry,
-  # Go module tagging) are no longer dispatched from here. They live in
-  # release-publish.yml and fire automatically on the `release: published`
-  # event emitted by the `create-release` job above (gt-567).
+  # Publish to the package registries. This is CALLED, not left to fire on the
+  # `release: published` event: that release is created with GITHUB_TOKEN, and
+  # GitHub does not start new workflow runs from GITHUB_TOKEN-triggered events,
+  # so an event-driven release-publish.yml would never have run.
+  publish-packages:
+    needs: [release-analysis, security-scan, create-release]
+    if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed'
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      version: ${{ needs.release-analysis.outputs.new_version }}
+    secrets: inherit
+    permissions:
+      contents: write
+      id-token: write
 
   # Build cross-platform binaries
   build-binaries:

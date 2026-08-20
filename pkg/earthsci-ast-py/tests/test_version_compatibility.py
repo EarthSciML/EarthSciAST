@@ -15,6 +15,8 @@ what makes them test the gate rather than the loader's own version constant.
 import warnings
 from contextlib import contextmanager
 
+import re
+
 import pytest
 from conftest import FIXTURES_ROOT, load_fixture as _load_fixture
 from earthsci_ast import load, __version__ as VERSION
@@ -247,16 +249,23 @@ class TestLibraryVersionInfo:
     """Test library version information."""
 
     def test_current_library_version(self):
-        """Should expose current library version.
+        """Should expose a well-formed package version.
+
+        The PACKAGE version (``__version__``) and the esm FORMAT version
+        (``parse._CURRENT_VERSION``) are independent: the format version is what
+        a document carries in its ``esm`` field, while the package version
+        tracks releases of this binding. They happened to coincide while both
+        read 1.0.0, and asserting lockstep turned that coincidence into a rule --
+        which broke as soon as the bindings were released as 0.1.0 against the
+        1.0.0 format.
 
         ``__version__`` falls back to ``0.0.0+unknown`` when the package is
         imported straight from the source tree (no installed distribution
-        metadata); only an installed distribution can be checked for lockstep
-        with ``parse._CURRENT_VERSION``.
+        metadata).
         """
         if VERSION.startswith("0.0.0+"):
             pytest.skip("source-tree import: no distribution metadata to check")
-        assert VERSION == _EXPECTED_VERSION
+        assert re.match(r"^\d+\.\d+\.\d+", VERSION), VERSION
 
     def test_compatibility_info(self):
         """Should provide version compatibility information."""

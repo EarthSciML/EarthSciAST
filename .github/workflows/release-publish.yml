@@ -7,6 +7,24 @@ name: Release Publish
 # conformance-testing.yml; only publish/release logic is handled here.
 
 on:
+  # A release created by the integrated pipeline uses GITHUB_TOKEN, and GitHub
+  # deliberately does NOT start new workflow runs from GITHUB_TOKEN-triggered
+  # events -- so neither `release: published` nor `push: tags` fires in that
+  # case. The pipeline therefore calls this workflow directly via workflow_call.
+  # The release/tag triggers are kept for releases a human creates by hand,
+  # which DO trigger normally.
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to publish, without the leading v (e.g. 0.1.0)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, without the leading v (e.g. 0.1.0)'
+        required: true
+        type: string
   release:
     types: [ published ]
   push:
@@ -81,10 +99,13 @@ jobs:
     name: Publish to PyPI
     needs: python-build
     runs-on: ubuntu-latest
-    # Disabled (2026-04-11, gt-0w4): not ready to publish anything yet. Re-enable
-    # by restoring the original condition once we're ready to release to PyPI and
-    # the trusted publisher is configured.
-    if: false
+    # Requires a PyPI trusted publisher for this repo + workflow + the `pypi`
+    # environment (see RELEASING.md). Without it this job fails with
+    # invalid-publisher.
+    if: >-
+      inputs.version != ''
+      || (github.event_name == 'release' && github.event.action == 'published')
+      || startsWith(github.ref, 'refs/tags/v')
     environment:
       name: pypi
       url: https://pypi.org/p/earthsci-ast
@@ -106,47 +127,51 @@ jobs:
   # ---------------------------------------------------------------------------
   julia-register:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: >-
+      inputs.version != ''
+      || (github.event_name == 'release' && github.event.action == 'published')
+      || startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Julia
-        uses: julia-actions/setup-julia@v2
-        with:
-          version: '1.12'
-
-      - name: Update version in Project.toml
-        working-directory: pkg/EarthSciAST.jl
+      # Julia General registration is NOT automated here, deliberately.
+      #
+      # The previous implementation called julia-actions/RegisterAction with
+      # `registry:` and `package_dir:` inputs -- neither of which that action
+      # accepts (it takes only `token` and `registrator`), so both were silently
+      # ignored. Since EarthSciAST.jl lives in a subdirectory, Registrator would
+      # have looked for a Project.toml at the repo root and registered the wrong
+      # package, or nothing at all.
+      #
+      # Registering a subdirectory package requires the `subdir=` argument, which
+      # is only expressible through a JuliaRegistrator comment. So the release
+      # prints the exact comment to post; see RELEASING.md.
+      - name: Julia registration instructions
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          sed -i "s/version = \"[^\"]*\"/version = \"$VERSION\"/" Project.toml
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add Project.toml
-          git commit -m "Update version to $VERSION" || true
-
-      - name: Register with General Registry
-        uses: julia-actions/RegisterAction@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          registry: General
-          package_dir: pkg/EarthSciAST.jl
-
-      - name: Tag Julia package
-        working-directory: pkg/EarthSciAST.jl
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          git tag -a "EarthSciAST-v$VERSION" -m "EarthSciAST v$VERSION"
-          git push origin "EarthSciAST-v$VERSION"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
+          {
+            echo "## Julia registration (manual step)"
+            echo ""
+            echo "EarthSciAST.jl v$VERSION is ready to register."
+            echo ""
+            echo "Comment the following on the release commit"
+            echo "(https://github.com/${{ github.repository }}/commit/${{ github.sha }}):"
+            echo ""
+            echo '```'
+            echo "@JuliaRegistrator register subdir=pkg/EarthSciAST.jl"
+            echo '```'
+            echo ""
+            echo "This requires the JuliaRegistrator GitHub App to be installed on the repository."
+            echo "New packages sit in a 3-day AutoMerge waiting period in the General registry."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Rust: publish to crates.io and attach cross-platform binaries.
   # ---------------------------------------------------------------------------
   rust-publish:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: >-
+      inputs.version != ''
+      || (github.event_name == 'release' && github.event.action == 'published')
+      || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -156,9 +181,9 @@ jobs:
       - name: Update version in Cargo.toml
         working-directory: pkg/earthsci-ast-rs
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          sed -i "s/version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
-          cargo update -p earthsci-ast --precise $VERSION
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
+          sed -i "0,/^version = \"[^\"]*\"/s//version = \"$VERSION\"/" Cargo.toml
+          cargo generate-lockfile
 
       - name: Build for release
         working-directory: pkg/earthsci-ast-rs
@@ -198,7 +223,10 @@ jobs:
   # ---------------------------------------------------------------------------
   go-build-release:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: >-
+      inputs.version != ''
+      || (github.event_name == 'release' && github.event.action == 'published')
+      || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -210,14 +238,14 @@ jobs:
       - name: Update version
         working-directory: pkg/earthsci-ast-go
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
           echo "Building version: $VERSION"
           sed -i "s/Version = \"[^\"]*\"/Version = \"$VERSION\"/" pkg/esm/version.go 2>/dev/null || true
 
       - name: Build for multiple platforms
         working-directory: pkg/earthsci-ast-go
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
           GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o esm-go-linux-amd64 ./main.go
           GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o esm-go-darwin-amd64 ./main.go
           GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o esm-go-darwin-arm64 ./main.go
@@ -238,7 +266,10 @@ jobs:
 
   go-publish-module:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: >-
+      inputs.version != ''
+      || (github.event_name == 'release' && github.event.action == 'published')
+      || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -250,11 +281,11 @@ jobs:
       - name: Tag Go module
         working-directory: pkg/earthsci-ast-go
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git tag -a "earthsci-ast-go/v$VERSION" -m "Go module v$VERSION"
-          git push origin "earthsci-ast-go/v$VERSION"
+          git tag -a "pkg/earthsci-ast-go/v$VERSION" -m "Go module v$VERSION"
+          git push origin "pkg/earthsci-ast-go/v$VERSION"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -263,7 +294,7 @@ jobs:
 
       - name: Trigger module indexing
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
           MODULE_PATH="github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go"
           curl -X GET "https://proxy.golang.org/$MODULE_PATH/@v/v$VERSION.info" || true
 
@@ -272,7 +303,10 @@ jobs:
   # ---------------------------------------------------------------------------
   npm-publish:
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      inputs.version != ''
+      || (github.event_name == 'release' && github.event.action == 'published')
+      || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -295,41 +329,5 @@ jobs:
       - name: Publish to NPM
         working-directory: pkg/earthsci-ast-ts
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  npm-publish-beta:
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Use Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
-          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
-
-      - name: Install dependencies
-        working-directory: pkg/earthsci-ast-ts
-        run: npm ci
-
-      - name: Build package
-        working-directory: pkg/earthsci-ast-ts
-        run: npm run build
-
-      - name: Update version to beta
-        working-directory: pkg/earthsci-ast-ts
-        run: |
-          CURRENT_VERSION=$(node -p "require('./package.json').version")
-          BETA_VERSION="${CURRENT_VERSION}-beta.$(date +%s)"
-          npm version $BETA_VERSION --no-git-tag-version
-          echo "Publishing version: $BETA_VERSION"
-
-      - name: Publish beta to NPM
-        working-directory: pkg/earthsci-ast-ts
-        run: npm publish --tag beta
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

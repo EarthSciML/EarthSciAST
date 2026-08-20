@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
-import { join } from 'path'
 import {
   load,
   migrate,
@@ -181,10 +179,15 @@ describe('Version Compatibility', () => {
   })
 
   describe('Library Version Information', () => {
-    it('exposes the schema version, kept in lockstep with package.json', () => {
-      const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf-8'))
-      expect(VERSION).toBe(pkg.version)
-      expect(SCHEMA_VERSION).toBe(pkg.version)
+    // The esm FORMAT version and the npm PACKAGE version are independent. The
+    // format version is what appears in a document's `esm` field and in the
+    // schema `$id`; the package version tracks releases of this binding and
+    // moves on its own cadence. They were equal while both read 1.0.0, and a
+    // test asserting lockstep encoded that coincidence as a rule -- which broke
+    // the moment the bindings were released as 0.1.0 against the 1.0.0 format.
+    it('exposes the schema version, derived from the embedded schema $id', () => {
+      expect(SCHEMA_VERSION).toBe('1.0.0')
+      expect(VERSION).toBe(SCHEMA_VERSION)
     })
   })
 })

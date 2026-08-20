@@ -1,6 +1,6 @@
 [package]
 name = "earthsci-ast"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88.0"
 authors = ["EarthSciML Authors and Contributors"]
@@ -61,8 +61,11 @@ rstar = "0.13"
 # runtime dependency that made the `esm` binary non-relocatable.
 #
 # Pinned EXACTLY: this crate decides conservative-regridding areas, and its
-# upstream is young (0.x, self-described beta). Bump deliberately, with the
-# `s2-cpp` differential test (below) run against the C++ kernel.
+# upstream is young (0.x, self-described beta). Bump deliberately, and re-check
+# the geometry results in `src/geometry.rs` against the s2geometry reference
+# vectors when you do — the former `s2-cpp` C++ differential oracle was removed
+# when the crate was published to crates.io (git dependencies are not allowed
+# there), so there is no longer an in-tree cross-check against C++ S2.
 s2rst = "=0.4.0"
 # diffsol (gt-5ws) — the ODE simulation backend, on BOTH native and wasm32: its
 # Faer backend is pure Rust and cross-compiles (spike S1), so the in-browser
@@ -99,26 +102,12 @@ criterion = { version = "0.5", optional = true }
 # because both crates live in this working tree; a published build would pin a
 # version/git rev. Optional so the default build neither links EarthSciIO nor
 # inherits its netcdf/hdf5 C build requirements.
-earthsciio = { path = "../../../EarthSciIO/rust", optional = true }
+earthsciio = { path = "../../../EarthSciIO/rust", version = "0.1", optional = true }
 time = { version = "0.3", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
-# s2bindings (ess-my4.4.11): FFI over Google's s2geometry C++ engine. NO LONGER
-# the production kernel — `s2rst` replaced it (see `[dependencies]`) — but kept
-# behind the OPT-IN `s2-cpp` feature as the **differential oracle**: the same S2
-# core Python's `spherely` wraps, so `tests/geometry_s2_differential.rs` can pin
-# the pure-Rust kernel against C++ S2 directly and catch an upstream regression
-# before it moves a regridding weight (CONFORMANCE_SPEC.md §5.8.2).
-#
-# Optional AND native-only, so the default build needs no CMake / abseil /
-# OpenSSL and cross-compiles to wasm32: the crate builds vendored abseil +
-# s2geometry from source and cannot target wasm32 at all. (diffsol, which used to
-# be gated here alongside it, is now an unconditional `[dependencies]` entry
-# since its Faer backend cross-compiles.)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-s2bindings = { git = "https://github.com/EarthSciML/s2bindings.rs", tag = "v0.1.0", optional = true }
 
 # Native-only dev-dependencies. `criterion` pulls `wait-timeout` (whose `imp`
 # module is unix/windows-only and fails to compile for wasm32), and
@@ -155,13 +144,6 @@ wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "web-sys"]
 # binding's `esio_provider` is opt-in for the same reason), and EarthSciIO pulls
 # netcdf/hdf5 C libraries that would otherwise burden every consumer's build.
 esio = ["dep:earthsciio", "dep:time"]
-# OPT-IN C++ S2 differential oracle (native only). Links the `s2bindings` FFI
-# kernel ALONGSIDE the pure-Rust `s2rst` one and enables
-# `tests/geometry_s2_differential.rs`, which asserts the two agree on area and
-# overlap area under the §5.8.2 tolerance contract. OFF by default because it
-# drags in the CMake + abseil + OpenSSL C++ superbuild that switching to s2rst
-# removed; turn it on when bumping `s2rst` or auditing the geometry kernel.
-s2-cpp = ["dep:s2bindings"]
 # Performance features
 parallel = ["rayon"]
 simd = ["wide", "bytemuck"]

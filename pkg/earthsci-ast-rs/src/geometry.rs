@@ -17,9 +17,8 @@
 //!   predicates). It runs the same S2 algorithms Python's `spherely` gets from
 //!   the C++ original, so the Rust and Python bindings still agree to a much
 //!   tighter tolerance than either does with Julia/GeometryOps (CONFORMANCE_SPEC.md
-//!   §5.8.2) — the C++ kernel remains available behind the `s2-cpp` feature as the
-//!   differential oracle that pins that claim. A flat lon/lat clip is wrong at the
-//!   poles and the antimeridian, which is exactly why the kernel is required.
+//!   §5.8.2). A flat lon/lat clip is wrong at the poles and the antimeridian,
+//!   which is exactly why the kernel is required.
 //! * [`Manifold::Planar`] — edges are **straight lines in the lon/lat plane**;
 //!   the clip is a pure-Rust Sutherland–Hodgman convex-polygon intersection.
 //!   Exact and dependency-free, used where a flat interpretation is intended
