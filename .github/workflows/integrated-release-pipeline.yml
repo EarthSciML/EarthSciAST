@@ -106,7 +106,8 @@ jobs:
         # Changelog range: the previous release tag if there is one, else the
         # last 50 commits. An unbounded log over all history produced a release
         # body so large it blew the argv limit in the finalize step.
-        PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
+        PREV_TAG=$(git tag -l 'v*' --sort=-v:refname)
+        PREV_TAG=${PREV_TAG%%$'\n'*}
         if [ -n "$PREV_TAG" ] && git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
           RANGE="$PREV_TAG..HEAD"
         else
@@ -120,7 +121,7 @@ jobs:
           echo "## Changes"
           echo ""
           if [ -n "$RANGE" ]; then
-            git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges | head -100
+            git log "$RANGE" -n 100 --pretty=format:"- %s (%h)" --no-merges
           else
             git log --pretty=format:"- %s (%h)" --no-merges -n 50
           fi
