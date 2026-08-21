@@ -78,6 +78,7 @@ use crate::simulate_array::{
     ConstArrayScope, Value as EvalValue, eval_expression_with_extents_and_consts,
     run_value_invention,
 };
+use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
 
 /// What a [`PrepareOptions::progress`] observer wants [`prepare`] to do next —
@@ -976,6 +977,35 @@ pub(crate) fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f6
 /// per gated request and per observed, not merely per phase — and returning
 /// [`Flow::Cancel`] stops it at a named point. Pair it with
 /// [`PrepareOptions::gated_fetch_batch`] so the fetch itself is interruptible.
+/// Does `raw` carry an esm-spec §9.7.2 import EDGE — at the top level of a
+/// library file, or inside a component?
+///
+/// The pushdown prepass reads the RAW document, before the typed load, so an
+/// edge that is still unresolved hides the imported templates and index sets
+/// from the recogniser: the binning body reads as an unexpandable
+/// `apply_expression_template` and the rewrite silently declines, which costs
+/// the whole ungated fetch. Resolving is gated on this predicate rather than run
+/// unconditionally so a document with no edge reaches `desugar_pushdown` in
+/// exactly the bytes it does today (metaparameters unfolded, goldens unmoved).
+fn has_template_import_edge(raw: &JsonValue) -> bool {
+    let Some(obj) = raw.as_object() else {
+        return false;
+    };
+    if obj.contains_key("expression_template_imports") {
+        return true;
+    }
+    ["models", "reaction_systems"].iter().any(|kind| {
+        obj.get(*kind)
+            .and_then(JsonValue::as_object)
+            .is_some_and(|comps| {
+                comps.values().any(|c| {
+                    c.as_object()
+                        .is_some_and(|c| c.contains_key("expression_template_imports"))
+                })
+            })
+    })
+}
+
 pub fn prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
@@ -1031,35 +1061,16 @@ pub fn prepare(
         }
     };
 
-    // ---- Phase-1 semantics: pushdown prepass BEFORE the typed parse ---------
-    report(PreparePhase::Rewrite, 0, None, "")?;
-    let rewritten = if opts.pushdown_rewrite {
-        desugar_pushdown(doc, opts.model_name.as_deref()).map_err(|e| err(e.0))?
-    } else {
-        std::borrow::Cow::Borrowed(doc)
-    };
-    let rewrite_fired = matches!(rewritten, std::borrow::Cow::Owned(_));
-    let provider_keys: Vec<String> = providers.iter().map(|(k, _)| k.clone()).collect();
-    let pd_gates: HashMap<String, ProviderGate> = if rewrite_fired {
-        pushdown_provider_gates(&rewritten, &provider_keys).map_err(|e| err(e.0))?
-    } else {
-        HashMap::new()
-    };
-    let pd_coupling = pushdown_coupling_pairs(&rewritten);
-    log(&format!(
-        "  [prepare] pushdown rewrite {}",
-        if rewrite_fired {
-            "fired"
-        } else {
-            "did not fire"
-        }
-    ));
-
     // ---- extent discovery: a loader that measures its OWN record count ------
-    // Must run BEFORE the typed load, because a discovered extent binds a
-    // metaparameter and metaparameters are closed at the loader API (§9.7.6
-    // site 4). A gated provider is skipped: its extent is the value-invention
-    // set's, which does not exist yet.
+    // FIRST, ahead of the rewrite, because a discovered extent binds a
+    // metaparameter and every resolution below closes metaparameters at the
+    // loader API (§9.7.6 site 4). This is the Julia ordering (`simulate.jl`
+    // prepare); Rust used to discover AFTER the rewrite, which was harmless only
+    // for as long as nothing between the two steps folded a metaparameter — the
+    // §9.7 resolution below does. A gated provider is still rejected outright:
+    // its extent is the value-invention set's, which does not exist yet — the
+    // provider's OWN declared gate is caught here, the gate the rewrite record
+    // derives in the check after the rewrite.
     let mut providers = providers;
     let mut discovered: HashMap<String, ArrayD<f64>> = HashMap::new();
     let mut metaparameters = opts.metaparameters.clone();
@@ -1068,7 +1079,7 @@ pub fn prepare(
         let Some(mp) = prov.extent_metaparameter() else {
             continue;
         };
-        if pd_gates.contains_key(key) || prov.gate_spec().is_some() {
+        if prov.gate_spec().is_some() {
             return Err(err(format!(
                 "provider '{key}' both GATES on a derived index set and declares the \
                  extent metaparameter '{mp}'; a gated slab's extent is the gating \
@@ -1101,6 +1112,66 @@ pub fn prepare(
         discovered_by.insert(mp.clone(), (n, key.clone()));
         metaparameters.insert(mp, n);
         discovered.insert(key.clone(), a);
+    }
+
+    // ---- Phase-1 semantics: pushdown prepass BEFORE the typed parse ---------
+    // §9.7 imports resolve BEFORE the recogniser looks. `desugar_pushdown`
+    // expands `apply_expression_template` references to find the containment
+    // predicate, but it can only expand what is IN SCOPE — and an import edge
+    // puts the library's templates and index sets in scope at LOAD, which has
+    // not happened yet on this raw-JSON path. Skipping this makes a document
+    // that factors its binning body through an imported library fail detection
+    // silently and fetch every provider-backed array whole.
+    report(PreparePhase::Rewrite, 0, None, "")?;
+    let resolved: Option<JsonValue> = if opts.pushdown_rewrite && has_template_import_edge(doc) {
+        resolve_template_machinery(
+            doc,
+            opts.base_path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .as_path(),
+            &metaparameters,
+        )
+        .map_err(|e| err(format!("resolve template imports: {}", e.message)))?
+    } else {
+        None
+    };
+    let doc: &JsonValue = resolved.as_ref().unwrap_or(doc);
+    let rewritten = if opts.pushdown_rewrite {
+        desugar_pushdown(doc, opts.model_name.as_deref()).map_err(|e| err(e.0))?
+    } else {
+        std::borrow::Cow::Borrowed(doc)
+    };
+    let rewrite_fired = matches!(rewritten, std::borrow::Cow::Owned(_));
+    let provider_keys: Vec<String> = providers.iter().map(|(k, _)| k.clone()).collect();
+    let pd_gates: HashMap<String, ProviderGate> = if rewrite_fired {
+        pushdown_provider_gates(&rewritten, &provider_keys).map_err(|e| err(e.0))?
+    } else {
+        HashMap::new()
+    };
+    let pd_coupling = pushdown_coupling_pairs(&rewritten);
+    log(&format!(
+        "  [prepare] pushdown rewrite {}",
+        if rewrite_fired {
+            "fired"
+        } else {
+            "did not fire"
+        }
+    ));
+
+    // A discovered extent and a record-derived gate are mutually exclusive: a
+    // gated slab's extent belongs to the gating set, which value-invention has
+    // not materialised yet. (The provider's OWN declared gate is caught in the
+    // discovery loop above; this catches the gate the rewrite record derives,
+    // which only exists now.)
+    for key in discovered.keys() {
+        if pd_gates.contains_key(key) {
+            return Err(err(format!(
+                "provider '{key}' both GATES on a derived index set and declares an \
+                 extent metaparameter; a gated slab's extent is the gating set's, not \
+                 a discovered one"
+            )));
+        }
     }
 
     // ---- typed load (metaparameters closed at the loader API) ---------------
