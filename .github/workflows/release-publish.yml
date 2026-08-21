@@ -125,29 +125,13 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Build binary assets
-        working-directory: pkg/earthsci-ast-rs
-        run: |
-          rustup target add x86_64-unknown-linux-gnu
-          rustup target add x86_64-apple-darwin
-          rustup target add x86_64-pc-windows-gnu
-
-          cargo build --release --target x86_64-unknown-linux-gnu --bin esm
-          cargo build --release --target x86_64-apple-darwin --bin esm
-          cargo build --release --target x86_64-pc-windows-gnu --bin esm
-
-          mkdir -p dist
-          cp target/x86_64-unknown-linux-gnu/release/esm dist/esm-linux-x86_64
-          cp target/x86_64-apple-darwin/release/esm dist/esm-macos-x86_64
-          cp target/x86_64-pc-windows-gnu/release/esm.exe dist/esm-windows-x86_64.exe
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: pkg/earthsci-ast-rs/dist/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # NOTE: cross-platform `esm` binaries are NOT built here. This job used to
+      # cross-compile x86_64-apple-darwin and x86_64-pc-windows-gnu from the
+      # Ubuntu runner, which cannot work -- the Apple target needs an Xcode SDK
+      # and the link failed with `cc: error: unrecognized command-line option
+      # '-arch'`. binary-release.yml already builds every platform on its own
+      # native runner (Linux/macOS x64/macOS ARM64/Windows), which is both
+      # correct and what the release actually attaches.
 
   # ---------------------------------------------------------------------------
   # Go: cross-platform binaries + module tagging / index trigger.
