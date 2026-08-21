@@ -238,17 +238,40 @@ fn pd_find_ifelse_cond(e: &Value) -> Option<&Value> {
     }
 }
 
-/// The overlap-gate envelopes of a rectangle-containment predicate.
+/// The §5.5.6 overlap-gate envelopes of a containment predicate. `tgt_env` is
+/// always the four cell bounds; `src_env` is two point coordinates or four
+/// record-envelope bounds, per the shape matched.
 struct Containment {
-    src_env: [String; 2],
+    src_env: Vec<String>,
     tgt_env: [String; 4],
 }
 
-/// Parse a rectangle-containment predicate — an `and`/`*` of comparisons,
-/// each between a CELL-indexed rect factor and a RECORD-indexed point factor
-/// — into the overlap-gate envelopes `(src_env=[Px,Py],
-/// tgt_env=[xmin,ymin,xmax,ymax])`; `None` unless exactly two point
-/// coordinates each carry BOTH a min and a max cell bound.
+/// Parse a containment predicate — an `and`/`*` of comparisons, each between a
+/// factor subscripted by `c_sym` and one subscripted by `r_sym` — into the
+/// §5.5.6 overlap-gate envelopes, `src_env` the `r_sym` side. TWO shapes are
+/// read, told apart by how many DISTINCT `r_sym`-side factors appear and how
+/// many `c_sym`-side bounds each carries:
+///
+/// * POINT-IN-RECT — 2 factors, each with a min AND a max bound:
+///   `src_env = [Px, Py]`, `tgt_env = [xmin, ymin, xmax, ymax]`;
+/// * ENVELOPE-OVERLAP — 4 factors, each with EXACTLY ONE bound, i.e. the AABB
+///   test `cxmin ≤ rxmax ∧ rxmin ≤ cxmax ∧ cymin ≤ rymax ∧ rymin ≤ cymax`:
+///   `src_env = [rxmin, rymin, rxmax, rymax]`, `tgt_env = [cxmin, cymin, cxmax,
+///   cymax]`.
+///
+/// A bound's KIND comes from the ORIENTATION of its comparison, so the
+/// comparisons may be authored in any order and either direction.
+///
+/// Which factors share an axis is decided by appearance order, and that choice
+/// is FREE: the envelope predicate is a perfect matching between the four cell
+/// and four record factors, and nothing in it says which two comparisons are
+/// the x pair — but §5.5.6's broad phase is the conjunction of the same four
+/// inequalities under ANY pairing that puts one lower and one upper bound in
+/// each axis, because each emitted inequality pairs an envelope entry with the
+/// partner matched here. The axis labels are a relabelling the AABB test is
+/// invariant under. Appearance order is used because it is deterministic.
+///
+/// `None` on any other shape.
 fn pd_parse_containment(pred: &Value, c_sym: &str, r_sym: &str) -> Option<Containment> {
     if !pred.is_object() {
         return None;
@@ -259,9 +282,10 @@ fn pd_parse_containment(pred: &Value, c_sym: &str, r_sym: &str) -> Option<Contai
     } else {
         &single
     };
-    // point factor -> {"min": rect, "max": rect}, in first-seen point order.
+    // record-side factor -> {"min": cell bound, "max": cell bound}, in
+    // first-seen order.
     let mut bounds: HashMap<String, HashMap<&'static str, String>> = HashMap::new();
-    let mut point_order: Vec<String> = Vec::new();
+    let mut rec_order: Vec<String> = Vec::new();
     for cmp in comps {
         let opn0 = op_of(cmp)?;
         if !matches!(opn0, "<" | "<=" | ">" | ">=") {
@@ -283,30 +307,58 @@ fn pd_parse_containment(pred: &Value, c_sym: &str, r_sym: &str) -> Option<Contai
         let opn = if cell_on_left { opn0 } else { pd_flip(opn0) };
         let kind = if matches!(opn, "<" | "<=") { "min" } else { "max" };
         let entry = bounds.entry(fp.to_string()).or_insert_with(|| {
-            point_order.push(fp.to_string());
+            rec_order.push(fp.to_string());
             HashMap::new()
         });
-        entry.insert(kind, fc.to_string());
-    }
-    if point_order.len() != 2 {
-        return None;
-    }
-    let (px, py) = (point_order[0].clone(), point_order[1].clone());
-    for p in [&px, &py] {
-        let b = &bounds[p.as_str()];
-        if !b.contains_key("min") || !b.contains_key("max") {
-            return None;
+        if entry.insert(kind, fc.to_string()).is_some() {
+            return None; // one bound of each kind per factor
         }
     }
-    Some(Containment {
-        tgt_env: [
-            bounds[&px]["min"].clone(),
-            bounds[&py]["min"].clone(),
-            bounds[&px]["max"].clone(),
-            bounds[&py]["max"].clone(),
-        ],
-        src_env: [px, py],
-    })
+    if rec_order.len() == 2 && rec_order.iter().all(|p| bounds[p.as_str()].len() == 2) {
+        let (px, py) = (rec_order[0].clone(), rec_order[1].clone());
+        return Some(Containment {
+            tgt_env: [
+                bounds[&px]["min"].clone(),
+                bounds[&py]["min"].clone(),
+                bounds[&px]["max"].clone(),
+                bounds[&py]["max"].clone(),
+            ],
+            src_env: vec![px, py],
+        });
+    }
+    if rec_order.len() == 4 && rec_order.iter().all(|p| bounds[p.as_str()].len() == 1) {
+        // A record factor carrying a LOWER cell bound (`cmin ≤ r`) is that
+        // axis's record MAXIMUM, and vice versa — the AABB test compares each
+        // side's min against the other side's max.
+        let his: Vec<String> = rec_order
+            .iter()
+            .filter(|p| bounds[p.as_str()].contains_key("min"))
+            .cloned()
+            .collect();
+        let los: Vec<String> = rec_order
+            .iter()
+            .filter(|p| bounds[p.as_str()].contains_key("max"))
+            .cloned()
+            .collect();
+        if his.len() != 2 || los.len() != 2 {
+            return None;
+        }
+        return Some(Containment {
+            tgt_env: [
+                bounds[his[0].as_str()]["min"].clone(),
+                bounds[his[1].as_str()]["min"].clone(),
+                bounds[los[0].as_str()]["max"].clone(),
+                bounds[los[1].as_str()]["max"].clone(),
+            ],
+            src_env: vec![
+                los[0].clone(),
+                los[1].clone(),
+                his[0].clone(),
+                his[1].clone(),
+            ],
+        });
+    }
+    None
 }
 
 fn ranges_of(agg: &Value) -> Option<&Map<String, Value>> {
@@ -318,18 +370,19 @@ fn range_from(v: Option<&Value>) -> Option<&str> {
 }
 
 /// A matched binning aggregate — a `+`-semiring reduction over TWO 1-D index
-/// sets whose body carries a rectangle-containment predicate between a
-/// CELL-indexed rect factor and a RECORD-indexed point factor. BOTH
+/// sets whose body carries a containment predicate between CELL-indexed and
+/// RECORD-indexed factors (either shape [`pd_parse_containment`] reads). BOTH
 /// orientations are recognised (CONFORMANCE_SPEC.md §5.5.7):
 ///
 /// ```text
-/// FORWARD  E[c] = Σ_r [contains(cell_c, pt_r)] · …   (the cell axis is output)
-/// MIRROR   P[r] = Σ_c [contains(cell_c, pt_r)] · …   (the record axis is output)
+/// FORWARD  E[c] = Σ_r [contains(cell_c, rec_r)] · …  (the cell axis is output)
+/// MIRROR   P[r] = Σ_c [contains(cell_c, rec_r)] · …  (the record axis is output)
 /// ```
 struct Binning {
     /// The loop symbol carrying the CELL side (the four rect bounds).
     c_sym: String,
-    /// The loop symbol carrying the RECORD side (the two point coordinates).
+    /// The loop symbol carrying the RECORD side (the point coordinates, or the
+    /// record envelope's four bounds).
     r_sym: String,
     /// The index set `c_sym` ranges over.
     c_set: String,
@@ -337,7 +390,7 @@ struct Binning {
     r_set: String,
     /// `true` when the aggregate's own output axis is the CELL one (FORWARD).
     out_is_cell: bool,
-    src_env: [String; 2],
+    src_env: Vec<String>,
     tgt_env: [String; 4],
 }
 
@@ -399,7 +452,19 @@ fn pd_is_unknown(v: &Value) -> bool {
 /// single other range supplies the opposite side, and the CONTAINMENT PREDICATE
 /// itself says which symbol is the cell (it carries the four rect BOUND
 /// factors) and which is the record (the two point coordinates).
-fn pd_detect_binning(ev: &Value, agg: &Value, out_set: &str) -> Option<Binning> {
+/// `want_out_is_cell` lets a caller that already knows the orientation say so.
+/// A POINT-IN-RECT predicate parses only one way — the rect side cannot pass
+/// for the point side — but an ENVELOPE-OVERLAP predicate is SYMMETRIC and
+/// parses BOTH, so the predicate alone no longer decides. The forward arm's
+/// cell set comes from the mat-vec array's first axis and mirrors are collected
+/// only once `c_set`/`r_set` are fixed, so both callers do know. `None` prefers
+/// the out-as-cell reading, which is what the point case always gave.
+fn pd_detect_binning(
+    ev: &Value,
+    agg: &Value,
+    out_set: &str,
+    want_out_is_cell: Option<bool>,
+) -> Option<Binning> {
     if !pd_is_unknown(ev) {
         return None;
     }
@@ -430,20 +495,21 @@ fn pd_detect_binning(ev: &Value, agg: &Value, out_set: &str) -> Option<Binning> 
         return None;
     }
     let pred = pd_find_ifelse_cond(body)?;
-    // Exactly one of the two assignments parses: `pd_parse_containment` demands
-    // each comparison put the cell symbol on one side and the record symbol on
-    // the other, and that the record side yield exactly two coordinates each
-    // with a min AND a max cell bound.
-    if let Some(env) = pd_parse_containment(pred, out_sym, &in_sym) {
-        return Some(Binning {
-            c_sym: out_sym.to_string(),
-            r_sym: in_sym,
-            c_set: out_set.to_string(),
-            r_set: in_set,
-            out_is_cell: true,
-            src_env: env.src_env,
-            tgt_env: env.tgt_env,
-        });
+    if want_out_is_cell != Some(false) {
+        if let Some(env) = pd_parse_containment(pred, out_sym, &in_sym) {
+            return Some(Binning {
+                c_sym: out_sym.to_string(),
+                r_sym: in_sym,
+                c_set: out_set.to_string(),
+                r_set: in_set,
+                out_is_cell: true,
+                src_env: env.src_env,
+                tgt_env: env.tgt_env,
+            });
+        }
+    }
+    if want_out_is_cell == Some(true) {
+        return None;
     }
     let env = pd_parse_containment(pred, &in_sym, out_sym)?;
     Some(Binning {
@@ -678,8 +744,9 @@ that could not be expanded for matching",
             }
         )
     } else {
-        "its containment predicate did not read as a rectangle containment between \
-four cell-indexed rect bounds and two record-indexed point coordinates"
+        "its containment predicate did not read as a point-in-rectangle containment \
+(four cell-indexed rect bounds against two record-indexed point coordinates) nor as an \
+envelope-overlap one (four bounds on each side)"
             .to_string()
     };
     format!(
@@ -711,8 +778,8 @@ fn pd_mirror_specs(
     c_set: &str,
     r_set: &str,
     forward_names: &[String],
-) -> Vec<(String, [String; 2], [String; 4])> {
-    let mut out: Vec<(String, [String; 2], [String; 4])> = Vec::new();
+) -> Vec<(String, Vec<String>, [String; 4])> {
+    let mut out: Vec<(String, Vec<String>, [String; 4])> = Vec::new();
     let Some(variables) = model.get("variables").and_then(Value::as_object) else {
         return out;
     };
@@ -723,7 +790,7 @@ fn pd_mirror_specs(
         let Some(agg) = pd_def_view(model, defs, name) else {
             continue;
         };
-        let Some(bind) = pd_detect_binning(v, agg, r_set) else {
+        let Some(bind) = pd_detect_binning(v, agg, r_set, Some(false)) else {
             continue;
         };
         if bind.out_is_cell || bind.c_set != c_set || bind.r_set != r_set {
@@ -755,11 +822,11 @@ struct Plan {
     /// [`pd_parse_containment`] read out of THIS aggregate's own containment
     /// predicate — the gate emitted onto the rewritten `E` is derived, not
     /// authored.
-    e_specs: Vec<(String, String, [String; 2], [String; 4])>,
+    e_specs: Vec<(String, String, Vec<String>, [String; 4])>,
     /// `(P name, gate src_env, gate tgt_env)` per MIRRORED binning observed,
     /// sorted by name. These receive ONLY the gate (§5.5.7 "MIRRORED arm").
-    mirror_specs: Vec<(String, [String; 2], [String; 4])>,
-    src_env: [String; 2],
+    mirror_specs: Vec<(String, Vec<String>, [String; 4])>,
+    src_env: Vec<String>,
     tgt_env: [String; 4],
     rep_ename: String,
     rep_csym: String,
@@ -784,7 +851,7 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     let mut diags: Vec<Value> = Vec::new();
     let mut conc_specs: Vec<(String, String)> = Vec::new();
     let mut a_names: Vec<String> = Vec::new();
-    let mut e_specs: Vec<(String, String, [String; 2], [String; 4])> = Vec::new();
+    let mut e_specs: Vec<(String, String, Vec<String>, [String; 4])> = Vec::new();
     let mut plan: Option<Plan> = None;
 
     for (cname, cv) in variables {
@@ -859,7 +926,7 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
         let Some(eagg) = pd_def_view(model, defs, &ename) else {
             continue;
         };
-        let Some(bind) = pd_detect_binning(ev, eagg, c_set) else {
+        let Some(bind) = pd_detect_binning(ev, eagg, c_set, None) else {
             // `ev` is the rank-1 factor of a `+`-mat-vec against a
             // provider-backed `[c_set, r_set]` array: the join position. If it
             // is ALSO binning-shaped but unreadable, say so — silence here is

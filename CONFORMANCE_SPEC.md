@@ -1133,15 +1133,55 @@ exactly the hash-order instability this rule exists to exclude.
 
 **The BINNING aggregate.** The pattern's core is a `+`-semiring aggregate over
 exactly two 1-D index sets — a CELL set `C` and a RECORD set `R` — whose body
-carries a rectangle-containment predicate between four CELL-indexed rect-bound
-factors and two RECORD-indexed point-coordinate factors. The predicate is parsed
-into the §5.5.6 envelopes (`src_env` the two point coordinates, `tgt_env` the
-four rect bounds `[xmin, ymin, xmax, ymax]`, each bound identified by the
-ORIENTATION of its comparison, so the authored comparison order is free).
+carries a **containment predicate**: an `and`/`*` of comparisons, each between a
+factor subscripted by the cell symbol and one subscripted by the record symbol.
+It is parsed into the §5.5.6 envelopes, `tgt_env` always the four cell bounds
+`[xmin, ymin, xmax, ymax]`. TWO predicate shapes MUST be recognised, told apart
+by how many DISTINCT record-side factors appear and how many cell-side bounds
+each carries:
+
+| | record-side factors | bounds each | `src_env` |
+|---|---|---|---|
+| **point-in-rectangle** | 2 | a min AND a max | `[Px, Py]` (arity 2) |
+| **envelope overlap** | 4 | exactly ONE | `[rxmin, rymin, rxmax, rymax]` (arity 4) |
+
+The second is the 2-D AABB test `cxmin ≤ rxmax ∧ rxmin ≤ cxmax ∧ cymin ≤ rymax
+∧ rymin ≤ cymax` — a record with EXTENT (a polygon's or a line's bounding box)
+rather than a position. The exact geometry stays the aggregate's own narrow
+phase, exactly as the point shape leaves the strict-vs-closed edge case to its
+`filter`; this is only the broad phase around it. §5.5.6 already admits an
+arity-4 envelope on either side independently, so nothing downstream of the
+parse changes: the derived set, producer, member factor, cell gathers and
+`gated_select` are arity-agnostic.
+
+Either way a bound's KIND is identified by the ORIENTATION of its comparison,
+never by the authored order, so the comparisons may be written in any sequence
+and either direction. In the envelope shape a record factor bounded BELOW by a
+cell factor is that axis's record MAXIMUM.
+
+**Which two comparisons share an axis is NOT determined by the predicate, and
+need not be.** The envelope predicate is a perfect matching between the four
+cell factors and the four record factors; `(cxmin≤rxmax, rxmin≤cxmax)` and
+`(cxmin≤rxmax, rymin≤cymax)` are structurally indistinguishable groupings, and
+no rule can recover the author's intent from the conjunction alone. It does not
+matter: §5.5.6's broad phase is the conjunction of the same four inequalities
+under ANY pairing that puts one lower and one upper bound in each axis, because
+each emitted inequality pairs an envelope entry with the partner it was matched
+to. The axis LABELS are a relabelling the AABB predicate is invariant under. A
+binding MUST therefore pair deterministically — by order of first appearance —
+and MUST NOT reject a predicate for being ambiguous, nor infer axes from factor
+NAMES.
 
 Both **orientations** of that aggregate are recognised. Which axis is the output
-is decided by the aggregate's own `output_idx`; which symbol is the cell and
-which the record is decided by the containment predicate, never by position:
+is decided by the aggregate's own `output_idx`. For a POINT predicate, which
+symbol is the cell is decided by the predicate too — the rect side carries four
+bound factors against the point side's two coordinates, and only one assignment
+parses. An ENVELOPE predicate is **symmetric** and parses BOTH ways, so there
+the orientation comes from the surrounding pattern instead, never from position:
+the forward arm's cell set is the mat-vec array's first axis (below), and a
+mirror is matched only against the `C`/`R` the forward arm already fixed. A
+binding MUST NOT resolve a symmetric predicate by taking whichever reading it
+tried first without that context.
 
 | | FORWARD `E[c] = Σ_{r∈R} […]` | MIRRORED `P[r] = Σ_{c∈C} […]` |
 |---|---|---|
@@ -1235,8 +1275,8 @@ implementation MUST emit a diagnostic naming the variable and stating the
 consequence — the provider-backed array is fetched WHOLESALE. The records are
 conformance-pinned by the `pushdown/unreadable_join` corpus fixture: `code`
 (`pushdown_join_unrecognised`), `variable`, `consumer`, `array`, `index_set`,
-`reason` (`predicate_unparsed` when a predicate was found but did not read as a
-rectangle containment; `surviving_template_reference` when the body carries a
+`reason` (`predicate_unparsed` when a predicate was found but read as neither
+containment shape; `surviving_template_reference` when the body carries a
 reference that could not be expanded for matching), `template` (the referenced
 template's name, or null) and `consequence`, sorted by
 `(variable, consumer, array)`. Human-readable text is not part of the contract.

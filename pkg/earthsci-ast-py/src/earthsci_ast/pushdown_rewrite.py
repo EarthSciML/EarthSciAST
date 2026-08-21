@@ -291,18 +291,40 @@ def _pd_find_ifelse_cond(e: Any) -> Any:
 
 
 def _pd_parse_containment(pred: Any, c_sym: str, r_sym: str):
-    """Parse a rectangle-containment predicate — an ``and``/``*`` of
-    comparisons, each between a CELL-indexed rect factor and a RECORD-indexed
-    point factor — into the overlap-gate envelopes ``(src_env=[Px,Py],
-    tgt_env=[xmin,ymin,xmax,ymax])``; ``None`` unless exactly two point
-    coordinates each carry BOTH a min and a max cell bound."""
+    """Parse a containment predicate — an ``and``/``*`` of comparisons, each
+    between a factor subscripted by ``c_sym`` and one subscripted by ``r_sym``
+    — into the §5.5.6 overlap-gate envelopes ``(src_env, tgt_env)``, where
+    ``src_env`` is the ``r_sym`` side. TWO shapes are read, told apart by how
+    many DISTINCT ``r_sym``-side factors appear and how many ``c_sym``-side
+    bounds each carries:
+
+    * **point-in-rect** — 2 factors, each with a min AND a max bound:
+      ``src_env=[Px,Py]``, ``tgt_env=[xmin,ymin,xmax,ymax]``;
+    * **envelope-overlap** — 4 factors, each with EXACTLY ONE bound, i.e. the
+      AABB test ``cxmin<=rxmax and rxmin<=cxmax and cymin<=rymax and
+      rymin<=cymax``: ``src_env=[rxmin,rymin,rxmax,rymax]``,
+      ``tgt_env=[cxmin,cymin,cxmax,cymax]``.
+
+    A bound's KIND comes from the ORIENTATION of its comparison, so the
+    comparisons may be authored in any order and either direction.
+
+    Which factors share an axis is decided by appearance order, and that choice
+    is FREE: the envelope predicate is a perfect matching between the four cell
+    and four record factors and nothing in it says which two comparisons are the
+    x pair, but §5.5.6's broad phase is the conjunction of the same four
+    inequalities under any pairing that puts one lower and one upper bound in
+    each axis — each emitted inequality pairs an envelope entry with the partner
+    matched here. The axis labels are a relabelling the AABB test is invariant
+    under. Appearance order is used because it is deterministic.
+
+    ``None`` on any other shape."""
     if not isinstance(pred, dict):
         return None
     comps = pred.get("args") if pred.get("op") in ("and", "*") else [pred]
     if not isinstance(comps, list):
         return None
     bounds: dict[str, dict[str, str]] = {}
-    point_order: list[str] = []
+    rec_order: list[str] = []
     for cmp_ in comps:
         if not (
             isinstance(cmp_, dict)
@@ -325,19 +347,40 @@ def _pd_parse_containment(pred: Any, c_sym: str, r_sym: str):
         opn = cmp_["op"] if cell_on_left else _pd_flip(cmp_["op"])
         kind = "min" if opn in ("<", "<=") else "max"
         if fp not in bounds:
-            point_order.append(fp)
+            rec_order.append(fp)
             bounds[fp] = {}
+        if kind in bounds[fp]:
+            return None  # one bound of each kind per factor
         bounds[fp][kind] = fc
-    if len(point_order) != 2:
-        return None
-    px, py = point_order
-    for p in (px, py):
-        if "min" not in bounds[p] or "max" not in bounds[p]:
+    if len(rec_order) == 2 and all(len(bounds[p]) == 2 for p in rec_order):
+        px, py = rec_order
+        return {
+            "src_env": [px, py],
+            "tgt_env": [
+                bounds[px]["min"],
+                bounds[py]["min"],
+                bounds[px]["max"],
+                bounds[py]["max"],
+            ],
+        }
+    if len(rec_order) == 4 and all(len(bounds[p]) == 1 for p in rec_order):
+        # A record factor carrying a LOWER cell bound (``cmin <= r``) is that
+        # axis's record MAXIMUM, and vice versa — the AABB test compares each
+        # side's min against the other side's max.
+        his = [p for p in rec_order if "min" in bounds[p]]
+        los = [p for p in rec_order if "max" in bounds[p]]
+        if len(his) != 2 or len(los) != 2:
             return None
-    return {
-        "src_env": [px, py],
-        "tgt_env": [bounds[px]["min"], bounds[py]["min"], bounds[px]["max"], bounds[py]["max"]],
-    }
+        return {
+            "src_env": [los[0], los[1], his[0], his[1]],
+            "tgt_env": [
+                bounds[his[0]]["min"],
+                bounds[his[1]]["min"],
+                bounds[los[0]]["max"],
+                bounds[los[1]]["max"],
+            ],
+        }
+    return None
 
 
 def _ranges_of(agg: dict) -> dict:
@@ -351,24 +394,30 @@ def _range_from(v: Any) -> str | None:
     return None
 
 
-def _pd_detect_binning(ev: Any, agg: Any, out_set: str):
+def _pd_detect_binning(ev: Any, agg: Any, out_set: str, out_is_cell: bool | None = None):
     """Is the observed unknown ``ev`` (declared shape) with defining expression
     ``agg`` a BINNING aggregate — a ``+``-semiring reduction over TWO 1-D
-    index sets whose body carries a rectangle-containment predicate between a
-    CELL-indexed rect factor and a RECORD-indexed point factor? BOTH
-    orientations are recognised (CONFORMANCE_SPEC §5.5.7):
+    index sets whose body carries a containment predicate between CELL-indexed
+    and RECORD-indexed factors (either shape :func:`_pd_parse_containment`
+    reads)? BOTH orientations are recognised (CONFORMANCE_SPEC §5.5.7):
 
-    * FORWARD ``E[c] = Σ_r [contains(cell_c, pt_r)]·…``  (cell axis is output)
-    * MIRROR  ``P[r] = Σ_c [contains(cell_c, pt_r)]·…``  (record axis is output)
+    * FORWARD ``E[c] = Σ_r [contains(cell_c, rec_r)]·…``  (cell axis is output)
+    * MIRROR  ``P[r] = Σ_c [contains(cell_c, rec_r)]·…``  (record axis is output)
 
     The gate is IDENTICAL either way — the enumeration driver binds its two
     symbols from the clause's declared envelopes and knows nothing about cells
     vs records, and the aggregate's own ``output_idx`` decides the result's
     orientation. So the guards here are on the aggregate's SHAPE, not on which
-    axis is which: ``out_set`` is the index set the observed is shaped on, the
-    single other range supplies the opposite side, and the CONTAINMENT
-    PREDICATE itself says which symbol is the cell (it carries the four rect
-    BOUND factors) and which is the record (the two point coordinates).
+    axis is which: ``out_set`` is the index set the observed is shaped on, and
+    the single other range supplies the opposite side.
+
+    For a POINT-IN-RECT predicate the predicate itself also says which symbol is
+    the cell — it carries the four rect BOUND factors, against the record's two
+    point coordinates. An ENVELOPE-OVERLAP predicate is symmetric and parses
+    BOTH ways, so a caller that already knows passes ``out_is_cell``: the
+    forward arm's cell set comes from the mat-vec array's first axis, and
+    mirrors are collected only once ``C``/``R`` are fixed. Left ``None`` the
+    out-as-cell reading is preferred, which is what the point case always gave.
 
     Returns the binding dict — ``c_sym``, ``r_sym``, ``C``, ``R``,
     ``out_is_cell``, ``src_env``, ``tgt_env`` — or ``None``.
@@ -402,21 +451,20 @@ def _pd_detect_binning(ev: Any, agg: Any, out_set: str):
     pred = _pd_find_ifelse_cond(body)
     if pred is None:
         return None
-    # Exactly one of the two assignments parses: `_pd_parse_containment` demands
-    # each comparison put the cell symbol on one side and the record symbol on
-    # the other, and that the record side yield exactly two coordinates each
-    # with a min AND a max cell bound.
-    env = _pd_parse_containment(pred, out_sym, in_sym)
-    if env is not None:
-        return {
-            "c_sym": out_sym,
-            "r_sym": in_sym,
-            "C": out_set,
-            "R": in_set,
-            "out_is_cell": True,
-            "src_env": env["src_env"],
-            "tgt_env": env["tgt_env"],
-        }
+    if out_is_cell is not False:
+        env = _pd_parse_containment(pred, out_sym, in_sym)
+        if env is not None:
+            return {
+                "c_sym": out_sym,
+                "r_sym": in_sym,
+                "C": out_set,
+                "R": in_set,
+                "out_is_cell": True,
+                "src_env": env["src_env"],
+                "tgt_env": env["tgt_env"],
+            }
+    if out_is_cell is True:
+        return None
     env = _pd_parse_containment(pred, in_sym, out_sym)
     if env is None:
         return None
@@ -582,7 +630,8 @@ def _pd_binning_refusal(
     Otherwise ``(reason, template)``: ``("surviving_template_reference", name)``
     when the body carries a reference that could not be expanded for matching,
     ``("predicate_unparsed", None)`` when a containment ``ifelse`` was found but
-    did not read as a rectangle containment in either orientation."""
+    did not read as a containment — point-in-rect or envelope overlap — in
+    either orientation."""
     if not isinstance(ev, dict):
         return None
     shape = ev.get("shape")
@@ -625,9 +674,10 @@ def _pd_diagnostic_message(d: dict) -> str:
         )
     else:
         why = (
-            "its containment predicate did not read as a rectangle containment "
-            "between four cell-indexed rect bounds and two record-indexed point "
-            "coordinates"
+            "its containment predicate did not read as a point-in-rectangle "
+            "containment (four cell-indexed rect bounds against two record-indexed "
+            "point coordinates) nor as an envelope-overlap one (four bounds on each "
+            "side)"
         )
     return (
         f"projection-pushdown desugar: '{d['variable']}' is join-shaped — it bins "
@@ -694,7 +744,7 @@ def _pd_mirror_specs(
     for name, expr in obs_defs.items():
         if name in forward_names:
             continue
-        bind = _pd_detect_binning(variables.get(name), expr, R)
+        bind = _pd_detect_binning(variables.get(name), expr, R, out_is_cell=False)
         if bind is None:
             continue
         if bind["out_is_cell"] or bind["C"] != C or bind["R"] != R:

@@ -290,20 +290,45 @@ function _pd_find_ifelse_cond(e)
     return nothing
 end
 
-# Parse a rectangle-containment predicate — an `and`/`*` of comparisons, each
-# between a CELL-indexed rect factor (`c_sym`) and a RECORD-indexed point factor
-# (`r_sym`) — into the overlap-gate envelopes:
-#   src_env = [Px, Py]                         (the two point coordinates)
-#   tgt_env = [xmin, ymin, xmax, ymax]         (the rect bound factors)
-# derived from each comparison's orientation (a lower vs upper bound), so the
-# broad-phase envelope is correct regardless of the authored comparison order.
-# Returns `nothing` (⇒ no match) unless there are exactly two point coordinates,
-# each with BOTH a min and a max cell bound.
+# Parse a containment predicate — an `and`/`*` of comparisons, each between a
+# factor subscripted by `c_sym` and a factor subscripted by `r_sym` — into the
+# §5.5.6 overlap-gate envelopes `(src_env, tgt_env)`, where `src_env` is the
+# `r_sym` side and `tgt_env` the `c_sym` side. TWO predicate shapes are read,
+# distinguished by how many DISTINCT `r_sym`-side factors appear and how many
+# `c_sym`-side bounds each one carries:
+#
+#   POINT-IN-RECT     2 factors, each with a min AND a max bound
+#                     src_env = [Px, Py]                     (point coordinates)
+#                     tgt_env = [xmin, ymin, xmax, ymax]     (the rect bounds)
+#
+#   ENVELOPE-OVERLAP  4 factors, each with EXACTLY ONE bound — the AABB test
+#                     `cxmin ≤ rxmax ∧ rxmin ≤ cxmax ∧ cymin ≤ rymax ∧ rymin ≤ cymax`
+#                     src_env = [rxmin, rymin, rxmax, rymax]
+#                     tgt_env = [cxmin, cymin, cxmax, cymax]
+#
+# Either way a bound's KIND comes from the ORIENTATION of its comparison, not
+# from the authored order: `Fc < Fp` (after normalising the cell factor to the
+# left) makes `Fc` a LOWER bound of `Fp`, `Fp < Fc` an upper one. So the four
+# comparisons may be written in any order and either direction.
+#
+# **Which factors share an axis is decided by appearance order, and that choice
+# is free.** In the envelope shape the predicate is a perfect matching between
+# the four cell factors and the four record factors, and NOTHING in it says
+# which two comparisons are the x-axis pair — `(cxmin≤rxmax, rxmin≤cxmax)` and
+# `(cxmin≤rxmax, rymin≤cymax)` are structurally indistinguishable groupings. It
+# does not matter: §5.5.6's broad phase is the CONJUNCTION of the same four
+# inequalities whichever grouping is chosen, because each emitted inequality
+# pairs an envelope entry with the partner it was matched to here. Any pairing
+# that puts one lower and one upper bound in each axis therefore re-emits
+# exactly the authored predicate; the axis LABELS are a relabelling the AABB
+# test is invariant under. Appearance order is used because it is deterministic.
+#
+# Returns `nothing` (⇒ no match) on any other shape.
 function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractString)
     pred isa OpExpr || return nothing
     comps = pred.op in ("and", "*") ? pred.args : ASTExpr[pred]
     bounds = Dict{String,Dict{Symbol,String}}()
-    point_order = String[]
+    rec_order = String[]
     for cmp in comps
         (cmp isa OpExpr && cmp.op in ("<", "<=", ">", ">=") && length(cmp.args) == 2) || return nothing
         s1 = _pd_index_split(cmp.args[1]); s2 = _pd_index_split(cmp.args[2])
@@ -319,35 +344,49 @@ function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractStrin
         end
         opn = cell_on_left ? cmp.op : _pd_flip(cmp.op)   # normalise to `Fc <opn> Fp`
         kind = opn in ("<", "<=") ? :min : :max          # Fc is a lower/upper bound of Fp
-        haskey(bounds, Fp) || (push!(point_order, Fp); bounds[Fp] = Dict{Symbol,String}())
+        haskey(bounds, Fp) || (push!(rec_order, Fp); bounds[Fp] = Dict{Symbol,String}())
+        haskey(bounds[Fp], kind) && return nothing       # one bound of each kind per factor
         bounds[Fp][kind] = Fc
     end
-    length(point_order) == 2 || return nothing
-    Px, Py = point_order[1], point_order[2]
-    for P in (Px, Py)
-        (haskey(bounds[P], :min) && haskey(bounds[P], :max)) || return nothing
+    nbound(P) = length(bounds[P])
+    if length(rec_order) == 2 && all(P -> nbound(P) == 2, rec_order)
+        Px, Py = rec_order[1], rec_order[2]
+        return (src_env = String[Px, Py],
+                tgt_env = String[bounds[Px][:min], bounds[Py][:min],
+                                 bounds[Px][:max], bounds[Py][:max]])
+    elseif length(rec_order) == 4 && all(P -> nbound(P) == 1, rec_order)
+        # A record factor carrying a LOWER cell bound (`cmin ≤ r`) is that
+        # axis's record MAXIMUM, and vice versa — the AABB test compares each
+        # side's min against the other side's max.
+        his = String[P for P in rec_order if haskey(bounds[P], :min)]
+        los = String[P for P in rec_order if haskey(bounds[P], :max)]
+        (length(his) == 2 && length(los) == 2) || return nothing
+        return (src_env = String[los[1], los[2], his[1], his[2]],
+                tgt_env = String[bounds[his[1]][:min], bounds[his[2]][:min],
+                                 bounds[los[1]][:max], bounds[los[2]][:max]])
     end
-    return (src_env = String[Px, Py],
-            tgt_env = String[bounds[Px][:min], bounds[Py][:min],
-                             bounds[Px][:max], bounds[Py][:max]])
+    return nothing
 end
 
 # Is `ev` a BINNING aggregate — a `+`-semiring reduction over TWO 1-D index
-# sets whose body carries a rectangle-containment predicate between a
-# CELL-indexed rect factor and a RECORD-indexed point factor? BOTH orientations
-# are recognised (§5.5.6 "recognised desugar patterns"):
+# sets whose body carries a containment predicate between CELL-indexed and
+# RECORD-indexed factors (either shape `_pd_parse_containment` reads)? BOTH
+# orientations are recognised (§5.5.6 "recognised desugar patterns"):
 #
-#   FORWARD  E[c] = Σ_r [contains(cell_c, pt_r)] · …    (the cell axis is output)
-#   MIRROR   P[r] = Σ_c [contains(cell_c, pt_r)] · …    (the record axis is output)
+#   FORWARD  E[c] = Σ_r [contains(cell_c, rec_r)] · …    (the cell axis is output)
+#   MIRROR   P[r] = Σ_c [contains(cell_c, rec_r)] · …    (the record axis is output)
 #
 # The gate is IDENTICAL either way — the enumeration driver binds its two
 # symbols from the join clause's declared envelopes and knows nothing about
 # cells vs records, and the aggregate's own `output_idx` decides the result's
 # orientation. So the guards here are on the aggregate's SHAPE, not on which
-# axis is which: `out_set` is the index set the observed is shaped on, the
-# single other range supplies the opposite side, and the CONTAINMENT PREDICATE
-# itself says which symbol is the cell (it carries the four rect BOUND factors)
-# and which is the record (the two point coordinates).
+# axis is which: `out_set` is the index set the observed is shaped on, and the
+# single other range supplies the opposite side.
+#
+# For a POINT-IN-RECT predicate the predicate itself also says which symbol is
+# the cell — it carries the four rect BOUND factors, against the record's two
+# point coordinates. An ENVELOPE-OVERLAP predicate is symmetric and says no such
+# thing, so a caller that knows passes `out_is_cell`.
 #
 # Returns `(c_sym, r_sym, C, R, out_is_cell, src_env, tgt_env)` or `nothing`.
 # `agg` is the observed unknown's DEFINING EQUATION RHS (esm-spec §6.3.1),
@@ -355,7 +394,8 @@ end
 # carries no expression of its own, so a non-observed variable simply has no
 # definition to pass and never reaches here.
 function _pd_detect_binning(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
-                            out_set::AbstractString)
+                            out_set::AbstractString;
+                            out_is_cell::Union{Bool,Nothing}=nothing)
     (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
     (agg isa OpExpr && _is_aggregate_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
@@ -375,14 +415,22 @@ function _pd_detect_binning(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
     body isa OpExpr || return nothing
     pred = _pd_find_ifelse_cond(body)
     pred === nothing && return nothing
-    # Exactly one of the two assignments parses: `_pd_parse_containment` demands
-    # each comparison put the cell symbol on one side and the record symbol on
-    # the other, and that the record side yield exactly two coordinates each
-    # with a min AND a max cell bound.
-    env = _pd_parse_containment(pred, out_sym, in_sym)
-    env === nothing || return (c_sym = out_sym, r_sym = in_sym,
-                               C = String(out_set), R = in_set, out_is_cell = true,
-                               src_env = env.src_env, tgt_env = env.tgt_env)
+    # For a POINT-IN-RECT predicate exactly one of the two assignments parses —
+    # `_pd_parse_containment` demands the record side yield two coordinates each
+    # with a min AND a max cell bound, which the rect side cannot do. An
+    # ENVELOPE-OVERLAP predicate is SYMMETRIC and parses BOTH ways, so the
+    # predicate alone no longer says which symbol is the cell. `out_is_cell`
+    # lets a caller that already knows say so: the forward arm's cell set comes
+    # from the mat-vec array's first axis, and mirrors are collected only after
+    # `C`/`R` are fixed. Left `nothing` (the point case, and the forward arm's
+    # unhinted call) the out-as-cell reading is preferred, as before.
+    if out_is_cell !== false
+        env = _pd_parse_containment(pred, out_sym, in_sym)
+        env === nothing || return (c_sym = out_sym, r_sym = in_sym,
+                                   C = String(out_set), R = in_set, out_is_cell = true,
+                                   src_env = env.src_env, tgt_env = env.tgt_env)
+    end
+    out_is_cell === true && return nothing
     env = _pd_parse_containment(pred, in_sym, out_sym)
     env === nothing && return nothing
     return (c_sym = in_sym, r_sym = out_sym, C = in_set, R = String(out_set),
@@ -439,7 +487,8 @@ Otherwise `(reason, template)`:
     `ifelse` because it is (or hides) a surviving `apply_expression_template`
     reference that could not be expanded for matching;
   * `("predicate_unparsed", nothing)` — a containment `ifelse` was found but it
-    did not read as a rectangle containment in EITHER orientation.
+    did not read as a containment — point-in-rect or envelope
+    overlap — in EITHER orientation.
 """
 function _pd_binning_refusal(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
                              out_set::AbstractString)
@@ -480,8 +529,9 @@ function _pd_diagnostic_message(d::AbstractDict)
         "its body carries a surviving `apply_expression_template` reference" *
         (tpl === nothing ? "" : " to '$(tpl)'") *
         " that could not be expanded for matching" :
-        "its containment predicate did not read as a rectangle containment " *
-        "between four cell-indexed rect bounds and two record-indexed point coordinates"
+        "its containment predicate did not read as a point-in-rectangle " *
+        "containment (four cell-indexed rect bounds against two record-indexed " *
+        "point coordinates) nor as an envelope-overlap one (four bounds on each side)"
     return "projection-pushdown desugar: '$(d["variable"])' is join-shaped — it bins " *
            "records into the cells of index set '$(d["index_set"])' and feeds the " *
            "provider-backed array '$(d["array"])' through '$(d["consumer"])' — but " *
@@ -504,7 +554,7 @@ function _pd_mirror_specs(model::Model, obs_defs::AbstractDict,
     for (name, defn) in obs_defs
         name in forward_names && continue
         v = model.variables[name]
-        bind = _pd_detect_binning(v, defn, R)
+        bind = _pd_detect_binning(v, defn, R; out_is_cell=false)
         bind === nothing && continue
         (!bind.out_is_cell && bind.C == C && bind.R == R) || continue
         # Never stack a second gate on an aggregate that already declares a join.

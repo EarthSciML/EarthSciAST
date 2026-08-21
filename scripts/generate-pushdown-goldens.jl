@@ -6,6 +6,9 @@
 # Four input/golden pairs (see each builder for what its golden pins):
 #   * pushdown_l1  — the reusable 9-cell isrm-SHAPED L1 fixture (the document
 #     built by test/prepare_pushdown_record_gate_test.jl, frozen here);
+#   * pushdown_envelope_overlap — the second containment shape: a record with
+#     EXTENT, gated by envelope-vs-envelope AABB overlap rather than
+#     point-in-rectangle;
 #   * isrm         — the real isrm.esm (point the ISRM_ESM env var at a
 #     checkout of the isrm.esm repo), loaded with its metaparameter DEFAULTS
 #     and re-emitted through `serialize_esm_file` so the committed input is a
@@ -369,6 +372,71 @@ function build_mirror_doc()
 end
 
 # ---------------------------------------------------------------------------
+# ENVELOPE-vs-ENVELOPE fixture — the second containment shape.
+#
+# A record with EXTENT rather than a position: the predicate is the 2-D AABB
+# overlap test between the cell rectangle and the record's own bounding box,
+#
+#   src_W[c] <= rec_xmax[r] ∧ rec_xmin[r] <= src_E[c] ∧
+#   src_S[c] <= rec_ymax[r] ∧ rec_ymin[r] <= src_N[c]
+#
+# which is what a polygon or line record needs — the exact geometry (clipped
+# area, clipped length) stays the aggregate's own narrow phase, and this is the
+# broad phase around it. §5.5.6 already admits an arity-4 envelope on EITHER
+# side independently; only the recogniser was point-only.
+#
+# What the golden pins:
+#
+#   * `src_env` is the record's FOUR bounds `[rec_xmin, rec_ymin, rec_xmax,
+#     rec_ymax]` — not two coordinates — while `tgt_env` is the same four cell
+#     bounds the point shape yields, so everything downstream of the parse
+#     (derived set, producer, member factor, cell gathers, `gated_select`) is
+#     arity-agnostic and emits exactly as in `pushdown_gated_dense`;
+#   * each bound is placed by the ORIENTATION of its comparison: a record factor
+#     bounded BELOW by a cell factor is that axis's record maximum;
+#   * the MIRRORED arm still resolves. An envelope predicate is SYMMETRIC — it
+#     parses with either symbol taken as the cell — so unlike the point shape it
+#     cannot say which side is which on its own. `overlapping_cells[r]` is here
+#     to pin that the orientation comes from the caller (the mat-vec's first axis
+#     forward, the already-fixed `C`/`R` for a mirror) and that a mirror is NOT
+#     misread as a second forward.
+# ---------------------------------------------------------------------------
+_pd_env_overlap() = _op("and",
+    _op("<=", _ix("src_W", "c"), _ix("rec_xmax", "r")),
+    _op("<=", _ix("rec_xmin", "r"), _ix("src_E", "c")),
+    _op("<=", _ix("src_S", "c"), _ix("rec_ymax", "r")),
+    _op("<=", _ix("rec_ymin", "r"), _ix("src_N", "c")))
+
+const _PD_ENV_ARGS = ["src_W","src_S","src_E","src_N",
+                      "rec_xmin","rec_ymin","rec_xmax","rec_ymax"]
+
+function build_envelope_overlap_doc()
+    d = build_gated_dense_doc()
+    d["metadata"]["name"] = "pushdown_envelope_overlap"
+    v = d["models"]["Binned"]["variables"]
+    for n in ("rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax")
+        v[n] = _pd_param(["emis_records"])
+    end
+    # FORWARD: the record's emissions are binned into every cell its envelope
+    # meets. `overlap_frac` stands in for the narrow phase a real polygon
+    # document computes (clipped area / record area); the rewrite neither reads
+    # nor touches it.
+    v["overlap_frac"] = _pd_param(["emis_records"])
+    v["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        _op("*", _op("ifelse", _pd_env_overlap(), 1.0, 0.0),
+                 _op("*", _ix("emis_annual", "r"), _ix("overlap_frac", "r")));
+        reduce="+", args=vcat(_PD_ENV_ARGS, ["emis_annual", "overlap_frac"])))
+    # MIRROR: how many cells this record spills into. Gate only.
+    v["overlapping_cells"] = _pd_obs(["emis_records"], _agg(["r"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        _op("ifelse", _pd_env_overlap(), 1.0, 0.0);
+        reduce="+", args=_PD_ENV_ARGS))
+    _split_observeds!(d["models"]["Binned"])
+    return d
+end
+
+# ---------------------------------------------------------------------------
 # TEMPLATE-FACTORED forward fixture — the ACCEPTANCE case.
 #
 # Byte-for-byte the same math as `pushdown_gated_dense`, but the binning body is
@@ -482,6 +550,14 @@ function main()
     EA.desugar_pushdown(mrr) === mrr || error("mirror golden re-desugars (idempotency broken)")
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_mirror.esm"), mr)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_mirror.rewritten.json"), mrr)
+
+    eo = build_envelope_overlap_doc()
+    eor = EA.desugar_pushdown(eo; model_name="Binned")
+    eor === eo && error("envelope-overlap fixture: desugar_pushdown did not fire")
+    EA.desugar_pushdown(eor) === eor || error("envelope-overlap golden re-desugars (idempotency broken)")
+    EA.load(eo)          # the fixture must be a VALID document, not just a dict
+    write_canon(joinpath(OUTDIR, "fixtures", "pushdown_envelope_overlap.esm"), eo)
+    write_canon(joinpath(OUTDIR, "golden", "pushdown_envelope_overlap.rewritten.json"), eor)
 
     tb = build_template_body_doc()
     tbr = EA.desugar_pushdown(tb; model_name="Binned")
