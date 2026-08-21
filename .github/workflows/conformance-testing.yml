@@ -53,6 +53,12 @@ env:
   # commit behind it -- which is how this workflow drifted red before.
   RUFF_VERSION: '0.16.4'
   GOLANGCI_LINT_VERSION: 'v2.6.2'
+  # Same reasoning for clippy, which is a linter like the other two: on a
+  # floating `stable` a new rustc turns the gate red with no commit behind it.
+  # (It just did -- 1.98 added a for_kv_map finding 1.95 did not make.) The
+  # rust-tests matrix below deliberately KEEPS floating stable/beta, because
+  # there the point is compile/test coverage against moving toolchains.
+  RUST_LINT_VERSION: '1.98.0'
   # Resource limits for conformance testing
   CONFORMANCE_MEMORY_LIMIT: '4g'
   CONFORMANCE_CPU_LIMIT: '2.0'
@@ -97,9 +103,10 @@ jobs:
           go-version: '1.23'
           cache-dependency-path: pkg/earthsci-ast-go/go.sum
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust (pinned)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_LINT_VERSION }}
           components: rustfmt, clippy
 
       - name: Cache Rust dependencies
@@ -339,7 +346,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: ['stable', 'beta', '1.88.0']  # 1.88.0 = MSRV
+        rust: ['stable', 'beta', '1.89.0']  # 1.89.0 = MSRV
     defaults:
       run:
         working-directory: pkg/earthsci-ast-rs

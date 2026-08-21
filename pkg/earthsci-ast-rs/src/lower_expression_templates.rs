@@ -2882,7 +2882,7 @@ pub fn flatten_template_registries(loaded: &Value) -> (Value, Map<String, Value>
     // Rewrite nested references inside the renamed merged bodies.
     for path in &paths {
         if let Some(rn) = rename.get(path) {
-            for (_, new) in rn.iter() {
+            for new in rn.values() {
                 if let Some(decl) = merged.get_mut(new) {
                     rename_apply_refs(decl, rn);
                 }
