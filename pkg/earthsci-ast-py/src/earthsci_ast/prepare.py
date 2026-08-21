@@ -43,6 +43,7 @@ from .pushdown_rewrite import (
     _pushdown_provider_gates,
     desugar_pushdown,
 )
+from .template_imports import resolve_template_machinery
 from .simulation_array import (
     BuildInspection,
     _build_numpy_rhs,
@@ -152,6 +153,31 @@ def _raw_document(input_: Any) -> tuple[dict | None, str | None]:
     return None, None
 
 
+def _has_template_import_edge(raw: Any) -> bool:
+    """Does ``raw`` carry an esm-spec §9.7.2 import EDGE — at the top level of a
+    library file, or inside a component?
+
+    The pushdown prepass reads the RAW document, before the typed load, so an
+    edge that is still unresolved hides the imported templates and index sets
+    from the recogniser: the binning body reads as an unexpandable
+    ``apply_expression_template`` and the rewrite silently declines, which costs
+    the whole ungated fetch. Resolving is gated on this predicate rather than run
+    unconditionally so a document with no edge reaches ``desugar_pushdown`` in
+    exactly the bytes it does today (metaparameters unfolded, goldens unmoved).
+    """
+    if not isinstance(raw, dict):
+        return False
+    if "expression_template_imports" in raw:
+        return True
+    for compkind in ("models", "reaction_systems"):
+        comps = raw.get(compkind)
+        if isinstance(comps, dict) and any(
+            isinstance(c, dict) and "expression_template_imports" in c for c in comps.values()
+        ):
+            return True
+    return False
+
+
 def prepare(
     input_: Any,
     *,
@@ -195,6 +221,17 @@ def prepare(
     t0 = float(sample_time)
     raw = base_path = None
 
+    # ---- extent discovery: a loader that measures its OWN record count ------
+    # FIRST, ahead of the rewrite, because a discovered extent CLOSES a
+    # metaparameter and every resolution below binds metaparameters at the
+    # loader API (esm-spec §9.7.6 site 4). This is the Julia ordering
+    # (`simulate.jl` prepare); Python used to discover AFTER the rewrite, which
+    # was harmless only for as long as nothing between the two steps folded a
+    # metaparameter — the §9.7 resolution added below does. Runs unconditionally:
+    # even when the input is already typed (nothing left to size) the agreement
+    # and caller-contradiction checks are still the loader's contract.
+    metaparameters, discovered = _discover_loader_extents(providers, {}, metaparameters, t0)
+
     if pushdown_rewrite:
         raw, base_path = _raw_document(input_)
         if raw is None:
@@ -204,18 +241,37 @@ def prepare(
                 "rewrite point (the raw-dict record would not survive the "
                 "typed parse; see pushdown_rewrite.py)"
             )
+        # §9.7 imports resolve BEFORE the recogniser looks. `desugar_pushdown`
+        # expands `apply_expression_template` references to find the containment
+        # predicate, but it can only expand what is IN SCOPE — and an import edge
+        # puts the library's templates and index sets in scope at LOAD, which has
+        # not happened yet on this raw-dict path. Skipping this makes a document
+        # that factors its binning body through an imported library fail
+        # detection silently and fetch every provider-backed array whole.
+        if _has_template_import_edge(raw):
+            resolved = resolve_template_machinery(
+                raw, base_path or os.getcwd(), metaparameters
+            )
+            if resolved is not None:
+                raw = resolved
         rewritten = desugar_pushdown(raw, model_name=model_name)
         if rewritten is not raw:  # the pattern matched
             pd_gates = _pushdown_provider_gates(rewritten, providers)
             pd_coupling = _pushdown_coupling_pairs(rewritten)
         doc_for_record = rewritten
 
-    # ---- extent discovery: a loader that measures its OWN record count ------
-    # BEFORE the load, because a discovered extent CLOSES a metaparameter and
-    # metaparameters are closed at the loader API. Runs unconditionally: even
-    # when the input is already typed (nothing left to size) the agreement and
-    # caller-contradiction checks are still the loader's contract.
-    metaparameters, discovered = _discover_loader_extents(providers, pd_gates, metaparameters, t0)
+    # A discovered extent and a record-derived gate are mutually exclusive: a
+    # gated slab's extent belongs to the gating set, which value-invention has
+    # not materialised yet. (`_discover_loader_extents` catches the provider's
+    # OWN declared gate; this catches the gate the rewrite record derives, which
+    # only exists now.)
+    for k in sorted(discovered):
+        if k in pd_gates:
+            raise SimulationError(
+                f"prepare: provider '{k}' both GATES on a derived index set and "
+                "declares an extent metaparameter; a gated slab's extent is the "
+                "gating set's, not a discovered one"
+            )
 
     if pushdown_rewrite:
         file = load(rewritten, metaparameters=metaparameters, base_path=base_path)
