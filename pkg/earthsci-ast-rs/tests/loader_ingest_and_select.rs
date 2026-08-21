@@ -166,6 +166,25 @@ fn document(dir: &Path) -> Value {
     doc
 }
 
+/// The `update.from` binding of the parameter a provider key names.
+///
+/// From esm 1.0.0 the data binding lives on the CONSUMER: `codes`, `select` and
+/// `unit_conversion` are fields of the reading parameter's `update.from`, not of
+/// a variable the source declares — a source declares none (esm-spec §8.5).
+fn binding_mut<'a>(doc: &'a mut Value, key: &str) -> &'a mut Value {
+    let (model, param) = key.split_once('.').expect("a provider key is Model.param");
+    &mut doc["models"][model]["variables"][param]["update"]["from"]
+}
+
+/// The `data_sources` key the parameter a provider key names reads.
+fn source_of(doc: &Value, key: &str) -> String {
+    let (model, param) = key.split_once('.').expect("a provider key is Model.param");
+    doc["models"][model]["variables"][param]["update"]["source"]
+        .as_str()
+        .expect("a data update names its source")
+        .to_string()
+}
+
 fn sample(doc: &Value, cache_root: &Path, key: &str) -> Vec<f64> {
     let mut provs = providers_from_document(doc, cache_root, None, &HashMap::new())
         .expect("providers build from the document");
@@ -194,19 +213,19 @@ fn the_document_alone_decodes_maps_and_filters_the_ff10_table() {
     // lines; codes mapped POLID; record_filter removed the unmapped CO record
     // and the SO2 record with no longitude. All of it from the declaration.
     assert_eq!(
-        sample(&doc, &cache, "EGU_Emis.pollutant"),
+        sample(&doc, &cache, "Ingest.pollutant"),
         vec![36.0, 36.0, 1.0],
         "POLID text -> the declared enum, unmapped records dropped"
     );
     assert_eq!(
-        sample(&doc, &cache, "EGU_Emis.annual"),
+        sample(&doc, &cache, "Ingest.annual"),
         vec![100.0, 7.0, 3.0]
     );
     assert_eq!(
-        sample(&doc, &cache, "EGU_Emis.lon"),
+        sample(&doc, &cache, "Ingest.lon"),
         vec![-90.0, -92.0, -93.0]
     );
-    assert_eq!(sample(&doc, &cache, "EGU_Emis.lat"), vec![40.0, 43.0, 44.0]);
+    assert_eq!(sample(&doc, &cache, "Ingest.lat"), vec![40.0, 43.0, 44.0]);
 }
 
 #[test]
@@ -217,11 +236,14 @@ fn every_variable_of_a_filtered_loader_declares_the_same_extent() {
         .expect("providers build");
     for (key, p) in &provs {
         let declared = PrepareProvider::extent_metaparameter(p);
-        if key.starts_with("EGU_Emis.") {
+        // `extent` is the SOURCE's, inherited by every parameter that reads it.
+        // A provider key names the consuming parameter, so the source comes from
+        // that parameter's own `update` rather than from a prefix on the key.
+        if source_of(&doc, key) == "EGU_Emis" {
             assert_eq!(
                 declared.as_deref(),
                 Some("N_REC"),
-                "{key} must bind the loader's extent metaparameter"
+                "{key} must bind the source's extent metaparameter"
             );
         } else {
             assert_eq!(declared, None, "{key} declares no extent");
@@ -305,15 +327,15 @@ fn a_caller_binding_that_contradicts_the_discovered_extent_is_an_error() {
 fn a_text_column_with_no_codes_map_is_a_boundary_error() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
-    doc["data_sources"]["EGU_Emis"]["variables"]["pollutant"]
+    binding_mut(&mut doc, "Ingest.pollutant")
         .as_object_mut()
-        .unwrap()
+        .expect("the binding is an object")
         .remove("codes");
     let mut provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
         .expect("providers build");
     let (_, p) = provs
         .iter_mut()
-        .find(|(k, _)| k == "EGU_Emis.pollutant")
+        .find(|(k, _)| k == "Ingest.pollutant")
         .unwrap();
     let msg = p.sample().expect_err("a text forcing must not load").0;
     assert!(msg.contains("decoded as strings"), "{msg}");
@@ -330,12 +352,12 @@ fn a_range_select_delivers_a_prefix_of_the_same_on_disk_array() {
     let doc = document(tmp.path());
     let cache = tmp.path().join("cache");
 
-    let full = sample(&doc, &cache, "Grid.W");
+    let full = sample(&doc, &cache, "Ingest.W");
     assert_eq!(full.len(), 10, "the unselected variable is unaffected");
     assert_eq!(full[0], 100.0);
 
     // stop is the METAPARAMETER name N_SRC (default 4), not a repeated literal.
-    let prefix = sample(&doc, &cache, "Grid.src_W");
+    let prefix = sample(&doc, &cache, "Ingest.src_W");
     assert_eq!(prefix, full[..4].to_vec());
     assert_eq!(prefix, vec![100.0, 101.0, 102.0, 103.0]);
 }
@@ -351,13 +373,13 @@ fn a_range_select_over_a_filtered_table_counts_surviving_records() {
     let cache = tmp.path().join("cache");
 
     assert_eq!(
-        sample(&doc, &cache, "EGU_Emis.annual"),
+        sample(&doc, &cache, "Ingest.annual"),
         vec![100.0, 7.0],
         "[0:2] is the first two SURVIVING records (100, 7) — never the first two \
          raw rows (100, 50) of which one is dropped"
     );
-    assert_eq!(sample(&doc, &cache, "EGU_Emis.pollutant"), vec![36.0, 36.0]);
-    assert_eq!(sample(&doc, &cache, "EGU_Emis.lon"), vec![-90.0, -92.0]);
+    assert_eq!(sample(&doc, &cache, "Ingest.pollutant"), vec![36.0, 36.0]);
+    assert_eq!(sample(&doc, &cache, "Ingest.lon"), vec![-90.0, -92.0]);
 }
 
 #[test]
@@ -457,8 +479,8 @@ fn reader_options_are_load_bearing_not_decorative() {
             .expect("providers build");
     let (_, p) = provs
         .iter_mut()
-        .find(|(k, _)| k == "EGU_Emis.annual")
-        .expect("no provider EGU_Emis.annual");
+        .find(|(k, _)| k == "Ingest.annual")
+        .expect("no provider Ingest.annual");
     assert!(
         p.sample().is_err(),
         "a whole-zip read cannot decode as one FF10 table"
@@ -469,7 +491,7 @@ fn reader_options_are_load_bearing_not_decorative() {
 fn an_unrecognised_axis_selector_is_refused_at_construction() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
-    doc["data_sources"]["Grid"]["variables"]["src_W"]["select"] = json!({"axes": [{"prefix": 4}]});
+    binding_mut(&mut doc, "Ingest.src_W")["select"] = json!({"axes": [{"prefix": 4}]});
     let e = match providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new()) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("an unknown selector must not be ignored"),
@@ -574,7 +596,7 @@ fn a_gated_select_is_reported_as_a_gate_not_pushed_to_the_reader() {
 
     for (key, p) in &provs {
         let gate = PrepareProvider::gate_spec(p);
-        if key == "Grid.emis_W" {
+        if key == "Ingest.emis_W" {
             let gate = gate.unwrap_or_else(|| {
                 panic!(
                     "{key} declares select.axes = [{{gated_by: emis_cells}}] on a store-backed \
@@ -605,7 +627,7 @@ fn a_gated_select_is_reported_as_a_gate_not_pushed_to_the_reader() {
     // other three selectors do not, and this fixture holds one of each on the
     // SAME `file_variable`.
     assert!(
-        provs.iter().any(|(k, _)| k == "Grid.src_W"),
+        provs.iter().any(|(k, _)| k == "Ingest.src_W"),
         "the range-selected sibling must still be built"
     );
 }
@@ -636,13 +658,13 @@ fn a_gated_fetch_asks_for_the_support_set_and_never_the_full_axis() {
     );
     assert_eq!(
         prep.gated_provider_keys,
-        vec!["Grid.emis_W".to_string()],
+        vec!["Ingest.emis_W".to_string()],
         "exactly the gated loader variable was deferred"
     );
 
     // THE ASSERTION THIS FILE EXISTS FOR: the request names the support set's
     // members (0-based for the reader), not the whole 10-cell axis.
-    let calls = logs["Grid.emis_W"].borrow();
+    let calls = logs["Ingest.emis_W"].borrow();
     assert_eq!(
         *calls,
         vec![Fetch::Selection(vec![AxisSel::Indices(vec![1, 2, 4])])],
@@ -684,7 +706,7 @@ fn the_ungated_siblings_are_still_read_eagerly_and_whole() {
     // Deferral is NOT the new default: a `range` select is still resolvable at
     // read time and still taken eagerly, so the fix cannot have been "defer
     // everything".
-    for key in ["Grid.W", "Grid.src_W"] {
+    for key in ["Ingest.W", "Ingest.src_W"] {
         assert_eq!(
             *logs[key].borrow(),
             vec![Fetch::Whole],
@@ -701,8 +723,8 @@ fn an_eager_sample_of_a_gated_variable_refuses_rather_than_reading_everything() 
         .expect("providers build");
     let (_, p) = provs
         .iter_mut()
-        .find(|(k, _)| k == "Grid.emis_W")
-        .expect("no provider Grid.emis_W");
+        .find(|(k, _)| k == "Ingest.emis_W")
+        .expect("no provider Ingest.emis_W");
 
     // Sampling a gated provider out of band is a caller error, and it must SAY
     // so. Silently returning the full axis here is the same defect one layer

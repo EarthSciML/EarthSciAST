@@ -108,7 +108,9 @@ impl CodeMap {
 /// become numbers.
 #[derive(Debug, Clone)]
 struct ColumnSpec {
-    /// The loader-level variable name (the key the model couples from).
+    /// The CONSUMING PARAMETER's flattened name (`"Ingest.lon"`) — its identity
+    /// from 1.0.0, since two parameters may read one `file_variable` with
+    /// different units and must not collide in the decoded table.
     name: String,
     /// The on-disk column.
     file_variable: String,
@@ -296,20 +298,49 @@ impl RecordTable {
 
         let n = nrec.unwrap_or(0);
         let mut mask = keep.unwrap_or_default();
+        // `require_finite` names FILE variables (esm-spec §8.9): from 1.0.0 a
+        // source declares no variables of its own, so the filter is stated in
+        // the reader's vocabulary. Resolve it there — through a bound
+        // parameter's already-decoded column when one reads it, and straight
+        // from the reader otherwise, since a source may filter on a column no
+        // parameter reads.
+        let mut by_file: HashMap<&str, &Vec<f64>> = HashMap::new();
+        for spec in &self.columns {
+            by_file
+                .entry(spec.file_variable.as_str())
+                .or_insert_with(|| &raw[&spec.name]);
+        }
         for name in &self.require_finite {
-            let col = raw.get(name).ok_or_else(|| {
-                err(format!(
-                    "loader '{}': record_filter.require_finite names '{name}', which is not \
-                     one of its variables",
-                    self.loader_name
-                ))
-            })?;
+            let widened;
+            let col: &[f64] = match by_file.get(name.as_str()) {
+                Some(c) => c.as_slice(),
+                None => {
+                    let f = fields.get(name).ok_or_else(|| {
+                        err(format!(
+                            "loader '{}': record_filter.require_finite names file variable \
+                             '{name}', which the source does not deliver",
+                            self.loader_name
+                        ))
+                    })?;
+                    widened = widen(name, &f.data)?;
+                    widened.as_slice()
+                }
+            };
+            if col.len() != n {
+                return Err(err(format!(
+                    "loader '{}': record_filter.require_finite column '{name}' has {} records \
+                     but the table has {n}",
+                    self.loader_name,
+                    col.len()
+                )));
+            }
             for i in 0..n {
                 if !col[i].is_finite() {
                     mask[i] = false;
                 }
             }
         }
+        drop(by_file);
 
         let kept = mask.iter().filter(|k| **k).count();
         let out = raw
@@ -904,13 +935,112 @@ mod prepare_impl {
         }
     }
 
+    /// `{data_sources key -> [(flattened parameter name, local name, `update.from`)]}`.
+    ///
+    /// From 1.0.0 a data source declares no variables of its own: the CONSUMING
+    /// PARAMETER carries `update: {kind: "data", source, from: {file_variable,
+    /// ...}}` and owns the units (esm-spec §8.5). This is the inversion of the
+    /// 0.x `data_loaders[l].variables` map, and it is where the provider path
+    /// now reads what to decode. The Python mirror is `_document_bindings`.
+    ///
+    /// The flattened name is the parameter's namespaced path (`"Ingest.lon"`,
+    /// `"Parent.Child.lon"`), which is what keys the provider: it is the only
+    /// spelling that names one parameter and every parameter. Neither half of
+    /// the source-qualified alternative works — two parameters may read one
+    /// `file_variable` differently (the ingest fixture's `W` / `src_W` /
+    /// `emis_W` all read `Grid`'s `W`), and two models may declare the same
+    /// parameter name against one source.
+    ///
+    /// Models, nested subsystems and variables are all walked in sorted order,
+    /// so the constructed provider set — and therefore the diagnostics — are
+    /// deterministic.
+    fn document_bindings(
+        doc: &serde_json::Value,
+    ) -> HashMap<String, Vec<(String, String, &serde_json::Value)>> {
+        fn sorted_keys(node: Option<&serde_json::Value>) -> Vec<&str> {
+            let mut keys: Vec<&str> = node
+                .and_then(serde_json::Value::as_object)
+                .map(|o| o.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            keys.sort_unstable();
+            keys
+        }
+
+        fn visit<'a>(
+            model: &'a serde_json::Value,
+            prefix: &str,
+            out: &mut HashMap<String, Vec<(String, String, &'a serde_json::Value)>>,
+        ) {
+            let vars = model.get("variables");
+            for vname in sorted_keys(vars) {
+                let vdef = &vars.expect("sorted_keys is empty without an object")[vname];
+                if vdef.get("type").and_then(serde_json::Value::as_str) != Some("parameter") {
+                    continue;
+                }
+                let update = vdef.get("update");
+                let rules: Vec<&serde_json::Value> = match update {
+                    Some(serde_json::Value::Array(a)) => a.iter().collect(),
+                    Some(v) => vec![v],
+                    None => Vec::new(),
+                };
+                for rule in rules {
+                    if rule.get("kind").and_then(serde_json::Value::as_str) != Some("data") {
+                        continue;
+                    }
+                    let (Some(binding), Some(source)) = (
+                        rule.get("from").filter(|f| f.is_object()),
+                        rule.get("source").and_then(serde_json::Value::as_str),
+                    ) else {
+                        continue;
+                    };
+                    let key = if prefix.is_empty() {
+                        vname.to_string()
+                    } else {
+                        format!("{prefix}.{vname}")
+                    };
+                    out.entry(source.to_string()).or_default().push((
+                        key,
+                        vname.to_string(),
+                        binding,
+                    ));
+                    break; // the FIRST data rule of an `update` (esm-spec §5.4)
+                }
+            }
+            let subs = model.get("subsystems");
+            for sname in sorted_keys(subs) {
+                let sub = &subs.expect("sorted_keys is empty without an object")[sname];
+                let next = if prefix.is_empty() {
+                    sname.to_string()
+                } else {
+                    format!("{prefix}.{sname}")
+                };
+                visit(sub, &next, out);
+            }
+        }
+
+        let mut out: HashMap<String, Vec<(String, String, &serde_json::Value)>> = HashMap::new();
+        let models = doc.get("models");
+        for mname in sorted_keys(models) {
+            visit(
+                &models.expect("sorted_keys is empty without an object")[mname],
+                mname,
+                &mut out,
+            );
+        }
+        for entries in out.values_mut() {
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        out
+    }
+
     /// Document-declared provider construction — the Rust mirror of the Python
     /// `earthsci_ast.data_sources.esio_provider.providers_from_document` (and
     /// the Julia EarthSciIO extension's namesake). The document's
-    /// `data_sources` say WHAT to read (`source.url_template`, `variables`)
-    /// and `metadata.esio_format` says HOW (the EarthSciIO format-registry
-    /// name); the runner no longer hand-constructs providers — it asks the
-    /// document.
+    /// `data_sources` say WHAT to read (`source.url_template`) and
+    /// `metadata.esio_format` says HOW (the EarthSciIO format-registry name);
+    /// the PARAMETERS bound to a source say which `file_variable` each consumer
+    /// wants and how to convert it (see [`document_bindings`]). The runner no
+    /// longer hand-constructs providers — it asks the document.
     ///
     /// One provider PER VARIABLE (keyed `"<ModelPath>.<param>"`), matching (a)
     /// `prepare`'s providers contract, (b) the single-field sample, and (c)
@@ -932,6 +1062,7 @@ mod prepare_impl {
             .get("data_sources")
             .and_then(|v| v.as_object())
             .ok_or_else(|| perr("providers_from_document: the document declares no data_sources"))?;
+        let bindings = document_bindings(doc);
         let mut out = Vec::new();
         for (lname, ld) in dls {
             if let Some(want) = loaders
@@ -966,8 +1097,12 @@ mod prepare_impl {
                          source.url_template (and no url_overrides entry)"
                     ))
                 })?;
-            let Some(variables) = ld.get("variables").and_then(|v| v.as_object()) else {
-                continue;
+            let consumers = match bindings.get(lname.as_str()) {
+                Some(c) if !c.is_empty() => c,
+                // A source no parameter reads has nothing to provide. Not an
+                // error: a document may carry a source only some of its models
+                // consume.
+                _ => continue,
             };
             let cache = Arc::new(
                 Cache::builder()
@@ -1000,27 +1135,29 @@ mod prepare_impl {
                 .unwrap_or_default();
 
             let mut columns: Vec<ColumnSpec> = Vec::new();
-            for (vname, vd) in variables {
-                let fv = vd
+            for (key, vname, binding) in consumers {
+                let fv = binding
                     .get("file_variable")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or(vname);
                 columns.push(ColumnSpec {
-                    name: vname.clone(),
+                    name: key.clone(),
                     file_variable: fv.to_string(),
-                    codes: parse_codes(&format!("data_sources.{lname}.variables.{vname}"), vd)?,
-                    unit_conversion: parse_unit_conversion(
-                        vd.get("unit_conversion"),
-                        &format!("{lname}.{vname}"),
-                    )
-                    .map_err(|e| perr(e.to_string()))?,
+                    codes: parse_codes(&format!("{key}.update.from"), binding)?,
+                    unit_conversion: parse_unit_conversion(binding.get("unit_conversion"), key)
+                        .map_err(|e| perr(e.to_string()))?,
                 });
             }
             // A record filter or a code map makes the loader a TABLE: one
             // decode, one keep mask, columns that stay aligned.
             let table = if !require_finite.is_empty() || columns.iter().any(|c| c.codes.is_some()) {
-                let mut file_vars: Vec<String> =
-                    columns.iter().map(|c| c.file_variable.clone()).collect();
+                // A `require_finite` column no parameter reads is still needed
+                // to compute the mask, so it is fetched alongside.
+                let mut file_vars: Vec<String> = columns
+                    .iter()
+                    .map(|c| c.file_variable.clone())
+                    .chain(require_finite.iter().cloned())
+                    .collect();
                 file_vars.sort();
                 file_vars.dedup();
                 Some(Arc::new(RecordTable {
@@ -1037,20 +1174,14 @@ mod prepare_impl {
                 None
             };
 
-            for spec in &columns {
-                let key = format!("{lname}.{}", spec.name);
-                let vd = &variables[&spec.name];
+            for (spec, (key, _vname, binding)) in columns.iter().zip(consumers) {
                 let loader = DataSource::new(lname.clone(), fmt, url)
                     .variables([spec.file_variable.clone()])
                     .reader_options(reader_options.clone());
                 let mut builder = EsioProvider::builder(loader, cache.clone())
                     .var(spec.file_variable.clone(), key.clone());
-                let select = parse_declared_select(
-                    doc,
-                    &format!("data_sources.{lname}.variables.{}", spec.name),
-                    vd,
-                )?
-                .or_else(|| loader_select.clone());
+                let select = parse_declared_select(doc, &format!("{key}.update.from"), binding)?
+                    .or_else(|| loader_select.clone());
                 if let Some(axes) = select {
                     builder = builder.declared_select(axes);
                 }
@@ -1066,7 +1197,7 @@ mod prepare_impl {
                 let provider = builder
                     .build()
                     .map_err(|e| perr(format!("provider {key}: {e}")))?;
-                out.push((key, provider));
+                out.push((key.clone(), provider));
             }
         }
         // Deterministic key order (BTreeMap-like), matching the Python dict of

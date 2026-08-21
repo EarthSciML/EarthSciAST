@@ -120,7 +120,7 @@ def _temporal_field(temporal: Any, name: str) -> Any:
 
 
 def _to_esio_temporal(temporal: TemporalLike | Mapping | None) -> Any:
-    """Convert an ESS ``DataSourceTemporal`` to an ``earthsciio.LoaderTemporal``
+    """Convert an ESS ``DataSourceTemporal`` to an ``earthsciio.SourceTemporal``
     (``None`` for a CONST loader)."""
     if temporal is None:
         return None
@@ -154,7 +154,7 @@ def _to_esio_temporal(temporal: TemporalLike | Mapping | None) -> Any:
     time_var = _temporal_field(temporal, "time_variable")
     if time_var:
         kwargs["time_dim"] = time_var
-    return esio.LoaderTemporal(**kwargs)
+    return esio.SourceTemporal(**kwargs)
 
 
 def _cds_metadata(dl: LoaderLike) -> dict | None:
@@ -270,7 +270,7 @@ def _to_esio_cds_loader(field: FieldLike, target: Any, window: Window | None = N
             days = list(range(1, calendar.monthrange(year, month)[1] + 1))
         return esio_era5.era5_cds_url(year, month, days, long_vars, levels, area)
 
-    return esio.DataLoader(
+    return esio.DataSource(
         name=getattr(dl, "name", field.name),
         format=str(cds.get("format", "netcdf")),
         url=url,
@@ -311,7 +311,7 @@ def to_esio_loader(field: FieldLike, target: Any = None, window: Window | None =
         return expand_with_mirrors(template, mirrors, date=anchor, variables=consts)[0]
 
     variables = [v for v in [getattr(field, "var", None)] if v]
-    return esio.DataLoader(
+    return esio.DataSource(
         name=getattr(dl, "name", field.name),
         format=_esio_format(dl),
         url=url,
@@ -1003,7 +1003,7 @@ def providers_from_document(
             vars_: list[str], _l=lname, _f=fmt, _u=url, _o=reader_options,
             _t=declared_temporal,
         ):
-            return esio.DataLoader(
+            return esio.DataSource(
                 name=_l, format=str(_f), url=_u, variables=vars_,
                 reader_kwargs=dict(_o), temporal=_t,
             )

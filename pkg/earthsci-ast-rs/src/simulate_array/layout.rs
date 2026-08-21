@@ -38,8 +38,14 @@ pub(super) fn col_major_to_arrayd(flat: &[f64], shape: &[usize]) -> ArrayD<f64> 
     // element order in `flat` is column-major, which equals row-major of
     // the reversed-shape array.
     let rev_shape: Vec<usize> = shape.iter().rev().copied().collect();
-    let arr = ArrayD::from_shape_vec(IxDyn(&rev_shape), flat.to_vec())
-        .expect("col_major_to_arrayd shape mismatch");
+    let arr = ArrayD::from_shape_vec(IxDyn(&rev_shape), flat.to_vec()).unwrap_or_else(|e| {
+        panic!(
+            "col_major_to_arrayd shape mismatch: shape {shape:?} (product {}) \
+             vs {} elements: {e}",
+            shape.iter().product::<usize>(),
+            flat.len(),
+        )
+    });
     let perm: Vec<usize> = (0..shape.len()).rev().collect();
     arr.permuted_axes(perm).as_standard_layout().into_owned()
 }
