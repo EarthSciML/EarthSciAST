@@ -83,7 +83,13 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
         ESS._overlap_candidate_set(["X", "Y"], ["W", "S", "E", "N"], const_arrays; eps=0.0)
     # each point centre intersects exactly ONE closed cell envelope
     @test length(cands) == npts
-    @test tcands < 2.0
+    # Blow-up guard, NOT a benchmark. What this must catch is the fast path
+    # silently falling back to the O(N*M) brute pass (20000 cells x 200 points),
+    # which is orders of magnitude slower -- not a few hundred ms of runner
+    # jitter. The old 2.0 s bound sat barely above the pass's own typical
+    # runtime (CI measured 3.93 s on an otherwise healthy 1.12 run and failed),
+    # so it flagged load on the shared runner rather than any regression.
+    @test tcands < 30.0
 
     # ---- independent brute-force ORACLE (point strictly inside cell) -------
     true_cells = Set{Int}()
