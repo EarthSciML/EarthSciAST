@@ -4415,6 +4415,29 @@ function build_evaluator(esm::AbstractDict;
     # skolem/distinct/rank node.
     model = _select_model_or_nothing(file, model_name)
 
+    # ---- §9.6.4 rule 2 at the FRONT-DOOR pre-passes ----
+    # Option B keeps `apply_expression_template` references UNINLINED until the
+    # build boundary, where `_build_evaluator_impl` expands them with site
+    # recording. But several build-time pre-passes run out HERE, before that
+    # entry: the binning-coordinate derivation, value invention, the
+    # `member_factor` feedback and the overlap-env derivation. They evaluate
+    # expression bodies directly through `_eval_cellwise`, which has no
+    # `apply_expression_template` arm — so a document that factors a
+    # build-time-evaluated observed (an LCC projection, say) through a template
+    # died here with `E_TREEWALK_UNSUPPORTED_OP` while the SAME document built
+    # in Rust and Python. Rule 2 governs: a reference DENOTES its expansion and
+    # every consumer MAY expand. Expand once for these passes, on a copy — the
+    # impl expands its own copy and keeps its sites, and a model with no
+    # surviving reference is not touched, so every existing build is
+    # byte-identical.
+    if model !== nothing && _model_has_surviving_refs(model)
+        _tmpl_reg = _component_template_reg(file, model_name)
+        if _tmpl_reg !== nothing
+            model = deepcopy(model)
+            _expand_model_refs!(model, _tmpl_reg)
+        end
+    end
+
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # Rewrite the caller's LOCAL-named `parameter_overrides` onto this
     # document's (flattening-qualified) parameter names once, at the front
