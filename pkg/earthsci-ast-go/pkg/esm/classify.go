@@ -357,16 +357,6 @@ func exprHasSpatialOperator(expr Expression) bool {
 	return false
 }
 
-// isSpatialDomain reports whether the document's domain describes a spatial
-// extent. Since v0.8.0 the domain carries no geometry block, so the only signal
-// left is an independent variable other than time.
-func isSpatialDomain(domain *Domain) bool {
-	if domain == nil {
-		return false
-	}
-	return domain.IndependentVariable != nil && *domain.IndependentVariable != DefaultIndepVar
-}
-
 // isBrownianVar reports whether any of a variable's update rules is `wiener`.
 func isBrownianVar(v ModelVariable) bool {
 	for _, rule := range v.UpdateRules() {

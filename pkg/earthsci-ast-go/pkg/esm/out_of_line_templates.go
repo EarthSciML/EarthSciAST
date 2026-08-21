@@ -840,9 +840,7 @@ func refClosure(refnames map[string]bool, named map[string]any) map[string]bool 
 		out[n] = true
 		var refs []string
 		collectApplyNames(&refs, decl["body"])
-		for _, r := range refs {
-			stack = append(stack, r)
-		}
+		stack = append(stack, refs...)
 	}
 	return out
 }

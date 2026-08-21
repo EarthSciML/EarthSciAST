@@ -461,13 +461,8 @@ func latexChemicalInner(formula string) string {
 
 // stripOuterMathrm peels one leading `\mathrm{` and one trailing `}`.
 func stripOuterMathrm(s string) string {
-	inner := s
-	if strings.HasPrefix(inner, "\\mathrm{") {
-		inner = inner[len("\\mathrm{"):]
-	}
-	if strings.HasSuffix(inner, "}") {
-		inner = inner[:len(inner)-1]
-	}
+	inner := strings.TrimPrefix(s, "\\mathrm{")
+	inner = strings.TrimSuffix(inner, "}")
 	return inner
 }
 
@@ -1185,10 +1180,10 @@ func comparisonSymbol(op, format string) string {
 
 // orSymbol returns the binary logical-or symbol per format.
 func orSymbol(format string) string {
-	switch {
-	case format == FmtUnicode || format == FmtUnicodeSpaced:
+	switch format {
+	case FmtUnicode, FmtUnicodeSpaced:
 		return "∨"
-	case format == FmtLatex:
+	case FmtLatex:
 		return "\\lor"
 	default:
 		return "or"
