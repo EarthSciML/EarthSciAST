@@ -32,102 +32,12 @@ on:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Python: build + publish to TestPyPI and PyPI.
-  # Both publish jobs are currently disabled (if: false) per gt-0w4 — TestPyPI
-  # trusted publisher is not configured. Re-enable by restoring the original
-  # condition once trusted publishing is set up.
-  # ---------------------------------------------------------------------------
-  python-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-
-      - name: Install build dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-
-      - name: Build package
-        run: |
-          cd pkg/earthsci-ast-py
-          python -m build
-
-      - name: Check package
-        run: |
-          cd pkg/earthsci-ast-py
-          python -m twine check dist/*
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-package-distributions
-          path: pkg/earthsci-ast-py/dist/
-
-  python-publish-testpypi:
-    name: Publish to TestPyPI
-    needs: python-build
-    runs-on: ubuntu-latest
-    # Disabled (2026-04-11, gt-0w4): not ready to publish anything yet. TestPyPI
-    # trusted publisher is not configured for this repo, so the job fails with
-    # invalid-publisher on every push. Re-enable by restoring the original
-    # condition once we're ready to publish and the trusted publisher is set up.
-    if: false
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/earthsci-ast
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-
-  python-publish-pypi:
-    name: Publish to PyPI
-    needs: python-build
-    runs-on: ubuntu-latest
-    # Requires a PyPI trusted publisher for this repo + workflow + the `pypi`
-    # environment (see RELEASING.md). Without it this job fails with
-    # invalid-publisher.
-    if: >-
-      inputs.version != ''
-      || (github.event_name == 'release' && github.event.action == 'published')
-      || startsWith(github.ref, 'refs/tags/v')
-    environment:
-      name: pypi
-      url: https://pypi.org/p/earthsci-ast
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          # PyPI also refuses a version that already exists; let a re-run of the
-          # release be a no-op rather than a failure.
-          skip-existing: true
-
-  # ---------------------------------------------------------------------------
-  # Julia: register new version with the General registry.
+  # NOTE: Python/PyPI is deliberately NOT published from this workflow. PyPI's
+  # trusted publishing does not support reusable workflows: the OIDC exchange
+  # matches `job_workflow_ref` (this file) while PEP 740 attestations match
+  # `workflow_ref` (whichever workflow called it), and no single publisher
+  # configuration satisfies both. The PyPI job therefore lives directly in
+  # integrated-release-pipeline.yml. See RELEASING.md.
   # ---------------------------------------------------------------------------
   julia-register:
     runs-on: ubuntu-latest

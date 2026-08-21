@@ -44,22 +44,22 @@ https://pypi.org/manage/account/publishing/:
 - PyPI project name: `earthsci-ast`
 - Owner: `EarthSciML`
 - Repository: `EarthSciAST`
-- Workflow: **`integrated-release-pipeline.yml`**
+- Workflow: `integrated-release-pipeline.yml`
 - Environment: `pypi`
 
-The workflow name is the **caller**, not `release-publish.yml`. Publishing runs
-inside `release-publish.yml`, but that workflow is invoked through
-`workflow_call`, and the OIDC token's build-config URI names the top-level
-workflow that started the run. Naming the reusable workflow gets:
+The workflow name is `integrated-release-pipeline.yml` because the PyPI job runs
+**directly in that workflow**, not in `release-publish.yml` where the other
+registries are handled. That split is deliberate:
 
-```
-Certificate's Build Config URI (...integrated-release-pipeline.yml@refs/heads/main)
-does not match expected Trusted Publisher (release-publish.yml @ EarthSciML/EarthSciAST)
-```
+> PyPI's trusted publishing does not support reusable workflows.
 
-To also allow publishing from a hand-created GitHub release (which triggers
-`release-publish.yml` directly), add a *second* trusted publisher naming
-`release-publish.yml`.
+A `workflow_call` run carries two different claims — `job_workflow_ref` (the
+reusable file) and `workflow_ref` (the caller). The OIDC exchange matches the
+first, PEP 740 attestations match the second, so **no single publisher
+configuration satisfies both**: naming `release-publish.yml` passes the token
+exchange and then fails attestation verification, and naming the caller fails the
+exchange outright. Publishing from a non-reusable workflow makes the two claims
+identical. EarthSciIO avoids the problem by having one workflow overall.
 
 Until this exists, the publish job fails with `invalid-publisher`.
 

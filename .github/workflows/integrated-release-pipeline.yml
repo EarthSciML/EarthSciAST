@@ -8,27 +8,8 @@ on:
     - 'COMPATIBILITY.md'
   workflow_dispatch:
     inputs:
-      version_type:
-        description: 'Version bump type'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-        - major
-        - minor
-        - patch
-        - prerelease
-      prerelease_type:
-        description: 'Prerelease type (only if prerelease selected)'
-        required: false
-        default: 'rc'
-        type: choice
-        options:
-        - alpha
-        - beta
-        - rc
       force_release:
-        description: 'Force release even if no package changes detected'
+        description: 'Re-run publishing for the current manifest version even if its tag already exists (recovers a partially-published release)'
         required: false
         default: false
         type: boolean
@@ -44,6 +25,7 @@ jobs:
     outputs:
       needs_release: ${{ steps.analysis.outputs.needs_release }}
       new_version: ${{ steps.analysis.outputs.new_version }}
+      tag_exists: ${{ steps.analysis.outputs.tag_exists }}
       release_notes: ${{ steps.analysis.outputs.release_notes }}
     steps:
     - uses: actions/checkout@v4
@@ -94,14 +76,24 @@ jobs:
 
         echo "new_version=$VERSION" >> $GITHUB_OUTPUT
 
-        # Already released? Then this push is ordinary work, not a release.
+        # Already released? Then this push is ordinary work, not a release --
+        # unless a human explicitly asked to re-publish, which is how a
+        # half-published release gets finished without burning a version number.
+        FORCE="${{ github.event_name == 'workflow_dispatch' && inputs.force_release }}"
         if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-          echo "::notice::Tag v$VERSION already exists — no release for this push."
-          echo "needs_release=false" >> $GITHUB_OUTPUT
-          exit 0
+          if [ "$FORCE" = "true" ]; then
+            echo "::notice::Tag v$VERSION exists; force_release set — re-publishing."
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+            echo "needs_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "::notice::Tag v$VERSION already exists — no release for this push."
+            echo "needs_release=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        else
+          echo "tag_exists=false" >> $GITHUB_OUTPUT
+          echo "needs_release=true" >> $GITHUB_OUTPUT
         fi
-
-        echo "needs_release=true" >> $GITHUB_OUTPUT
 
         # Changelog range: the previous release tag if there is one, else the
         # last 50 commits. An unbounded log over all history produced a release
@@ -215,7 +207,7 @@ jobs:
   create-release:
     needs: [release-analysis, security-scan]
     runs-on: ubuntu-latest
-    if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed'
+    if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed' && needs.release-analysis.outputs.tag_exists != 'true'
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       release_id: ${{ steps.create_release.outputs.id }}
@@ -238,13 +230,48 @@ jobs:
         prerelease: ${{ contains(needs.release-analysis.outputs.new_version, '-') }}
 
 
+  # Python/PyPI is published from THIS workflow, not from release-publish.yml.
+  # PyPI's trusted publishing does not support reusable workflows: the OIDC
+  # exchange matches `job_workflow_ref` (the reusable file) while PEP 740
+  # attestations match `workflow_ref` (the caller), so a publisher naming either
+  # one fails the other check. Publishing from a non-reusable workflow makes the
+  # two claims identical and the match unambiguous.
+  publish-pypi:
+    needs: [release-analysis, security-scan, create-release]
+    if: always() && needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed' && needs.create-release.result != 'failure'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/earthsci-ast
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build and check distributions
+        working-directory: pkg/earthsci-ast-py
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pkg/earthsci-ast-py/dist
+          # PyPI refuses a version that already exists; let a re-run be a no-op.
+          skip-existing: true
+
   # Publish to the package registries. This is CALLED, not left to fire on the
   # `release: published` event: that release is created with GITHUB_TOKEN, and
   # GitHub does not start new workflow runs from GITHUB_TOKEN-triggered events,
   # so an event-driven release-publish.yml would never have run.
   publish-packages:
     needs: [release-analysis, security-scan, create-release]
-    if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed'
+    if: always() && needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed' && needs.create-release.result != 'failure'
     uses: ./.github/workflows/release-publish.yml
     with:
       version: ${{ needs.release-analysis.outputs.new_version }}
