@@ -35,23 +35,136 @@ on:
         default: 'true'
         type: boolean
 
+permissions:
+  contents: read
+
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Consistent versions across jobs
   NODE_VERSION: '20'
   PYTHON_VERSION: '3.11'
   JULIA_VERSION: '1.10'
   RUST_VERSION: 'stable'
+  # Linter versions are PINNED. An unpinned linter re-lints unchanged code
+  # against new rules on every run, so a green commit turns red with no
+  # commit behind it -- which is how this workflow drifted red before.
+  RUFF_VERSION: '0.16.4'
+  GOLANGCI_LINT_VERSION: 'v2.6.2'
   # Resource limits for conformance testing
   CONFORMANCE_MEMORY_LIMIT: '4g'
   CONFORMANCE_CPU_LIMIT: '2.0'
   CONFORMANCE_TIMEOUT: '300s'
 
 jobs:
+  # Every lint and format gate for every language, in ONE job.
+  #
+  # These used to sit as steps INSIDE each language's test job, ahead of the
+  # test steps -- so a single prettier nit or rustfmt diff failed the job
+  # before a single test ran, and the real test status stayed invisible. That
+  # is how this workflow stayed red for 40 consecutive runs while nobody could
+  # see whether the suites underneath actually passed.
+  #
+  # Split out, the test jobs report test results and this job reports style.
+  # It also de-duplicates work: rust lint ran 3x across its matrix, python 4x,
+  # typescript 2x. Here each runs once.
+  lint:
+    name: Lint and format (all languages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || '' }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: pkg/earthsci-ast-go/go.sum
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            pkg/earthsci-ast-rs/target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+
+      # --- Python -------------------------------------------------------
+      - name: Install ruff (pinned)
+        run: pip install "ruff==${RUFF_VERSION}"
+
+      - name: ruff check / ruff format
+        working-directory: pkg/earthsci-ast-py
+        run: |
+          # Config lives in the repo-root ruff.toml.
+          ruff check src/ tests/ ../../scripts/
+          ruff format --check src/ tests/ ../../scripts/
+
+      # --- Rust ---------------------------------------------------------
+      - name: cargo fmt
+        working-directory: pkg/earthsci-ast-rs
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: pkg/earthsci-ast-rs
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # --- TypeScript ---------------------------------------------------
+      - name: Install TypeScript dependencies
+        working-directory: pkg/earthsci-ast-ts
+        run: npm ci
+
+      - name: eslint / prettier
+        working-directory: pkg/earthsci-ast-ts
+        run: |
+          npm run lint
+          npm run format:check
+
+      # --- Go -----------------------------------------------------------
+      - name: gofmt
+        working-directory: pkg/earthsci-ast-go
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needs to run on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: golangci-lint (pinned)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: pkg/earthsci-ast-go
+
   # Run each language's individual tests first.
   # Matrices absorbed from the per-language CI workflows (gt-9ju):
   #   python-package.yml, rust-ci.yml, julia-ci.yml, go-ci.yml, npm-publish.yml
   julia-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +204,7 @@ jobs:
           directories: pkg/EarthSciAST.jl/src
 
       - name: Upload Julia coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         if: matrix.julia-version == '1.12'
         with:
           files: lcov.info
@@ -99,6 +212,7 @@ jobs:
 
   typescript-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -124,12 +238,6 @@ jobs:
       - name: Typecheck TypeScript package
         run: npm run typecheck
 
-      - name: Lint TypeScript package
-        run: npm run lint
-
-      - name: Check TypeScript formatting
-        run: npm run format:check
-
       - name: Build TypeScript package
         run: npm run build
 
@@ -138,6 +246,7 @@ jobs:
 
   earthsci-ast-editor-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: pkg/earthsci-ast-editor
@@ -170,6 +279,7 @@ jobs:
 
   python-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -201,18 +311,12 @@ jobs:
           pip install build pytest pytest-cov ruff
           pip install -e .[dev,test]
 
-      - name: Lint and check formatting with ruff
-        run: |
-          # Config lives in the repo-root ruff.toml.
-          ruff check src/ tests/ ../../scripts/
-          ruff format --check src/ tests/ ../../scripts/
-
       - name: Run Python tests (with coverage)
         run: |
           pytest tests/ -v --cov=src/earthsci_ast --cov-report=xml
 
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         if: matrix.python-version == '3.11'
         with:
           files: pkg/earthsci-ast-py/coverage.xml
@@ -220,6 +324,7 @@ jobs:
 
   rust-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -248,12 +353,6 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
-
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build Rust library
         run: cargo build --verbose
@@ -298,6 +397,7 @@ jobs:
 
   go-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -336,7 +436,7 @@ jobs:
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Upload Go coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         if: matrix.go-version == '1.23'
         with:
           files: pkg/earthsci-ast-go/coverage.out
@@ -345,17 +445,11 @@ jobs:
       - name: Build Go binary
         run: go build -v ./...
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        if: matrix.go-version == '1.23'
-        with:
-          version: latest
-          working-directory: pkg/earthsci-ast-go
-
   # Cross-language conformance testing — only runs if all per-language suites pass
   standard-conformance-testing:
     runs-on: ubuntu-latest
-    needs: [julia-tests, typescript-tests, python-tests, rust-tests, go-tests]
+    timeout-minutes: 45
+    needs: [lint, julia-tests, typescript-tests, python-tests, rust-tests, go-tests]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -446,6 +540,7 @@ jobs:
   # Performance analysis job
   performance-analysis:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: github.event.inputs.run_performance_analysis != 'false'
     needs: [standard-conformance-testing]
     steps:
@@ -517,6 +612,7 @@ jobs:
   # Report aggregation and final status
   conformance-results:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [standard-conformance-testing]
     if: always()
     steps:
