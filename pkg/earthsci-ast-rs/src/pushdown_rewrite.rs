@@ -499,18 +499,18 @@ fn pd_detect_binning(
         return None;
     }
     let pred = pd_find_ifelse_cond(body)?;
-    if want_out_is_cell != Some(false) {
-        if let Some(env) = pd_parse_containment(pred, out_sym, &in_sym) {
-            return Some(Binning {
-                c_sym: out_sym.to_string(),
-                r_sym: in_sym,
-                c_set: out_set.to_string(),
-                r_set: in_set,
-                out_is_cell: true,
-                src_env: env.src_env,
-                tgt_env: env.tgt_env,
-            });
-        }
+    if want_out_is_cell != Some(false)
+        && let Some(env) = pd_parse_containment(pred, out_sym, &in_sym)
+    {
+        return Some(Binning {
+            c_sym: out_sym.to_string(),
+            r_sym: in_sym,
+            c_set: out_set.to_string(),
+            r_set: in_set,
+            out_is_cell: true,
+            src_env: env.src_env,
+            tgt_env: env.tgt_env,
+        });
     }
     if want_out_is_cell == Some(true) {
         return None;
