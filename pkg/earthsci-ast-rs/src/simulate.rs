@@ -174,6 +174,10 @@ pub enum SolverChoice {
     Erk,
 }
 
+/// The raw trajectory `integrate` hands back: sample times, one state row per
+/// time, and the solver's step/eval counters.
+type IntegrateResult = Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats), SimulateError>;
+
 impl SolverChoice {
     /// Parse the host-facing solver name, case-insensitively.
     ///
@@ -856,7 +860,7 @@ impl Compiled {
         param_vec: &[f64],
         ic_vec: &[f64],
         opts: &SimulateOptions,
-    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats), SimulateError> {
+    ) -> IntegrateResult {
         let n_states = self.state_names.len();
         let rhs_closure = self.make_rhs_closure();
         let jac_closure = self.make_jac_closure();

@@ -104,6 +104,11 @@ enum SrcKey {
 type AxisSegs = SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>;
 
 /// Geometry of one folded (shifted-read) gather input.
+// `Segs` is deliberately far larger than `Linear`: the SmallVec-of-SmallVec is
+// inline storage, chosen so the common segment counts never touch the heap on
+// this hot fold path. Boxing it to even the variants out -- clippy's suggested
+// fix -- would reintroduce exactly the indirection that layout is avoiding.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum ShiftedGeom {
     /// Piecewise per-axis segments (stride-1 within runs; ghost gaps).

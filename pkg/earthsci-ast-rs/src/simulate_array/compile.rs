@@ -978,10 +978,8 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
 /// used to credit an `ic` RHS's coordinate symbols into the bound set.
 fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
     match expr {
-        Expr::Variable(name) => {
-            if !name.contains('.') && !is_builtin_fn_name(name) {
-                out.insert(name.clone());
-            }
+        Expr::Variable(name) if !name.contains('.') && !is_builtin_fn_name(name) => {
+            out.insert(name.clone());
         }
         Expr::Operator(node) => {
             node.for_each_child(&mut |child| collect_free_bare_symbols(child, out));
@@ -2529,10 +2527,8 @@ fn collect_wrapped_array_leaves(
     out: &mut Vec<String>,
 ) {
     match expr {
-        Expr::Variable(v) => {
-            if array_axes.contains_key(v) {
-                out.push(v.clone());
-            }
+        Expr::Variable(v) if array_axes.contains_key(v) => {
+            out.push(v.clone());
         }
         Expr::Operator(node) => {
             if !crate::op_registry::is_elementwise_node(node) {

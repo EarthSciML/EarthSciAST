@@ -397,8 +397,8 @@ impl ArrayCompiled {
         // trajectory built on a const-array bug fails loudly instead of carrying
         // the `NaN` the gather substituted.
         crate::simulate_array::take_const_array_oob();
-        let param_vec = self.build_param_vec(&params_owned)?;
-        let ic_vec = self.build_initial_state(&ics_owned, &param_vec)?;
+        let param_vec = self.build_param_vec(params_owned)?;
+        let ic_vec = self.build_initial_state(ics_owned, &param_vec)?;
 
         // Seed the forcing buffer at t0 BEFORE the static hoist reads it — a
         // no-op for the CONST/single-segment path; for DISCRETE it primes the
@@ -669,7 +669,7 @@ impl ArrayCompiled {
                 if t == b {
                     u0 = (0..n_states).map(|r| seg_state[r][i]).collect();
                 }
-                if requested.iter().any(|&g| g == t) {
+                if requested.contains(&t) {
                     time.push(t);
                     for r in 0..n_states {
                         state[r].push(seg_state[r][i]);
@@ -863,7 +863,7 @@ impl ArrayCompiled {
             let mut f_y = vec![0.0f64; n];
             let mut f_yp = vec![0.0f64; n];
             let mut scratch_slot = jac_scratch.borrow_mut();
-            let mut scratch = scratch_slot.get_or_insert_with(|| {
+            let scratch = scratch_slot.get_or_insert_with(|| {
                 let mut s = RhsScratch::new(&var_shapes_jac);
                 s.set_const_arrays(Rc::clone(&const_scope_jac));
                 s.set_static((*jac_seed).clone());
@@ -881,7 +881,7 @@ impl ArrayCompiled {
                 &mut f_y,
                 false,
                 &mut RhsStats::default(),
-                &mut scratch,
+                scratch,
             );
             evaluate_rhs_with_scratch(
                 &rhs_rules_jac,
@@ -895,7 +895,7 @@ impl ArrayCompiled {
                 &mut f_yp,
                 false,
                 &mut RhsStats::default(),
-                &mut scratch,
+                scratch,
             );
             let jv_s = jv.as_mut_slice();
             for i in 0..n {

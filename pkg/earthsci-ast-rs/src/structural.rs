@@ -901,10 +901,8 @@ fn collect_bare_array_operands<'a>(
     out: &mut Vec<&'a str>,
 ) {
     match expr {
-        crate::Expr::Variable(name) => {
-            if declared_axes.contains_key(name.as_str()) {
-                out.push(name.as_str());
-            }
+        crate::Expr::Variable(name) if declared_axes.contains_key(name.as_str()) => {
+            out.push(name.as_str());
         }
         crate::Expr::Operator(node) => {
             if !crate::op_registry::is_elementwise_node(node) {

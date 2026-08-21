@@ -447,7 +447,6 @@ pub(in crate::simulate_array) fn run_tape_call(
         run_range(&env, const_end..prime_end, exec, dy, stats);
     }
     run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
-    drop(env);
     exec.state_rm = state_rm;
 
     stats.taped_rules += exec.n_taped;
@@ -2753,7 +2752,7 @@ mod simd_tests {
 
         let bases: Vec<*const f64> =
             vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
-        let mut run_level = |wider: u8| -> Vec<Vec<f64>> {
+        let run_level = |wider: u8| -> Vec<Vec<f64>> {
             let mut outbufs: Vec<Vec<f64>> = (0..n_ops).map(|_| vec![0.0f64; N]).collect();
             let outs: Vec<(u16, *mut f64)> = outbufs
                 .iter_mut()

@@ -138,7 +138,7 @@ pub(super) fn run_reference(
                 let desc = &prog.slots[*out as usize];
                 let a = *axis as usize;
                 let lo = *lo;
-                let mut arr = ArrayD::<f64>::zeros(IxDyn(&desc.shape.to_vec()));
+                let mut arr = ArrayD::<f64>::zeros(IxDyn(&desc.shape));
                 arr.indexed_iter_mut()
                     .for_each(|(idx, v)| *v = (lo + idx[a] as i64) as f64);
                 slots[*out as usize] = Some(RefVal::Arr(arr));
@@ -152,7 +152,7 @@ pub(super) fn run_reference(
                 let val = if desc.scalar {
                     RefVal::Scalar(s)
                 } else {
-                    RefVal::Arr(ArrayD::<f64>::from_elem(IxDyn(&desc.shape.to_vec()), s))
+                    RefVal::Arr(ArrayD::<f64>::from_elem(IxDyn(&desc.shape), s))
                 };
                 slots[*out as usize] = Some(val);
             }
@@ -388,8 +388,8 @@ pub(super) fn run_reference(
                 assert_eq!(covered, n, "run schedule tiles the box");
                 for (ovals, &(_, slot)) in outs.into_iter().zip(fs.outputs.iter()) {
                     let desc = &prog.slots[slot as usize];
-                    let arr = ArrayD::from_shape_vec(IxDyn(&desc.shape.to_vec()), ovals)
-                        .expect("output shape");
+                    let arr =
+                        ArrayD::from_shape_vec(IxDyn(&desc.shape), ovals).expect("output shape");
                     slots[slot as usize] = Some(RefVal::Arr(arr));
                 }
             }
@@ -513,7 +513,7 @@ fn exec_gather(plan: &GatherPlan, src: ArrayViewD<'_, f64>) -> ArrayD<f64> {
         })
         .collect();
     let rvb = rv.broadcast(IxDyn(&bshape)).expect("gather broadcast");
-    let mut result = ArrayD::<f64>::zeros(IxDyn(&plan.shape.to_vec()));
+    let mut result = ArrayD::<f64>::zeros(IxDyn(&plan.shape));
     let mut pick = vec![0usize; out_ndim];
     loop {
         {

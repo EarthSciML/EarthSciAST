@@ -1330,7 +1330,7 @@ fn ab_shifted_read_folding_wrap_ghost_linear() {
         .fused
         .iter()
         .flat_map(|f| f.runs.iter())
-        .any(|r| r.in_off.iter().any(|&o| o == GHOST_OFF));
+        .any(|r| r.in_off.contains(&GHOST_OFF));
     let any_strided = prog
         .fused
         .iter()

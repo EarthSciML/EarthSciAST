@@ -906,10 +906,8 @@ fn collect_ref_names(
     out: &mut std::collections::HashSet<String>,
 ) {
     match x {
-        Value::String(s) => {
-            if !shadowed.contains(s) {
-                out.insert(s.clone());
-            }
+        Value::String(s) if !shadowed.contains(s) => {
+            out.insert(s.clone());
         }
         Value::Array(arr) => {
             for v in arr {

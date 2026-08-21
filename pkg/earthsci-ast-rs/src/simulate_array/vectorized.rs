@@ -1585,7 +1585,7 @@ pub(super) fn eval_vec_index<'a>(
     // index (descending axis order so the lower axis indices stay valid).
     let mut fixed_desc: SmallVec<[(usize, usize); 4]> =
         fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
-    fixed_desc.sort_by(|a, b| b.0.cmp(&a.0));
+    fixed_desc.sort_by_key(|x| std::cmp::Reverse(x.0));
     let mut rv = arg0.view().expect("array");
     for (d, i0) in fixed_desc {
         rv = rv.index_axis_move(ndarray::Axis(d), i0);

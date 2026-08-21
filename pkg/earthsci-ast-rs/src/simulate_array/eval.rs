@@ -611,6 +611,8 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
 /// same expressions — `binary_kernels_match_apply_binary` pins the two to raw
 /// IEEE bit equality over every op name and a spread of operands (±0, ±inf,
 /// NaN, subnormals), so a divergence is a test failure, not a silent one.
+#[cfg(test)] // only the `*_of` code-based form is on the hot path now;
+// this `&str` wrapper survives solely for the bit-equality pinning test below.
 pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
     binary_kernel_of(BinCode::of(op))
 }
@@ -823,6 +825,7 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
 /// unary counterpart of [`binary_kernel`], for the same reason (the whole-array
 /// overlay applied it inside an N-element loop). Arms mirror [`apply_unary`]
 /// exactly; `unary_kernels_match_apply_unary` pins them to bit equality.
+#[cfg(test)] // see `binary_kernel` above: test-only pinning wrapper.
 pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
     unary_kernel_of(UnCode::of(op))
 }
