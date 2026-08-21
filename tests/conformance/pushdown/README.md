@@ -24,6 +24,20 @@ is **deep-equal as parsed JSON** to the committed golden.
   ONLY a gate, over the document's own full-grid rect factors; no second derived
   set, producer, member factor or `gated_select` entry is emitted for them, and
   their `shape` / `output_idx` / `ranges` are untouched.
+- `fixtures/pushdown_envelope_overlap.esm` — the SECOND containment shape. The
+  record has EXTENT rather than a position, so the predicate is the 2-D AABB
+  overlap test between the cell rectangle and the record's own bounding box
+  (`src_W[c] <= rec_xmax[r] ∧ rec_xmin[r] <= src_E[c] ∧ …`) — what a polygon or
+  line record needs, with the exact clipped area or length left to the
+  aggregate's own narrow phase. Its golden pins that `src_env` is the record's
+  FOUR bounds `[rec_xmin, rec_ymin, rec_xmax, rec_ymax]` while everything
+  downstream of the parse emits exactly as in `pushdown_gated_dense` — the
+  derived set, producer, member factor, cell gathers and `gated_select` are
+  arity-agnostic. It also carries a mirror (`overlapping_cells[r]`), because an
+  envelope predicate is SYMMETRIC — it parses with either symbol taken as the
+  cell — and so, unlike the point shape, cannot decide the orientation on its
+  own: that must come from the mat-vec's first axis forward, and from the
+  already-fixed `C`/`R` for a mirror.
 - `fixtures/pushdown_template_body.esm` — the SAME math as
   `pushdown_gated_dense`, but the binning body is factored through an
   `expression_templates` entry with the four rect factors and the two point
@@ -41,7 +55,9 @@ is **deep-equal as parsed JSON** to the committed golden.
 - `fixtures/pushdown_unreadable_join.esm` — a `fires: false` fixture: `E_PM25`
   bins records into `src_cells` with a THREE-dimensional box containment and
   feeds the provider-backed `SR_PM25`, so it is unmistakably in the join
-  position, but the recogniser handles 2-D rectangles only. The rewrite MUST
+  position, but the recogniser handles 2-D geometry only — three coordinates
+  each carrying a min and a max match neither the 2-factor point shape nor the
+  4-factor envelope one. The rewrite MUST
   leave the document unchanged AND MUST report why — its golden is the
   `pushdown_diagnostics` list, not a rewritten document.
 - `fixtures/isrm.esm` — the real `isrm.esm` (from the isrm.esm repo), loaded
@@ -53,8 +69,11 @@ is **deep-equal as parsed JSON** to the committed golden.
 
 ## What the goldens pin about the gate
 
-Both orientations of the binning join are recognised (CONFORMANCE_SPEC.md
-§5.5.7). The gate is the SAME clause either way — only which axis the aggregate
+Two containment SHAPES are recognised — point-in-rectangle (`src_env` arity 2)
+and envelope overlap (arity 4) — and both ORIENTATIONS of the binning join
+(CONFORMANCE_SPEC.md §5.5.7). Shape and orientation are independent: the shape
+decides only `src_env`'s arity, and everything below is per-orientation. The
+gate is the SAME clause either way — only which axis the aggregate
 outputs differs, and the enumeration driver is orientation-agnostic:
 
 | | forward `E[c] = Σ_r […]` | mirrored `P[r] = Σ_c […]` |
