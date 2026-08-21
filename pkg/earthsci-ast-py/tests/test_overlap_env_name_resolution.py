@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -160,9 +159,7 @@ def test_mirror_arm_resolves_its_envelope_factors(oracle, rect_keys):  # noqa: F
         providers[f"MockSR.{v}"] = MockGated(oracle["full_sr"][v])
 
     insp = BuildInspection()
-    prep = prepare(
-        doc, providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True
-    )
+    prep = prepare(doc, providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True)
 
     # Nothing was dropped by the tolerant hoist.
     assert not getattr(prep.build, "static_skip_reasons", {})

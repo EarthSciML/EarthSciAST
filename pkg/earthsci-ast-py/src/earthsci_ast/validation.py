@@ -325,9 +325,7 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
     )
 
 
-def _validate_content_presence(
-    esm_file: EsmFile, structural_errors: list[ValidationError]
-) -> None:
+def _validate_content_presence(esm_file: EsmFile, structural_errors: list[ValidationError]) -> None:
     """
     Validate that at least one of models, reaction_systems, or data_sources is
     present and non-empty.
@@ -1180,9 +1178,7 @@ def _validate_event_consistency(
                         )
 
 
-def _validate_coupling_units(
-    esm_file: EsmFile, structural_errors: list[ValidationError]
-) -> None:
+def _validate_coupling_units(esm_file: EsmFile, structural_errors: list[ValidationError]) -> None:
     """esm-spec §4.7.6: a ``variable_map`` coupling with ``transform == "identity"``
     whose ``from`` and ``to`` variables carry declared units that are both present,
     non-empty, and DIFFERENT is a provable domain mismatch — decidable statically

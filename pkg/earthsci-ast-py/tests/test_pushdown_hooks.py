@@ -180,9 +180,7 @@ def test_gated_fetch_sibling_loaders_do_not_overwrite_each_other():
         )
         for L in range(3)
     }
-    out = _fetch_gated_providers(
-        gated, _IDX, {"faq1": [2, 4, 6]}, {"faq1": 3}, 0.0, names
-    )
+    out = _fetch_gated_providers(gated, _IDX, {"faq1": [2, 4, 6]}, {"faq1": 3}, 0.0, names)
     for L in range(3):
         np.testing.assert_array_equal(out[f"SR_L{L}.SOA"], full[L][[1, 3, 5], :])
     # the three slabs really do differ, so no overwrite could hide in an
@@ -230,7 +228,9 @@ def test_binning_coords_seeded_from_overlap_producer():
             "distinct": True,
             "semiring": "bool_and_or",
             "id": "faq1",
-            "join": [{"overlap": {"src_env": ["X", "Y"], "tgt_env": ["W", "S", "E", "N"], "eps": 0.0}}],
+            "join": [
+                {"overlap": {"src_env": ["X", "Y"], "tgt_env": ["W", "S", "E", "N"], "eps": 0.0}}
+            ],
             "key": {"op": "skolem", "label": "cell", "args": ["c"]},
             "args": ["X", "Y", "W", "S", "E", "N"],
         }

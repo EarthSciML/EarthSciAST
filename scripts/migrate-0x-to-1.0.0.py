@@ -137,7 +137,9 @@ def transform(doc: dict) -> tuple[dict, Counter, list[str]]:
                     if "expression" in var:
                         appended.append({"lhs": var_name, "rhs": var.pop("expression")})
                     else:
-                        blockers.append(f"{where}.variables.{var_name}: observed with no `expression`")
+                        blockers.append(
+                            f"{where}.variables.{var_name}: observed with no `expression`"
+                        )
                 elif vtype in ("unknown", "parameter"):
                     pass
                 else:
@@ -147,7 +149,9 @@ def transform(doc: dict) -> tuple[dict, Counter, list[str]]:
                         f"document never validated"
                     )
                 if "expression" in var and var.get("type") != "unknown":
-                    blockers.append(f"{where}.variables.{var_name}: `expression` on a {vtype!r} variable")
+                    blockers.append(
+                        f"{where}.variables.{var_name}: `expression` on a {vtype!r} variable"
+                    )
             if appended:
                 owner.setdefault("equations", []).extend(appended)
                 counts["equations_appended"] += len(appended)
@@ -160,9 +164,9 @@ def transform(doc: dict) -> tuple[dict, Counter, list[str]]:
 
     if "data_loaders" in out:
         n_vars = sum(
-            len(l.get("variables") or {})
-            for l in out["data_loaders"].values()
-            if isinstance(l, dict)
+            len(loader.get("variables") or {})
+            for loader in out["data_loaders"].values()
+            if isinstance(loader, dict)
         )
         blockers.append(
             f"`data_loaders` ({len(out['data_loaders'])} loader(s), {n_vars} loader "
@@ -171,8 +175,16 @@ def transform(doc: dict) -> tuple[dict, Counter, list[str]]:
         for lname, loader in out["data_loaders"].items():
             if isinstance(loader, dict):
                 extra = set(loader) - {
-                    "kind", "source", "temporal", "determinism", "reader_options",
-                    "select", "record_filter", "extent", "reference", "metadata",
+                    "kind",
+                    "source",
+                    "temporal",
+                    "determinism",
+                    "reader_options",
+                    "select",
+                    "record_filter",
+                    "extent",
+                    "reference",
+                    "metadata",
                     "variables",
                 }
                 if extra:
@@ -204,7 +216,12 @@ def migrate_file(path: str, write: bool) -> dict:
     try:
         doc = json.loads(original_text)
     except Exception as exc:  # noqa: BLE001 - reported, not raised
-        return {"path": path, "error": f"JSON parse failed: {exc}", "blockers": [], "counts": Counter()}
+        return {
+            "path": path,
+            "error": f"JSON parse failed: {exc}",
+            "blockers": [],
+            "counts": Counter(),
+        }
 
     target, counts, blockers = transform(doc)
     if target == doc:
@@ -236,7 +253,9 @@ def migrate_file(path: str, write: bool) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("roots", nargs="+")
     ap.add_argument("--write", action="store_true", help="apply changes (default is a dry run)")
     ap.add_argument("--skip", action="append", default=[], help="repo-relative directory to skip")
@@ -268,7 +287,9 @@ def main() -> int:
         print(f"  {v:6d}  {k}")
     print(f"  {modes['text']:6d}  files edited as text")
     print(f"  {modes['json']:6d}  files rewritten through JSON")
-    print(f"  {modes['json-fallback']:6d}  files rewritten through JSON after a text-edit divergence")
+    print(
+        f"  {modes['json-fallback']:6d}  files rewritten through JSON after a text-edit divergence"
+    )
 
     if errors:
         print(f"\n-- {len(errors)} FILE(S) NOT MIGRATED --")

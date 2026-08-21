@@ -80,8 +80,15 @@ def test_refresh_regrid_band_matches_golden() -> None:
         insp = BuildInspection()
         fsrc = np.asarray(fsrc_by[_anchor_key(fsrc_by, anchor)], dtype=float)
         res = _simulate_with_numpy(
-            flat, (anchor, anchor + 1.0), {}, {}, "LSODA", rtol=1e-10, atol=1e-12,
-            loader_arrays={_SKEY: scale_native, _FKEY: fsrc}, inspect=insp,
+            flat,
+            (anchor, anchor + 1.0),
+            {},
+            {},
+            "LSODA",
+            rtol=1e-10,
+            atol=1e-12,
+            loader_arrays={_SKEY: scale_native, _FKEY: fsrc},
+            inspect=insp,
         )
         assert res.success, res.message
         ftgt_want = ftgt_by[_anchor_key(ftgt_by, anchor)]
@@ -109,14 +116,18 @@ def test_refresh_trajectory_band_matches_golden() -> None:
     for a, b in zip(endpoints[:-1], endpoints[1:]):
         fsrc = np.asarray(fsrc_by[_anchor_key(fsrc_by, a)], dtype=float)
         res = _simulate_with_numpy(
-            flat, (a, b), {}, ics, "LSODA", rtol=1e-10, atol=1e-12,
+            flat,
+            (a, b),
+            {},
+            ics,
+            "LSODA",
+            rtol=1e-10,
+            atol=1e-12,
             loader_arrays={_SKEY: scale_native, _FKEY: fsrc},
         )
         assert res.success, res.message
         idx = {n: k for k, n in enumerate(res.vars)}
-        ics = {
-            s: float(res.y[idx[s if s in idx else s.split(".")[-1]]][-1]) for s in _STATES
-        }
+        ics = {s: float(res.y[idx[s if s in idx else s.split(".")[-1]]][-1]) for s in _STATES}
         states[b] = dict(ics)
 
     traj = golden["trajectory"]

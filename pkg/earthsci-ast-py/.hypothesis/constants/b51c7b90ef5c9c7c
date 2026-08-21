@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/index_alignment.py
+# hypothesis_version: 6.141.1
+
+['ELEMENTWISE_OPS', 'align_expression', 'alignment_plan', 'args', 'axis_sizes', 'broadcast', 'declared_axes', 'interval', 'iter_named_operands', 'kind', 'op', 'reshape', 'size', 'transpose', 'unalignable_axes']

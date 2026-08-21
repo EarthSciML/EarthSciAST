@@ -120,9 +120,7 @@ def parse_select_axis(ctx: str, ax: Any, gated_by_override: str | None = None) -
         if bounds["step"] == 0:
             raise bad('"range.step" must be >= 1')
         if bounds["stop"] < bounds["start"]:
-            raise bad(
-                f'"range" is empty: stop {bounds["stop"]} precedes start {bounds["start"]}'
-            )
+            raise bad(f'"range" is empty: stop {bounds["stop"]} precedes start {bounds["start"]}')
         return {"range": bounds}
     raise bad(
         f"unrecognised axis selector keys {sorted(map(str, ax))}; expected one of "
@@ -130,9 +128,7 @@ def parse_select_axis(ctx: str, ax: Any, gated_by_override: str | None = None) -
     )
 
 
-def parse_select_axes(
-    ctx: str, axes: Any, gated_by_override: str | None = None
-) -> list[Any]:
+def parse_select_axes(ctx: str, axes: Any, gated_by_override: str | None = None) -> list[Any]:
     """Parse a whole ``axes`` array of the selector vocabulary
     (:func:`parse_select_axis`)."""
     if not isinstance(axes, (list, tuple)):
@@ -211,9 +207,7 @@ def _pd_index_syms(e: Any) -> tuple[str, list[str]] | None:
     return (f, syms)
 
 
-def _pd_matvec_factors(
-    body: Any, c_sym: str, out_syms: list[str]
-) -> tuple[str, str] | None:
+def _pd_matvec_factors(body: Any, c_sym: str, out_syms: list[str]) -> tuple[str, str] | None:
     """Classify an aggregate BODY ``A[c, out…] · E[c]`` — a two-factor ``⊗=·``
     product of a rank-(1+|out|) array factor ``A`` subscripted ``[c, out…]``
     and a rank-1 factor ``E`` subscripted ``[c]`` — into ``(Aname, Ename)``,
@@ -569,9 +563,7 @@ PD_UNGATED_CONSEQUENCE = (
 )
 
 
-def _pd_binning_refusal(
-    ev: Any, agg: Any, out_set: str
-) -> tuple[str, str | None] | None:
+def _pd_binning_refusal(ev: Any, agg: Any, out_set: str) -> tuple[str, str | None] | None:
     """Why :func:`_pd_detect_binning` refused ``ev``, for a caller that has
     ALREADY established ``ev`` sits in the join position. ``agg`` is ``ev``'s
     defining equation RHS from the detection view, exactly as
@@ -637,6 +629,8 @@ def _pd_diagnostic_message(d: dict) -> str:
         "Bind the containment's factors through the template's params, or write "
         "the predicate longhand."
     )
+
+
 def _pd_observed_defs(model: dict) -> dict:
     """``{observed unknown -> its defining equation's RHS}`` for ``model``.
 
@@ -827,8 +821,7 @@ def _pd_detect(model: dict, index_sets: Any):
     # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
     # cell/record sets. They are collected only once the forward pattern has
     # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
-    mirror_specs = _pd_mirror_specs(model, observed_defs, C, R,
-                                    {e[0] for e in e_specs})
+    mirror_specs = _pd_mirror_specs(model, observed_defs, C, R, {e[0] for e in e_specs})
     return {
         "C": C,
         "rcv_set": rcv_set,
@@ -994,13 +987,9 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
         # comparisons, so the document's template block and call sites are
         # untouched. A template-free document never reaches this branch, so its
         # emitted filter is byte-identical to before.
-        ifcond = _pd_find_ifelse_cond(
-            _pd_expand_for_detection(repexpr.get("expr"), templates)
-        )
+        ifcond = _pd_find_ifelse_cond(_pd_expand_for_detection(repexpr.get("expr"), templates))
     if ifcond is None:
-        raise PushdownRewriteError(
-            "pushdown desugar: representative E lost its containment ifelse"
-        )
+        raise PushdownRewriteError("pushdown desugar: representative E lost its containment ifelse")
     comps = ifcond["args"] if ifcond.get("op") in ("and", "*") else [ifcond]
     prod_filter = {"op": "*", "args": [copy.deepcopy(c) for c in comps]}
 
@@ -1061,9 +1050,7 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
             expr["args"] = [rectmap.get(str(s), s) for s in expr["args"]]
         mv[ename]["shape"] = [setname]
         if "join" not in expr:
-            expr["join"] = [
-                _pd_overlap_clause(e_src, [rectmap.get(f, f) for f in e_tgt])
-            ]
+            expr["join"] = [_pd_overlap_clause(e_src, [rectmap.get(f, f) for f in e_tgt])]
         _pd_assert_rects_rebound(expr, ename, rectmap, templates)
 
     # --- MIRRORED orientation: gate only ---
@@ -1306,9 +1293,7 @@ def _pushdown_gated_rank(doc: dict, applies: list[str]) -> int:
     return 2
 
 
-def _pushdown_gate_axes(
-    doc: dict, loader: str, gset: str, gaxis: int, mrank: int
-) -> list[Any]:
+def _pushdown_gate_axes(doc: dict, loader: str, gset: str, gaxis: int, mrank: int) -> list[Any]:
     """Per-NATIVE-axis gate ``axes`` for ``loader``: the loader's declared
     ``metadata.x_esd.gated_select.axes`` template with the GENERATED set name
     substituted into its ``gated_by`` slot (validated against the record's

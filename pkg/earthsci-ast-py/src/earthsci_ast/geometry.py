@@ -199,8 +199,7 @@ def _points_close(px: float, py: float, qx: float, qy: float) -> bool:
     dispatch. Those dominated the conservative-regrid build (``np.allclose`` on
     2-element rings in this loop was ~57 % of the whole Python run).
     """
-    return (abs(px - qx) <= 1e-8 + 1e-5 * abs(qx)
-            and abs(py - qy) <= 1e-8 + 1e-5 * abs(qy))
+    return abs(px - qx) <= 1e-8 + 1e-5 * abs(qx) and abs(py - qy) <= 1e-8 + 1e-5 * abs(qy)
 
 
 def _dedup_consecutive(ring: np.ndarray) -> np.ndarray:

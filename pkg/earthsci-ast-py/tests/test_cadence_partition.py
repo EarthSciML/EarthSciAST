@@ -229,7 +229,11 @@ def test_guard_continuous_relational_rejected():
                     "output_idx": ["e"],
                     "ranges": {"f": {"from": "faces"}},
                     # the key reads state u → the distinct node classifies CONTINUOUS
-                    "key": {"op": "skolem", "label": "edge", "args": [{"op": "index", "args": ["u", "f"]}]},
+                    "key": {
+                        "op": "skolem",
+                        "label": "edge",
+                        "args": [{"op": "index", "args": ["u", "f"]}],
+                    },
                     "expr": {"op": "true", "args": []},
                 },
             }
@@ -344,9 +348,7 @@ def test_cadence_runner_accepts_python_adapter(tmp_path):
     """End-to-end: drive the real cross-binding runner with this adapter and
     assert it reports the Python binding as conformant to the golden."""
     env = dict(os.environ)
-    env["EARTHSCI_CADENCE_ADAPTER_PYTHON"] = (
-        f"{sys.executable} -m earthsci_ast.cli.cadence_adapter"
-    )
+    env["EARTHSCI_CADENCE_ADAPTER_PYTHON"] = f"{sys.executable} -m earthsci_ast.cli.cadence_adapter"
     env["PYTHONPATH"] = os.pathsep.join([str(SRC_DIR), env.get("PYTHONPATH", "")]).rstrip(
         os.pathsep
     )

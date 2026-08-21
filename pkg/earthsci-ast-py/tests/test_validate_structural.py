@@ -967,9 +967,7 @@ class TestReferenceIntegrityEveryExpressionBearingField:
     def test_undefined_name_is_caught_at_every_site(self, fixture_name):
         fixtures_dir = FIXTURES_ROOT
         pins = json.loads((fixtures_dir / "invalid" / "expected_errors.json").read_text())
-        expected = self._STALE_PINS.get(
-            fixture_name, pins[fixture_name]["structural_errors"][0]
-        )
+        expected = self._STALE_PINS.get(fixture_name, pins[fixture_name]["structural_errors"][0])
 
         content = (fixtures_dir / "invalid" / fixture_name).read_text()
         result = validate(content)

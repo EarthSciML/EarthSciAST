@@ -697,12 +697,12 @@ def _require_real(value: Any, where: str) -> Any:
         real = np.real(value)
         return real if isinstance(value, np.ndarray) else float(real)
     raise ComplexValueError(
-            f"{where}: expression evaluated to a COMPLEX value ({value!r}); the "
-            f"evaluable core is real-valued (esm-spec §4.3.4). This is what '^' "
-            f"with a negative base and a fractional exponent produces on a scalar "
-            f"operand — casting it to a real would silently discard the imaginary "
-            f"part and return a plausible wrong number"
-        )
+        f"{where}: expression evaluated to a COMPLEX value ({value!r}); the "
+        f"evaluable core is real-valued (esm-spec §4.3.4). This is what '^' "
+        f"with a negative base and a fractional exponent produces on a scalar "
+        f"operand — casting it to a real would silently discard the imaginary "
+        f"part and return a plausible wrong number"
+    )
     return value
 
 
@@ -1037,8 +1037,26 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
 #: arithmetic / index / elementwise-math layer that a discretized stencil body
 #: is overwhelmingly made of.
 _COMPILED_OPS: frozenset = frozenset(
-    {"index", "+", "-", "neg", "*", "/", "^", "**", "pow", "atan2", "and", "or", "not",
-     "min", "max", "ifelse", "true", "false"}
+    {
+        "index",
+        "+",
+        "-",
+        "neg",
+        "*",
+        "/",
+        "^",
+        "**",
+        "pow",
+        "atan2",
+        "and",
+        "or",
+        "not",
+        "min",
+        "max",
+        "ifelse",
+        "true",
+        "false",
+    }
     | set(_SCALAR_FUNCS)
     | set(_CMP_UFUNCS)
 )
@@ -1596,9 +1614,7 @@ def _bind_broadcast_range(
 
 
 @contextmanager
-def _bound_index_box(
-    ctx: EvalContext, syms: list[str], ranges: list[list[int]]
-) -> Iterator[None]:
+def _bound_index_box(ctx: EvalContext, syms: list[str], ranges: list[list[int]]) -> Iterator[None]:
     """Bind each index symbol to its 1-based ``range`` reshaped to broadcast on
     its own axis of the ``len(syms)``-D box (so a body evaluates over the whole
     box in one pass), restoring ``ctx.locals`` on exit. The shared save / bind /
@@ -1614,9 +1630,7 @@ def _bound_index_box(
         ctx.locals = prev
 
 
-def _expand_reduce_ranges(
-    resolved: dict[str, Any], reduce_syms: list[str]
-) -> list[list[int]]:
+def _expand_reduce_ranges(resolved: dict[str, Any], reduce_syms: list[str]) -> list[list[int]]:
     """Dense 1-based value list for each contracted range, in ``reduce_syms``
     order (``_expand_range`` of each resolved reduce spec) — the one line every
     scalar / vectorized reduction path repeats to expand its contracted box."""
@@ -1814,11 +1828,7 @@ def _eval_arrayop_batched_leaf(
     body = expr.expr
     if not (isinstance(body, ExprNode) and body.op == "polygon_intersection_area"):
         return None
-    if (
-        getattr(body, "manifold", None) != "planar"
-        or len(body.args) != 2
-        or len(out_syms) != 2
-    ):
+    if getattr(body, "manifold", None) != "planar" or len(body.args) != 2 or len(out_syms) != 2:
         return None
     ga = _batched_ring_gather(body.args[0], out_syms, ctx)
     gb = _batched_ring_gather(body.args[1], out_syms, ctx)
@@ -2136,8 +2146,15 @@ def _reduce_over(
     semiring's empty-reduction identity ``empty_zero`` (0̄) when the contracted
     ranges are empty (RFC §5.1)."""
     return _reduce_over_gated(
-        body, ctx, local_binding, reduce_syms, cartesian_red, reducer, empty_zero,
-        gates=[], filter_expr=None,
+        body,
+        ctx,
+        local_binding,
+        reduce_syms,
+        cartesian_red,
+        reducer,
+        empty_zero,
+        gates=[],
+        filter_expr=None,
     )
 
 
@@ -2498,9 +2515,7 @@ def _overlap_spec(clause: Any) -> dict | None:
             "gate, not both (CONFORMANCE_SPEC §5.5.6)"
         )
     if not isinstance(ov, dict):
-        raise NumpyInterpreterError(
-            f"join 'overlap' must be an object; got {type(ov).__name__}"
-        )
+        raise NumpyInterpreterError(f"join 'overlap' must be an object; got {type(ov).__name__}")
     return ov
 
 
@@ -2553,9 +2568,7 @@ def _resolve_join(
                 ),
                 eps=eps,
             )
-            gates.append(
-                _JoinGate(sym_l, sym_r, candidates=broad_phase.OverlapIndex(cands))
-            )
+            gates.append(_JoinGate(sym_l, sym_r, candidates=broad_phase.OverlapIndex(cands)))
             continue
         on = (clause or {}).get("on") or []
         if not on:
@@ -2965,8 +2978,8 @@ def _expr_mentions(node: Expr, name: str) -> bool:
     for child in node.args or []:
         if _expr_mentions(child, name):
             return True
-    for field in ("expr", "filter", "key", "lower", "upper"):
-        child = getattr(node, field, None)
+    for attr in ("expr", "filter", "key", "lower", "upper"):
+        child = getattr(node, attr, None)
         if child is not None and _expr_mentions(child, name):
             return True
     for child in getattr(node, "values", None) or []:
@@ -3128,8 +3141,18 @@ def _eval_arrayop_scalar(
     ov = broad_phase.overlap_driver(gates)
     if ov is not None:
         return _eval_arrayop_scalar_gate_driven(
-            expr, ctx, out_syms, out_ranges_exp, out_shape, reduce_syms,
-            red_ranges_exp, reducer, empty_zero, filter_expr, gates, ov,
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            red_ranges_exp,
+            reducer,
+            empty_zero,
+            filter_expr,
+            gates,
+            ov,
         )
 
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
@@ -3223,8 +3246,7 @@ def _eval_arrayop_scalar_gate_driven(
             fast_is_l = plan[1] == reduce_syms[-1]
             prs = sorted(plan[3], key=(lambda pr: (pr[1], pr[0])) if fast_is_l else None)
             cartesian_red = [
-                (int(pr[1]), int(pr[0])) if fast_is_l else (int(pr[0]), int(pr[1]))
-                for pr in prs
+                (int(pr[1]), int(pr[0])) if fast_is_l else (int(pr[0]), int(pr[1])) for pr in prs
             ]
         else:
             if full_cartesian is None:

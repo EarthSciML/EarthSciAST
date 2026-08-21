@@ -17,6 +17,7 @@ integrates the system. The guard rejects only *undiscretized* spatial operators,
 not PDEs. Remaining limitation: limited event support.
 This enables atmospheric chemistry and discretized-PDE simulation in Python.
 """
+
 from __future__ import annotations
 
 from typing import Any, Callable
@@ -298,6 +299,4 @@ def simulate(
     # Scalar-only models: route to the scalar-SymPy pathway submodule
     # (:mod:`simulation_scalar`). No array ops, loader fields, or provider
     # injections reach here, so this is the plain lambdified-RHS + SciPy path.
-    return _simulate_scalar(
-        flat, tspan, parameters, initial_conditions, method, rtol, atol, cse
-    )
+    return _simulate_scalar(flat, tspan, parameters, initial_conditions, method, rtol, atol, cse)

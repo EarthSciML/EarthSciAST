@@ -168,10 +168,7 @@ def oracle():
     def oracle_E(mask):
         return np.array(
             [
-                sum(
-                    (1.0 if cont(c, r) else 0.0) * emis_annual[r] * mask[r]
-                    for r in range(N_REC)
-                )
+                sum((1.0 if cont(c, r) else 0.0) * emis_annual[r] * mask[r] for r in range(N_REC))
                 for c in members0
             ]
         )
@@ -264,9 +261,7 @@ def test_prepare_pushdown_record_gate_end_to_end(oracle):
     # ---- engine-derived support set surfaced through the inspection ----------
     mf = [k for k in insp.const_arrays if str(k).startswith("pd_member_factor__")]
     assert mf, "member_factor feedback missing from the inspection const registry"
-    assert sorted(int(m) for m in np.asarray(insp.const_arrays[mf[0]])) == [
-        m + 1 for m in members0
-    ]
+    assert sorted(int(m) for m in np.asarray(insp.const_arrays[mf[0]])) == [m + 1 for m in members0]
 
     # ---- results through the prepared document's own graph ------------------
     np.testing.assert_allclose(
@@ -350,7 +345,10 @@ def test_prepare_pushdown_single_member_support_set(oracle):
     tot = FACT * sum(conc[v] for v in LVARS)
 
     for v in LVARS:
-        got = observed_field(prep, f"E_{'VOC' if v == 'SOA' else 'NOx' if v == 'pNO3' else 'NH3' if v == 'pNH4' else 'SOx' if v == 'pSO4' else 'PM25'}")
+        got = observed_field(
+            prep,
+            f"E_{'VOC' if v == 'SOA' else 'NOx' if v == 'pNO3' else 'NH3' if v == 'pNH4' else 'SOx' if v == 'pSO4' else 'PM25'}",
+        )
         assert np.asarray(got).shape == (1,)
         np.testing.assert_allclose(got, E_or[v])
     np.testing.assert_allclose(observed_field(prep, "TotalPM25"), tot)

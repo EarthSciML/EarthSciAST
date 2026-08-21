@@ -430,8 +430,7 @@ class _RecordTable:
         cols = self._materialize()
         if name not in cols:
             raise ValueError(
-                f"loader {self.loader_name!r} has no column {name!r} "
-                f"(declared: {sorted(cols)})"
+                f"loader {self.loader_name!r} has no column {name!r} (declared: {sorted(cols)})"
             )
         return cols[name]
 
@@ -594,10 +593,7 @@ def _neutral_to_native(selection: list[Any]) -> dict[str, Any]:
     """The engine's neutral per-axis selection (``"all"`` | 0-based index list),
     in EarthSciIO's native ``{"axes": [...]}`` spelling."""
     return {
-        "axes": [
-            "all" if ax == "all" else {"indices": [int(i) for i in ax]}
-            for ax in selection
-        ]
+        "axes": ["all" if ax == "all" else {"indices": [int(i) for i in ax]} for ax in selection]
     }
 
 
@@ -663,8 +659,7 @@ class EsioDocumentProvider:
             if not gated and table is None and bool(inner.supports_selection):
                 self._reader_select = _to_reader_select(declared)
                 self._drop_axes = tuple(
-                    i for i, a in enumerate(declared)
-                    if isinstance(a, dict) and "fixed" in a
+                    i for i, a in enumerate(declared) if isinstance(a, dict) and "fixed" in a
                 )
             else:
                 self._engine_axes = list(declared)
@@ -691,9 +686,7 @@ class EsioDocumentProvider:
         provider-declared gate: ``prepare`` defers it past value-invention and
         fetches it pre-sliced to the materialised members."""
         axes = self._engine_axes
-        if axes is None or not any(
-            isinstance(a, dict) and "gated_by" in a for a in axes
-        ):
+        if axes is None or not any(isinstance(a, dict) and "gated_by" in a for a in axes):
             return None
         return {"axes": list(axes), "applies_to": [self.key.rsplit(".", 1)[-1]]}
 
@@ -747,9 +740,7 @@ class EsioDocumentProvider:
         """
         if self._unit_conversion is None:
             return arr
-        out = apply_unit_conversion(
-            arr, self._unit_conversion, variable_name=self.key
-        )
+        out = apply_unit_conversion(arr, self._unit_conversion, variable_name=self.key)
         return np.asarray(out, dtype=float)
 
     def _apply_declared(self, arr: np.ndarray) -> np.ndarray:
@@ -757,9 +748,7 @@ class EsioDocumentProvider:
             return _apply_axes(self.key, arr, self._engine_axes)
         if self._drop_axes:
             # The reader already sliced; only the `fixed` axes still need dropping.
-            axes = [
-                {"fixed": 0} if i in self._drop_axes else "all" for i in range(arr.ndim)
-            ]
+            axes = [{"fixed": 0} if i in self._drop_axes else "all" for i in range(arr.ndim)]
             return _apply_axes(self.key, arr, axes)
         return arr
 
@@ -815,9 +804,7 @@ def _parse_codes(ctx: str, vd: Any) -> _CodeMap | None:
     unmapped = codes.get("unmapped", "error")
     if unmapped not in ("drop", "error"):
         if isinstance(unmapped, bool) or not isinstance(unmapped, (int, float)):
-            raise ValueError(
-                f'{ctx}.codes.unmapped must be "drop", "error" or a number'
-            )
+            raise ValueError(f'{ctx}.codes.unmapped must be "drop", "error" or a number')
         unmapped = float(unmapped)
     out: dict[str, float] = {}
     for k, v in mapping.items():
@@ -942,9 +929,7 @@ def providers_from_document(
                 f"metadata.esio_format — cannot construct a provider for it"
             )
         src = ld.get("source")
-        url = overrides.get(
-            lname, src.get("url_template") if isinstance(src, dict) else None
-        )
+        url = overrides.get(lname, src.get("url_template") if isinstance(src, dict) else None)
         if not isinstance(url, str):
             raise ValueError(
                 f"providers_from_document: data_sources.{lname} has no "
@@ -1000,12 +985,20 @@ def providers_from_document(
         declared_temporal = _to_esio_temporal(ld.get("temporal"))
 
         def _loader(
-            vars_: list[str], _l=lname, _f=fmt, _u=url, _o=reader_options,
+            vars_: list[str],
+            _l=lname,
+            _f=fmt,
+            _u=url,
+            _o=reader_options,
             _t=declared_temporal,
         ):
             return esio.DataSource(
-                name=_l, format=str(_f), url=_u, variables=vars_,
-                reader_kwargs=dict(_o), temporal=_t,
+                name=_l,
+                format=str(_f),
+                url=_u,
+                variables=vars_,
+                reader_kwargs=dict(_o),
+                temporal=_t,
             )
 
         # A record filter or a code map makes the source a TABLE: one decode,

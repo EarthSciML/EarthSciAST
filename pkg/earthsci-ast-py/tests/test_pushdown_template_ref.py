@@ -40,13 +40,17 @@ def _op(o, *args):
 
 
 def _apply(name, bindings):
-    return {"op": "apply_expression_template", "args": [], "name": name,
-            "bindings": dict(bindings)}
+    return {"op": "apply_expression_template", "args": [], "name": name, "bindings": dict(bindings)}
 
 
 def _agg(output_idx, ranges, expr, reduce=None, args=()):
-    d = {"op": "aggregate", "output_idx": list(output_idx), "ranges": ranges,
-         "args": list(args), "expr": expr}
+    d = {
+        "op": "aggregate",
+        "output_idx": list(output_idx),
+        "ranges": ranges,
+        "args": list(args),
+        "expr": expr,
+    }
     if reduce is not None:
         d["reduce"] = reduce
     return d
@@ -96,11 +100,13 @@ def _structural(doc):
 
 
 def _contain():
-    return _op("and",
-               _op("<=", _ix("src_W", "c"), _ix("px", "r")),
-               _op("<", _ix("px", "r"), _ix("src_E", "c")),
-               _op("<=", _ix("src_S", "c"), _ix("py", "r")),
-               _op("<", _ix("py", "r"), _ix("src_N", "c")))
+    return _op(
+        "and",
+        _op("<=", _ix("src_W", "c"), _ix("px", "r")),
+        _op("<", _ix("px", "r"), _ix("src_E", "c")),
+        _op("<=", _ix("src_S", "c"), _ix("py", "r")),
+        _op("<", _ix("py", "r"), _ix("src_N", "c")),
+    )
 
 
 def _eranges():
@@ -130,14 +136,30 @@ def base_doc():
         "models": {"Binned": {"variables": v, "equations": []}},
     }
     m = doc["models"]["Binned"]
-    _define(m, "E_PM25", ["src_cells"], _agg(
-        ["c"], _eranges(),
-        _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("emis_annual", "r")),
-        reduce="+", args=_EARGS))
-    _define(m, "conc_PM25", ["rcv_cells"], _agg(
-        ["rcv"], {"s": {"from": "src_cells"}, "rcv": {"from": "rcv_cells"}},
-        _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")),
-        reduce="+", args=["SR_PM25", "E_PM25"]))
+    _define(
+        m,
+        "E_PM25",
+        ["src_cells"],
+        _agg(
+            ["c"],
+            _eranges(),
+            _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("emis_annual", "r")),
+            reduce="+",
+            args=_EARGS,
+        ),
+    )
+    _define(
+        m,
+        "conc_PM25",
+        ["rcv_cells"],
+        _agg(
+            ["rcv"],
+            {"s": {"from": "src_cells"}, "rcv": {"from": "rcv_cells"}},
+            _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")),
+            reduce="+",
+            args=["SR_PM25", "E_PM25"],
+        ),
+    )
     return doc
 
 
@@ -151,20 +173,42 @@ def test_bare_factor_name_bindings_are_repointed():
 
     d = base_doc()
     m = d["models"]["Binned"]
-    tpl_contain = _op("and",
-                      _op("<=", _ix("xmin", "c"), _ix("ptx", "r")),
-                      _op("<", _ix("ptx", "r"), _ix("xmax", "c")),
-                      _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
-                      _op("<", _ix("pty", "r"), _ix("ymax", "c")))
-    m["expression_templates"] = {"bin_into_cell": {
-        "params": ["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
-        "body": _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r"))}}
-    _define(m, "E_PM25", ["src_cells"], _agg(
-        ["c"], _eranges(),
-        _apply("bin_into_cell", {"xmin": "src_W", "ymin": "src_S",
-                                 "xmax": "src_E", "ymax": "src_N",
-                                 "ptx": "px", "pty": "py", "wgt": "emis_annual"}),
-        reduce="+", args=_EARGS))
+    tpl_contain = _op(
+        "and",
+        _op("<=", _ix("xmin", "c"), _ix("ptx", "r")),
+        _op("<", _ix("ptx", "r"), _ix("xmax", "c")),
+        _op("<=", _ix("ymin", "c"), _ix("pty", "r")),
+        _op("<", _ix("pty", "r"), _ix("ymax", "c")),
+    )
+    m["expression_templates"] = {
+        "bin_into_cell": {
+            "params": ["xmin", "ymin", "xmax", "ymax", "ptx", "pty", "wgt"],
+            "body": _op("*", _op("ifelse", tpl_contain, 1.0, 0.0), _ix("wgt", "r")),
+        }
+    }
+    _define(
+        m,
+        "E_PM25",
+        ["src_cells"],
+        _agg(
+            ["c"],
+            _eranges(),
+            _apply(
+                "bin_into_cell",
+                {
+                    "xmin": "src_W",
+                    "ymin": "src_S",
+                    "xmax": "src_E",
+                    "ymax": "src_N",
+                    "ptx": "px",
+                    "pty": "py",
+                    "wgt": "emis_annual",
+                },
+            ),
+            reduce="+",
+            args=_EARGS,
+        ),
+    )
     tpl_before = copy.deepcopy(m["expression_templates"])
 
     r = desugar_pushdown(d, model_name="Binned")
@@ -199,20 +243,50 @@ def test_subscripted_bindings_are_repointed():
     its params as plain operands."""
     d = base_doc()
     m = d["models"]["Binned"]
-    m["expression_templates"] = {"bin2": {
-        "params": ["lo_x", "lo_y", "hi_x", "hi_y", "x", "y", "wgt"],
-        "body": _op("*", _op("ifelse", _op("and",
-                                           _op("<=", "lo_x", "x"),
-                                           _op("<", "x", "hi_x"),
-                                           _op("<=", "lo_y", "y"),
-                                           _op("<", "y", "hi_y")), 1.0, 0.0), "wgt")}}
-    _define(m, "E_PM25", ["src_cells"], _agg(
-        ["c"], _eranges(),
-        _apply("bin2", {"lo_x": _ix("src_W", "c"), "lo_y": _ix("src_S", "c"),
-                        "hi_x": _ix("src_E", "c"), "hi_y": _ix("src_N", "c"),
-                        "x": _ix("px", "r"), "y": _ix("py", "r"),
-                        "wgt": _ix("emis_annual", "r")}),
-        reduce="+", args=_EARGS))
+    m["expression_templates"] = {
+        "bin2": {
+            "params": ["lo_x", "lo_y", "hi_x", "hi_y", "x", "y", "wgt"],
+            "body": _op(
+                "*",
+                _op(
+                    "ifelse",
+                    _op(
+                        "and",
+                        _op("<=", "lo_x", "x"),
+                        _op("<", "x", "hi_x"),
+                        _op("<=", "lo_y", "y"),
+                        _op("<", "y", "hi_y"),
+                    ),
+                    1.0,
+                    0.0,
+                ),
+                "wgt",
+            ),
+        }
+    }
+    _define(
+        m,
+        "E_PM25",
+        ["src_cells"],
+        _agg(
+            ["c"],
+            _eranges(),
+            _apply(
+                "bin2",
+                {
+                    "lo_x": _ix("src_W", "c"),
+                    "lo_y": _ix("src_S", "c"),
+                    "hi_x": _ix("src_E", "c"),
+                    "hi_y": _ix("src_N", "c"),
+                    "x": _ix("px", "r"),
+                    "y": _ix("py", "r"),
+                    "wgt": _ix("emis_annual", "r"),
+                },
+            ),
+            reduce="+",
+            args=_EARGS,
+        ),
+    )
     tpl_before = copy.deepcopy(m["expression_templates"])
 
     r = desugar_pushdown(d, model_name="Binned")
@@ -224,7 +298,7 @@ def test_subscripted_bindings_are_repointed():
     b = edef["expr"]["bindings"]
     assert b["lo_x"]["args"][0] == "pd_cell__src_cells__src_W"
     assert b["hi_y"]["args"][0] == "pd_cell__src_cells__src_N"
-    assert b["x"]["args"][0] == "px"          # records untouched
+    assert b["x"]["args"][0] == "px"  # records untouched
     assert r["models"]["Binned"]["expression_templates"] == tpl_before
     assert desugar_pushdown(r) is r
 
@@ -236,12 +310,18 @@ def test_free_rect_in_template_body_is_rejected():
     positions — wrong numbers, silently. Hence an error, not a warning."""
     d = base_doc()
     m = d["models"]["Binned"]
-    m["expression_templates"] = {"bin3": {
-        "params": ["wgt"],
-        "body": _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("wgt", "r"))}}
-    _define(m, "E_PM25", ["src_cells"], _agg(
-        ["c"], _eranges(), _apply("bin3", {"wgt": "emis_annual"}),
-        reduce="+", args=_EARGS))
+    m["expression_templates"] = {
+        "bin3": {
+            "params": ["wgt"],
+            "body": _op("*", _op("ifelse", _contain(), 1.0, 0.0), _ix("wgt", "r")),
+        }
+    }
+    _define(
+        m,
+        "E_PM25",
+        ["src_cells"],
+        _agg(["c"], _eranges(), _apply("bin3", {"wgt": "emis_annual"}), reduce="+", args=_EARGS),
+    )
     with pytest.raises(ExpressionTemplateError) as ei:
         desugar_pushdown(d, model_name="Binned")
     assert ei.value.code == "template_body_references_pushdown_rewritten_variable"
@@ -251,12 +331,21 @@ def test_free_rect_in_template_body_is_rejected():
 
 
 def test_dense_reduction_is_silent():
-    """"Not a join" is not a defect: an aggregate with no containment predicate
+    """ "Not a join" is not a defect: an aggregate with no containment predicate
     is a legitimately dense factor and MUST NOT be reported."""
     d = base_doc()
-    _define(d["models"]["Binned"], "E_PM25", ["src_cells"], _agg(
-        ["c"], _eranges(), _op("*", _ix("emis_annual", "r"), 1.0),
-        reduce="+", args=["emis_annual"]))
+    _define(
+        d["models"]["Binned"],
+        "E_PM25",
+        ["src_cells"],
+        _agg(
+            ["c"],
+            _eranges(),
+            _op("*", _ix("emis_annual", "r"), 1.0),
+            reduce="+",
+            args=["emis_annual"],
+        ),
+    )
     assert pushdown_diagnostics(d, model_name="Binned") == []
     assert desugar_pushdown(d, model_name="Binned") is d
 
@@ -266,9 +355,12 @@ def test_unexpandable_reference_in_the_join_position_is_reported():
     the registry is gone. The document IS join-shaped, so this is reported,
     naming the template, and the document comes back untouched."""
     d = base_doc()
-    _define(d["models"]["Binned"], "E_PM25", ["src_cells"], _agg(
-        ["c"], _eranges(), _apply("gone", {"wgt": "emis_annual"}),
-        reduce="+", args=_EARGS))
+    _define(
+        d["models"]["Binned"],
+        "E_PM25",
+        ["src_cells"],
+        _agg(["c"], _eranges(), _apply("gone", {"wgt": "emis_annual"}), reduce="+", args=_EARGS),
+    )
     dg = pushdown_diagnostics(d, model_name="Binned")
     assert len(dg) == 1
     assert dg[0]["code"] == "pushdown_join_unrecognised"

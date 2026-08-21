@@ -453,9 +453,7 @@ def expand_coupling_imports(
             out.append(entry)
             continue
         ref = entry.ref if isinstance(entry.ref, str) else ""
-        bind: dict[str, str] = {
-            k: v for k, v in (entry.bind or {}).items() if isinstance(v, str)
-        }
+        bind: dict[str, str] = {k: v for k, v in (entry.bind or {}).items() if isinstance(v, str)}
         try:
             lib = resolver(ref, base_path)
         except ExpressionTemplateError:

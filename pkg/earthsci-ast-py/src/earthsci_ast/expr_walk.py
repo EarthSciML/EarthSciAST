@@ -18,6 +18,7 @@ Note: this enumerates *children* only. ``output_idx``, ``ranges``, and
 ``wrt`` bind index symbols for the node's body; callers that resolve
 variable names decide how to treat bound symbols.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator

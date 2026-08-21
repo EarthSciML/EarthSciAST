@@ -306,9 +306,12 @@ def _op_literals_in_source(module) -> set[str]:
 # renders via the generic fallback, but is not a *registered* op, so it is not
 # listed here.)
 DISPLAY_GENERIC_OK = {
-    "ic",                                 # equation-LHS declaration
-    "skolem", "rank", "distinct", "join",  # build-time value-invention ops
-    "false",                              # display renders `true` but not `false`
+    "ic",  # equation-LHS declaration
+    "skolem",
+    "rank",
+    "distinct",
+    "join",  # build-time value-invention ops
+    "false",  # display renders `true` but not `false`
 }
 
 # Unregistered ops display nonetheless branches on a source literal for: `integral`
@@ -351,14 +354,29 @@ def test_display_covers_every_registered_op():
 # ops, …), which is the deliberate, correct behaviour. So codegen's contract is a
 # SUBSET of the registry, pinned here explicitly.
 CODEGEN_HANDLED = {
-    "+", "*", "-", "/", "^", "**", "pow",
+    "+",
+    "*",
+    "-",
+    "/",
+    "^",
+    "**",
+    "pow",
     "D",  # `grad`/`div`/`laplacian`/`curl` are no longer special-cased in codegen —
-          # they render via the generic `op(args)` fallback (rewrite-target keywords a
-          # discretization template lowers before codegen; `D` remains the special core
-          # derivative reshaped per target).
-    "exp", "ifelse", "Pre", "not",
-    "<", ">", "<=", ">=", "==", "!=",
-    "and", "or",
+    # they render via the generic `op(args)` fallback (rewrite-target keywords a
+    # discretization template lowers before codegen; `D` remains the special core
+    # derivative reshaped per target).
+    "exp",
+    "ifelse",
+    "Pre",
+    "not",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "==",
+    "!=",
+    "and",
+    "or",
 }
 
 

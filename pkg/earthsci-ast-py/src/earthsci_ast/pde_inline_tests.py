@@ -682,13 +682,8 @@ def _evaluate_assertion(
             else:
                 ref = None
                 if a.reference is not None:
-                    if (
-                        isinstance(a.reference, dict)
-                        and a.reference.get("type") == "from_file"
-                    ):
-                        ref = _from_file_reference(
-                            a.reference, resolved_base, cell_tuples
-                        )
+                    if isinstance(a.reference, dict) and a.reference.get("type") == "from_file":
+                        ref = _from_file_reference(a.reference, resolved_base, cell_tuples)
                     elif isinstance(a.reference, (ExprNode, int, float, str)):
                         # Model parameters (load-time constants) are
                         # in scope for a §6.6.5 analytic reference;
@@ -701,9 +696,7 @@ def _evaluate_assertion(
                             params=_param_scope_with_aliases(insp.params),
                         )
                     else:
-                        raise RuntimeError(
-                            f"unsupported `reference` shape {type(a.reference)}"
-                        )
+                        raise RuntimeError(f"unsupported `reference` shape {type(a.reference)}")
                 actual = field_reduce(a.reduce, field, reference=ref)
     except Exception as err:  # noqa: BLE001 — recorded per assertion
         msg = f"assertion evaluation failed: {err}"
@@ -798,9 +791,7 @@ def run_pde_tests(
                         rtol=rtol,
                         atol=atol,
                         saveat=times,
-                        parameters=_scope_to_component(
-                            t.parameter_overrides, str(mname), run_file
-                        ),
+                        parameters=_scope_to_component(t.parameter_overrides, str(mname), run_file),
                         initial_conditions=_scope_to_component(
                             t.initial_conditions, str(mname), run_file
                         ),
@@ -813,26 +804,20 @@ def run_pde_tests(
             for i, a in enumerate(t.assertions, start=1):
                 a_rtol, a_atol = _resolve_tolerance(run_model.tolerance, t.tolerance, a.tolerance)
                 if sim is None:
-                    results.append(
-                        _result(mname, t, i, a, a_rtol, a_atol, None, False, sim_err)
-                    )
+                    results.append(_result(mname, t, i, a, a_rtol, a_atol, None, False, sim_err))
                     continue
                 actual, msg = _evaluate_assertion(
                     a, sim, times, mname, eval_file, insp, resolved_base
                 )
                 if actual is None:
-                    results.append(
-                        _result(mname, t, i, a, a_rtol, a_atol, None, False, msg)
-                    )
+                    results.append(_result(mname, t, i, a, a_rtol, a_atol, None, False, msg))
                 else:
                     ok = _check_assertion(actual, a.expected, a_rtol, a_atol)
                     if not ok:
                         msg = (
                             f"actual={actual} expected={a.expected} (rtol={a_rtol}, atol={a_atol})"
                         )
-                    results.append(
-                        _result(mname, t, i, a, a_rtol, a_atol, actual, ok, msg)
-                    )
+                    results.append(_result(mname, t, i, a, a_rtol, a_atol, actual, ok, msg))
     return results
 
 

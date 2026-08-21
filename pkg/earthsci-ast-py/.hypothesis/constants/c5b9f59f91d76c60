@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/classification.py
+# hypothesis_version: 6.141.1
+
+['ClassificationError', 'D', 'SYSTEM_KINDS', 'aggregate', 'algebraic_unknowns', 'args', 'assert_partitions', 'brownian_parameters', 'constant_parameters', 'declared_system_kind', 'discrete_parameters', 'distribution', 'div', 'equations', 'expr', 'expr_dict', 'expr_list', 'grad', 'ic', 'index', 'inlined_unknowns', 'is_observed_unknown', 'is_ode_state', 'kind', 'laplacian', 'lhs', 'model_nodes', 'models', 'nonlinear', 'observed_definitions', 'observed_unknowns', 'ode', 'ode_states', 'op', 'parameter', 'parameters', 'pde', 'ref', 'rhs', 'sampled_parameters', 'sde', 'subsystems', 'system_kind', 't', 'type', 'unknown', 'unknowns', 'update', 'variables', 'wiener', 'wrt']

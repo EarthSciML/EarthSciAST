@@ -64,7 +64,7 @@ def build_doc(depth: int) -> dict:
     for i in range(1, depth + 1):
         templates[f"T{i}"] = {
             "params": [],
-            "body": {"op": "+", "args": [apply_node(f"T{i-1}"), apply_node(f"T{i-1}")]},
+            "body": {"op": "+", "args": [apply_node(f"T{i - 1}"), apply_node(f"T{i - 1}")]},
         }
     return {
         "esm": "0.4.0",

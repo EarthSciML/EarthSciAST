@@ -11,6 +11,7 @@ the scalar continuous-event helper that builds SciPy root-finding callbacks
 from a system's ``continuous_events``. ``earthsci_ast.simulation`` re-exports
 this module's API and routes to :func:`_simulate_scalar`.
 """
+
 from __future__ import annotations
 
 from typing import Any, Callable
@@ -155,9 +156,7 @@ def _resolve_parameter_values(
     """
     values: list[float] = []
     for pname in parameter_names:
-        values.append(
-            _resolve_override(pname, parameter_overrides, flat.parameters[pname].default)
-        )
+        values.append(_resolve_override(pname, parameter_overrides, flat.parameters[pname].default))
     return values
 
 

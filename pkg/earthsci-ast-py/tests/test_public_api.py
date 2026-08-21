@@ -78,9 +78,7 @@ def test_all_exports_resolve():
     assert not missing, f"__all__ names missing from package: {missing}"
 
 
-@pytest.mark.parametrize(
-    "name", _CLASSIFICATION_API + _DATA_SOURCE_API + _PARAMETER_BEHAVIOUR_API
-)
+@pytest.mark.parametrize("name", _CLASSIFICATION_API + _DATA_SOURCE_API + _PARAMETER_BEHAVIOUR_API)
 def test_new_public_name_is_exported(name):
     """Each 1.0.0 name is both importable and advertised in __all__."""
     assert hasattr(earthsci_ast, name), f"{name} is not exported from earthsci_ast"

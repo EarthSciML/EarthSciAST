@@ -56,6 +56,7 @@ def _requires_zarr_store() -> None:
     if major < 3:
         pytest.skip(f"earthsciio's zarr backend needs zarr v3 (found {version})")
 
+
 from conftest import VALID_DIR  # noqa: E402
 
 from earthsci_ast.data_sources.esio_provider import (  # noqa: E402
@@ -362,8 +363,7 @@ def test_the_record_filter_drops_the_record_from_every_variable(doc_and_tmp):
     of alignment — every variable delivers the same records, in the same order."""
     doc, tmp_path = doc_and_tmp
     lengths = {
-        v: len(_sample(doc, tmp_path, f"Ingest.{v}"))
-        for v in ("pollutant", "annual", "lon", "lat")
+        v: len(_sample(doc, tmp_path, f"Ingest.{v}")) for v in ("pollutant", "annual", "lon", "lat")
     }
     assert set(lengths.values()) == {3}, lengths
     # Relaxing the filter to `annual` alone re-admits the coordinate-less SO2

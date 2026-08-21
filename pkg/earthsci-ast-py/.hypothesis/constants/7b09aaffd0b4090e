@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/expression.py
+# hypothesis_version: 6.141.1
+
+['!=', '*', '**', '+', '-', '/', '<', '<=', '==', '>', '>=', 'Abs', 'Add', 'And', 'BooleanFalse', 'BooleanTrue', 'Cosine', 'D', 'Division', 'Equality', 'Exponential', 'Greater than', 'GreaterThan', 'Inequality', 'Less than', 'Less than or equal', 'LessThan', 'Logarithm', 'Max', 'Min', 'Mul', 'Not', 'Or', 'Pre', 'Sine', 'StrictGreaterThan', 'StrictLessThan', 'Unequality', '^', '__name__', '_ess_numeric_abs', 'abs', 'acos', 'acosh', 'and', 'asin', 'asinh', 'atan', 'atan2', 'atanh', 'ceil', 'ceiling', 'comparison', 'const', 'core', 'cos', 'cosh', 'enum', 'exp', 'floor', 'fn', 'func', 'ifelse', 'is_real', 'log', 'log10', 'max', 'min', 'not', 'or', 'parameter', 'pow', 'sign', 'sin', 'sinh', 'sqrt', 'tan', 'tanh']

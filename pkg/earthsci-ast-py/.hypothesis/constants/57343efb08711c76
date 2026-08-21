@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/reference_resolution.py
+# hypothesis_version: 6.141.1
+
+[' -> ', 'E_REF_CYCLE', 'EdgeKind', 'ReferenceEdge', 'ReferenceGraph', 'ReferenceVertex', 'VertexKind', 'args', 'derived', 'equations', 'factor', 'from', 'from_faq', 'id', 'index_set', 'index_sets', 'join', 'join_factor', 'kind', 'models', 'node', 'on', 'op', 'output_idx', 'range_from', 'ranges', 'resolve_references']

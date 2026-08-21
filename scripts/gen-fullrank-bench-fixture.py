@@ -9,7 +9,9 @@ region body here is a rank-3 aggregate, so the affine box processor fires and
 the branch keys form the genuine 5x5x5 cross-product the RFC's compile-once
 tier collapses to 5+5+5.
 """
-import json, sys
+
+import json
+import sys
 
 N = 7
 AXES = [("x", 0), ("y", 1), ("z", 2)]
@@ -19,14 +21,14 @@ LOOPS = ["i", "j", "k"]
 def idx(f, offs, pin=None):
     """index(f, i+offs on the axis dim, j, k) with optional pinned int."""
     args = [f]
-    for d, l in enumerate(LOOPS):
+    for d, loop in enumerate(LOOPS):
         if pin is not None and d == pin[0]:
             args.append(pin[1])
         elif offs is not None and d == offs[0] and offs[1] != 0:
             op = "+" if offs[1] > 0 else "-"
-            args.append({"op": op, "args": [l, abs(offs[1])]})
+            args.append({"op": op, "args": [loop, abs(offs[1])]})
         else:
-            args.append(l)
+            args.append(loop)
     return {"op": "index", "args": args}
 
 
@@ -54,15 +56,27 @@ def body(axis_d, cls):
         e = add(
             times(0.6666666666666666, sub(idx(f, (axis_d, 1)), idx(f, (axis_d, -1)))),
             times(-0.08333333333333333, sub(idx(f, (axis_d, 2)), idx(f, (axis_d, -2)))),
-            times(0.05, sub({"op": "min", "args": [idx(f, (axis_d, 1)), idx(f, None)]},
-                            {"op": "max", "args": [idx(f, (axis_d, -1)), idx(f, None)]})),
-            times(0.025, sub({"op": "min", "args": [idx(f, (axis_d, 2)), idx(f, (axis_d, 1))]},
-                             {"op": "max", "args": [idx(f, (axis_d, -2)), idx(f, (axis_d, -1))]})),
+            times(
+                0.05,
+                sub(
+                    {"op": "min", "args": [idx(f, (axis_d, 1)), idx(f, None)]},
+                    {"op": "max", "args": [idx(f, (axis_d, -1)), idx(f, None)]},
+                ),
+            ),
+            times(
+                0.025,
+                sub(
+                    {"op": "min", "args": [idx(f, (axis_d, 2)), idx(f, (axis_d, 1))]},
+                    {"op": "max", "args": [idx(f, (axis_d, -2)), idx(f, (axis_d, -1))]},
+                ),
+            ),
         )
     elif cls == "c1":
         rng = [1, 1]
-        e = sub(times(1.5, sub(idx(f, None, (axis_d, 2)), idx(f, None, (axis_d, 1)))),
-                times(0.5, sub(idx(f, None, (axis_d, 3)), idx(f, None, (axis_d, 2)))))
+        e = sub(
+            times(1.5, sub(idx(f, None, (axis_d, 2)), idx(f, None, (axis_d, 1)))),
+            times(0.5, sub(idx(f, None, (axis_d, 3)), idx(f, None, (axis_d, 2)))),
+        )
     elif cls == "c2":
         rng = [2, 2]
         e = times(0.5, sub(idx(f, None, (axis_d, 3)), idx(f, None, (axis_d, 1))))
@@ -71,19 +85,19 @@ def body(axis_d, cls):
         e = times(0.5, sub(idx(f, None, (axis_d, N)), idx(f, None, (axis_d, N - 2))))
     else:  # c7
         rng = [N, N]
-        e = sub(times(1.5, sub(idx(f, None, (axis_d, N)), idx(f, None, (axis_d, N - 1)))),
-                times(0.5, sub(idx(f, None, (axis_d, N - 1)), idx(f, None, (axis_d, N - 2)))))
+        e = sub(
+            times(1.5, sub(idx(f, None, (axis_d, N)), idx(f, None, (axis_d, N - 1)))),
+            times(0.5, sub(idx(f, None, (axis_d, N - 1)), idx(f, None, (axis_d, N - 2)))),
+        )
     ranges = {}
-    for d, l in enumerate(LOOPS):
-        ranges[l] = rng if d == axis_d else {"from": ["x", "y", "z"][d]}
-    return {"op": "aggregate", "output_idx": list(LOOPS), "args": [f],
-            "ranges": ranges, "expr": e}
+    for d, loop in enumerate(LOOPS):
+        ranges[loop] = rng if d == axis_d else {"from": ["x", "y", "z"][d]}
+    return {"op": "aggregate", "output_idx": list(LOOPS), "args": [f], "ranges": ranges, "expr": e}
 
 
 templates = {}
 CLASSES = ["int", "c1", "c2", "c6", "c7"]
-REGION = {"int": [3, N - 2], "c1": [1, 1], "c2": [2, 2],
-          "c6": [N - 1, N - 1], "c7": [N, N]}
+REGION = {"int": [3, N - 2], "c1": [1, 1], "c2": [2, 2], "c6": [N - 1, N - 1], "c7": [N, N]}
 for axis, d in AXES:
     for cls in CLASSES:
         templates[f"s{axis}_{cls}"] = {"params": ["f"], "body": body(d, cls)}
@@ -93,8 +107,14 @@ for axis, d in AXES:
         for dd in range(3):
             reg.append(REGION[cls] if dd == d else [1, N])
         regions.append(reg)
-        values.append({"op": "apply_expression_template", "args": [],
-                       "name": f"s{axis}_{cls}", "bindings": {"f": "f"}})
+        values.append(
+            {
+                "op": "apply_expression_template",
+                "args": [],
+                "name": f"s{axis}_{cls}",
+                "bindings": {"f": "f"},
+            }
+        )
     templates[f"D{axis}"] = {
         "params": ["f"],
         "match": {"op": "D", "args": ["f"], "wrt": axis},
@@ -128,16 +148,25 @@ doc = {
         "Transport": {
             "expression_templates": templates,
             "variables": {
-                "q": {"type": "unknown", "units": "1",
-                      "shape": ["x", "y", "z"], "default": 1.5},
+                "q": {"type": "unknown", "units": "1", "shape": ["x", "y", "z"], "default": 1.5},
             },
             "equations": [
-                {"lhs": {"op": "D", "args": ["q"], "wrt": "t"},
-                 "rhs": {"op": "-", "args": [
-                     {"op": "+", "args": [
-                         {"op": "D", "args": ["q"], "wrt": "x"},
-                         {"op": "D", "args": ["q"], "wrt": "y"},
-                         {"op": "D", "args": ["q"], "wrt": "z"}]}]}},
+                {
+                    "lhs": {"op": "D", "args": ["q"], "wrt": "t"},
+                    "rhs": {
+                        "op": "-",
+                        "args": [
+                            {
+                                "op": "+",
+                                "args": [
+                                    {"op": "D", "args": ["q"], "wrt": "x"},
+                                    {"op": "D", "args": ["q"], "wrt": "y"},
+                                    {"op": "D", "args": ["q"], "wrt": "z"},
+                                ],
+                            }
+                        ],
+                    },
+                },
             ],
         }
     },

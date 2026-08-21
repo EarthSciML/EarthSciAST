@@ -18,6 +18,7 @@ and are re-imported here so existing ``sympy_bridge`` imports keep working.
 ``simulation.py`` imports from this module and handles the SciPy
 ``solve_ivp`` wiring, event handling, and array-op interpreter path.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -177,9 +178,7 @@ def _flat_to_sympy_rhs(
                     fn_callable_map,
                 )
                 continue
-        if isinstance(lhs, str) and (
-            lhs in flat.state_variables or lhs in flat.observed_variables
-        ):
+        if isinstance(lhs, str) and (lhs in flat.state_variables or lhs in flat.observed_variables):
             rhs_sym = _expr_to_sympy(
                 eq.rhs,
                 dict(symbol_map),

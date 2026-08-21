@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/data_sources/provider.py
+# hypothesis_version: 6.141.1
+
+[1.0, 3600.0, 4000, 'LoaderField', 'bbox_east', 'bbox_east_deg', 'bbox_north', 'bbox_north_deg', 'bbox_south', 'bbox_south_deg', 'bbox_west', 'bbox_west_deg', 'frequency', 'height', 'image_height', 'image_width', 'lon', 'metadata', 'resolution_deg', 'size_cap', 'source', 'start', 'unit_conversion', 'url_defaults', 'url_template', 'width', '{bbox']

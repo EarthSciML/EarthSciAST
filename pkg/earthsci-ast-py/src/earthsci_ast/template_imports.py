@@ -232,6 +232,7 @@ def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:
     variable-reference surface syntax — with their integer values, everywhere
     except the :data:`_META_SUBST_SKIP_KEYS` structural fields (esm-spec
     §9.7.6: expression-position substitution; no folding here)."""
+
     # Routed through the shared functional rebuild
     # (:func:`json_walk._rewrite_json`, ``share=False``): these trees are
     # UNSHARED (pre-fixpoint) so every dict / list is rebuilt fresh with no memo,
@@ -719,7 +720,9 @@ _RENAME_PROTECTED_KEYS = _META_SUBST_SKIP_KEYS | frozenset(
 #: symbols, and the protected structural fields are never variable positions.
 #: Mirrors the positional skips of :func:`_rename_walk` for the reference
 #: inventory of :func:`_collect_ref_names`.
-_REF_NAME_SKIP_KEYS = _RENAME_PROTECTED_KEYS | frozenset({"from", "of"}) | frozenset(_RENAME_AXIS_KEYS)
+_REF_NAME_SKIP_KEYS = (
+    _RENAME_PROTECTED_KEYS | frozenset({"from", "of"}) | frozenset(_RENAME_AXIS_KEYS)
+)
 
 
 def _rename_walk(
@@ -745,6 +748,7 @@ def _rename_walk(
     body/registry would use the renamed set while ``where`` still named the
     original, and registration would fail with
     ``template_constraint_unknown_index_set``."""
+
     # Routed through the shared functional rebuild
     # (:func:`json_walk._rewrite_json`, ``share=False``): these imported-decl
     # trees are UNSHARED, so every dict / list is rebuilt fresh with no memo, and
@@ -847,9 +851,7 @@ def _collect_ref_names(out: set, x: Any, shadowed: set) -> set:
     return out
 
 
-def _apply_edge_renames(
-    scope: _TemplateScope, entry: Any, origin: str, ref: str
-) -> _TemplateScope:
+def _apply_edge_renames(scope: _TemplateScope, entry: Any, origin: str, ref: str) -> _TemplateScope:
     """Apply one import edge's ``prefix`` / ``rename`` / ``rebind`` (esm-spec
     §9.7.7) to the target's SURVIVING export scope — templates after ``only``,
     all index sets, and metaparameters still open after this edge's ``bindings``
@@ -1125,9 +1127,7 @@ def _resolve_import_entry(
                     f"'{name}', which the target neither declares nor "
                     "re-exports (esm-spec §9.7.6)",
                 )
-            values[name] = require_meta_expr(
-                v, f"{origin}: import of '{ref}', binding '{name}'"
-            )
+            values[name] = require_meta_expr(v, f"{origin}: import of '{ref}', binding '{name}'")
     if values:
         _instantiate_scope(scope, values, f"{origin} -> {ref}")
         for name in values:
@@ -1167,9 +1167,7 @@ def _resolve_import_entry(
             closure.add(r)
             rbody = scope.templates[r].get("body") if _is_object(scope.templates[r]) else None
             wstack.extend(_collect_apply_names([], rbody))
-        scope.templates = {
-            n: d for n, d in scope.templates.items() if n in keepset or n in closure
-        }
+        scope.templates = {n: d for n, d in scope.templates.items() if n in keepset or n in closure}
 
     # Import-edge renaming / namespacing / free-name rebinding (esm-spec
     # §9.7.7): after `bindings` instantiation and `only` filtering, before the
@@ -1564,9 +1562,7 @@ def resolve_template_machinery(
     # working copies. Restored verbatim by ``_finalize_document`` (esm-spec
     # §9.6.4 rule 5 — see the rationale there).
     declarations = {
-        k: copy.deepcopy(root[k])
-        for k in ("expression_templates", "metaparameters")
-        if k in root
+        k: copy.deepcopy(root[k]) for k in ("expression_templates", "metaparameters") if k in root
     }
 
     doc_meta = _collect_metaparam_decls(root, "document")

@@ -1,4 +1,5 @@
 """Base exception for all earthsci_ast errors."""
+
 from __future__ import annotations
 
 

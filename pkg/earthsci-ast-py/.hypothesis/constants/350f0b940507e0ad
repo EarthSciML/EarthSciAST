@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/broad_phase.py
+# hypothesis_version: 6.141.1
+
+[0.0, 'BroadPhaseError', 'ENUM_VISITS', 'OverlapIndex', '_adj_l', '_adj_r', '_sorted', 'candidates', 'envelope_vectors', 'l', 'none', 'overlap_drive_plan', 'overlap_driver', 'overlap_restrict', 'pairs', 'r', 'reject', 'restrict', 'ring_envelopes']

@@ -20,14 +20,17 @@ import re
 import pytest
 from conftest import FIXTURES_ROOT, load_fixture as _load_fixture
 from earthsci_ast import load, __version__ as VERSION
-from earthsci_ast.parse import _CURRENT_VERSION
+from earthsci_ast.parse import (
+    _CURRENT_VERSION,
+    SchemaValidationError,
+    UnsupportedVersionError,
+)
 
 # The package version (__version__, from distribution metadata) is kept in
 # lockstep with the supported ESM format version (parse._CURRENT_VERSION).
 # Derive the expectation from the latter so this test never re-hardcodes a
 # literal that goes stale on the next version bump.
 _EXPECTED_VERSION = ".".join(str(v) for v in _CURRENT_VERSION)
-from earthsci_ast.parse import SchemaValidationError, UnsupportedVersionError
 
 # Path to version compatibility test fixtures
 FIXTURES_DIR = FIXTURES_ROOT / "version_compatibility"

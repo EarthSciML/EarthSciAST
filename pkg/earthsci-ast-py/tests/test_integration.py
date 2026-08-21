@@ -291,10 +291,7 @@ class TestWorkflowRobustness:
                         **{f"x{i}": {"type": "unknown"} for i in range(20)},
                         # The `param{i}` were USED but never DECLARED; reference
                         # integrity covers every equation RHS (esm-spec §4.9.5).
-                        **{
-                            f"param{i}": {"type": "parameter", "default": 1.0}
-                            for i in range(20)
-                        },
+                        **{f"param{i}": {"type": "parameter", "default": 1.0} for i in range(20)},
                     },
                     "equations": [
                         {

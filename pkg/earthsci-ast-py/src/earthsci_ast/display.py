@@ -7,6 +7,7 @@ Implements output formats:
 
 Based on ESM Format Specification Section 6.1
 """
+
 from __future__ import annotations
 
 import math
@@ -83,9 +84,7 @@ def _convert_greek(text: str, format_type: str) -> str:
     if format_type == "latex":
         return _GREEK_LATEX_RE.sub(lambda m: GREEK_LETTERS.get(m.group(0), m.group(0)), text)
     if format_type == "unicode":
-        return _GREEK_UNICODE_RE.sub(
-            lambda m: GREEK_NAME_TO_CHAR.get(m.group(0), m.group(0)), text
-        )
+        return _GREEK_UNICODE_RE.sub(lambda m: GREEK_NAME_TO_CHAR.get(m.group(0), m.group(0)), text)
     if format_type == "ascii":
         return _GREEK_CHAR_RE.sub(lambda m: GREEK_CHAR_TO_NAME.get(m.group(0), m.group(0)), text)
     return text
@@ -926,9 +925,7 @@ def _format_aggregate(node, format_type: str) -> str:
         out += _format_ranges_clause(ranges, format_type)
     join = _node_field(node, "join")
     if join:
-        clauses = "; ".join(
-            ", ".join(f"{p[0]}={p[1]}" for p in (c.get("on") or [])) for c in join
-        )
+        clauses = "; ".join(", ".join(f"{p[0]}={p[1]}" for p in (c.get("on") or [])) for c in join)
         out += f" join({clauses})"
     filt = _node_field(node, "filter")
     if filt is not None:

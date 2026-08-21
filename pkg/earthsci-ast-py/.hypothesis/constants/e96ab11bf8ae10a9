@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/simulation_array.py
+# hypothesis_version: 6.141.1
+
+[0.0, 1e-12, 1e-10, ',', '.', 'D', '[', ']', 'aggregate', 'all', 'applies_to', 'axes', 'default', 'derived', 'derived_extents', 'distinct', 'equations', 'fixed', 'from_faq', 'gate', 'gate_spec', 'gated_by', 'grid_spacing', 'ic', 'index', 'index_sets', 'indices', 'interval', 'join', 'join_key_buffers', 'join_key_index_sets', 'kind', 'lhs', 'materialize', 'member_factor', 'op_cache', 'parameter', 'prov', 'range', 'refresh_times', 'rhs', 'sample', 'shape', 'size', 'skolem', 'sol', 'start', 'step', 'stop', 'supports_selection', 't', 'type', 'unknown', 'variables', 'vi_members']

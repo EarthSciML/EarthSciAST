@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py
+# hypothesis_version: 6.141.1
+
+['coupling_role_unused', 'domain_unit_mismatch', 'event_var_undeclared', 'interp_nan_in_axis', 'null_reaction', 'parse', 'schema', 'system_kind_mismatch', 'undeclared_parameter', 'undeclared_species', 'undefined_operator', 'undefined_parameter', 'undefined_species', 'undefined_system', 'undefined_variable', 'unit_inconsistency', 'unit_mismatch', 'unit_parse_error', 'unknown_enum', 'unknown_enum_symbol', 'validation_error']

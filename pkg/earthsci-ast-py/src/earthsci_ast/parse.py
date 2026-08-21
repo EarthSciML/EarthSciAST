@@ -283,9 +283,7 @@ def _parse_expression(
                 if required:  # ``args`` — required, direct index
                     kwargs[name] = [rec(v) for v in expr_data[wire]]
                 else:  # ``values`` — optional
-                    kwargs[name] = (
-                        [rec(v) for v in expr_data[wire]] if wire in expr_data else None
-                    )
+                    kwargs[name] = [rec(v) for v in expr_data[wire]] if wire in expr_data else None
 
         # Validate operator-specific field requirements. `D` genuinely requires
         # `wrt` (its structural differentiation variable). The open-tier sugar
@@ -375,8 +373,7 @@ def _parse_distribution(dist_data: dict[str, Any]) -> Distribution:
     kind = dist_data.get("kind")
     if kind not in ("normal", "lognormal", "uniform"):
         raise ParseError(
-            f"Unknown distribution kind: {kind!r} (the closed set is "
-            f"normal / lognormal / uniform)"
+            f"Unknown distribution kind: {kind!r} (the closed set is normal / lognormal / uniform)"
         )
     return Distribution(
         kind=kind,

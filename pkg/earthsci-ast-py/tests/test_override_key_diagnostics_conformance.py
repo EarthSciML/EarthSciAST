@@ -28,9 +28,7 @@ from earthsci_ast.errors import AmbiguousParameterError, UnknownParameterError
 from earthsci_ast.parse import load
 from earthsci_ast.simulation import simulate
 
-_ROOT = (
-    Path(__file__).resolve().parents[3] / "tests" / "conformance" / "override_key_diagnostics"
-)
+_ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "override_key_diagnostics"
 _MANIFEST = _ROOT / "manifest.json"
 
 
