@@ -353,6 +353,72 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         end
     end
 
+    @testset "the RESOLVED document keeps its declarations too (§9.6.4 rule 5)" begin
+        # The testset above pins the `EsmFile` path, which `_lower_and_coerce`
+        # rescues with its own verbatim snapshot off the RAW document. That
+        # papered over the real defect: `resolve_template_machinery` DELETED both
+        # declarations from the resolved tree, so `emit_document` — the
+        # cross-binding byte-identity surface — and every other raw-tree consumer
+        # still lost them, emitting `{esm, metadata, index_sets}`: none of the
+        # five top-level payload keys the schema's top-level `anyOf` requires.
+        #
+        # VERBATIM is asserted, not merely "present": the close/fold/compose
+        # phases rewrite the registry in place (`size: "N"` -> `size: 8`, bodies
+        # composed, `params` dropped), so restoring the WORKING copy would emit
+        # the folded form and a library would still not round-trip to ITSELF.
+        # Mirrors the Rust `template_library_round_trips_to_itself` and the
+        # TypeScript `§9.6.4 rule 5: a template library round-trips to itself`.
+        for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
+            src = joinpath(repo_root, "tests", "valid", name)
+            isfile(src) || continue
+            authored = JSON3.read(read(src, String))
+            resolved = resolve_template_machinery(authored, dirname(src))
+            @test resolved !== nothing
+
+            # The DECLARATIONS survive the resolver, verbatim.
+            @test _normj(resolved["expression_templates"]) ==
+                  _normj(authored.expression_templates)
+            @test _normj(resolved["metaparameters"]) == _normj(authored.metaparameters)
+            # The import EDGE, by contrast, is consumed.
+            @test !haskey(resolved, "expression_template_imports")
+
+            # ...and so does the emitted document, which must itself be a legal,
+            # loadable file — the property that was actually broken.
+            doc = EarthSciAST.emit_document(JSON3.read(read(src, String)), dirname(src))
+            @test _normj(doc["expression_templates"]) == _normj(authored.expression_templates)
+            @test _normj(doc["metaparameters"]) == _normj(authored.metaparameters)
+            @test any(k -> haskey(doc, k),
+                      ("models", "reaction_systems", "data_sources", "operators",
+                       "expression_templates"))
+            tmp = tempname() * ".esm"
+            try
+                write(tmp, EarthSciAST.emit_esm_string(doc))
+                @test EarthSciAST.load(tmp) isa EarthSciAST.EsmFile
+            finally
+                isfile(tmp) && rm(tmp, force=true)
+            end
+        end
+    end
+
+    @testset "an EDGE-CONSUMED metaparameter still folds away (§9.7.6 site 1)" begin
+        # The negative half of the testset above: restoring the authored SNAPSHOT
+        # must not become "re-export everything the resolver saw". The imported
+        # grid declares NLON / NLAT and the edge binds them, so neither the name
+        # nor a `metaparameters` block may leak into the importing document.
+        src = conf("import_smoke", "fixture.esm")
+        resolved = resolve_template_machinery(JSON3.read(read(src, String)), dirname(src))
+        @test resolved !== nothing
+        @test !haskey(resolved, "metaparameters")
+        @test resolved["index_sets"]["lon"]["size"] == 288
+        @test resolved["index_sets"]["lat"]["size"] == 181
+
+        text = EarthSciAST.emit_esm_string(
+            EarthSciAST.emit_document(JSON3.read(read(src, String)), dirname(src)))
+        @test !occursin("metaparameters", text)
+        @test !occursin("NLON", text)
+        @test !occursin("NLAT", text)
+    end
+
     @testset "invalid fixtures: every §9.7 diagnostic code, machine-checked" begin
         expected = JSON3.read(read(joinpath(repo_root, "tests", "invalid",
                                             "expected_errors.json"), String))

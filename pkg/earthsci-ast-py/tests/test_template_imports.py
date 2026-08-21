@@ -19,11 +19,12 @@ import pytest
 
 from earthsci_ast.lower_expression_templates import (
     ExpressionTemplateError,
+    emit_document,
     expand_document,
     lower_expression_templates,
 )
 from earthsci_ast.parse import SchemaValidationError, load
-from earthsci_ast.serialize import _serialize_esm_file, save
+from earthsci_ast.serialize import _serialize_esm_file, emit_esm_string, save
 from earthsci_ast.template_imports import (
     MAX_TEMPLATE_EXPANSION_DEPTH,
     _substitute_metaparams,
@@ -249,7 +250,15 @@ def test_loader_api_bindings_and_defaults():
 
 
 def test_round_trip_emits_expanded_folded_form():
-    """§9.7.6: no §9.7 construct survives parse → emit."""
+    """A CONSUMER file round-trips to its expanded, folded form (§9.7.6).
+
+    ``expression_template_imports`` IS an import edge and is consumed, along with
+    the ``apply_expression_template`` call sites it lowers. This fixture declares
+    NO top-level ``expression_templates`` registry and NO top-level
+    ``metaparameters`` block, so there is no DECLARATION here to preserve —
+    contrast ``test_template_library_round_trips_to_itself``. NLON / NLAT are
+    declared by the IMPORTED grid and closed at the edge, so they fold away.
+    """
     f = load(os.path.join(CONF, "import_smoke", "fixture.esm"))
     text = save(f)
     assert "expression_template_imports" not in text
@@ -259,6 +268,84 @@ def test_round_trip_emits_expanded_folded_form():
     reloaded = load(text)
     assert reloaded.index_sets["lon"]["size"] == 288
     assert reloaded.models["Advection"].equations[0].rhs.args[1].op == "makearray"
+
+
+@pytest.mark.parametrize(
+    "lib", ["template_import_lib.esm", "template_import_rename_lib.esm"]
+)
+def test_template_library_round_trips_to_itself(lib):
+    """A TEMPLATE-LIBRARY file MUST round-trip to ITSELF (§9.6.4 rule 5, §9.7.6).
+
+    The top-level ``expression_templates`` registry and ``metaparameters`` block
+    are DECLARATIONS — peers of ``index_sets``, not ``apply_expression_template``
+    call sites. Option A expands call sites; it does NOT delete declarations.
+    Both survive ``parse -> emit`` VERBATIM.
+
+    ``resolve_template_machinery`` deleted both, so a pure library file emitted
+    as ``{esm, metadata, index_sets}`` — NONE of the five top-level payload keys,
+    which the schema's top-level ``anyOf`` rejects. A conforming library was
+    legal on disk and illegal the instant it was loaded and re-emitted.
+
+    VERBATIM is asserted, not merely "present": the close/fold/compose phases
+    mutate the working registry in place (``size: "N"`` -> ``size: 8``), so
+    preserving the WORKING copy would emit the folded form and the library would
+    still not round-trip to ITSELF. Mirrors the Rust
+    ``template_library_round_trips_to_itself`` and the TypeScript
+    ``§9.6.4 rule 5: a template library round-trips to itself``.
+    """
+    path = os.path.join(VALID_DIR, lib)
+    on_disk = _read_json(path)
+    assert on_disk.get("expression_templates"), f"{lib} must author the registry to pin anything"
+    assert on_disk.get("metaparameters"), f"{lib} must author metaparameters to pin anything"
+
+    # The resolver's own output — the tree every downstream pass and the emit
+    # surface see.
+    resolved = resolve_template_machinery(on_disk, os.path.dirname(path))
+    assert resolved is not None
+    assert resolved["expression_templates"] == on_disk["expression_templates"]
+    assert resolved["metaparameters"] == on_disk["metaparameters"]
+    # The import EDGE, by contrast, is consumed.
+    assert "expression_template_imports" not in resolved
+
+    # The reference-preserving EMIT surface (the cross-binding byte-identity
+    # surface): the emitted document keeps both declarations and is itself a
+    # legal, loadable document — the property that was actually broken.
+    emitted = emit_document(_read_json(path), os.path.dirname(path))
+    assert emitted["expression_templates"] == on_disk["expression_templates"]
+    assert emitted["metaparameters"] == on_disk["metaparameters"]
+    assert any(
+        k in emitted
+        for k in ("models", "reaction_systems", "data_sources", "operators", "expression_templates")
+    ), f"{lib}: emitted form carries none of the five top-level payload keys"
+    load(emit_esm_string(emitted), base_path=os.path.dirname(path))
+
+    # ...and the typed load -> save surface.
+    typed = json.loads(save(load(path)))
+    assert typed["expression_templates"] == on_disk["expression_templates"]
+    assert typed["metaparameters"] == on_disk["metaparameters"]
+
+
+def test_edge_consumed_metaparameter_still_folds_away():
+    """The declarations survive, but a metaparameter CONSUMED AT AN IMPORT EDGE
+    is still closed and folded away (§9.7.6 binding site 1).
+
+    The imported grid declares NLON / NLAT, the edge binds them, and neither the
+    name nor a ``metaparameters`` block may leak into the importing document's
+    resolved or emitted scope. The negative half of
+    ``test_template_library_round_trips_to_itself``: restoring the authored
+    SNAPSHOT must not become "re-export everything the resolver saw".
+    """
+    path = os.path.join(CONF, "import_smoke", "fixture.esm")
+    resolved = resolve_template_machinery(_read_json(path), os.path.dirname(path))
+    assert resolved is not None
+    assert "metaparameters" not in resolved
+    assert resolved["index_sets"]["lon"]["size"] == 288
+    assert resolved["index_sets"]["lat"]["size"] == 181
+
+    text = emit_esm_string(emit_document(_read_json(path), os.path.dirname(path)))
+    assert "metaparameters" not in text
+    assert "NLON" not in text
+    assert "NLAT" not in text
 
 
 def test_import_where_rename_carries_where_shape():

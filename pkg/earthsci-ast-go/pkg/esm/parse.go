@@ -135,10 +135,11 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// SITES; it does not delete DECLARATIONS. The top-level `expression_templates`
 	// registry and `metaparameters` block are peers of `index_sets`, and they
 	// survive parse → emit VERBATIM — a template-library file must round-trip to
-	// itself. The resolver strips them from its working view (it has consumed
-	// them), so they are captured from the AUTHORED document here and reattached to
-	// the typed struct below, which makes "verbatim" literal: whatever the passes
-	// did to their working copy cannot perturb what is re-emitted.
+	// itself. The resolver restores them onto its own output from an equivalent
+	// pre-folding snapshot (template_resolve.go); they are captured from the
+	// AUTHORED document here as well because the typed struct is built from the
+	// post-Expand JSON, which makes "verbatim" literal: whatever the passes did to
+	// their working copies cannot perturb what is re-emitted.
 	authoredTemplates, authoredMetaparams := authoredDeclarationBlocks(jsonStr)
 
 	expanded, err := resolveAndLowerJSON(jsonStr, o.basePath, o.metaparameters)

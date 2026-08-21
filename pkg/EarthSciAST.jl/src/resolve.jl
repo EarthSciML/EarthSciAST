@@ -242,9 +242,13 @@ Resolves esm-spec §9.7 machinery first — template-library imports
 (depth-first post-order, per-edge metaparameter instantiation), index_sets
 merge, metaparameter close+fold — then expands `apply_expression_template`
 ops / fires `match` rules to the §9.6.3 fixpoint. After both passes the typed
-tree carries no apply_expression_template nodes, no `expression_templates`
-blocks, no imports, and no metaparameters — downstream consumers see only
-normal Expression ASTs (Option A round-trip).
+tree carries no apply_expression_template nodes, no per-component
+`expression_templates` blocks and no imports — downstream consumers see only
+normal Expression ASTs (Option A round-trip). The top-level
+`expression_templates` / `metaparameters` DECLARATIONS are NOT consumed: Option A
+expands call sites, it does not delete declarations (esm-spec §9.6.4 rule 5), so
+they survive on the resolved tree and are additionally snapshotted below for the
+`EsmFile`.
 
 esm-spec §9.7.10 forms A/B: any scope-directed injection — a subsystem-ref
 edge's `injected_imports` (form A) or a coupling entry's injection map

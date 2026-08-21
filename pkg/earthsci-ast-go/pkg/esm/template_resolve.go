@@ -478,10 +478,15 @@ func hasImportMachinery(view map[string]any) bool {
 // (extractTemplateOrders); the resolver reads the root's declaration orders
 // from it and WRITES each component's effective template sequence back into
 // it, so the subsequent lowerExpressionTemplatesOrdered pass breaks
-// declaration-order ties by the §9.7.4 effective sequence. After resolution
-// no `expression_template_imports`, `metaparameters`, or top-level
-// `expression_templates` key remains (Option A round-trip). Returns false
-// when the document carries no §9.7 machinery (the legacy fast path).
+// declaration-order ties by the §9.7.4 effective sequence.
+//
+// After resolution no `expression_template_imports` key remains — that IS an
+// import edge, consumed by the fixpoint (esm-spec §9.7.6). But the top-level
+// `expression_templates` registry and `metaparameters` block are DECLARATIONS,
+// peers of `index_sets`, and they are restored VERBATIM from a pre-resolution
+// snapshot: Option A expands CALL SITES; it does not delete DECLARATIONS
+// (§9.6.4 rule 5). Returns false when the document carries no §9.7 machinery
+// (the legacy fast path).
 func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 	baseDir string, metaparameters map[string]int64) (bool, error) {
 	if !hasImportMachinery(view) {
@@ -500,6 +505,22 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 		orders = map[string][]string{}
 	}
 	stack := []string{}
+
+	// Snapshot the §9.7.1 DECLARATIONS exactly as authored, BEFORE any phase
+	// below composes a body, folds a metaparameter, or otherwise mutates the
+	// working copies. Restored verbatim at the end (esm-spec §9.6.4 rule 5).
+	// Deep copies, because a Go map is a reference: the working copies alias
+	// these same sub-objects, and composeTemplateBodies / the folding phases
+	// would otherwise rewrite the "snapshot" in place and emit a library's
+	// EXPANDED form rather than the library itself.
+	origTemplates, hasTemplates := view["expression_templates"]
+	if hasTemplates {
+		origTemplates = deepCopyJSON(origTemplates)
+	}
+	origMetaparams, hasMetaparams := view["metaparameters"]
+	if hasMetaparams {
+		origMetaparams = deepCopyJSON(origMetaparams)
+	}
 
 	docMeta, err := collectMetaparamDecls(view, "document", orders["/metaparameters"])
 	if err != nil {
@@ -546,16 +567,41 @@ func resolveTemplateMachinery(view map[string]any, orders map[string][]string,
 		return false, err
 	}
 
-	// --- root library file: compose bodies (validation), then strip; no §9.7
-	//     construct survives parse → emit (esm-spec §9.7.6 round-trip) ---
+	// --- root library file: compose bodies (VALIDATION only) ---
 	if isLibrary {
 		if err := composeTemplateBodies(topTemplates.m, "document"); err != nil {
 			return false, err
 		}
-		delete(view, "expression_templates")
 	}
+
+	// esm-spec §9.6.4 rule 5: OPTION A EXPANDS CALL SITES; IT DOES NOT DELETE
+	// DECLARATIONS.
+	//
+	// `expression_template_imports` IS an import edge — a directive consumed by
+	// the fixpoint — and correctly does not survive `parse → emit`. But a
+	// top-level `expression_templates` registry and a top-level `metaparameters`
+	// block (§9.7.1) are DECLARATIONS, peers of `index_sets`. Both survive
+	// `parse → emit` VERBATIM, and a template-library file MUST round-trip to
+	// ITSELF (§9.7.6 "Ordering within load").
+	//
+	// This code deleted both, reading "no §9.7 construct survives parse → emit"
+	// — a retracted revision — as covering the declarations too. A pure library
+	// file then emitted as `{esm, metadata, index_sets}`, carrying NONE of the
+	// five top-level payload keys, which the schema's top-level `anyOf` rejects:
+	// a conforming library was legal on disk and illegal the instant it was
+	// loaded and re-emitted.
+	//
+	// The SNAPSHOTS are restored, not the working copies: topTemplates has had
+	// its bodies composed and its metaparameters substituted, and emitting that
+	// would round-trip a library to a DIFFERENT (expanded) library. Verbatim
+	// means verbatim.
 	delete(view, "expression_template_imports")
-	delete(view, "metaparameters")
+	if hasTemplates {
+		view["expression_templates"] = origTemplates
+	}
+	if hasMetaparams {
+		view["metaparameters"] = origMetaparams
+	}
 	if docIsets.len() > 0 {
 		view["index_sets"] = docIsets.m
 	}

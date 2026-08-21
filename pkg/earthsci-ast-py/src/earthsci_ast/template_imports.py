@@ -1481,15 +1481,41 @@ def _finalize_document(
     is_library: bool,
     top_templates: dict[str, Any],
     doc_isets: dict[str, Any],
+    declarations: dict[str, Any],
 ) -> dict[str, Any]:
-    """Root library body composition (validation) + strip: consume every §9.7
-    construct so none survives ``parse → emit`` (Option A round-trip), attach the
-    merged ``index_sets`` registry, and return ``root``."""
+    """Root library body composition (VALIDATION only), consume the import EDGE,
+    restore the DECLARATIONS verbatim, attach the merged ``index_sets``
+    registry, and return ``root``.
+
+    esm-spec §9.6.4 rule 5: OPTION A EXPANDS CALL SITES; IT DOES NOT DELETE
+    DECLARATIONS. ``expression_template_imports`` IS an import edge — a directive
+    consumed by the fixpoint — and correctly does not survive ``parse → emit``.
+    But a top-level ``expression_templates`` registry and a top-level
+    ``metaparameters`` block (§9.7.1) are DECLARATIONS, peers of ``index_sets``:
+    both survive ``parse → emit`` VERBATIM, and a template-library file MUST
+    round-trip to ITSELF (§9.7.6 "Ordering within load").
+
+    This code deleted both, reading "no §9.7 construct survives parse → emit" —
+    a retracted revision — as covering the declarations too. A pure library file
+    then emitted as ``{esm, metadata, index_sets}``, carrying NONE of the five
+    top-level payload keys, which the schema's top-level ``anyOf`` rejects: a
+    conforming library was legal on disk and illegal the instant it was loaded
+    and re-emitted.
+
+    The authored SNAPSHOTS are restored, not the working copies: ``top_templates``
+    has had its bodies composed and its metaparameters substituted, and emitting
+    that would round-trip a library to a DIFFERENT (expanded) library. Verbatim
+    means verbatim. Assignment (never pop-then-insert) keeps each block in its
+    authored key position.
+    """
     if is_library:
         _compose_template_bodies(top_templates, "document")
-        del root["expression_templates"]
     root.pop("expression_template_imports", None)
-    root.pop("metaparameters", None)
+    for key in ("expression_templates", "metaparameters"):
+        if key in declarations:
+            root[key] = declarations[key]
+        else:
+            root.pop(key, None)
     if doc_isets:
         root["index_sets"] = doc_isets
     return root
@@ -1510,10 +1536,12 @@ def resolve_template_machinery(
 
     Returns a new order-preserving dict tree ready for
     :func:`~earthsci_ast.lower_expression_templates.lower_expression_templates`
-    with ``expression_template_imports``, ``metaparameters``, and top-level
-    ``expression_templates`` consumed (Option A round-trip: none survives
-    ``parse → emit``), or ``None`` when the document carries no §9.7 machinery
-    (the legacy fast path). Does not mutate the input.
+    with ``expression_template_imports`` consumed — that IS an import edge — and
+    the top-level ``expression_templates`` / ``metaparameters`` DECLARATIONS
+    restored VERBATIM from a pre-folding snapshot (esm-spec §9.6.4 rule 5:
+    Option A expands call sites, it does not delete declarations). ``None`` when
+    the document carries no §9.7 machinery (the legacy fast path). Does not
+    mutate the input.
     """
 
     api_raw = dict(metaparameters or {})
@@ -1530,6 +1558,16 @@ def resolve_template_machinery(
     root: dict[str, Any] = copy.deepcopy(raw)
     stack: list[str] = []
     base_dir = str(base_path)
+
+    # Snapshot the §9.7.1 DECLARATIONS exactly as authored, BEFORE any phase
+    # below composes a body, folds a metaparameter, or otherwise mutates the
+    # working copies. Restored verbatim by ``_finalize_document`` (esm-spec
+    # §9.6.4 rule 5 — see the rationale there).
+    declarations = {
+        k: copy.deepcopy(root[k])
+        for k in ("expression_templates", "metaparameters")
+        if k in root
+    }
 
     doc_meta = _collect_metaparam_decls(root, "document")
     doc_isets: dict[str, Any] = {}
@@ -1561,7 +1599,7 @@ def resolve_template_machinery(
     # importing scope.
     doc_isets = _substitute_closed_metaparameters(root, top_templates, doc_isets, values)
     _fold_closed_document(root, top_templates, doc_isets)
-    return _finalize_document(root, is_library, top_templates, doc_isets)
+    return _finalize_document(root, is_library, top_templates, doc_isets, declarations)
 
 
 # ===========================================================================

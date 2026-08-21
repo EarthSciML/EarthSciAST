@@ -1528,10 +1528,12 @@ mirroring [`expand_coupling_imports`](@ref)'s kwarg; `nothing` (the default)
 uses the file/URL loader `_load_import_raw`.
 
 Returns an order-preserving native tree ready for
-[`lower_expression_templates`](@ref) with `expression_template_imports`,
-`metaparameters`, and top-level `expression_templates` consumed (Option A
-round-trip: none survives `parse → emit`), or `nothing` when the document
-carries no §9.7 machinery (the legacy fast path).
+[`lower_expression_templates`](@ref) with `expression_template_imports`
+consumed — that IS an import edge — and the top-level `expression_templates` /
+`metaparameters` DECLARATIONS restored VERBATIM from a pre-folding snapshot
+(esm-spec §9.6.4 rule 5: Option A expands call sites, it does not delete
+declarations; a template-library file MUST round-trip to itself). `nothing`
+when the document carries no §9.7 machinery (the legacy fast path).
 """
 function resolve_template_machinery(raw_data, base_path::AbstractString;
         metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
@@ -1548,6 +1550,16 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
     base_dir = String(base_path)
     root = _to_ordered(raw_data)::OrderedDict{String,Any}
     stack = String[]
+
+    # Snapshot the §9.7.1 DECLARATIONS exactly as authored, BEFORE any phase
+    # below composes a body, folds a metaparameter, or otherwise mutates the
+    # working copies. Restored verbatim in phase 7 (esm-spec §9.6.4 rule 5 — the
+    # rationale is there). `deepcopy` because the folding phases rewrite these
+    # sub-trees IN PLACE: an aliased "snapshot" would emit the folded form.
+    orig_templates = haskey(root, "expression_templates") ?
+        deepcopy(root["expression_templates"]) : nothing
+    orig_metaparams = haskey(root, "metaparameters") ?
+        deepcopy(root["metaparameters"]) : nothing
 
     doc_meta = _collect_metaparam_decls(root, "document")
     doc_isets = OrderedDict{String,Any}()
@@ -1569,26 +1581,47 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
     doc_isets = _substitute_closed_metaparams!(root, top_templates, doc_isets, values)
     _fold_closed_document!(root, top_templates, doc_isets)
 
-    # --- phase 7: root library file — compose bodies (validation), then strip ---
+    # --- phase 7: root library file — compose bodies (VALIDATION only), consume
+    #     the import EDGE, restore the DECLARATIONS verbatim ---
     #
-    # The registry is stripped from the LOWERED tree, which is right: everything
-    # downstream (evaluators, codegen) consumes the post-expansion form and must
-    # not re-expand. What was wrong is that it was stripped from the EMITTED form
-    # too. Option A expands CALL SITES; it does not delete DECLARATIONS (esm-spec
-    # §9.6.4 rule 5), and a template LIBRARY must round-trip to itself.
+    # esm-spec §9.6.4 rule 5: OPTION A EXPANDS CALL SITES; IT DOES NOT DELETE
+    # DECLARATIONS. `expression_template_imports` IS an import edge — a directive
+    # consumed by the fixpoint — and correctly does not survive `parse → emit`.
+    # But a top-level `expression_templates` registry and a top-level
+    # `metaparameters` block (§9.7.1) are DECLARATIONS, peers of `index_sets`:
+    # both survive `parse → emit` VERBATIM, and a template LIBRARY must
+    # round-trip to ITSELF (§9.7.6 "Ordering within load").
     #
-    # `EsmFile` therefore keeps a VERBATIM snapshot of `expression_templates` and
-    # `metaparameters`, taken from the raw document BEFORE any of this runs (see
-    # `load`) — these declarations are rewritten in place by the folding above, so
-    # snapshotting the lowered form would emit a mangled registry (bodies
-    # composed, `params` gone). The snapshot is what `serialize_esm_file` writes
-    # back.
+    # This stripped both from the resolved tree. The typed load path papered over
+    # it — `_lower_and_coerce` snapshots the two blocks off the RAW document and
+    # `serialize_esm_file` writes the snapshot back — so an `EsmFile` round-trip
+    # looked right while the RESOLVED DOCUMENT (what `emit_document` and every
+    # raw-tree consumer see) still lost them, emitting `{esm, metadata,
+    # index_sets}`: none of the five top-level payload keys, which the schema's
+    # top-level `anyOf` rejects.
+    #
+    # The authored SNAPSHOTS are restored, not the working copies: `top_templates`
+    # has had its bodies composed and its metaparameters substituted, and emitting
+    # that would round-trip a library to a DIFFERENT (expanded) library. Verbatim
+    # means verbatim — and it is the SAME verbatim block the `EsmFile` carries, so
+    # the two paths agree rather than disagreeing about what a library is.
+    #
+    # Assignment (never delete-then-insert) keeps each block in its authored key
+    # position in the `OrderedDict`.
     if is_library
         _compose_template_bodies!(top_templates, "document")
-        delete!(root, "expression_templates")
     end
     delete!(root, "expression_template_imports")
-    delete!(root, "metaparameters")
+    if orig_templates === nothing
+        delete!(root, "expression_templates")
+    else
+        root["expression_templates"] = orig_templates
+    end
+    if orig_metaparams === nothing
+        delete!(root, "metaparameters")
+    else
+        root["metaparameters"] = orig_metaparams
+    end
     isempty(doc_isets) || (root["index_sets"] = doc_isets)
     return root
 end

@@ -17,9 +17,18 @@ package esm
 //     invoked per component from lowerExpressionTemplatesOrdered);
 //  5. the §9.6.3 fixpoint on fully-concrete trees.
 //
-// Round-trip is Option A: `expression_template_imports`, `metaparameters`, and
-// top-level `expression_templates` do not survive parse → emit; the emitted
-// form is the expanded, folded document.
+// Round-trip is Option A, which expands CALL SITES and does NOT delete
+// DECLARATIONS (esm-spec §9.6.4 rule 5). `expression_template_imports` is an
+// import directive consumed by the fixpoint and does not survive parse → emit;
+// the `apply_expression_template` call sites it lowers do not survive either.
+// But a top-level `expression_templates` registry and a top-level
+// `metaparameters` block are DECLARATIONS — peers of `index_sets` — and they
+// survive VERBATIM: a template-library file MUST round-trip to itself.
+//
+// This module used to delete all three, so a pure library file emitted as
+// `{esm, metadata, index_sets}` — none of the five top-level payload keys —
+// which the schema's top-level `anyOf` rejects. A conforming library was legal
+// on disk and illegal the instant it was loaded and re-emitted.
 //
 // Because a decoded map[string]interface{} loses key order — and the §9.7.4
 // effective declaration order is normative for the §9.6.3 tie-break — the

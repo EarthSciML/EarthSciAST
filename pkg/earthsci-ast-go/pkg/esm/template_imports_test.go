@@ -489,6 +489,15 @@ func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 	}
 }
 
+// A CONSUMER file round-trips to its expanded, folded form (esm-spec §9.7.6):
+// `expression_template_imports` IS an import edge and is consumed, along with
+// the `apply_expression_template` call sites it lowers.
+//
+// import_smoke/fixture.esm declares NO top-level `expression_templates` registry
+// and NO top-level `metaparameters` block, so there is no DECLARATION here to
+// preserve — contrast TestTemplateImports_LibraryRoundTripsToItself. NLON / NLAT
+// are declared by the IMPORTED grid and closed at the edge (`bindings`), so they
+// are folded away and must not reappear in the consumer's scope.
 func TestTemplateImports_RoundTripEmitsExpandedFoldedForm(t *testing.T) {
 	f, err := Load(tiConfDir(t, "import_smoke", "fixture.esm"))
 	if err != nil {
@@ -504,6 +513,136 @@ func TestTemplateImports_RoundTripEmitsExpandedFoldedForm(t *testing.T) {
 		if strings.Contains(text, construct) {
 			t.Errorf("round-trip output still contains %s", construct)
 		}
+	}
+}
+
+// A TEMPLATE-LIBRARY file MUST round-trip to ITSELF (esm-spec §9.6.4 rule 5,
+// §9.7.6 "Ordering within load").
+//
+// The top-level `expression_templates` registry and `metaparameters` block are
+// DECLARATIONS — peers of `index_sets`, not `apply_expression_template` call
+// sites. Option A expands call sites; it does NOT delete declarations. Both
+// survive `parse → emit` VERBATIM.
+//
+// The resolver deleted both, so a pure library file emitted as
+// `{esm, metadata, index_sets}` — NONE of the five top-level payload keys, which
+// the schema's top-level `anyOf` rejects. A conforming library was legal on disk
+// and illegal the instant it was loaded and re-emitted.
+//
+// VERBATIM is asserted, not merely "present": the close/fold/compose phases
+// mutate the working registry in place (`size: "N"` → `size: 8`), so preserving
+// the WORKING copy would emit the folded form and the library would still not
+// round-trip to ITSELF. Mirrors the Rust `template_library_round_trips_to_itself`
+// and the TypeScript `§9.6.4 rule 5: a template library round-trips to itself`.
+func TestTemplateImports_LibraryRoundTripsToItself(t *testing.T) {
+	for _, lib := range []string{"template_import_lib.esm", "template_import_rename_lib.esm"} {
+		t.Run(lib, func(t *testing.T) {
+			path := filepath.Join(tiRepoRoot(t), "tests", "valid", lib)
+			src, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			var onDisk map[string]any
+			if err := json.Unmarshal(src, &onDisk); err != nil {
+				t.Fatalf("parse source: %v", err)
+			}
+
+			// The reference-preserving EMIT surface (the cross-binding
+			// byte-identity surface, CONFORMANCE_SPEC §5.9).
+			emittedText, err := EmitReferencePreserving(string(src), filepath.Dir(path), nil)
+			if err != nil {
+				t.Fatalf("EmitReferencePreserving: %v", err)
+			}
+			var emitted map[string]any
+			if err := json.Unmarshal([]byte(emittedText), &emitted); err != nil {
+				t.Fatalf("parse emit: %v", err)
+			}
+
+			// ...and the typed Load → Serialize surface.
+			loaded, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			typedText, err := Serialize(loaded)
+			if err != nil {
+				t.Fatalf("Serialize: %v", err)
+			}
+			var typed map[string]any
+			if err := json.Unmarshal([]byte(typedText), &typed); err != nil {
+				t.Fatalf("parse typed emit: %v", err)
+			}
+
+			for _, key := range []string{"expression_templates", "metaparameters"} {
+				if onDisk[key] == nil {
+					t.Fatalf("%s is only a meaningful pin if it authors `%s`", lib, key)
+				}
+				want := tiCanonJSON(t, onDisk[key])
+				if got := tiCanonJSON(t, emitted[key]); got != want {
+					t.Errorf("%s: `%s` must survive emit VERBATIM (§9.6.4 rule 5)\n got: %s\nwant: %s",
+						lib, key, got, want)
+				}
+				if got := tiCanonJSON(t, typed[key]); got != want {
+					t.Errorf("%s: `%s` must survive typed round-trip VERBATIM\n got: %s\nwant: %s",
+						lib, key, got, want)
+				}
+			}
+
+			// The emitted document must still carry a top-level payload key —
+			// this is the schema `anyOf` that the deletion violated.
+			payload := false
+			for _, k := range []string{"models", "reaction_systems", "data_sources",
+				"operators", "expression_templates"} {
+				if emitted[k] != nil {
+					payload = true
+				}
+			}
+			if !payload {
+				t.Errorf("%s: emitted form carries none of the five top-level payload keys: %s",
+					lib, emittedText)
+			}
+
+			// And it must re-load: legal on disk MUST mean legal after a
+			// round-trip.
+			if _, err := LoadString(emittedText, WithBasePath(filepath.Dir(path))); err != nil {
+				t.Errorf("%s: emitted form must re-load: %v", lib, err)
+			}
+		})
+	}
+}
+
+// The declarations survive, but a metaparameter CONSUMED AT AN IMPORT EDGE is
+// still closed and folded away (esm-spec §9.7.6 binding site 1): the imported
+// grid declares NLON / NLAT, the edge binds them, and neither the name nor a
+// `metaparameters` block may leak into the importing document's emitted scope.
+//
+// The negative half of TestTemplateImports_LibraryRoundTripsToItself: restoring
+// the authored SNAPSHOT must not become "re-export everything the resolver saw".
+func TestTemplateImports_EdgeConsumedMetaparameterStillFolds(t *testing.T) {
+	path := tiConfDir(t, "import_smoke", "fixture.esm")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	emittedText, err := EmitReferencePreserving(string(src), filepath.Dir(path), nil)
+	if err != nil {
+		t.Fatalf("EmitReferencePreserving: %v", err)
+	}
+	var emitted map[string]any
+	if err := json.Unmarshal([]byte(emittedText), &emitted); err != nil {
+		t.Fatalf("parse emit: %v", err)
+	}
+	if _, has := emitted["metaparameters"]; has {
+		t.Errorf("edge-consumed metaparameters leaked into the consumer: %s", emittedText)
+	}
+	for _, name := range []string{"NLON", "NLAT"} {
+		if strings.Contains(emittedText, name) {
+			t.Errorf("edge-consumed metaparameter %s survived unfolded: %s", name, emittedText)
+		}
+	}
+	isets, _ := emitted["index_sets"].(map[string]any)
+	lon, _ := isets["lon"].(map[string]any)
+	if got := tiCanonJSON(t, lon["size"]); got != "288" {
+		t.Errorf("index_sets.lon.size = %s; want 288 (edge binding folded)", got)
 	}
 }
 
