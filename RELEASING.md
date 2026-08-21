@@ -18,8 +18,9 @@ These are two different numbers and they are *not* kept in lockstep:
 
 - The **esm format version** is `1.0.0`. It appears in every document's `esm`
   field and in the schema `$id`. Changing it is a spec change.
-- The **package version** is what these bindings are released as. It starts at
-  `0.1.0`.
+- The **package version** is what these bindings are released as. First release
+  was `0.1.1` (`0.1.0` was published to crates.io under the wrong license and
+  yanked; a crates.io version can never be reused).
 
 A test in the TypeScript and Python suites used to assert the two were equal.
 They were only ever equal by coincidence; the assertion has been removed.
@@ -29,13 +30,8 @@ They were only ever equal by coincidence; the assertion has been removed.
 None of this can be done from CI — it needs a human with registry accounts.
 
 ### npm
-The `@earthsciml` scope **does not exist yet**. Create it first, or a scoped
-publish cannot succeed:
-
-1. https://www.npmjs.com/org/create → create the `earthsciml` org (free for
-   public packages).
-2. Create an **automation** access token (Account → Access Tokens).
-3. Add it to the repo as the `NPM_TOKEN` secret.
+The `@earthsciml` org must exist and own the scope, and `NPM_TOKEN` must be set
+(org-level secret, visible to public repositories). Both are in place.
 
 `package.json` already sets `publishConfig.access = "public"`, which is required
 — a scoped package defaults to restricted and the first publish would otherwise
@@ -68,9 +64,11 @@ To also allow publishing from a hand-created GitHub release (which triggers
 Until this exists, the publish job fails with `invalid-publisher`.
 
 ### crates.io
-Create an API token at https://crates.io/settings/tokens and add it as the
-`CARGO_REGISTRY_TOKEN` repo secret. Never commit it — crates.io publishes are
-**permanent** (a version can be yanked but never deleted or reused).
+`CARGO_REGISTRY_TOKEN` is set as an org-level secret. Note that a token needs
+the **`yank`** scope in addition to publish scopes if you ever have to retract a
+version; a publish-only token gets 403 on `cargo yank`. Never commit it —
+crates.io publishes are **permanent** (a version can be yanked but never deleted
+or reused).
 
 ### Julia
 Install the [JuliaRegistrator](https://github.com/JuliaRegistries/Registrator)
@@ -81,19 +79,19 @@ Nothing. The module proxy serves whatever the tag points at.
 
 ## Dependency prerequisites
 
-Both the Rust and Julia bindings depend on **EarthSciIO**, which must be
-published *before* EarthSciAST can be:
+Both the Rust and Julia bindings depend on **EarthSciIO**:
 
-1. **`earthsciio` v0.1.0 → crates.io** (from `EarthSciIO/rust`). The Rust
-   binding declares `earthsciio = { path = ..., version = "0.1", optional = true }`;
-   cargo resolves the `version` when publishing and rejects a path-only dep.
-2. **`EarthSciIO` v0.1.0 → General registry** (from `EarthSciIO/julia`). It is a
-   `[weakdeps]` entry of EarthSciAST.jl, and Registrator refuses to register a
-   package whose dependencies are not themselves registered.
+1. **`earthsciio` → crates.io** — done (0.1.1). The Rust binding declares
+   `earthsciio = { path = ..., version = "0.1", optional = true }`; cargo
+   resolves the `version` when publishing and rejects a path-only dep.
+2. **`EarthSciIO` → General registry** (from `EarthSciIO/julia`) — still
+   outstanding. It is a `[weakdeps]` entry of EarthSciAST.jl, and Registrator
+   refuses to register a package whose dependencies are not themselves
+   registered, so EarthSciAST.jl is blocked until this merges.
 
 New packages sit in a **3-day AutoMerge waiting period** in the General
-registry, so the Julia binding lands roughly a week after EarthSciIO is
-submitted.
+registry, and these two are sequential, so the Julia binding lands roughly a
+week after EarthSciIO is submitted.
 
 ## Cutting a release
 
@@ -145,3 +143,17 @@ submitted.
 - **A duplicate beta publish.** `npm-publish-beta` fired on the same `v*` tag as
   the real publish, pushing a throwaway `<version>-beta.<epoch>` alongside every
   release. Removed.
+
+- **`cargo build --release --all-features` in CI.** `--all-features` enables
+  `esio`, whose `earthsciio` dependency is a path into a sibling EarthSciIO
+  checkout that no runner has, and `wasm`, which targets another architecture.
+  It builds default features now.
+- **Release-asset uploads had no tag.** Reached through `workflow_call` from a
+  push, `github.ref` is `refs/heads/main`, so the upload action failed with
+  "GitHub Releases requires a tag". The tag is now resolved once into
+  `RELEASE_TAG` — taking care not to prefix `v` onto a value that already has
+  one, which `github.ref_name` and `release.tag_name` both do.
+- **Piping git into `head` under `pipefail`.** `head` closing the pipe kills
+  `git` with SIGPIPE; with `set -e` that aborted release analysis midway through
+  writing a heredoc, leaving an unterminated delimiter. Let git limit itself
+  (`git log -n 100`).
