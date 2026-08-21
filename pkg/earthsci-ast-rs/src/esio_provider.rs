@@ -739,10 +739,222 @@ mod prepare_impl {
     use super::*;
     use crate::prepare::{AxisSel, PrepareError, PrepareProvider};
     use crate::pushdown_rewrite::ProviderGate;
+    use earthsciio::SourceTemporal;
     use earthsciio::format::AxisSelect;
+    use time::{Date, Duration, Month, PrimitiveDateTime, Time, UtcOffset};
 
     fn perr(msg: impl Into<String>) -> PrepareError {
         PrepareError(msg.into())
+    }
+
+    // ----------------------------------------------------------------------- //
+    // The DECLARED cadence (esm-spec §8.9): `data_sources.<name>.temporal`.
+    //
+    // A source with no `temporal` is CONST — one file, read once, and (this is
+    // the half that bites) IMMUTABLE to EarthSciIO's cache, which never
+    // revalidates it. So dropping a declared cadence does not merely serve the
+    // first file forever: it pins those bytes on disk permanently, with no
+    // warning. The Python mirror is `_to_esio_temporal`, and the two must agree
+    // down to the approximate-seconds constants below.
+    // ----------------------------------------------------------------------- //
+
+    /// Seconds in one ISO-8601 duration (`P1D`, `PT3H`, `P50Y`), with months and
+    /// years measured by the mean Gregorian year — the same 365.2425 /
+    /// 30.436875 day counts Python's `Duration.approximate_seconds` uses, so one
+    /// document's cadence resolves identically in both bindings.
+    ///
+    /// The grammar is the one the Python regex accepts: `P[nY][nM][nW][nD]` then
+    /// optional `T[nH][nM][n(.n)S]`, unsigned, designators in order. An all-zero
+    /// duration is rejected rather than returned: a zero cadence would leave
+    /// `refresh_times` empty and silently demote the source back to CONST, which
+    /// is the very failure this conversion exists to prevent.
+    fn parse_iso_duration_seconds(spec: &str) -> Result<f64, String> {
+        let rest = spec
+            .strip_prefix('P')
+            .ok_or_else(|| format!("invalid ISO-8601 duration: {spec:?}"))?;
+        let (date, time) = match rest.split_once('T') {
+            Some((d, t)) => (d, t),
+            None => (rest, ""),
+        };
+
+        // Consume `<digits><designator>` from the head of `s` when that
+        // designator is the next one; otherwise leave `s` untouched and answer
+        // zero, so an absent component is not an error but a stray one is (it
+        // survives to the non-empty check below).
+        fn take(s: &mut &str, designator: char, fractional: bool) -> Result<f64, String> {
+            let n = s
+                .find(|c: char| !(c.is_ascii_digit() || (fractional && c == '.')))
+                .unwrap_or(s.len());
+            if n == 0 || !s[n..].starts_with(designator) {
+                return Ok(0.0);
+            }
+            let v = s[..n]
+                .parse::<f64>()
+                .map_err(|_| format!("invalid ISO-8601 duration component {:?}", &s[..=n]))?;
+            *s = &s[n + designator.len_utf8()..];
+            Ok(v)
+        }
+
+        let mut d = date;
+        let years = take(&mut d, 'Y', false)?;
+        let months = take(&mut d, 'M', false)?;
+        let weeks = take(&mut d, 'W', false)?;
+        let days = take(&mut d, 'D', false)? + 7.0 * weeks;
+        let mut t = time;
+        let hours = take(&mut t, 'H', false)?;
+        let minutes = take(&mut t, 'M', false)?;
+        let seconds = take(&mut t, 'S', true)?;
+        if !d.is_empty() || !t.is_empty() {
+            return Err(format!("invalid ISO-8601 duration: {spec:?}"));
+        }
+
+        let total = years * 365.2425 * 86400.0
+            + months * 30.436875 * 86400.0
+            + days * 86400.0
+            + hours * 3600.0
+            + minutes * 60.0
+            + seconds;
+        if total <= 0.0 {
+            return Err(format!("duration {spec:?} has no nonzero components"));
+        }
+        Ok(total)
+    }
+
+    /// A trailing UTC offset — `+HH`, `-HH:MM`, `+HHMM`.
+    fn parse_utc_offset(spec: &str) -> Result<UtcOffset, String> {
+        let bad = || format!("invalid UTC offset: {spec:?}");
+        let sign: i8 = match spec.as_bytes().first() {
+            Some(b'+') => 1,
+            Some(b'-') => -1,
+            _ => return Err(bad()),
+        };
+        let digits: String = spec[1..].chars().filter(|c| *c != ':').collect();
+        if !digits.chars().all(|c| c.is_ascii_digit()) || !matches!(digits.len(), 2 | 4) {
+            return Err(bad());
+        }
+        let h: i8 = digits[..2].parse().map_err(|_| bad())?;
+        let m: i8 = if digits.len() == 4 {
+            digits[2..].parse().map_err(|_| bad())?
+        } else {
+            0
+        };
+        UtcOffset::from_hms(sign * h, sign * m, 0).map_err(|_| bad())
+    }
+
+    /// One ISO-8601 instant — `2016-01-01`, `2016-01-01T06:30:00Z`,
+    /// `2016-01-01 06:30:00+02:00` — as UTC.
+    ///
+    /// A stamp carrying no offset is read as UTC, and one carrying an offset is
+    /// converted to UTC rather than kept: the anchor is fed to the URL template,
+    /// so a `+02:00` start left as-is would resolve `[year][month][day]` in the
+    /// wrong zone. Python normalises to naive UTC for the same reason.
+    fn parse_iso_instant(spec: &str) -> Result<OffsetDateTime, String> {
+        let s = spec.trim();
+        let bad = || format!("cannot parse {spec:?} as an ISO-8601 datetime");
+        let (body, offset) = if let Some(b) = s.strip_suffix(['Z', 'z']) {
+            (b, UtcOffset::UTC)
+        } else {
+            // The date's own hyphens are not offsets, so only the tail past
+            // `YYYY-MM-DD` is searched for one.
+            match s.get(10..).and_then(|tail| tail.rfind(['+', '-'])) {
+                Some(i) => (&s[..10 + i], parse_utc_offset(&s[10 + i..])?),
+                None => (s, UtcOffset::UTC),
+            }
+        };
+        let (day, clock) = match body.split_once(['T', 't', ' ']) {
+            Some((d, c)) => (d, c),
+            None => (body, ""),
+        };
+        let mut dp = day.split('-');
+        let (Some(y), Some(mo), Some(dd), None) = (dp.next(), dp.next(), dp.next(), dp.next())
+        else {
+            return Err(bad());
+        };
+        let date = Date::from_calendar_date(
+            y.parse::<i32>().map_err(|_| bad())?,
+            Month::try_from(mo.parse::<u8>().map_err(|_| bad())?).map_err(|_| bad())?,
+            dd.parse::<u8>().map_err(|_| bad())?,
+        )
+        .map_err(|_| bad())?;
+        let time = if clock.is_empty() {
+            Time::MIDNIGHT
+        } else {
+            let mut cp = clock.split(':');
+            let h: u8 = cp.next().unwrap_or("").parse().map_err(|_| bad())?;
+            let m: u8 = cp.next().unwrap_or("0").parse().map_err(|_| bad())?;
+            let secs: f64 = cp.next().unwrap_or("0").parse().map_err(|_| bad())?;
+            if cp.next().is_some() || !(0.0..60.0).contains(&secs) {
+                return Err(bad());
+            }
+            Time::from_hms_nano(h, m, secs as u8, (secs.fract() * 1e9).round() as u32)
+                .map_err(|_| bad())?
+        };
+        Ok(PrimitiveDateTime::new(date, time)
+            .assume_offset(offset)
+            .to_offset(UtcOffset::UTC))
+    }
+
+    /// A source's declared `temporal` block as an [`earthsciio::SourceTemporal`]
+    /// (`None` ⇒ CONST).
+    ///
+    /// `start` is the anchor every cadence step is aligned to, so a block
+    /// without one cannot describe a schedule and stays CONST — matching
+    /// Python. A block that DOES anchor but names no cadence is an error rather
+    /// than a quiet CONST: it says the data varies in time and then declines to
+    /// say how, and reading its first file forever would be a wrong answer, not
+    /// a slow one.
+    fn to_esio_temporal(
+        ctx: &str,
+        node: Option<&serde_json::Value>,
+    ) -> Result<Option<SourceTemporal>, String> {
+        let Some(t) = node.filter(|v| !v.is_null()) else {
+            return Ok(None);
+        };
+        let obj = t
+            .as_object()
+            .ok_or_else(|| format!("{ctx}.temporal must be an object"))?;
+        let field = |k: &str| {
+            obj.get(k)
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+        };
+        let Some(start) = field("start") else {
+            return Ok(None); // no anchor ⇒ CONST
+        };
+        let dur = |k: &str| -> Result<Option<Duration>, String> {
+            field(k)
+                .map(|s| {
+                    parse_iso_duration_seconds(s)
+                        .map(Duration::seconds_f64)
+                        .map_err(|e| format!("{ctx}.temporal.{k}: {e}"))
+                })
+                .transpose()
+        };
+        // Either one alone is enough: a file whose period is its cadence holds
+        // one record, and a cadence with no stated file period is one file per
+        // step. Both absent is the error.
+        let declared_frequency = dur("frequency")?;
+        let file_period = dur("file_period")?.or(declared_frequency);
+        let frequency = declared_frequency.or(file_period);
+        let (Some(frequency), Some(file_period)) = (frequency, file_period) else {
+            return Err(format!(
+                "{ctx}.temporal anchors at {start:?} but declares neither \
+                 frequency nor file_period; EarthSciIO needs a cadence to \
+                 refresh on"
+            ));
+        };
+        let mut out = SourceTemporal::new(
+            parse_iso_instant(start).map_err(|e| format!("{ctx}.temporal.start: {e}"))?,
+            frequency,
+            file_period,
+        );
+        if let Some(end) = field("end") {
+            out = out.end(parse_iso_instant(end).map_err(|e| format!("{ctx}.temporal.end: {e}"))?);
+        }
+        if let Some(dim) = field("time_variable") {
+            out = out.time_dim(dim);
+        }
+        Ok(Some(out))
     }
 
     /// A `select.axes` declaration on a loader or one of its variables.
@@ -1118,6 +1330,20 @@ mod prepare_impl {
                 .cloned()
                 .unwrap_or_default();
             let loader_select = parse_declared_select(doc, &format!("data_sources.{lname}"), ld)?;
+            // The source's DECLARED cadence, converted once and carried by
+            // every loader built below. Without it EarthSciIO saw CONST no
+            // matter what the document said (see `to_esio_temporal`).
+            let temporal = to_esio_temporal(&format!("data_sources.{lname}"), ld.get("temporal"))
+                .map_err(perr)?;
+            let make_loader = |vars: Vec<String>| {
+                let loader = DataSource::new(lname.clone(), fmt, url)
+                    .variables(vars)
+                    .reader_options(reader_options.clone());
+                match &temporal {
+                    Some(t) => loader.temporal(t.clone()),
+                    None => loader,
+                }
+            };
             let extent_mp = ld
                 .get("extent")
                 .and_then(|e| e.get("metaparameter"))
@@ -1162,9 +1388,7 @@ mod prepare_impl {
                 file_vars.dedup();
                 Some(Arc::new(RecordTable {
                     loader_name: lname.clone(),
-                    loader: DataSource::new(lname.clone(), fmt, url)
-                        .variables(file_vars)
-                        .reader_options(reader_options.clone()),
+                    loader: make_loader(file_vars),
                     cache: cache.clone(),
                     columns: columns.clone(),
                     require_finite: require_finite.clone(),
@@ -1175,9 +1399,7 @@ mod prepare_impl {
             };
 
             for (spec, (key, _vname, binding)) in columns.iter().zip(consumers) {
-                let loader = DataSource::new(lname.clone(), fmt, url)
-                    .variables([spec.file_variable.clone()])
-                    .reader_options(reader_options.clone());
+                let loader = make_loader(vec![spec.file_variable.clone()]);
                 let mut builder = EsioProvider::builder(loader, cache.clone())
                     .var(spec.file_variable.clone(), key.clone());
                 let select = parse_declared_select(doc, &format!("{key}.update.from"), binding)?
@@ -1204,6 +1426,107 @@ mod prepare_impl {
         // sorted construction order closely enough for stable logs.
         out.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(out)
+    }
+
+    #[cfg(test)]
+    mod temporal_tests {
+        use super::*;
+
+        fn secs(spec: &str) -> f64 {
+            parse_iso_duration_seconds(spec).unwrap_or_else(|e| panic!("{spec}: {e}"))
+        }
+
+        #[test]
+        fn iso_durations_match_the_python_approximate_seconds() {
+            assert_eq!(secs("PT1H"), 3600.0);
+            assert_eq!(secs("P1D"), 86400.0);
+            assert_eq!(secs("P1DT12H30M"), 86400.0 + 45000.0);
+            assert_eq!(secs("PT0.5S"), 0.5);
+            assert_eq!(secs("P2W"), 14.0 * 86400.0);
+            // The mean-Gregorian constants, which are the whole reason this is
+            // hand-written rather than a whole-days conversion.
+            assert_eq!(secs("P1M"), 30.436875 * 86400.0);
+            assert_eq!(secs("P50Y"), 50.0 * 365.2425 * 86400.0);
+            // `M` before `T` is months, after it is minutes.
+            assert_eq!(secs("P1M"), secs("P1M"));
+            assert_eq!(secs("PT1M"), 60.0);
+        }
+
+        #[test]
+        fn a_malformed_duration_is_named_not_guessed_at() {
+            for spec in ["1 hour", "PT", "P", "P1X", "PT1H30", "hourly", "P1.5D"] {
+                assert!(
+                    parse_iso_duration_seconds(spec).is_err(),
+                    "{spec:?} must not parse"
+                );
+            }
+        }
+
+        #[test]
+        fn instants_parse_with_and_without_an_offset() {
+            let utc = parse_iso_instant("2016-01-01T00:00:00Z").expect("Zulu");
+            assert_eq!(utc.unix_timestamp(), 1_451_606_400);
+            // A bare date is midnight; a bare stamp is UTC, not local.
+            assert_eq!(parse_iso_instant("2016-01-01").expect("date"), utc);
+            assert_eq!(
+                parse_iso_instant("2016-01-01T00:00:00").expect("naive"),
+                utc
+            );
+            // An offset is honoured AND normalised, so the anchor that reaches
+            // the URL template is the same instant in the same zone.
+            let plus2 = parse_iso_instant("2016-01-01T02:00:00+02:00").expect("offset");
+            assert_eq!(plus2, utc);
+            assert_eq!(plus2.offset(), UtcOffset::UTC);
+            assert!(parse_iso_instant("2016-13-01").is_err(), "month 13");
+            assert!(parse_iso_instant("yesterday").is_err());
+        }
+
+        #[test]
+        fn a_source_with_no_anchor_stays_const() {
+            assert!(to_esio_temporal("s", None).expect("absent").is_none());
+            assert!(
+                to_esio_temporal("s", Some(&serde_json::json!({"frequency": "PT1H"})))
+                    .expect("no start")
+                    .is_none(),
+                "a cadence with nothing to align it to cannot schedule anything"
+            );
+        }
+
+        #[test]
+        fn either_period_alone_fills_in_for_the_other() {
+            let hourly_files = to_esio_temporal(
+                "s",
+                Some(&serde_json::json!({"start": "2016-01-01", "file_period": "PT1H"})),
+            )
+            .expect("file_period alone")
+            .expect("DISCRETE");
+            assert_eq!(hourly_files.frequency, Duration::hours(1));
+            assert_eq!(hourly_files.file_period, Duration::hours(1));
+
+            let full = to_esio_temporal(
+                "s",
+                Some(&serde_json::json!({
+                    "start": "2016-01-01T00:00:00Z",
+                    "end": "2016-01-02T00:00:00Z",
+                    "frequency": "PT1H",
+                    "file_period": "P1D",
+                    "time_variable": "Time",
+                })),
+            )
+            .expect("full block")
+            .expect("DISCRETE");
+            assert_eq!(full.frequency, Duration::hours(1));
+            assert_eq!(full.file_period, Duration::days(1));
+            assert_eq!(full.end.map(|e| e.unix_timestamp()), Some(1_451_692_800));
+            assert_eq!(full.time_dim, "Time");
+        }
+
+        #[test]
+        fn an_anchor_with_no_cadence_is_an_error_not_a_quiet_const() {
+            let e = to_esio_temporal("s", Some(&serde_json::json!({"start": "2016-01-01"})))
+                .expect_err("a time-varying source must say how it varies");
+            assert!(e.contains("neither frequency nor file_period"), "{e}");
+        }
     }
 }
 

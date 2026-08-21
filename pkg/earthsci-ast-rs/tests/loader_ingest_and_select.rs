@@ -34,6 +34,7 @@ use std::rc::Rc;
 
 use earthsci_ast::esio_provider::{EsioProvider, providers_from_document};
 use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareOptions, PrepareProvider, prepare};
+use earthsci_ast::provider::CadenceProvider;
 use earthsci_ast::pushdown_rewrite::GateAxis;
 use ndarray::ArrayD;
 use serde_json::{Value, json};
@@ -735,4 +736,82 @@ fn an_eager_sample_of_a_gated_variable_refuses_rather_than_reading_everything() 
         .0;
     assert!(msg.contains("emis_cells"), "{msg}");
     assert!(msg.contains("value-invention"), "{msg}");
+}
+
+// --------------------------------------------------------------------------- //
+// U6 — the declared CADENCE is the source's, not the caller's
+// --------------------------------------------------------------------------- //
+
+/// A source that says it varies hourly must reach EarthSciIO saying so.
+///
+/// The bridge used to build every loader with no `temporal` at all, so a
+/// declared cadence was parsed by the document loader and then dropped on the
+/// floor: the provider read the first file and served it for the whole run. It
+/// is worse than a stale read, too — EarthSciIO treats an absent `temporal` as
+/// IMMUTABLE, so the cache never revalidates those bytes either.
+#[test]
+fn a_declared_cadence_reaches_the_provider() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let mut doc = document(tmp.path());
+
+    // As committed, both sources are static: every provider is CONST.
+    let provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
+        .expect("providers build");
+    assert!(
+        provs.iter().all(|(_, p)| PrepareProvider::is_const(p)),
+        "a document with no temporal block declares no cadence"
+    );
+
+    // Declare one, and only the parameters reading THAT source step.
+    doc["data_sources"]["Grid"]["kind"] = json!("grid");
+    doc["data_sources"]["Grid"]["temporal"] = json!({
+        "start": "2016-01-01T00:00:00Z",
+        "end": "2016-01-01T03:00:00Z",
+        "frequency": "PT1H",
+        "file_period": "P1D",
+    });
+    let provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
+        .expect("providers build");
+    for (key, p) in &provs {
+        if source_of(&doc, key) == "Grid" {
+            assert!(
+                !PrepareProvider::is_const(p),
+                "{key} reads an hourly source and cannot be CONST"
+            );
+            assert_eq!(
+                CadenceProvider::refresh_times(p),
+                vec![1_451_606_400.0, 1_451_610_000.0, 1_451_613_600.0],
+                "{key} refreshes on the declared hourly anchors, in epoch seconds"
+            );
+        } else {
+            assert!(PrepareProvider::is_const(p), "{key} reads a static source");
+        }
+    }
+}
+
+/// An unreadable cadence is a named error at construction. The alternative —
+/// falling back to CONST — is the same silent-staleness defect wearing a
+/// different hat, and a typo'd `frequency` would never be noticed.
+#[test]
+fn an_unparseable_cadence_is_refused_rather_than_demoted_to_const() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let cache = tmp.path().join("cache");
+
+    let mut doc = document(tmp.path());
+    doc["data_sources"]["Grid"]["temporal"] = json!({"start": "2016-01-01", "frequency": "1 hour"});
+    let e = match providers_from_document(&doc, &cache, None, &HashMap::new()) {
+        Err(e) => e.0,
+        Ok(_) => panic!("a mis-typed frequency must not build a provider"),
+    };
+    assert!(e.contains("invalid ISO-8601 duration"), "{e}");
+    assert!(e.contains("data_sources.Grid.temporal.frequency"), "{e}");
+
+    // Anchored, but declining to say how it varies.
+    let mut doc = document(tmp.path());
+    doc["data_sources"]["Grid"]["temporal"] = json!({"start": "2016-01-01"});
+    let e = match providers_from_document(&doc, &cache, None, &HashMap::new()) {
+        Err(e) => e.0,
+        Ok(_) => panic!("an anchor with no cadence must not build a provider"),
+    };
+    assert!(e.contains("neither frequency nor file_period"), "{e}");
 }
