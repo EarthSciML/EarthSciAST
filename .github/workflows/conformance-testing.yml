@@ -40,7 +40,11 @@ permissions:
 
 concurrency:
   group: conformance-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Cancel superseded runs everywhere, main included. The julia matrix runs
+  # ~55 min, so queueing meant each push to main waited out the previous
+  # commit's full matrix before testing the code anyone actually cares about.
+  # Testing HEAD promptly beats finishing a run whose result is already stale.
+  cancel-in-progress: true
 
 env:
   # Consistent versions across jobs
@@ -463,11 +467,19 @@ jobs:
       - name: Build Go binary
         run: go build -v ./...
 
-  # Cross-language conformance testing — only runs if all per-language suites pass
+  # Cross-language conformance testing — only runs if all per-language suites pass.
+  #
+  # Deliberately NOT gated on `lint`. It needs each binding to BUILD and pass
+  # its own suite, which is what the jobs below it establish; whether a file is
+  # prettier-clean has no bearing on whether the five bindings agree on a
+  # document. Gating it on style would put this suite back behind exactly the
+  # kind of nit that kept the whole workflow red for 40 runs. `lint` still runs
+  # and still fails the workflow on its own — it just does not withhold this
+  # signal while it does.
   standard-conformance-testing:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [lint, julia-tests, typescript-tests, python-tests, rust-tests, go-tests]
+    needs: [julia-tests, typescript-tests, python-tests, rust-tests, go-tests]
     steps:
       - uses: actions/checkout@v4
         with:
