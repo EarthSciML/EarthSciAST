@@ -102,7 +102,24 @@ def _esio_format(dl: LoaderLike) -> str:
     )
 
 
-def _to_esio_temporal(temporal: TemporalLike | None) -> Any:
+def _temporal_field(temporal: Any, name: str) -> Any:
+    """One field of a temporal block, whether it arrives as a typed object or as
+    the raw JSON mapping ``providers_from_document`` works in.
+
+    Both shapes reach :func:`_to_esio_temporal`. Reading only attributes made a
+    mapping answer ``None`` to everything, so a declared cadence silently
+    degraded to CONST rather than raising — the failure mode this whole function
+    exists to avoid.
+    """
+    from collections.abc import Mapping as _Mapping  # runtime: the module-level
+    # `Mapping` import is TYPE_CHECKING-only and would NameError here.
+
+    if isinstance(temporal, _Mapping):
+        return temporal.get(name)
+    return getattr(temporal, name, None)
+
+
+def _to_esio_temporal(temporal: TemporalLike | Mapping | None) -> Any:
     """Convert an ESS ``DataSourceTemporal`` to an ``earthsciio.LoaderTemporal``
     (``None`` for a CONST loader)."""
     if temporal is None:
@@ -111,7 +128,7 @@ def _to_esio_temporal(temporal: TemporalLike | None) -> Any:
 
     from .time_resolution import _coerce_datetime, parse_iso_duration
 
-    start = getattr(temporal, "start", None)
+    start = _temporal_field(temporal, "start")
     if not start:
         return None  # no anchor ⇒ treat as CONST
 
@@ -120,21 +137,21 @@ def _to_esio_temporal(temporal: TemporalLike | None) -> Any:
             _dt.timedelta(seconds=parse_iso_duration(spec).approximate_seconds()) if spec else None
         )
 
-    freq = _dur(getattr(temporal, "frequency", None))
-    file_period = _dur(getattr(temporal, "file_period", None)) or freq
+    freq = _dur(_temporal_field(temporal, "frequency"))
+    file_period = _dur(_temporal_field(temporal, "file_period")) or freq
     if freq is None:
         freq = file_period
     if freq is None or file_period is None:
         raise ValueError(
             "EarthSciIO temporal needs frequency + file_period; "
-            f"loader temporal has frequency={getattr(temporal, 'frequency', None)!r} "
-            f"file_period={getattr(temporal, 'file_period', None)!r}"
+            f"loader temporal has frequency={_temporal_field(temporal, 'frequency')!r} "
+            f"file_period={_temporal_field(temporal, 'file_period')!r}"
         )
     kwargs = {"start": _coerce_datetime(start), "frequency": freq, "file_period": file_period}
-    end = getattr(temporal, "end", None)
+    end = _temporal_field(temporal, "end")
     if end:
         kwargs["end"] = _coerce_datetime(end)
-    time_var = getattr(temporal, "time_variable", None)
+    time_var = _temporal_field(temporal, "time_variable")
     if time_var:
         kwargs["time_dim"] = time_var
     return esio.LoaderTemporal(**kwargs)
@@ -972,9 +989,23 @@ def providers_from_document(
             for key, vname, binding in consumers
         ]
 
-        def _loader(vars_: list[str], _l=lname, _f=fmt, _u=url, _o=reader_options):
+        # The source's declared cadence, converted once. Without this the loader
+        # was built with no `temporal` at all, so EarthSciIO saw CONST for every
+        # source no matter what the document said: an hourly source read its
+        # first file once and served it forever, with no warning (esm-spec §8.9).
+        # It is also load-bearing for caching — EarthSciIO treats an absent
+        # `temporal` as IMMUTABLE and will never revalidate it, so silently
+        # dropping a declared cadence here does not merely ignore it, it pins
+        # stale bytes in the cache permanently.
+        declared_temporal = _to_esio_temporal(ld.get("temporal"))
+
+        def _loader(
+            vars_: list[str], _l=lname, _f=fmt, _u=url, _o=reader_options,
+            _t=declared_temporal,
+        ):
             return esio.DataLoader(
-                name=_l, format=str(_f), url=_u, variables=vars_, reader_kwargs=dict(_o)
+                name=_l, format=str(_f), url=_u, variables=vars_,
+                reader_kwargs=dict(_o), temporal=_t,
             )
 
         # A record filter or a code map makes the source a TABLE: one decode,

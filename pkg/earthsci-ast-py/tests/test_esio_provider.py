@@ -246,3 +246,42 @@ def test_cds_credentials_resolve():
     """gap G7: the ERA5 path authenticates via ~/.cdsapirc (no network)."""
     assert esio.cds_api_key()  # non-empty token
     assert esio.cds_api_url().startswith("https://")
+
+
+# --------------------------------------------------------------------------- #
+# `temporal` reaches the loader (esm-spec §8.9)
+# --------------------------------------------------------------------------- #
+def test_declared_temporal_survives_a_raw_json_mapping():
+    """`providers_from_document` holds the document as raw JSON, so the temporal
+    block arrives as a MAPPING, not a typed object.
+
+    Reading it with `getattr` alone answered None to every field, so a declared
+    cadence degraded silently to CONST: the source read its first file once and
+    served it forever. Silent, because "no anchor" is a legitimate CONST answer
+    and nothing distinguished it from "I could not read your anchor".
+
+    This is not merely a staleness bug since the cache ladder began treating an
+    absent `temporal` as immutable (EarthSciIO `validate.decide` rule 2): a
+    dropped cadence now pins stale bytes permanently instead of revalidating
+    them by ETag. Mapping and object MUST agree.
+    """
+    from earthsci_ast.data_sources.esio_provider import _to_esio_temporal
+
+    as_mapping = {
+        "start": "2016-01-01T00:00:00Z",
+        "frequency": "PT1H",
+        "file_period": "P1D",
+    }
+    from_mapping = _to_esio_temporal(as_mapping)
+    assert from_mapping is not None, "a declared cadence must not degrade to CONST"
+
+    from_object = _to_esio_temporal(
+        DataSourceTemporal(start="2016-01-01T00:00:00Z", frequency="PT1H", file_period="P1D")
+    )
+    assert from_mapping.frequency == from_object.frequency
+    assert from_mapping.file_period == from_object.file_period
+    assert from_mapping.start == from_object.start
+
+    # A genuinely absent block is still CONST, from either shape.
+    assert _to_esio_temporal(None) is None
+    assert _to_esio_temporal({}) is None
