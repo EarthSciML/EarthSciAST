@@ -121,6 +121,10 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # PyPI also refuses a version that already exists; let a re-run of the
+          # release be a no-op rather than a failure.
+          skip-existing: true
 
   # ---------------------------------------------------------------------------
   # Julia: register new version with the General registry.
@@ -178,20 +182,25 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Update version in Cargo.toml
-        working-directory: pkg/earthsci-ast-rs
-        run: |
-          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
-          sed -i "0,/^version = \"[^\"]*\"/s//version = \"$VERSION\"/" Cargo.toml
-          cargo generate-lockfile
-
       - name: Build for release
         working-directory: pkg/earthsci-ast-rs
         run: cargo build --release --all-features
 
       - name: Publish to crates.io
         working-directory: pkg/earthsci-ast-rs
-        run: cargo publish
+        run: |
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
+          # Publishing is not idempotent: crates.io rejects a version that
+          # already exists, and a version can never be reused. Treat "already
+          # there" as success so re-running a release, or releasing a version
+          # that was published by hand, does not fail the pipeline.
+          if curl -sf -o /dev/null \
+               -H "User-Agent: EarthSciAST release (github.com/EarthSciML/EarthSciAST)" \
+               "https://crates.io/api/v1/crates/earthsci-ast/$VERSION"; then
+            echo "::notice::earthsci-ast $VERSION is already on crates.io — skipping publish."
+            exit 0
+          fi
+          cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
