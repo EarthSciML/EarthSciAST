@@ -416,9 +416,7 @@ describe('Unit parsing and dimensional analysis', () => {
                 cos_zenith: { type: 'parameter', units: '1', default: 0.5 },
                 solar_zenith_angle: { type: 'unknown', units: 'rad' },
               },
-              equations: [
-                { lhs: 'solar_zenith_angle', rhs: { op: 'acos', args: ['cos_zenith'] } },
-              ],
+              equations: [{ lhs: 'solar_zenith_angle', rhs: { op: 'acos', args: ['cos_zenith'] } }],
             },
           },
         }

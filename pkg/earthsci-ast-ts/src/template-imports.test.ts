@@ -67,9 +67,7 @@ function canonEqs(v: unknown): unknown {
     }
     if (n === null || typeof n !== 'object') return
     if (Array.isArray(n.equations)) {
-      n.equations.sort((a: unknown, b: unknown) =>
-        JSON.stringify(a) < JSON.stringify(b) ? -1 : 1,
-      )
+      n.equations.sort((a: unknown, b: unknown) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1))
     }
     for (const k of Object.keys(n)) walk(n[k])
   }
@@ -217,9 +215,9 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
   })
 
   it('effective order: import order pins the tie-break, priority flips it', () => {
-    expect(canonEqs(expandRaw(conf('import_order_determinism', 'fixture_import_order.esm')))).toEqual(
-      canonEqs(golden(conf('import_order_determinism', 'expanded_import_order.esm'))),
-    )
+    expect(
+      canonEqs(expandRaw(conf('import_order_determinism', 'fixture_import_order.esm'))),
+    ).toEqual(canonEqs(golden(conf('import_order_determinism', 'expanded_import_order.esm'))))
     expect(
       canonEqs(expandRaw(conf('import_order_determinism', 'fixture_priority_override.esm'))),
     ).toEqual(canonEqs(golden(conf('import_order_determinism', 'expanded_priority_override.esm'))))
@@ -275,7 +273,9 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       expect(definingRhs(sub, 'ramp').ranges.i).toEqual([1, n / 2])
       // Typed round-trip matches the golden, fully structurally.
       const emitted = JSON.parse(save(f))
-      expect(canonEqs(emitted)).toEqual(canonEqs(golden(conf('metaparameter_resolutions', goldenName))))
+      expect(canonEqs(emitted)).toEqual(
+        canonEqs(golden(conf('metaparameter_resolutions', goldenName))),
+      )
     }
   })
 

@@ -219,10 +219,6 @@ export function leafCadence(model: Model, name: string, esmFile?: EsmFile): Cade
 }
 
 /** The cadence of an expression in a model: `max` over its leaves. */
-export function expressionCadence(
-  model: Model,
-  expr: Expression,
-  esmFile?: EsmFile,
-): CadenceClass {
+export function expressionCadence(model: Model, expr: Expression, esmFile?: EsmFile): CadenceClass {
   return new CadenceSeeder(model, esmFile).expression(expr)
 }

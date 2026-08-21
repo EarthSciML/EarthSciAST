@@ -735,14 +735,7 @@ type TextFormat = 'unicode' | 'latex' | 'ascii'
 
 /** The renderable top-level kinds, distinguished once by {@link classifyExpr}. */
 type ExprKind =
-  | 'numeric'
-  | 'variable'
-  | 'node'
-  | 'equation'
-  | 'file'
-  | 'model'
-  | 'reactionSystem'
-  | 'reaction'
+  'numeric' | 'variable' | 'node' | 'equation' | 'file' | 'model' | 'reactionSystem' | 'reaction'
 
 /**
  * The ONE type discriminator shared by every top-level entry point
@@ -751,7 +744,9 @@ type ExprKind =
  * Checked in a fixed order (file before model, since an EsmFile also has the
  * summary fields a Model does not).
  */
-function classifyExpr(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): ExprKind {
+function classifyExpr(
+  expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile,
+): ExprKind {
   if (typeof expr === 'number' || isNumericLiteral(expr)) return 'numeric'
   if (typeof expr === 'string') return 'variable'
   if (isExprNode(expr)) return 'node'
@@ -815,21 +810,27 @@ function formatAny(
 /**
  * Format an expression as Unicode mathematical notation
  */
-export function toUnicode(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
+export function toUnicode(
+  expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile,
+): string {
   return formatAny(expr, 'unicode')
 }
 
 /**
  * Format an expression as LaTeX mathematical notation
  */
-export function toLatex(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
+export function toLatex(
+  expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile,
+): string {
   return formatAny(expr, 'latex')
 }
 
 /**
  * Format an expression as plain ASCII text
  */
-export function toAscii(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
+export function toAscii(
+  expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile,
+): string {
   return formatAny(expr, 'ascii')
 }
 
@@ -845,7 +846,9 @@ export function formatChemicalName(name: string): string {
 /**
  * Format an expression as MathML markup for web/academic publishing
  */
-export function toMathML(expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile): string {
+export function toMathML(
+  expr: Expr | Equation | Model | ReactionSystem | Reaction | EsmFile,
+): string {
   switch (classifyExpr(expr)) {
     case 'numeric':
       return `<mn>${formatNumber(numericValue(expr)!, 'ascii')}</mn>`
@@ -1204,7 +1207,8 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
     mathml: (c) => {
       const { args } = c
       if (args.length === 2) return `<mrow>${c.m(args[0])}<mo>&#x22C5;</mo>${c.m(args[1])}</mrow>`
-      if (args.length >= 3) return `<mrow>${args.map((a) => c.m(a)).join('<mo>&#x22C5;</mo>')}</mrow>`
+      if (args.length >= 3)
+        return `<mrow>${args.map((a) => c.m(a)).join('<mo>&#x22C5;</mo>')}</mrow>`
       return undefined
     },
   },
@@ -1261,7 +1265,8 @@ const OP_RENDERERS: Record<string, OpRenderer> = {
     mathml: (c) => {
       const { args } = c
       if (args.length === 2) return `<mrow>${c.m(args[0])}<mo>&#x2228;</mo>${c.m(args[1])}</mrow>`
-      if (args.length >= 3) return `<mrow>${args.map((a) => c.m(a)).join('<mo>&#x2228;</mo>')}</mrow>`
+      if (args.length >= 3)
+        return `<mrow>${args.map((a) => c.m(a)).join('<mo>&#x2228;</mo>')}</mrow>`
       return undefined
     },
   },

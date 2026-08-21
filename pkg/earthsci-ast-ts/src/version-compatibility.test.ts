@@ -59,9 +59,7 @@ describe('Version Compatibility', () => {
     })
 
     it('loads the 1.0.0 baseline fixture as committed, without warnings', () => {
-      const fixture = JSON.parse(
-        readFixture('version_compatibility', 'version_1_0_0_baseline.esm'),
-      )
+      const fixture = JSON.parse(readFixture('version_compatibility', 'version_1_0_0_baseline.esm'))
       const { result, warnings } = captureWarnings(() => load(fixture))
 
       expect(result.esm).toBe('1.0.0')
