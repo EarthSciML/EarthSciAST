@@ -98,11 +98,16 @@ bumpalo = { version = "3.14", optional = true }
 wide = { version = "0.7", optional = true }
 bytemuck = { version = "1.14", optional = true }
 criterion = { version = "0.5", optional = true }
-# OPT-IN data-provider bridge (feature `esio`, src/esio_provider.rs). A PATH dep
-# because both crates live in this working tree; a published build would pin a
-# version/git rev. Optional so the default build neither links EarthSciIO nor
-# inherits its netcdf/hdf5 C build requirements.
-earthsciio = { path = "../../../EarthSciIO/rust", version = "0.1", optional = true }
+# OPT-IN data-provider bridge (feature `esio`, src/esio_provider.rs). Resolved
+# from crates.io, NOT by path: cargo resolves every dependency in the manifest at
+# metadata time, optional ones included, so a path into a sibling EarthSciIO
+# checkout broke every cargo command on CI, where that checkout does not exist.
+# To develop against a local EarthSciIO instead, add to .cargo/config.toml:
+#     [patch.crates-io]
+#     earthsciio = { path = "../../../EarthSciIO/rust" }
+# Optional so the default build neither links EarthSciIO nor inherits its
+# netcdf/hdf5 C build requirements.
+earthsciio = { version = "0.1", optional = true }
 time = { version = "0.3", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

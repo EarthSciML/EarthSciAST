@@ -223,8 +223,15 @@ jobs:
           VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git tag -a "pkg/earthsci-ast-go/v$VERSION" -m "Go module v$VERSION"
-          git push origin "pkg/earthsci-ast-go/v$VERSION"
+          TAG="pkg/earthsci-ast-go/v$VERSION"
+          # The Go proxy caches a tag immutably, so an existing one is already
+          # what consumers resolve; re-pushing it is both rejected and pointless.
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "::notice::$TAG already exists — skipping."
+          else
+            git tag -a "$TAG" -m "Go module v$VERSION"
+            git push origin "$TAG"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -267,6 +274,15 @@ jobs:
 
       - name: Publish to NPM
         working-directory: pkg/earthsci-ast-ts
-        run: npm publish
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          # npm refuses to publish over an existing version (E403). Treat that as
+          # success so re-running a release is a no-op rather than a failure.
+          if npm view "@earthsciml/ast@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::@earthsciml/ast@$VERSION is already on npm — skipping."
+            exit 0
+          fi
+          npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
