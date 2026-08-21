@@ -1,0 +1,491 @@
+{
+  "esm": "1.0.0",
+  "index_sets": {
+    "emis_records": {
+      "kind": "interval",
+      "size": 3
+    },
+    "rcv_cells": {
+      "kind": "interval",
+      "size": 2
+    },
+    "ring_vertex": {
+      "kind": "interval",
+      "size": 5
+    },
+    "src_cells": {
+      "kind": "interval",
+      "size": 4
+    },
+    "xy": {
+      "kind": "interval",
+      "size": 2
+    }
+  },
+  "metadata": {
+    "name": "pushdown_polygon_area"
+  },
+  "models": {
+    "Binned": {
+      "equations": [
+        {
+          "lhs": "E_PM25",
+          "rhs": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "rec_xmin",
+              "rec_ymin",
+              "rec_xmax",
+              "rec_ymax",
+              "cell_ring",
+              "cell_area",
+              "rec_ring",
+              "emis_annual"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_W",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "rec_xmax",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "rec_xmin",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_E",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "src_S",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "rec_ymax",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        },
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "rec_ymin",
+                                "r"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "src_N",
+                                "c"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "op": "<="
+                        }
+                      ],
+                      "op": "and"
+                    },
+                    1.0,
+                    0.0
+                  ],
+                  "op": "ifelse"
+                },
+                {
+                  "args": [
+                    {
+                      "args": [
+                        "emis_annual",
+                        "r"
+                      ],
+                      "op": "index"
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            {
+                              "args": [
+                                "cell_ring",
+                                "c"
+                              ],
+                              "op": "index"
+                            },
+                            {
+                              "args": [
+                                "rec_ring",
+                                "r"
+                              ],
+                              "op": "index"
+                            }
+                          ],
+                          "manifold": "planar",
+                          "op": "polygon_intersection_area"
+                        },
+                        {
+                          "args": [
+                            "cell_area",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "/"
+                    }
+                  ],
+                  "op": "*"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "c"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": "conc_PM25",
+          "rhs": {
+            "args": [
+              "SR_PM25",
+              "E_PM25"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "SR_PM25",
+                    "s",
+                    "rcv"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    "E_PM25",
+                    "s"
+                  ],
+                  "op": "index"
+                }
+              ],
+              "op": "*"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "rcv"
+            ],
+            "ranges": {
+              "rcv": {
+                "from": "rcv_cells"
+              },
+              "s": {
+                "from": "src_cells"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": "overlapping_cells",
+          "rhs": {
+            "args": [
+              "src_W",
+              "src_S",
+              "src_E",
+              "src_N",
+              "rec_xmin",
+              "rec_ymin",
+              "rec_xmax",
+              "rec_ymax"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "src_W",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "rec_xmax",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "rec_xmin",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "src_E",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "src_S",
+                            "c"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "rec_ymax",
+                            "r"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    },
+                    {
+                      "args": [
+                        {
+                          "args": [
+                            "rec_ymin",
+                            "r"
+                          ],
+                          "op": "index"
+                        },
+                        {
+                          "args": [
+                            "src_N",
+                            "c"
+                          ],
+                          "op": "index"
+                        }
+                      ],
+                      "op": "<="
+                    }
+                  ],
+                  "op": "and"
+                },
+                1.0,
+                0.0
+              ],
+              "op": "ifelse"
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "r"
+            ],
+            "ranges": {
+              "c": {
+                "from": "src_cells"
+              },
+              "r": {
+                "from": "emis_records"
+              }
+            },
+            "reduce": "+"
+          }
+        }
+      ],
+      "variables": {
+        "E_PM25": {
+          "shape": [
+            "src_cells"
+          ],
+          "type": "unknown"
+        },
+        "SR_PM25": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "rcv_cells"
+          ],
+          "type": "parameter"
+        },
+        "cell_area": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "cell_ring": {
+          "default": 0.0,
+          "shape": [
+            "src_cells",
+            "ring_vertex",
+            "xy"
+          ],
+          "type": "parameter"
+        },
+        "conc_PM25": {
+          "shape": [
+            "rcv_cells"
+          ],
+          "type": "unknown"
+        },
+        "emis_annual": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "overlapping_cells": {
+          "shape": [
+            "emis_records"
+          ],
+          "type": "unknown"
+        },
+        "px": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "py": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "rec_ring": {
+          "default": 0.0,
+          "shape": [
+            "emis_records",
+            "ring_vertex",
+            "xy"
+          ],
+          "type": "parameter"
+        },
+        "rec_xmax": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "rec_xmin": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "rec_ymax": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "rec_ymin": {
+          "default": 0.0,
+          "shape": [
+            "emis_records"
+          ],
+          "type": "parameter"
+        },
+        "src_E": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_N": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_S": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        },
+        "src_W": {
+          "default": 0.0,
+          "shape": [
+            "src_cells"
+          ],
+          "type": "parameter"
+        }
+      }
+    }
+  }
+}

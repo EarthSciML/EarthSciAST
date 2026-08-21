@@ -206,12 +206,18 @@ const _OP_TABLE = _OpSpec[
 
     # ── Logical (n-ary and/or fold in child order; no single Base scalar fn —
     #    the arms carry the 0.0/1.0 truth-value convention) ──
+    # `geo=true`: a setup-time geometry body may carry a CONTAINMENT PREDICATE,
+    # and the canonical spelling of one is `ifelse(and(cmp, cmp, …), …)` — every
+    # comparison already carried the flag, so without it here a polygon-area
+    # binning body (the shape the pushdown's own conformance corpus uses) could
+    # not compile at all. The runtime ladder these lower to already has the
+    # `:and` / `:or` / `:not` arms; only the vocabulary gate was missing.
     _op("and"; arity=2:typemax(Int), category=:logical, dimclass=:boolean,
-        prec=2, sep=(" and ", " ∧ ", " \\land "), stencil=true),
+        prec=2, sep=(" and ", " ∧ ", " \\land "), stencil=true, geo=true),
     _op("or";  arity=2:typemax(Int), category=:logical, dimclass=:boolean,
-        prec=1, sep=(" or ",  " ∨ ", " \\lor "), stencil=true),
+        prec=1, sep=(" or ",  " ∨ ", " \\lor "), stencil=true, geo=true),
     _op("not"; arity=1:1,            category=:logical, dimclass=:boolean,
-        prec=6, stencil=true),  # prec 6: unary, binds tighter than infix
+        prec=6, stencil=true, geo=true),  # prec 6: unary, binds tighter than infix
 
     # ── Control (`ifelse` tests its condition `!= 0`; `Pre` is the MTK
     #    previous-value marker, a pass-through on the tree-walk path) ──

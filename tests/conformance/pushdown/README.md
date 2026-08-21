@@ -38,6 +38,25 @@ is **deep-equal as parsed JSON** to the committed golden.
   cell — and so, unlike the point shape, cannot decide the orientation on its
   own: that must come from the mat-vec's first axis forward, and from the
   already-fixed `C`/`R` for a mirror.
+- `fixtures/pushdown_polygon_area.esm` — the POLYGON-ALLOCATION shape, and the
+  fixture that pins the RANK-PRESERVING gather. Its binning weight is an
+  intersection area rather than a constant: the record polygon is clipped
+  against the CELL polygon and the clipped area, normalised by the cell's own
+  area, is the allocation fraction. So the body reads two more arrays on the
+  cell axis besides the four envelope bounds — `cell_ring`, a rank-3
+  `[src_cells, ring_vertex, xy]` stack, and `cell_area` — and neither is an
+  envelope factor. Its golden pins that EVERY cell-axis array the body reads is
+  gathered, not just the bounds; that the gather keeps the array's rank, so
+  `pd_cell__src_cells__cell_ring` is `[pd_support__src_cells, ring_vertex, xy]`
+  and the sliced polygon-operand spelling `index(cell_ring, c)` survives the
+  substitution of the name unchanged; and that the trailing axes are iterated by
+  GENERATED symbols (`pd_t0`, `pd_t1`) that cannot capture an authored one.
+  Gathering only the envelopes leaves the rest pointing at the full grid while
+  the axis is compact — full-grid values read at support positions, wrong
+  numbers with no diagnostic anywhere. Its mirror (`overlapping_cells[r]`,
+  inherited from `pushdown_envelope_overlap`) is untouched, because a per-record
+  aggregate keeps the full cell axis and so needs no gathers even though it too
+  reads cell factors.
 - `fixtures/pushdown_template_body.esm` — the SAME math as
   `pushdown_gated_dense`, but the binning body is factored through an
   `expression_templates` entry with the four rect factors and the two point

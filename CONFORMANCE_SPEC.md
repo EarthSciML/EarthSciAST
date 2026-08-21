@@ -1201,13 +1201,14 @@ parameter shaped `[C, out]`, the rewrite emits:
    the produced member set CELL-oriented;
 3. an `unknown` member variable and (4) a `parameter` member factor, both shaped
    on the derived set;
-4. one observed cell-gather per rect bound (an `unknown` defined by a
-   bare-variable equation),
-   `pd_cell__<C>__<F>[c] = F[member_factor[c]]`, shaped on the derived set;
+4. one observed cell-gather per **cell-axis array the binning bodies read** (an
+   `unknown` defined by a bare-variable equation),
+   `pd_cell__<C>__<F>[c, …] = F[member_factor[c], …]`, its first axis the
+   derived set — see "Cell-axis arrays" below, which is normative;
 5. `E`'s reduction axis and declared shape re-pointed onto the derived set, its
-   rect references rewritten to the gathers of (4), **and the derived
-   `join.overlap` clause attached** — with `tgt_env` naming the gathers of (4),
-   i.e. the envelopes in the COMPACT index space `E` now ranges over;
+   cell-axis references rewritten to the gathers of (4), **and the derived
+   `join.overlap` clause attached** — with `tgt_env` naming the envelope gathers
+   of (4), i.e. the envelopes in the COMPACT index space `E` now ranges over;
 6. `A`'s first axis re-pointed onto the derived set, and a provenance record
    `metadata.x_esd.pushdown` whose `gated_select` names the derived set, the
    gated axis, and the (sorted) list of gated arrays.
@@ -1215,6 +1216,49 @@ parameter shaped `[C, out]`, the rewrite emits:
 Emitting (5)'s gate is what stops the rewritten `E` from still visiting
 `|support| × |R|` pairs; with it, §5.5.6's driver makes the aggregate cost
 `O(|candidates|)`.
+
+**Cell-axis arrays (normative).** Re-pointing `E`'s reduction range renumbers
+the cell symbol: after the rewrite it counts SUPPORT positions, and support
+position `i` is grid cell `member_factor[i]`. Every array the binning body reads
+through that symbol must be renumbered with it. The gather family of (4) is
+therefore **not** the four envelope bounds — it is every array `F` such that
+
+* `F`'s declared `shape[0]` is the cell index set `C`, **and**
+* the body subscripts `F` with the bare cell symbol.
+
+Both subscript spellings on such an `F` MUST be carried, and by the SAME gather:
+the full subscript `index(F, c, v, d)`, and the PARTIAL subscript `index(F, c)`
+that yields the trailing slice — the spelling a rank-3 `[C, vertex, xy]` ring
+stack takes when it is a `polygon_intersection_area` operand. This is why the
+gather MUST be **rank-preserving**: `pd_cell__<C>__<F>` is declared
+`[pd_support__<C>, …F's trailing axes]` and defined by a map (not a reduction)
+whose `output_idx` names the support symbol and one generated symbol per
+trailing axis, so substituting the gather's name for `F` leaves every use of it
+well-typed. Generated trailing symbols MUST NOT be able to capture an authored
+one; the reference implementation names them `pd_t0`, `pd_t1`, ….
+
+Gathering only the envelope bounds is a **wrong-numbers defect**, not a
+performance one: the remaining cell-axis arrays keep pointing at the full grid
+while the axis they are indexed on has become compact, so the body reads
+full-grid values at support positions and no diagnostic fires anywhere. A
+binding MUST NOT emit the rewrite in that state.
+
+Two reads are deliberately NOT gathered, and MUST NOT be:
+
+* an array whose `shape[0]` is **not** `C`. A flat-offset gather into another
+  axis — `index(Temperature, layer · N_C + c)`, over an `[all_cells]`
+  declaration — is not on the cell axis, stays full-grid, and is still correct
+  after the rewrite because nothing about it moved;
+* a cell-axis array indexed **without** the cell symbol. It reads the full-grid
+  array at a full-grid position, which the rewrite does not disturb.
+
+A cell-axis array read at a COMPUTED cell position — `index(F, c + 1)`, or any
+subscript that mentions the cell symbol without being it — cannot be re-pointed:
+the compact axis is a renumbering, and no arithmetic on a support position
+survives it. A binding MUST reject such a document with a hard error naming the
+array and the subscript. Declining silently is not permitted, and neither is
+emitting the rewrite anyway: the first hides an ungated whole-array fetch, the
+second produces wrong numbers.
 
 **MIRRORED arm (gate only).** A per-record binning aggregate receives ONLY the
 `join.overlap` clause. It MUST NOT receive a derived index set, a producer, a

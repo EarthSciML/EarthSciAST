@@ -1,7 +1,7 @@
 {
   "category": "pushdown",
   "version": "1.0",
-  "description": "Projection-pushdown auto-rewrite (desugar_pushdown) golden corpus. Each fixture pairs an INPUT document with the artifact the Julia reference emits for it. A fixture with a \"golden\" key is a REWRITE fixture: bindings run desugar_pushdown on the parsed input and deep-compare the result to the parsed golden (numeric equality by value, key order free); they must also assert idempotency (desugaring the golden returns it unchanged) and input purity (the input document is not mutated). A fixture with \"fires\": false MUST come back UNCHANGED from desugar_pushdown, and its \"diagnostics\" key names the golden list that pushdown_diagnostics must return for it, compared the same way. The corpus covers BOTH recognised orientations of the binning join (CONFORMANCE_SPEC.md 5.5.7): the FORWARD cell-output aggregate, whose rewritten form is re-pointed onto the compact derived axis AND gated on the generated pd_cell__* envelopes, and the MIRRORED record-output aggregate, which keeps its full record axis and receives ONLY the gate. It covers BOTH containment shapes the recogniser reads: point-in-rectangle, where the record is a position and src_env is its two coordinates, and envelope-vs-envelope AABB overlap, where the record has EXTENT and src_env is its four bounds -- the shape a polygon or line record needs, with the exact geometry left to the aggregate's own narrow phase. It also pins the two template-facing invariants: a binning body factored through an expression_templates entry with the rect factors passed as bindings rewrites IDENTICALLY to the longhand form while its template body is left byte-identical (esm-spec 9.6.4 Option B is preserved: the rewrite edits the CALL SITE's bindings, never the shared body), and a join-shaped aggregate whose containment cannot be read produces a NAMED diagnostic instead of a silent ungated fetch. Files are canonical JSON (sorted keys, 2-space indent) for byte-stable re-emission via scripts/generate-pushdown-goldens.jl.",
+  "description": "Projection-pushdown auto-rewrite (desugar_pushdown) golden corpus. Each fixture pairs an INPUT document with the artifact the Julia reference emits for it. A fixture with a \"golden\" key is a REWRITE fixture: bindings run desugar_pushdown on the parsed input and deep-compare the result to the parsed golden (numeric equality by value, key order free); they must also assert idempotency (desugaring the golden returns it unchanged) and input purity (the input document is not mutated). A fixture with \"fires\": false MUST come back UNCHANGED from desugar_pushdown, and its \"diagnostics\" key names the golden list that pushdown_diagnostics must return for it, compared the same way. The corpus covers BOTH recognised orientations of the binning join (CONFORMANCE_SPEC.md 5.5.7): the FORWARD cell-output aggregate, whose rewritten form is re-pointed onto the compact derived axis AND gated on the generated pd_cell__* envelopes, and the MIRRORED record-output aggregate, which keeps its full record axis and receives ONLY the gate. It covers BOTH containment shapes the recogniser reads: point-in-rectangle, where the record is a position and src_env is its two coordinates, and envelope-vs-envelope AABB overlap, where the record has EXTENT and src_env is its four bounds -- the shape a polygon or line record needs, with the exact geometry left to the aggregate's own narrow phase. It pins the RANK-PRESERVING gather: a binning body may read ANY array on the cell axis, not only the four envelope bounds, and every one of them is re-pointed onto the compact derived axis with its trailing axes intact -- so a [cells, vertex, xy] ring stack read as a polygon operand comes out as a [support, vertex, xy] ring stack and the sliced spelling index(F, c) survives the rename. Gathering only the envelopes leaves the rest pointing at the full grid while the axis is compact, which is wrong numbers with no diagnostic. It also pins the two template-facing invariants: a binning body factored through an expression_templates entry with the rect factors passed as bindings rewrites IDENTICALLY to the longhand form while its template body is left byte-identical (esm-spec 9.6.4 Option B is preserved: the rewrite edits the CALL SITE's bindings, never the shared body), and a join-shaped aggregate whose containment cannot be read produces a NAMED diagnostic instead of a silent ungated fetch. Files are canonical JSON (sorted keys, 2-space indent) for byte-stable re-emission via scripts/generate-pushdown-goldens.jl.",
   "fixtures": [
     {
       "id": "pushdown/l1",
@@ -48,6 +48,19 @@
         "pushdown",
         "gate",
         "envelope_overlap"
+      ]
+    },
+    {
+      "id": "pushdown/polygon_area",
+      "input": "conformance/pushdown/fixtures/pushdown_polygon_area.esm",
+      "golden": "conformance/pushdown/golden/pushdown_polygon_area.rewritten.json",
+      "model_name": "Binned",
+      "tags": [
+        "core",
+        "pushdown",
+        "gate",
+        "cell_geometry",
+        "rank_preserving_gather"
       ]
     },
     {

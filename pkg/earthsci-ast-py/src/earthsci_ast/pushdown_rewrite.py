@@ -771,6 +771,12 @@ def _pd_detect(model: dict, index_sets: Any):
     a_names: list[str] = []
     # (E name, cell output symbol, gate src_env, gate tgt_env)
     e_specs: list[tuple[str, str, list[str], list[str]]] = []
+    # EVERY array any binning body reads on the cell axis, name -> declared
+    # shape, and the ungatherable ones. The envelope factors are a SUBSET of
+    # this: a binning body is free to read the cell's geometry, its area, its
+    # ring stack. All of them ride the same re-pointing (`_pd_cell_factors`).
+    cell_factors: dict[str, list] = {}
+    cell_bad: dict[str, str] = {}
     C = rcv_set = R = None
     src_env = tgt_env = None
     rep_ename = rep_csym = rep_rsym = None
@@ -850,6 +856,15 @@ def _pd_detect(model: dict, index_sets: Any):
             a_names.append(aname)
         if not any(e[0] == ename for e in e_specs):
             e_specs.append((ename, bind["c_sym"], bind["src_env"], bind["tgt_env"]))
+            # Collected on the DETECTION view, like every other pattern read:
+            # a body factored through a template must yield the same gather set
+            # as its longhand twin (esm-spec §9.6.4 rule 2). Emission still
+            # edits the authored body / call-site bindings, and
+            # `_pd_assert_rects_rebound` proves the substitution landed.
+            _pd_cell_factors(
+                observed_defs[ename], bind["c_sym"], variables, c_set,
+                cell_factors, cell_bad,
+            )
     # Deterministic, deduplicated diagnostic order: the same E can be reached
     # from several `conc` consumers.
     diags.sort(key=lambda d: (d["variable"], d["consumer"], d["array"]))
@@ -882,6 +897,8 @@ def _pd_detect(model: dict, index_sets: Any):
         "mirror_specs": mirror_specs,
         "src_env": src_env,
         "tgt_env": tgt_env,
+        "cell_factors": cell_factors,
+        "cell_bad": cell_bad,
         "rep_ename": rep_ename,
         "rep_csym": rep_csym,
         "rep_rsym": rep_rsym,
@@ -891,6 +908,160 @@ def _pd_detect(model: dict, index_sets: Any):
 # --------------------------------------------------------------------------- #
 # Emission
 # --------------------------------------------------------------------------- #
+
+
+def _pd_cell_factors(node: Any, c_sym: str, variables: dict, C: str, out: dict, bad: dict) -> None:
+    """Walk a binning body and record EVERY array it reads at a position on the
+    cell axis — not only the envelope factors of the containment predicate.
+
+    The rewrite re-points the aggregate's reduction range onto the compact
+    derived support set, so from that moment on the loop symbol ``c_sym`` counts
+    support positions, not grid cells. Any array still indexed by it that was
+    NOT re-pointed then reads full-grid values at support positions: WRONG
+    NUMBERS, no diagnostic. The set collected here is exactly the set that must
+    be gathered, and an array whose cell subscript cannot be re-pointed lands in
+    ``bad`` so the caller can refuse loudly rather than emit silent garbage.
+
+    Membership is decided by the DECLARATION, not by the subscript: an array is
+    on the cell axis iff its declared ``shape[0]`` is the cell index set ``C``.
+    That is what keeps a flat-offset gather into a DIFFERENT axis — the
+    ``index(Temperature, layer*N_SRC + c)`` spelling a layered met read wants,
+    whose base is declared over the full ``[all_cells]`` axis — out of the map:
+    it is not on the cell axis, it stays full-grid, and it is still correct
+    after the rewrite because nothing about it moved.
+
+    Three subscript shapes on a cell-axis array, and they are not alike:
+
+      ``index(F, c)``           the whole trailing slice at cell ``c`` — a rank-3
+                               ring stack read as a polygon operand. Gatherable.
+      ``index(F, c, v, d)``     a fully-subscripted scalar read. Gatherable, and
+                               by the SAME gather: the generated array keeps
+                               ``F``'s rank, so both spellings survive untouched
+                               past the substitution of the name.
+      ``index(F, <expr in c>)`` arithmetic on the cell position. NOT gatherable —
+                               the compact axis is a renumbering, so ``c+1`` or
+                               ``2*c`` mean nothing in it. Recorded in ``bad``.
+
+    A cell-axis array indexed WITHOUT the cell symbol (a constant position, or a
+    record-driven lookup) is deliberately left alone: it still reads the
+    full-grid array at a full-grid position, which the rewrite does not disturb.
+    """
+    if isinstance(node, dict):
+        if node.get("op") == "index":
+            a = node.get("args")
+            if isinstance(a, list) and len(a) >= 2 and isinstance(a[0], str):
+                v = variables.get(a[0])
+                shp = v.get("shape") if isinstance(v, dict) else None
+                if isinstance(shp, list) and shp and shp[0] == C:
+                    if a[1] == c_sym:
+                        out.setdefault(a[0], list(shp))
+                    elif _pd_mentions_sym(a[1], c_sym):
+                        bad.setdefault(a[0], _pd_subscript_sketch(a[1]))
+        for v in node.values():
+            _pd_cell_factors(v, c_sym, variables, C, out, bad)
+    elif isinstance(node, list):
+        for x in node:
+            _pd_cell_factors(x, c_sym, variables, C, out, bad)
+
+
+def _pd_mentions_sym(node: Any, sym: str) -> bool:
+    """Does ``node`` reference the loop symbol ``sym`` anywhere?"""
+    if isinstance(node, str):
+        return node == sym
+    if isinstance(node, dict):
+        return any(_pd_mentions_sym(v, sym) for k, v in node.items() if k != "name")
+    if isinstance(node, list):
+        return any(_pd_mentions_sym(x, sym) for x in node)
+    return False
+
+
+def _pd_subscript_sketch(node: Any) -> str:
+    """A one-line rendering of a subscript expression, for the refusal message."""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, (int, float)):
+        return repr(node)
+    if isinstance(node, dict):
+        op = node.get("op")
+        if op == "index":
+            a = node.get("args") or []
+            return f"{_pd_subscript_sketch(a[0])}[" + ", ".join(
+                _pd_subscript_sketch(x) for x in a[1:]) + "]"
+        args = ", ".join(_pd_subscript_sketch(x) for x in (node.get("args") or []))
+        return f"{op}({args})"
+    return "?"
+
+
+def _pd_gather_defn(
+    f: str, shape: list, setname: str, mfactor: str, index_sets: Any, C: str
+) -> tuple[dict, dict]:
+    """The ``(variable declaration, defining aggregate)`` for one per-support
+    cell gather ``pd_cell__C__f``, RANK-PRESERVING.
+
+    Rank 1 — the envelope factors — emits exactly what it always did::
+
+        pd_cell__C__F[c] = F[member_factor[c]]
+
+    Rank k keeps every trailing axis, so a ``[cells, vertex, xy]`` ring stack
+    comes out as a ``[support, vertex, xy]`` ring stack and every use of it
+    survives the rename unchanged — the sliced polygon-operand form
+    ``index(F, c)`` and the fully-subscripted scalar form alike::
+
+        pd_cell__C__F[c, t0, t1] = F[member_factor[c], t0, t1]
+
+    This is a map, not a reduction: every range appears in ``output_idx``. The
+    trailing loop symbols are named ``pd_t0…`` rather than reusing the
+    document's own, because the gather is generated in its own scope and a
+    collision with an authored symbol would be a silent capture."""
+    decl = {"type": "unknown", "shape": [setname] + [t for t in shape[1:]]}
+    syms = ["pd_t%d" % i for i in range(len(shape) - 1)]
+    ranges: dict = {"c": {"from": setname}}
+    for s, t in zip(syms, shape[1:]):
+        if not (isinstance(t, str) and _pd_is_index_set(index_sets, t)):
+            raise PushdownRewriteError(
+                f"projection-pushdown desugar: cannot gather '{f}' onto the derived "
+                f"support set of '{C}'. Its declared shape is {shape!r}, whose trailing "
+                f"entry {t!r} is not a named index set, so the generated gather has no "
+                "range to iterate it over. Declare the array's trailing axes as index "
+                "sets, or keep the value off the cell axis."
+            )
+        ranges[s] = {"from": t}
+    return decl, {
+        "op": "aggregate",
+        "output_idx": ["c"] + syms,
+        "ranges": ranges,
+        "args": [f, mfactor],
+        "expr": _pd_ix(f, _pd_ix(mfactor, "c"), *syms),
+    }
+
+
+def _pd_is_index_set(index_sets: Any, name: str) -> bool:
+    return isinstance(index_sets, dict) and name in index_sets
+
+
+def _pd_refuse_ungatherable(bad: dict, C: str, setname: str) -> None:
+    """Refuse, loudly, when a binning body reads a cell-axis array at a computed
+    cell position. See :func:`_pd_cell_factors` for why it cannot be re-pointed.
+
+    A hard error, not a warning, and not a silent decline. The pattern HAS
+    matched: declining here would leave the document correct but ungated, and
+    the residual-diagnostic machinery is the right home for that — but the
+    caller is already past the point where the plan is committed, and an
+    aggregate reading a cell-axis array at ``c+1`` cannot be gated at all
+    without renumbering arithmetic the compact axis does not admit. Say so."""
+    if not bad:
+        return
+    detail = "; ".join(f"'{f}' at [{s}]" for f, s in sorted(bad.items()))
+    raise PushdownRewriteError(
+        "projection-pushdown desugar: the binning aggregate reads a cell-axis array "
+        f"at a COMPUTED cell position ({detail}). The rewrite re-points the reduction "
+        f"onto the derived support set '{setname}', which renumbers '{C}' — support "
+        "position i is grid cell member_factor[i], and no arithmetic on i survives "
+        "that renumbering. A gather can carry `F[c]`, and `F[c, …]`, but not "
+        "`F[f(c)]`. Index the array with the bare cell symbol, or move the value off "
+        f"the '{C}' axis (declare it over the axis it is really indexed by, so it "
+        "stays full-grid and is left alone)."
+    )
 
 
 def _pd_rewrite_rects(node: Any, rectmap: dict[str, str]) -> Any:
@@ -1010,8 +1181,14 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
     def cellgath(f: str) -> str:
         return "pd_cell__" + C + "__" + f
 
+    # The gather set is the envelope factors PLUS every other array a binning
+    # body reads on the cell axis. Envelopes lead, so a document whose bodies
+    # read nothing else emits exactly what it emitted before; the rest follow in
+    # sorted order, and emission below re-sorts anyway.
+    cell_shapes: dict[str, list] = dict(plan.get("cell_factors") or {})
+    _pd_refuse_ungatherable(plan.get("cell_bad") or {}, C, setname)
     rects: list[str] = []
-    for f in plan["tgt_env"]:
+    for f in list(plan["tgt_env"]) + sorted(cell_shapes):
         if f not in rects:
             rects.append(f)
     rectmap = {f: cellgath(f) for f in rects}
@@ -1056,18 +1233,12 @@ def _pd_apply(esm: dict, mname: str, plan: dict, templates: dict | None = None) 
     # in tests/conformance/pushdown carry them sorted, which is also the only
     # order every binding can agree on without sharing tgt_env traversal.
     for f in sorted(rects):
-        mv[cellgath(f)] = {"type": "unknown", "shape": [setname]}
-        _pd_set_observed(
-            d["models"][mname],
-            cellgath(f),
-            {
-                "op": "aggregate",
-                "output_idx": ["c"],
-                "ranges": {"c": {"from": setname}},
-                "args": [f, mfactor],
-                "expr": _pd_ix(f, _pd_ix(mfactor, "c")),
-            },
-        )
+        shape = cell_shapes.get(f)
+        if not shape:
+            shape = mv[f]["shape"] if isinstance(mv.get(f), dict) and mv[f].get("shape") else [C]
+        decl, defn = _pd_gather_defn(f, list(shape), setname, mfactor, d.get("index_sets"), C)
+        mv[cellgath(f)] = decl
+        _pd_set_observed(d["models"][mname], cellgath(f), defn)
 
     # --- gate the provider-backed arrays onto the derived axis ---
     for a in plan["A_names"]:

@@ -34,7 +34,7 @@
 //! by value, key order free — see the corpus README).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use serde_json::{Map, Value, json};
@@ -830,6 +830,13 @@ struct Plan {
     mirror_specs: Vec<(String, Vec<String>, [String; 4])>,
     src_env: Vec<String>,
     tgt_env: [String; 4],
+    /// EVERY array any binning body reads on the cell axis, name => declared
+    /// shape. The envelope factors of `tgt_env` are a SUBSET: a binning body is
+    /// free to read the cell's geometry, its area, its ring stack, and all of
+    /// them ride the same re-pointing. See [`pd_cell_factors`].
+    cell_factors: BTreeMap<String, Vec<String>>,
+    /// The cell-axis reads that CANNOT be re-pointed, name => subscript sketch.
+    cell_bad: BTreeMap<String, String>,
     rep_ename: String,
     rep_csym: String,
     rep_rsym: String,
@@ -854,6 +861,8 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     let mut conc_specs: Vec<(String, String)> = Vec::new();
     let mut a_names: Vec<String> = Vec::new();
     let mut e_specs: Vec<(String, String, Vec<String>, [String; 4])> = Vec::new();
+    let mut cell_factors: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut cell_bad: BTreeMap<String, String> = BTreeMap::new();
     let mut plan: Option<Plan> = None;
 
     for (cname, cv) in variables {
@@ -964,6 +973,8 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
                     mirror_specs: Vec::new(),
                     src_env: bind.src_env.clone(),
                     tgt_env: bind.tgt_env.clone(),
+                    cell_factors: BTreeMap::new(),
+                    cell_bad: BTreeMap::new(),
                     rep_ename: ename.clone(),
                     rep_csym: bind.c_sym.clone(),
                     rep_rsym: bind.r_sym.clone(),
@@ -979,6 +990,19 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
             a_names.push(aname);
         }
         if !e_specs.iter().any(|(e, ..)| e == &ename) {
+            // Collected on the DETECTION view, like every other pattern read: a
+            // body factored through a template must yield the same gather set
+            // as its longhand twin (esm-spec §9.6.4 rule 2). Emission still
+            // edits the authored body / call-site bindings, and
+            // `pd_assert_rects_rebound` proves the substitution landed.
+            pd_cell_factors(
+                eagg,
+                &bind.c_sym,
+                variables,
+                c_set,
+                &mut cell_factors,
+                &mut cell_bad,
+            );
             e_specs.push((ename, bind.c_sym, bind.src_env, bind.tgt_env));
         }
     }
@@ -1016,12 +1040,229 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     plan.conc_specs = conc_specs;
     plan.a_names = a_names;
     plan.e_specs = e_specs;
+    plan.cell_factors = cell_factors;
+    plan.cell_bad = cell_bad;
     (Some(plan), diags)
 }
 
 // --------------------------------------------------------------------------- //
 // Emission
 // --------------------------------------------------------------------------- //
+
+/// Walk a binning body and record into `out` EVERY array it reads at a position
+/// on the cell axis — not only the envelope factors of the containment
+/// predicate — mapping each to its declared shape. Ungatherable reads land in
+/// `bad`.
+///
+/// The rewrite re-points the aggregate's reduction range onto the compact
+/// derived support set, so from that moment `c_sym` counts support positions,
+/// not grid cells. Any array still indexed by it that was NOT re-pointed then
+/// reads full-grid values at support positions: WRONG NUMBERS, no diagnostic.
+/// `out` is exactly the set that must be gathered.
+///
+/// Membership is decided by the DECLARATION, not by the subscript: an array is
+/// on the cell axis iff its declared `shape[0]` is the cell index set `c_set`.
+/// That is what keeps a flat-offset gather into a DIFFERENT axis — the
+/// `index(Temperature, layer * N_SRC + c)` spelling a layered met read wants,
+/// whose base is declared over the full `[all_cells]` axis — out of the map: it
+/// is not on the cell axis, it stays full-grid, and it is still correct after
+/// the rewrite because nothing about it moved.
+///
+/// Three subscript shapes on a cell-axis array, and they are not alike:
+///
+/// * `index(F, c)` — the whole trailing slice at cell `c`, a rank-3 ring stack
+///   read as a polygon operand. Gatherable.
+/// * `index(F, c, v, d)` — a fully-subscripted scalar read. Gatherable, and by
+///   the SAME gather: the generated array keeps `F`'s rank, so both spellings
+///   survive the substitution of the name.
+/// * `index(F, <expr in c>)` — arithmetic on the cell position. NOT gatherable:
+///   the compact axis is a renumbering, so `c + 1` means nothing in it.
+///   Recorded in `bad`.
+///
+/// A cell-axis array indexed WITHOUT the cell symbol is deliberately left
+/// alone: it still reads the full-grid array at a full-grid position, which the
+/// rewrite does not disturb.
+fn pd_cell_factors(
+    node: &Value,
+    c_sym: &str,
+    variables: &Map<String, Value>,
+    c_set: &str,
+    out: &mut BTreeMap<String, Vec<String>>,
+    bad: &mut BTreeMap<String, String>,
+) {
+    match node {
+        Value::Object(o) => {
+            if o.get("op").and_then(Value::as_str) == Some("index")
+                && let Some(a) = o.get("args").and_then(Value::as_array)
+                && a.len() >= 2
+                && let Some(f) = a[0].as_str()
+                && let Some(shape) = variables
+                    .get(f)
+                    .and_then(|v| v.get("shape"))
+                    .and_then(Value::as_array)
+                && shape.first().and_then(Value::as_str) == Some(c_set)
+            {
+                if a[1].as_str() == Some(c_sym) {
+                    out.entry(f.to_string()).or_insert_with(|| {
+                        shape
+                            .iter()
+                            .map(|t| t.as_str().unwrap_or_default().to_string())
+                            .collect()
+                    });
+                } else if pd_mentions_sym(&a[1], c_sym) {
+                    bad.entry(f.to_string())
+                        .or_insert_with(|| pd_subscript_sketch(&a[1]));
+                }
+            }
+            for v in o.values() {
+                pd_cell_factors(v, c_sym, variables, c_set, out, bad);
+            }
+        }
+        Value::Array(xs) => {
+            for x in xs {
+                pd_cell_factors(x, c_sym, variables, c_set, out, bad);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Does `node` reference the loop symbol `sym` anywhere?
+fn pd_mentions_sym(node: &Value, sym: &str) -> bool {
+    match node {
+        Value::String(s) => s == sym,
+        Value::Object(o) => o
+            .iter()
+            .any(|(k, v)| k != "name" && pd_mentions_sym(v, sym)),
+        Value::Array(xs) => xs.iter().any(|x| pd_mentions_sym(x, sym)),
+        _ => false,
+    }
+}
+
+/// A one-line rendering of a subscript expression, for the refusal message.
+fn pd_subscript_sketch(node: &Value) -> String {
+    match node {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Object(o) => {
+            let op = o.get("op").and_then(Value::as_str).unwrap_or("?");
+            let empty: Vec<Value> = Vec::new();
+            let args = o
+                .get("args")
+                .and_then(Value::as_array)
+                .unwrap_or(&empty);
+            if op == "index" && !args.is_empty() {
+                let inner: Vec<String> = args[1..].iter().map(pd_subscript_sketch).collect();
+                format!("{}[{}]", pd_subscript_sketch(&args[0]), inner.join(", "))
+            } else {
+                let inner: Vec<String> = args.iter().map(pd_subscript_sketch).collect();
+                format!("{}({})", op, inner.join(", "))
+            }
+        }
+        _ => "?".to_string(),
+    }
+}
+
+/// The `(variable declaration, defining aggregate)` for one per-support cell
+/// gather `pd_cell__C__F`, RANK-PRESERVING.
+///
+/// Rank 1 — the envelope factors — emits exactly what it always did:
+///
+/// ```text
+/// pd_cell__C__F[c] = F[member_factor[c]]
+/// ```
+///
+/// Rank k keeps every trailing axis, so a `[cells, vertex, xy]` ring stack comes
+/// out as a `[support, vertex, xy]` ring stack and every use of it survives the
+/// rename unchanged — the sliced polygon-operand form `index(F, c)` and the
+/// fully-subscripted scalar form alike:
+///
+/// ```text
+/// pd_cell__C__F[c, t0, t1] = F[member_factor[c], t0, t1]
+/// ```
+///
+/// This is a map, not a reduction: every range appears in `output_idx`. The
+/// trailing loop symbols are named `pd_t0…` rather than reusing the document's
+/// own, because the gather is generated in its own scope and a collision with an
+/// authored symbol would be a silent capture.
+fn pd_gather_defn(
+    f: &str,
+    shape: &[String],
+    setname: &str,
+    mfactor: &str,
+    index_set_names: &HashSet<String>,
+    c_set: &str,
+) -> Result<(Value, Value), PushdownRewriteError> {
+    let mut decl_shape: Vec<Value> = vec![Value::String(setname.to_string())];
+    let mut output_idx: Vec<Value> = vec![Value::String("c".into())];
+    let mut ranges = Map::new();
+    ranges.insert("c".into(), json!({"from": setname}));
+    let mut subs: Vec<Value> = Vec::new();
+    for (i, t) in shape.iter().skip(1).enumerate() {
+        if !index_set_names.contains(t) {
+            return Err(PushdownRewriteError(format!(
+                "projection-pushdown desugar: cannot gather '{f}' onto the derived \
+                 support set of '{c_set}'. Its declared shape is {shape:?}, whose \
+                 trailing entry '{t}' is not a named index set, so the generated \
+                 gather has no range to iterate it over. Declare the array's \
+                 trailing axes as index sets, or keep the value off the cell axis."
+            )));
+        }
+        let sym = format!("pd_t{i}");
+        decl_shape.push(Value::String(t.clone()));
+        output_idx.push(Value::String(sym.clone()));
+        ranges.insert(sym.clone(), json!({"from": t}));
+        subs.push(Value::String(sym));
+    }
+    let mut expr_args: Vec<Value> = vec![
+        Value::String(f.to_string()),
+        pd_ix(mfactor.to_string(), "c"),
+    ];
+    expr_args.extend(subs);
+    Ok((
+        json!({"type": "unknown", "shape": decl_shape}),
+        json!({
+            "op": "aggregate",
+            "output_idx": output_idx,
+            "ranges": Value::Object(ranges),
+            "args": [f, mfactor],
+            "expr": {"op": "index", "args": expr_args},
+        }),
+    ))
+}
+
+/// Refuse, loudly, when a binning body reads a cell-axis array at a computed
+/// cell position. See [`pd_cell_factors`] for why it cannot be re-pointed.
+///
+/// A hard error, not a warning, and not a silent decline. The pattern HAS
+/// matched: an aggregate reading a cell-axis array at `c + 1` cannot be gated at
+/// all without renumbering arithmetic the compact axis does not admit, and
+/// emitting the rewrite anyway is the silent-wrong-numbers failure this pass
+/// exists to prevent.
+fn pd_refuse_ungatherable(
+    bad: &BTreeMap<String, String>,
+    c_set: &str,
+    setname: &str,
+) -> Result<(), PushdownRewriteError> {
+    if bad.is_empty() {
+        return Ok(());
+    }
+    let detail = bad
+        .iter()
+        .map(|(f, s)| format!("'{f}' at [{s}]"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(PushdownRewriteError(format!(
+        "projection-pushdown desugar: the binning aggregate reads a cell-axis array \
+         at a COMPUTED cell position ({detail}). The rewrite re-points the reduction \
+         onto the derived support set '{setname}', which renumbers '{c_set}' — \
+         support position i is grid cell member_factor[i], and no arithmetic on i \
+         survives that renumbering. A gather can carry `F[c]`, and `F[c, …]`, but \
+         not `F[f(c)]`. Index the array with the bare cell symbol, or move the value \
+         off the '{c_set}' axis (declare it over the axis it is really indexed by, \
+         so it stays full-grid and is left alone)."
+    )))
+}
 
 /// In-place: rewrite every `index(F, …)` whose factor `F` is a key of
 /// `rectmap` to `index(rectmap[F], …)` throughout a raw AST subtree.
@@ -1216,8 +1457,26 @@ fn pd_apply(
     let mfactor = format!("pd_member_factor__{c}");
     let cellgath = |f: &str| format!("pd_cell__{c}__{f}");
 
+    // The gather set is the envelope factors PLUS every other array a binning
+    // body reads on the cell axis. Envelopes lead, so a document whose bodies
+    // read nothing else emits exactly what it emitted before; the rest follow in
+    // sorted order (`cell_factors` is a BTreeMap).
+    pd_refuse_ungatherable(&plan.cell_bad, c, &setname)?;
+    // The document's OWN index-set names, snapshotted before the mutable borrow
+    // below adds the derived one. A gather's trailing ranges are author-declared
+    // axes, so this is the right set to check them against.
+    let index_set_names: HashSet<String> = esm
+        .get("index_sets")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
     let mut rects: Vec<String> = Vec::new();
     for f in &plan.tgt_env {
+        if !rects.contains(f) {
+            rects.push(f.clone());
+        }
+    }
+    for f in plan.cell_factors.keys() {
         if !rects.contains(f) {
             rects.push(f.clone());
         }
@@ -1305,24 +1564,23 @@ fn pd_apply(
     // The DECLARATION is a bare `unknown`; what makes it observed is the
     // bare-variable-LHS equation added below (esm-spec §6.3.1).
     let mut cellgath_defs: Vec<(String, Value)> = Vec::new();
-    for f in &rects {
-        mv.insert(
-            cellgath(f),
-            json!({
-                "type": "unknown",
-                "shape": [setname.clone()],
-            }),
-        );
-        cellgath_defs.push((
-            cellgath(f),
-            json!({
-                "op": "aggregate",
-                "output_idx": ["c"],
-                "ranges": {"c": {"from": setname.clone()}},
-                "args": [f.clone(), mfactor.clone()],
-                "expr": pd_ix(f.clone(), pd_ix(mfactor.clone(), "c")),
-            }),
-        ));
+    let mut sorted_rects: Vec<&String> = rects.iter().collect();
+    sorted_rects.sort();
+    for f in sorted_rects {
+        let fallback: Vec<String> = mv
+            .get(f)
+            .and_then(|v| v.get("shape"))
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .map(|t| t.as_str().unwrap_or_default().to_string())
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![c.clone()]);
+        let shape: &[String] = plan.cell_factors.get(f).unwrap_or(&fallback);
+        let (decl, defn) = pd_gather_defn(f, shape, &setname, &mfactor, &index_set_names, c)?;
+        mv.insert(cellgath(f), decl);
+        cellgath_defs.push((cellgath(f), defn));
     }
 
     // The cell-gather DEFINITIONS, now that the `variables` borrow is done.

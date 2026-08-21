@@ -67,10 +67,21 @@ const ESM = EarthSciAST
     end
 
     @testset "_GEO_EVAL_OPS membership (pre-registry literal)" begin
+        # `and` / `or` / `not` joined the set on 2026-08-21. A setup-time
+        # geometry body may carry a CONTAINMENT PREDICATE — the canonical
+        # spelling is `ifelse(and(cmp, cmp, …), …)`, which is what every
+        # projection-pushdown binning aggregate writes — and every comparison
+        # already carried the flag, so without the three logical ops a
+        # polygon-area binning body could not compile at all
+        # (E_TREEWALK_GEOMETRY_SETUP: unsupported op 'and'). Nothing was added to
+        # the evaluator: `_eval_node_op`'s `:and` / `:or` / `:not` arms
+        # (tree_walk/compile.jl) already existed; only the vocabulary gate was
+        # missing. See CONFORMANCE_SPEC §5.5.7 "Cell-axis arrays".
         @test ESM._GEO_EVAL_OPS == Set{String}([
             "+", "*", "-", "/", "^", "max", "min", "sqrt", "abs", "cos", "sin",
             "atan2",
             "ifelse", "floor", "ceil", ">", "<", ">=", "<=", "==", "!=",
+            "and", "or", "not",
             "index", "intersect_polygon", "polygon_intersection_area", "skolem",
             "true", "false", "aggregate", "arrayop",
         ])

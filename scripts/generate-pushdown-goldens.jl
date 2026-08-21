@@ -437,6 +437,66 @@ function build_envelope_overlap_doc()
 end
 
 # ---------------------------------------------------------------------------
+# RANK-3 CELL-GEOMETRY fixture — the polygon-allocation shape.
+#
+# The binning body's weight is an INTERSECTION AREA, not a constant: the record
+# polygon is clipped against the CELL polygon and the clipped area, normalised
+# by the cell's own area, is the allocation fraction. That makes the body read
+# two more arrays on the cell axis besides the four envelope bounds —
+# `cell_ring`, a rank-3 `[src_cells, ring_vertex, xy]` stack, and `cell_area`,
+# a plain rank-1 — and neither is an envelope factor.
+#
+# That is the whole point of this fixture. The rewrite re-points the reduction
+# onto the compact derived support set, so after it fires the loop symbol counts
+# SUPPORT positions, not grid cells. An implementation that gathers only the
+# envelope factors leaves `cell_ring` and `cell_area` pointing at the full grid
+# and reads them at support positions: wrong areas, wrong allocation, wrong
+# concentrations, and NO diagnostic anywhere. The golden pins the fix:
+#
+#   * every cell-axis array the body reads gets a `pd_cell__*` gather, not just
+#     the four bounds;
+#   * the gather is RANK-PRESERVING — `pd_cell__src_cells__cell_ring` keeps the
+#     `ring_vertex` and `xy` axes and only its FIRST axis becomes the derived
+#     set, so the sliced polygon-operand spelling `index(cell_ring, c)` survives
+#     the substitution of the name unchanged;
+#   * the trailing axes are iterated by GENERATED symbols (`pd_t0`, `pd_t1`)
+#     rather than by any of the document's own, so an authored `v` or `d` cannot
+#     be captured.
+#
+# The predicate is the envelope-vs-envelope AABB shape, because a polygon record
+# has extent; `polygon_intersection_area` is the exact narrow phase behind the
+# `overlap_frac` stand-in of `pushdown_envelope_overlap`.
+# ---------------------------------------------------------------------------
+function build_polygon_area_doc()
+    d = build_envelope_overlap_doc()
+    d["metadata"]["name"] = "pushdown_polygon_area"
+    d["index_sets"]["ring_vertex"] = Dict("kind"=>"interval", "size"=>5)
+    d["index_sets"]["xy"] = Dict("kind"=>"interval", "size"=>2)
+    v = d["models"]["Binned"]["variables"]
+    delete!(v, "overlap_frac")
+    v["cell_ring"] = _pd_param(["src_cells", "ring_vertex", "xy"])
+    v["cell_area"] = _pd_param(["src_cells"])
+    v["rec_ring"]  = _pd_param(["emis_records", "ring_vertex", "xy"])
+    # E[c] = Σ_r [envelopes meet] · emis[r] · area(cell_c ∩ rec_r) / area(cell_c)
+    v["E_PM25"] = _pd_obs(["src_cells"], _agg(["c"],
+        Dict("c"=>Dict("from"=>"src_cells"), "r"=>Dict("from"=>"emis_records")),
+        _op("*", _op("ifelse", _pd_env_overlap(), 1.0, 0.0),
+                 _op("*", _ix("emis_annual", "r"),
+                          _op("/", Dict("op"=>"polygon_intersection_area",
+                                        "manifold"=>"planar",
+                                        "args"=>Any[_ix("cell_ring", "c"),
+                                                    _ix("rec_ring", "r")]),
+                                   _ix("cell_area", "c"))));
+        reduce="+", args=vcat(_PD_ENV_ARGS,
+                              ["cell_ring", "cell_area", "rec_ring", "emis_annual"])))
+    # The MIRROR stays as `build_envelope_overlap_doc` left it: a per-record
+    # aggregate keeps the FULL cell axis, so nothing about it is re-pointed and
+    # it needs no gathers even though it reads cell factors.
+    _split_observeds!(d["models"]["Binned"])
+    return d
+end
+
+# ---------------------------------------------------------------------------
 # TEMPLATE-FACTORED forward fixture — the ACCEPTANCE case.
 #
 # Byte-for-byte the same math as `pushdown_gated_dense`, but the binning body is
@@ -558,6 +618,14 @@ function main()
     EA.load(eo)          # the fixture must be a VALID document, not just a dict
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_envelope_overlap.esm"), eo)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_envelope_overlap.rewritten.json"), eor)
+
+    pa = build_polygon_area_doc()
+    par = EA.desugar_pushdown(pa; model_name="Binned")
+    par === pa && error("polygon-area fixture: desugar_pushdown did not fire")
+    EA.desugar_pushdown(par) === par || error("polygon-area golden re-desugars (idempotency broken)")
+    EA.load(pa)          # the fixture must be a VALID document, not just a dict
+    write_canon(joinpath(OUTDIR, "fixtures", "pushdown_polygon_area.esm"), pa)
+    write_canon(joinpath(OUTDIR, "golden", "pushdown_polygon_area.rewritten.json"), par)
 
     tb = build_template_body_doc()
     tbr = EA.desugar_pushdown(tb; model_name="Binned")

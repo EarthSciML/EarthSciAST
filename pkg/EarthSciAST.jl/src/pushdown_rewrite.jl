@@ -221,6 +221,89 @@ end
 # ---- typed-IR leaf helpers -------------------------------------------------
 _pd_varname(e) = e isa VarExpr ? e.name : nothing
 
+"""
+    _pd_cell_factors!(e, c_sym, vars, C, out, bad)
+
+Walk a binning body and record into `out` EVERY array it reads at a position on
+the cell axis — not only the envelope factors of the containment predicate —
+mapping each to its declared shape. Ungatherable reads land in `bad`.
+
+The rewrite re-points the aggregate's reduction range onto the compact derived
+support set, so from that moment `c_sym` counts support positions, not grid
+cells. Any array still indexed by it that was NOT re-pointed then reads
+full-grid values at support positions: WRONG NUMBERS, no diagnostic. `out` is
+exactly the set that must be gathered.
+
+Membership is decided by the DECLARATION, not by the subscript: an array is on
+the cell axis iff its declared `shape[1]` is the cell index set `C`. That is
+what keeps a flat-offset gather into a DIFFERENT axis — the
+`index(Temperature, layer * N_SRC + c)` spelling a layered met read wants, whose
+base is declared over the full `[all_cells]` axis — out of the map: it is not on
+the cell axis, it stays full-grid, and it is still correct after the rewrite
+because nothing about it moved.
+
+Three subscript shapes on a cell-axis array, and they are not alike:
+
+  `index(F, c)`           the whole trailing slice at cell `c` — a rank-3 ring
+                          stack read as a polygon operand. Gatherable.
+  `index(F, c, v, d)`     a fully-subscripted scalar read. Gatherable, and by the
+                          SAME gather: the generated array keeps `F`'s rank, so
+                          both spellings survive the substitution of the name.
+  `index(F, <expr in c>)` arithmetic on the cell position. NOT gatherable — the
+                          compact axis is a renumbering, so `c+1` means nothing
+                          in it. Recorded in `bad`.
+
+A cell-axis array indexed WITHOUT the cell symbol is deliberately left alone: it
+still reads the full-grid array at a full-grid position, which the rewrite does
+not disturb.
+"""
+function _pd_cell_factors!(e, c_sym::AbstractString, vars::AbstractDict,
+                           C::AbstractString, out::AbstractDict, bad::AbstractDict)
+    e isa OpExpr || return nothing
+    if e.op == "index" && length(e.args) >= 2
+        F = _pd_varname(e.args[1])
+        if F !== nothing
+            v = get(vars, F, nothing)
+            shp = v === nothing ? nothing : v.shape
+            if shp !== nothing && !isempty(shp) && String(shp[1]) == C
+                sub = e.args[2]
+                if _pd_varname(sub) == c_sym
+                    haskey(out, F) || (out[F] = String[String(x) for x in shp])
+                elseif _pd_mentions_sym(sub, c_sym)
+                    haskey(bad, F) || (bad[F] = _pd_subscript_sketch(sub))
+                end
+            end
+        end
+    end
+    for c in child_exprs(e)
+        _pd_cell_factors!(c, c_sym, vars, C, out, bad)
+    end
+    return nothing
+end
+
+# Does `e` reference the loop symbol `sym` anywhere?
+function _pd_mentions_sym(e, sym::AbstractString)::Bool
+    _pd_varname(e) == sym && return true
+    e isa OpExpr || return false
+    for c in child_exprs(e)
+        _pd_mentions_sym(c, sym) && return true
+    end
+    return false
+end
+
+# A one-line rendering of a subscript expression, for the refusal message.
+function _pd_subscript_sketch(e)
+    n = _pd_varname(e); n === nothing || return String(n)
+    e isa NumExpr && return string(e.value)
+    e isa IntExpr && return string(e.value)
+    e isa OpExpr || return "?"
+    if e.op == "index"
+        return _pd_subscript_sketch(e.args[1]) * "[" *
+               join((_pd_subscript_sketch(a) for a in e.args[2:end]), ", ") * "]"
+    end
+    return String(e.op) * "(" * join((_pd_subscript_sketch(a) for a in e.args), ", ") * ")"
+end
+
 # index(F, sym) with EXACTLY one index → (F, sym); else nothing.
 function _pd_index_split(e)
     (e isa OpExpr && e.op == "index" && length(e.args) == 2) || return nothing
@@ -580,6 +663,12 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     A_names = String[]                          # provider-backed arrays to gate
     # (E name, cell output symbol, gate src_env, gate tgt_env)
     E_specs = Tuple{String,String,Vector{String},Vector{String}}[]
+    # EVERY array any binning body reads on the cell axis, name => declared
+    # shape, and the ungatherable ones. The envelope factors are a SUBSET: a
+    # binning body is free to read the cell's geometry, its area, its ring
+    # stack, and all of them ride the same re-pointing (`_pd_cell_factors!`).
+    cell_factors = OrderedDict{String,Vector{String}}()
+    cell_bad = OrderedDict{String,String}()
     C = nothing; rcv_set = nothing; R = nothing
     src_env = nothing; tgt_env = nothing
     rep_ename = nothing; rep_csym = nothing; rep_rsym = nothing
@@ -634,8 +723,16 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         end
         push!(conc_specs, (cname, s_sym))
         Aname in A_names || push!(A_names, Aname)
-        any(e -> e[1] == Ename, E_specs) ||
+        if !any(e -> e[1] == Ename, E_specs)
             push!(E_specs, (Ename, bind.c_sym, bind.src_env, bind.tgt_env))
+            # Collected on the DETECTION view, like every other pattern read: a
+            # body factored through a template must yield the same gather set as
+            # its longhand twin (esm-spec §9.6.4 rule 2). Emission still edits
+            # the authored body / call-site bindings, and
+            # `_pd_assert_rects_rebound` proves the substitution landed.
+            _pd_cell_factors!(edef, bind.c_sym, vars, String(c_set),
+                              cell_factors, cell_bad)
+        end
     end
     # Deterministic, deduplicated diagnostic order: `vars` is a hash-ordered
     # Dict, and the same E can be reached from several `conc` consumers.
@@ -659,6 +756,7 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     return ((C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
              A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
              src_env = src_env, tgt_env = tgt_env,
+             cell_factors = cell_factors, cell_bad = cell_bad,
              rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym), diags)
 end
 
@@ -870,6 +968,76 @@ function _pd_canonicalize_equations!(model::AbstractDict)
     return model
 end
 
+"""
+    _pd_gather_defn(F, shape, setname, mfactor, index_sets, C) -> (decl, defn)
+
+The `(variable declaration, defining aggregate)` for one per-support cell gather
+`pd_cell__C__F`, RANK-PRESERVING.
+
+Rank 1 — the envelope factors — emits exactly what it always did:
+
+    pd_cell__C__F[c] = F[member_factor[c]]
+
+Rank k keeps every trailing axis, so a `[cells, vertex, xy]` ring stack comes out
+as a `[support, vertex, xy]` ring stack and every use of it survives the rename
+unchanged — the sliced polygon-operand form `index(F, c)` and the
+fully-subscripted scalar form alike:
+
+    pd_cell__C__F[c, t0, t1] = F[member_factor[c], t0, t1]
+
+This is a map, not a reduction: every range appears in `output_idx`. The trailing
+loop symbols are named `pd_t0…` rather than reusing the document's own, because
+the gather is generated in its own scope and a collision with an authored symbol
+would be a silent capture.
+"""
+function _pd_gather_defn(F::AbstractString, shape::AbstractVector,
+                         setname::AbstractString, mfactor::AbstractString,
+                         index_sets, C::AbstractString)
+    decl = Dict{String,Any}("type" => "unknown",
+                            "shape" => Any[setname; Any[String(t) for t in shape[2:end]]...])
+    syms = String["pd_t" * string(i - 1) for i in 1:(length(shape) - 1)]
+    ranges = Dict{String,Any}("c" => Dict{String,Any}("from" => setname))
+    for (sym, t) in zip(syms, shape[2:end])
+        (index_sets isa AbstractDict && haskey(index_sets, String(t))) || error(
+            "projection-pushdown desugar: cannot gather '$(F)' onto the derived " *
+            "support set of '$(C)'. Its declared shape is $(shape), whose trailing " *
+            "entry '$(t)' is not a named index set, so the generated gather has no " *
+            "range to iterate it over. Declare the array's trailing axes as index " *
+            "sets, or keep the value off the cell axis.")
+        ranges[sym] = Dict{String,Any}("from" => String(t))
+    end
+    defn = Dict{String,Any}(
+        "op" => "aggregate", "output_idx" => Any[Any["c"]; Any[s for s in syms]...],
+        "ranges" => ranges, "args" => Any[F, mfactor],
+        "expr" => _pd_ix(F, _pd_ix(mfactor, "c"), syms...))
+    return (decl, defn)
+end
+
+"""
+    _pd_refuse_ungatherable(bad, C, setname)
+
+Refuse, loudly, when a binning body reads a cell-axis array at a computed cell
+position. See [`_pd_cell_factors!`](@ref) for why it cannot be re-pointed.
+
+A hard error, not a warning, and not a silent decline. The pattern HAS matched:
+an aggregate reading a cell-axis array at `c+1` cannot be gated at all without
+renumbering arithmetic the compact axis does not admit, and emitting the rewrite
+anyway is the silent-wrong-numbers failure this pass exists to prevent.
+"""
+function _pd_refuse_ungatherable(bad::AbstractDict, C::AbstractString,
+                                 setname::AbstractString)
+    isempty(bad) && return nothing
+    detail = join(("'$(F)' at [$(bad[F])]" for F in sort(collect(keys(bad)))), "; ")
+    error("projection-pushdown desugar: the binning aggregate reads a cell-axis " *
+          "array at a COMPUTED cell position ($(detail)). The rewrite re-points the " *
+          "reduction onto the derived support set '$(setname)', which renumbers " *
+          "'$(C)' — support position i is grid cell member_factor[i], and no " *
+          "arithmetic on i survives that renumbering. A gather can carry `F[c]`, " *
+          "and `F[c, …]`, but not `F[f(c)]`. Index the array with the bare cell " *
+          "symbol, or move the value off the '$(C)' axis (declare it over the axis " *
+          "it is really indexed by, so it stays full-grid and is left alone).")
+end
+
 # Apply the desugar to the raw document, returning a NEW mutable dict tree.
 # `reg` is the component template registry (`nothing` when the document carries
 # no surviving `apply_expression_template` references) — needed to read the
@@ -884,8 +1052,15 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     mfactor = "pd_member_factor__" * C
     cellgath(F) = "pd_cell__" * C * "__" * F
 
+    # The gather set is the envelope factors PLUS every other array a binning
+    # body reads on the cell axis. Envelopes lead, so a document whose bodies
+    # read nothing else emits exactly what it emitted before; the rest follow in
+    # sorted order, and emission below re-sorts anyway.
+    cell_shapes = plan.cell_factors
+    _pd_refuse_ungatherable(plan.cell_bad, C, setname)
     rects = String[]                            # rect factors, [xmin,ymin,xmax,ymax] order
     for F in plan.tgt_env; F in rects || push!(rects, F); end
+    for F in sort(collect(keys(cell_shapes))); F in rects || push!(rects, F); end
     rectmap = Dict{String,String}(F => cellgath(F) for F in rects)
 
     # --- derived index set ---
@@ -934,15 +1109,16 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     # Declaration and DEFINING EQUATION, emitted in sorted name order so the
     # rewritten document does not depend on `rects`' construction order.
     for F in sort(rects)
-        name = cellgath(F)
-        mv[name] = Dict{String,Any}("type" => "unknown", "shape" => Any[setname])
-        push!(eqs, Dict{String,Any}(
-            "lhs" => name,
-            "rhs" => Dict{String,Any}(
-                "op" => "aggregate", "output_idx" => Any["c"],
-                "ranges" => Dict{String,Any}("c" => Dict{String,Any}("from" => setname)),
-                "args" => Any[F, mfactor],
-                "expr" => _pd_ix(F, _pd_ix(mfactor, "c")))))
+        shape = get(cell_shapes, F, nothing)
+        if shape === nothing
+            sh = get(mv, F, nothing)
+            shape = (sh isa AbstractDict && get(sh, "shape", nothing) isa AbstractVector) ?
+                String[String(x) for x in sh["shape"]] : String[C]
+        end
+        decl, defn = _pd_gather_defn(F, shape, setname, mfactor,
+                                     get(d, "index_sets", nothing), C)
+        mv[cellgath(F)] = decl
+        push!(eqs, Dict{String,Any}("lhs" => cellgath(F), "rhs" => defn))
     end
 
     # --- gate the provider-backed arrays onto the derived axis ---

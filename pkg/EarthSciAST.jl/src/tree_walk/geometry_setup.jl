@@ -266,10 +266,21 @@ end
 # them; `_materialize_geometry_setup` evaluates them.
 
 # Extent of an IndexSetRef range against the model's index sets + derived extents.
+#
+# A `kind:"derived"` set resolves through its `from_faq`, exactly as
+# `_resolve_index_set_ranges` (tree_walk/resolve.jl) does for the ODE stream:
+# `derived_extents` is keyed by the PRODUCER id, not by the set name. Setup-time
+# geometry can range over one because the projection pushdown re-points a binning
+# aggregate onto `pd_support__<C>` — and when that aggregate's weight is an
+# intersection area, its body IS setup-time geometry.
 function _geo_index_extent(ref, index_sets, derived_extents)
     name = ref isa IndexSetRef ? ref.from : String(ref)
     haskey(derived_extents, name) && return derived_extents[name]
     s = index_sets === nothing ? nothing : get(index_sets, name, nothing)
+    if s isa IndexSet && s.kind == "derived" && s.from_faq !== nothing
+        e = get(derived_extents, String(s.from_faq), nothing)
+        e === nothing || return Int(e)
+    end
     sz = s === nothing ? nothing :
          hasproperty(s, :size) ? getproperty(s, :size) :
          (s isa AbstractDict ? get(s, "size", get(s, :size, nothing)) : nothing)

@@ -2175,6 +2175,20 @@ function _build_partition_and_materialize(model::Model, cls;
             _materialize_geometry_rings(cls.equations, const_arrays, cls.geom_ring_vars)
         merge!(derived_extents, geom_extents)
     end
+    # Value-invention derived index sets (skolem/distinct/rank) materialized via
+    # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
+    # supply each producer's distinct-set cardinality as the resolver's dense
+    # extent `[1, n]`, generalizing the geometry handoff to the relational engine.
+    #
+    # Merged BEFORE the geometry-setup materialization below, not after, because
+    # a setup-time geometry body may now RANGE over a derived set. The projection
+    # pushdown re-points a binning aggregate onto `pd_support__<C>`, and when that
+    # aggregate's weight is an intersection area the body is setup-time geometry —
+    # so `_geo_index_extent` must be able to resolve the derived extent. The merge
+    # order relative to `geom_extents` is unchanged (value invention still wins a
+    # name collision), so nothing downstream sees a different `derived_extents`.
+    merge!(derived_extents, Dict{String,Int}(String(k) => Int(v) for (k, v) in vi_extents))
+
     # M4+: materialize the ranged-clip / per-pair-area / A_ij geometry into const
     # arrays (and record the per-pair clip_ring extent) BEFORE index-set ranges are
     # resolved, so the polygon_area FAQ's `clip_ring` range lowers to `[1, maxn]`.
@@ -2188,12 +2202,6 @@ function _build_partition_and_materialize(model::Model, cls;
                 registered_functions=registered_functions)
         end
     end
-    # Value-invention derived index sets (skolem/distinct/rank) materialized via
-    # the relational engine in the AbstractDict front-door (RFC §6.1 / §5.5):
-    # supply each producer's distinct-set cardinality as the resolver's dense
-    # extent `[1, n]`, generalizing the geometry handoff to the relational engine.
-    merge!(derived_extents, Dict{String,Int}(String(k) => Int(v) for (k, v) in vi_extents))
-
     # Geometry-setup vars (ranged clips / per-pair area / A_ij / their bin buffers)
     # and direct clip rings are materialized at setup — drop their equations before
     # the ODE-lowering passes so their join/filter/intersect_polygon nodes never
