@@ -48,8 +48,22 @@ https://pypi.org/manage/account/publishing/:
 - PyPI project name: `earthsci-ast`
 - Owner: `EarthSciML`
 - Repository: `EarthSciAST`
-- Workflow: `release-publish.yml`
+- Workflow: **`integrated-release-pipeline.yml`**
 - Environment: `pypi`
+
+The workflow name is the **caller**, not `release-publish.yml`. Publishing runs
+inside `release-publish.yml`, but that workflow is invoked through
+`workflow_call`, and the OIDC token's build-config URI names the top-level
+workflow that started the run. Naming the reusable workflow gets:
+
+```
+Certificate's Build Config URI (...integrated-release-pipeline.yml@refs/heads/main)
+does not match expected Trusted Publisher (release-publish.yml @ EarthSciML/EarthSciAST)
+```
+
+To also allow publishing from a hand-created GitHub release (which triggers
+`release-publish.yml` directly), add a *second* trusted publisher naming
+`release-publish.yml`.
 
 Until this exists, the publish job fails with `invalid-publisher`.
 

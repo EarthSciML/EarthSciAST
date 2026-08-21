@@ -179,12 +179,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve release tag
+        run: |
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$VERSION" >> "$GITHUB_ENV"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build for release
         working-directory: pkg/earthsci-ast-rs
-        run: cargo build --release --all-features
+        # NOT --all-features: `esio` resolves earthsciio through a path into the
+        # sibling EarthSciIO checkout, which does not exist on a CI runner, and
+        # `wasm` targets a different architecture. Default features are what the
+        # released `esm` binary ships with.
+        run: cargo build --release
 
       - name: Publish to crates.io
         working-directory: pkg/earthsci-ast-rs
@@ -221,8 +232,9 @@ jobs:
           cp target/x86_64-pc-windows-gnu/release/esm.exe dist/esm-windows-x86_64.exe
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: pkg/earthsci-ast-rs/dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -238,6 +250,13 @@ jobs:
       || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        run: |
+          VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$VERSION" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -267,8 +286,9 @@ jobs:
           mv esm-go-* dist/
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: pkg/earthsci-ast-go/dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
