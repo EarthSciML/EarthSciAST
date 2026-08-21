@@ -41,12 +41,8 @@ use std::process::ExitCode;
 
 use earthsci_ast::evaluate;
 use earthsci_ast::parse::{LoadOptions, load_path, load_path_with_options, load_with_options};
-use earthsci_ast::pde_inline_tests::{
-    evaluate_cellwise, field_reduce, run_pde_tests, state_cells,
-};
-use earthsci_ast::simulate::{
-    SimulateOptions, SolverChoice, simulate, simulate_with_inspection,
-};
+use earthsci_ast::pde_inline_tests::{evaluate_cellwise, field_reduce, run_pde_tests, state_cells};
+use earthsci_ast::simulate::{SimulateOptions, SolverChoice, simulate, simulate_with_inspection};
 use earthsci_ast::simulate_array::BuildInspection;
 use earthsci_ast::types::{AssertionReference, EsmFile, Expr};
 use serde_json::{Value, json};

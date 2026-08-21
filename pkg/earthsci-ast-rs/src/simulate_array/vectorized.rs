@@ -351,9 +351,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
                         }
                     }
                 }
-                Some(mask) => {
-                    vec_select(mask, body_v, VecValue::Scalar(reduce.identity()), pool)?
-                }
+                Some(mask) => vec_select(mask, body_v, VecValue::Scalar(reduce.identity()), pool)?,
             },
         }
     } else {
@@ -954,7 +952,6 @@ fn eval_vec_op_code<'a>(
         }
     }
 }
-
 
 /// Whether `expr` mentions the variable `name` anywhere (including in an
 /// `index` axis position, a nested aggregate body, or a `makearray` region
@@ -2453,13 +2450,22 @@ mod op_dispatch_equivalence {
     fn every_box_transparent_dispatch_arm_is_listed() {
         let listed = |op: &str| super::super::cse::BOX_TRANSPARENT_OPS.contains(&op);
         for op in ARITH.iter().chain(CMP).chain(UNARY) {
-            assert!(listed(op), "`{op}` has a dispatch arm but is not CSE-transparent");
+            assert!(
+                listed(op),
+                "`{op}` has a dispatch arm but is not CSE-transparent"
+            );
         }
         for op in ["neg", "index", "ifelse", "broadcast"] {
-            assert!(listed(op), "`{op}` has a dispatch arm but is not CSE-transparent");
+            assert!(
+                listed(op),
+                "`{op}` has a dispatch arm but is not CSE-transparent"
+            );
         }
         for op in ["aggregate", "makearray"] {
-            assert!(!listed(op), "`{op}` rebinds the box and must not be CSE-transparent");
+            assert!(
+                !listed(op),
+                "`{op}` rebinds the box and must not be CSE-transparent"
+            );
         }
     }
 }

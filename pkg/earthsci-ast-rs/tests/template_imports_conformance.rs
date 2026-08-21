@@ -30,7 +30,6 @@ fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Valu
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -117,7 +116,9 @@ fn aggregate_int_ratio_golden_matches_golden() {
     );
     // The in-aggregate ratio and the standalone dx=1/8 both stay integers.
     let expanded = expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"]));
-    let dx = &earthsci_ast::classification::observed_definition_json(&expanded["models"]["M"], "dx").expect("dx defining equation")["args"];
+    let dx =
+        &earthsci_ast::classification::observed_definition_json(&expanded["models"]["M"], "dx")
+            .expect("dx defining equation")["args"];
     assert!(dx[0].is_i64() || dx[0].is_u64());
     assert!(dx[1].is_i64() || dx[1].is_u64());
 }
@@ -169,11 +170,13 @@ fn import_order_pins_tie_break_and_priority_flips_it() {
     // Winner sanity, independent of the goldens: earlier import wins the
     // equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&d1["models"]["M"], "y").expect("y defining equation")["args"][0],
+        earthsci_ast::classification::observed_definition_json(&d1["models"]["M"], "y")
+            .expect("y defining equation")["args"][0],
         json!(2)
     );
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&d2["models"]["M"], "y").expect("y defining equation")["args"][0],
+        earthsci_ast::classification::observed_definition_json(&d2["models"]["M"], "y")
+            .expect("y defining equation")["args"][0],
         json!(5)
     );
 }
@@ -420,15 +423,21 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         let sweep = &f.models.as_ref().expect("models")["Sweep"];
         let problem = &sweep.subsystems.as_ref().expect("subsystems")["Problem"];
         // Expression position: bare "N" substituted as an integer literal.
-        assert_eq!(*earthsci_ast::classification::observed_definition_json(problem, "npts").expect("npts defining equation"), json!(n));
+        assert_eq!(
+            *earthsci_ast::classification::observed_definition_json(problem, "npts")
+                .expect("npts defining equation"),
+            json!(n)
+        );
         // Expression-position division stays an AST division (no folding).
         assert_eq!(
-            *earthsci_ast::classification::observed_definition_json(problem, "half").expect("half defining equation"),
+            *earthsci_ast::classification::observed_definition_json(problem, "half")
+                .expect("half defining equation"),
             json!({"op": "/", "args": [n, 2]})
         );
         // Structural site: the aggregate dense range folded exactly.
         assert_eq!(
-            earthsci_ast::classification::observed_definition_json(problem, "ramp").expect("ramp defining equation")["ranges"]["i"],
+            earthsci_ast::classification::observed_definition_json(problem, "ramp")
+                .expect("ramp defining equation")["ranges"]["i"],
             json!([1, n / 2])
         );
     }
@@ -1146,7 +1155,8 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
     lower_expression_templates(&mut doc).expect("lower");
     expand(&mut doc).expect("expand");
     assert_eq!(
-        *earthsci_ast::classification::observed_definition_json(&doc["models"]["M"], "y").expect("y defining equation"),
+        *earthsci_ast::classification::observed_definition_json(&doc["models"]["M"], "y")
+            .expect("y defining equation"),
         json!({"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]})
     );
 

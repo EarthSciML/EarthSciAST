@@ -103,8 +103,11 @@ struct Ctx<'a> {
 
 impl<'a> Ctx<'a> {
     fn new(model: &'a Value) -> Result<Ctx<'a>, CadenceError> {
-        let class = crate::classification::Classification::from_json(model)
-            .map_err(|e| err(format!("model does not deserialize for classification: {e}")))?;
+        let class = crate::classification::Classification::from_json(model).map_err(|e| {
+            err(format!(
+                "model does not deserialize for classification: {e}"
+            ))
+        })?;
 
         // Pair each observed unknown with the RAW JSON of its defining
         // equation's RHS. The LHS form is decided by the one shared
@@ -318,24 +321,24 @@ impl Ctx<'_> {
         node: &Value,
         problems: &mut Vec<String>,
     ) -> Result<(), CadenceError> {
-    let Value::Object(map) = node else {
-        return Ok(());
-    };
-    if let Some(want) = map.get("expect_cadence").and_then(|v| v.as_str()) {
-        let derived = self.classify(node)?;
-        if derived.as_str() != want {
-            problems.push(format!(
-                "expect_cadence mismatch on op={:?}: declared {:?} but derived {:?}",
-                map.get("op").and_then(|v| v.as_str()),
-                want,
-                derived.as_str()
-            ));
+        let Value::Object(map) = node else {
+            return Ok(());
+        };
+        if let Some(want) = map.get("expect_cadence").and_then(|v| v.as_str()) {
+            let derived = self.classify(node)?;
+            if derived.as_str() != want {
+                problems.push(format!(
+                    "expect_cadence mismatch on op={:?}: declared {:?} but derived {:?}",
+                    map.get("op").and_then(|v| v.as_str()),
+                    want,
+                    derived.as_str()
+                ));
+            }
         }
-    }
-    for c in child_exprs(map) {
-        self.check_expect_cadence(c, problems)?;
-    }
-    Ok(())
+        for c in child_exprs(map) {
+            self.check_expect_cadence(c, problems)?;
+        }
+        Ok(())
     }
 }
 
@@ -461,27 +464,27 @@ pub fn assert_no_continuous_relational(node: &Value, model: &Value) -> Result<()
 
 impl Ctx<'_> {
     fn assert_no_continuous_relational(&mut self, node: &Value) -> Result<(), CadenceError> {
-    let Value::Object(map) = node else {
-        return Ok(());
-    };
-    let op = map.get("op").and_then(|v| v.as_str());
-    let is_relational = op.is_some_and(|o| RELATIONAL_OPS.contains(&o))
-        || (op == Some("aggregate")
-            && map
-                .get("distinct")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false));
-    if is_relational && self.classify(node)? == Cadence::Continuous {
-        return Err(err(format!(
-            "relational/value-invention node op={op:?} classifies CONTINUOUS — it may \
+        let Value::Object(map) = node else {
+            return Ok(());
+        };
+        let op = map.get("op").and_then(|v| v.as_str());
+        let is_relational = op.is_some_and(|o| RELATIONAL_OPS.contains(&o))
+            || (op == Some("aggregate")
+                && map
+                    .get("distinct")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false));
+        if is_relational && self.classify(node)? == Cadence::Continuous {
+            return Err(err(format!(
+                "relational/value-invention node op={op:?} classifies CONTINUOUS — it may \
              not run on the hot path (§5.7 guard 2). A state-dependent \
              distinct/join/skolem/rank is out of scope for v1."
-        )));
-    }
-    for c in child_exprs(map) {
-        self.assert_no_continuous_relational(c)?;
-    }
-    Ok(())
+            )));
+        }
+        for c in child_exprs(map) {
+            self.assert_no_continuous_relational(c)?;
+        }
+        Ok(())
     }
 }
 

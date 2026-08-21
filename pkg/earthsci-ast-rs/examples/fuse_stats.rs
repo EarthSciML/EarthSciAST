@@ -12,8 +12,7 @@ fn main() -> Result<(), String> {
     }
     let file = load_path_with_options(std::path::Path::new(&path), &mp)
         .map_err(|e| format!("load: {e:?}"))?;
-    let compiled =
-        earthsci_ast::compile_array(file).map_err(|e| format!("compile: {e:?}"))?;
+    let compiled = earthsci_ast::compile_array(file).map_err(|e| format!("compile: {e:?}"))?;
     compiled.debug_dump_fuse_stats();
     Ok(())
 }

@@ -418,11 +418,7 @@ impl Unit {
 ///
 /// Never aborts: an undeterminable subtree yields [`Dim::Unknown`] and the walk
 /// continues, so all provable mismatches in the expression are reported.
-fn propagate_dim(
-    expr: &Expr,
-    env: &HashMap<String, Unit>,
-    findings: &mut Vec<UnitFinding>,
-) -> Dim {
+fn propagate_dim(expr: &Expr, env: &HashMap<String, Unit>, findings: &mut Vec<UnitFinding>) -> Dim {
     match expr {
         // A BARE NUMERIC LITERAL has an INDETERMINATE dimension, not a
         // dimensionless one: nothing in the AST says whether `273.15` is a pure

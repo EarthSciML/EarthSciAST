@@ -80,8 +80,10 @@ fn resolve_observed(model: &Model, bindings: &mut HashMap<String, f64>) {
 fn build_bindings(model: &Model, t: &ModelTest) -> HashMap<String, f64> {
     let mut bindings = HashMap::new();
     for (vname, var) in &model.variables {
-        if matches!(var.var_type, VariableType::Parameter | VariableType::Unknown)
-            && let Some(d) = var.default
+        if matches!(
+            var.var_type,
+            VariableType::Parameter | VariableType::Unknown
+        ) && let Some(d) = var.default
         {
             bindings.insert(vname.clone(), d);
         }

@@ -21,8 +21,8 @@ mod refexec;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use exec::tape_disabled;
+pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use fuse::fuse_disabled;
 pub(crate) use ir::*;
 use lower::build_tape_program;
@@ -235,11 +235,7 @@ impl ArrayCompiled {
         let tot_micro: usize = prog.fused.iter().map(|f| f.micro.len()).sum();
         let tot_inputs: usize = prog.fused.iter().map(|f| f.inputs.len()).sum();
         let tot_outputs: usize = prog.fused.iter().map(|f| f.outputs.len()).sum();
-        let tot_elem_ops: usize = prog
-            .fused
-            .iter()
-            .map(|f| f.micro.len() * f.n_elems())
-            .sum();
+        let tot_elem_ops: usize = prog.fused.iter().map(|f| f.micro.len() * f.n_elems()).sum();
         let tot_out_elems: usize = prog
             .fused
             .iter()

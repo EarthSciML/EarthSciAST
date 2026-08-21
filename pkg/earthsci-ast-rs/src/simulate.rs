@@ -102,7 +102,9 @@ pub enum SimulateError {
     /// §6.6.2). Distinct from [`SimulateError::InvalidParameter`]: the name
     /// exists, it just does not identify ONE parameter, and binding it to
     /// either candidate would be a wrong answer rather than a missing one.
-    #[error("Ambiguous parameter '{name}': the local name of {candidates:?} — qualify it with its owning component")]
+    #[error(
+        "Ambiguous parameter '{name}': the local name of {candidates:?} — qualify it with its owning component"
+    )]
     AmbiguousParameter {
         /// The ambiguous local name.
         name: String,
@@ -122,7 +124,9 @@ pub enum SimulateError {
     /// The user supplied a BARE state name that two or more of the flattened
     /// system's states carry as their local name (esm-spec §6.6.2). The
     /// state-side counterpart of [`SimulateError::AmbiguousParameter`].
-    #[error("Ambiguous initial condition '{name}': the local name of {candidates:?} — qualify it with its owning component")]
+    #[error(
+        "Ambiguous initial condition '{name}': the local name of {candidates:?} — qualify it with its owning component"
+    )]
     AmbiguousInitialCondition {
         /// The ambiguous local name.
         name: String,
@@ -650,9 +654,8 @@ impl Compiled {
         t0: f64,
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
-        let initial_conditions =
-            canonicalize_override_keys(&self.state_index, initial_conditions)
-                .map_err(ic_key_error)?;
+        let initial_conditions = canonicalize_override_keys(&self.state_index, initial_conditions)
+            .map_err(ic_key_error)?;
         let no_state: [f64; 0] = [];
         let no_obs: [f64; 0] = [];
         let mut ic_vec = vec![0.0f64; self.state_names.len()];
@@ -1175,7 +1178,6 @@ fn classify_equations(
     })
 }
 
-
 /// Output of [`resolve_observed`]: observed names in evaluation order, the
 /// matching name -> index table, and the resolved defining expressions
 /// (parallel to the ordered names).
@@ -1229,13 +1231,15 @@ fn resolve_observed(
             // `variable.expression`) is undefined. Fail the build naming it, rather
             // than silently substituting the constant 0.0 — which turned a modelling
             // mistake into a plausible-looking zero trajectory.
-            let expr = raw.as_ref().ok_or_else(|| CompileError::InterpreterBuildError {
-                details: format!(
-                    "Observed variable '{}' has no defining expression (no \
+            let expr = raw
+                .as_ref()
+                .ok_or_else(|| CompileError::InterpreterBuildError {
+                    details: format!(
+                        "Observed variable '{}' has no defining expression (no \
                      equation and no `expression` field); cannot simulate.",
-                    observed_names[i]
-                ),
-            })?;
+                        observed_names[i]
+                    ),
+                })?;
             resolve_expr(expr, state_index, param_index, &observed_index, Some(i))
         })
         .collect::<Result<_, _>>()?;
@@ -1662,10 +1666,11 @@ pub fn simulate_with_providers_inspect(
     let (t0, t_end) = tspan;
     let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
     let forcing = compiled.forcing_handle();
-    exec.materialize_const(&forcing).map_err(|e| SimulateError::ProviderError {
-        name: "<const-loader>".into(),
-        details: e.to_string(),
-    })?;
+    exec.materialize_const(&forcing)
+        .map_err(|e| SimulateError::ProviderError {
+            name: "<const-loader>".into(),
+            details: e.to_string(),
+        })?;
 
     let discrete_set: std::collections::HashSet<String> = exec
         .bindings()
@@ -1843,8 +1848,7 @@ pub(crate) fn canonicalize_override_keys(
             if cands.len() == 1 {
                 out.insert(cands[0].to_string(), *v); // rule 3
             } else {
-                let mut candidates: Vec<String> =
-                    cands.iter().map(|s| (*s).to_string()).collect();
+                let mut candidates: Vec<String> = cands.iter().map(|s| (*s).to_string()).collect();
                 candidates.sort();
                 failures.push(OverrideKeyError::Ambiguous {
                     key: k.clone(),
@@ -3153,7 +3157,12 @@ mod tests {
         let file = crate::parse::load(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let err = compiled
-            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &SimulateOptions::default())
+            .simulate(
+                (0.0, 1.0),
+                &HashMap::new(),
+                &HashMap::new(),
+                &SimulateOptions::default(),
+            )
             .expect_err("a differential state with no initial value must be refused");
         assert!(
             matches!(err, SimulateError::InvalidInitialCondition { .. }),

@@ -77,10 +77,7 @@ fn peak_rss_mib() -> Option<f64> {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let depth: usize = args
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
+    let depth: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(10);
     let run_load = std::env::args().any(|a| a == "--load");
 
     let mut v = doc(depth);
@@ -95,9 +92,7 @@ fn main() {
         .expect("lower_expression_templates");
     let lower_time = t0.elapsed();
     let nodes = count_nodes(&v["reaction_systems"]["chem"]["reactions"][0]["rate"]);
-    println!(
-        "depth={depth} lower_expression_templates={lower_time:?} expanded_rate_nodes={nodes}"
-    );
+    println!("depth={depth} lower_expression_templates={lower_time:?} expanded_rate_nodes={nodes}");
 
     if let Some(src) = src {
         let t1 = Instant::now();
@@ -105,10 +100,7 @@ fn main() {
         println!(
             "depth={depth} parse::load={:?} reactions={}",
             t1.elapsed(),
-            file.reaction_systems
-                .as_ref()
-                .map(|r| r.len())
-                .unwrap_or(0)
+            file.reaction_systems.as_ref().map(|r| r.len()).unwrap_or(0)
         );
     }
 

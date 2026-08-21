@@ -140,7 +140,10 @@ fn build_executor(raw: &Value, golden: &Value) -> RefreshExecutor {
         schedule: Vec::new(),
     };
     let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
-        ("emis".to_string(), Box::new(emis) as Box<dyn CadenceProvider>),
+        (
+            "emis".to_string(),
+            Box::new(emis) as Box<dyn CadenceProvider>,
+        ),
         (
             "factors".to_string(),
             Box::new(factors) as Box<dyn CadenceProvider>,
@@ -154,7 +157,12 @@ fn final_value(sol: &Solution, name: &str) -> f64 {
         .state_variable_names
         .iter()
         .position(|n| n == name || n.ends_with(&format!(".{name}")))
-        .unwrap_or_else(|| panic!("state slot {name:?} not found in {:?}", sol.state_variable_names));
+        .unwrap_or_else(|| {
+            panic!(
+                "state slot {name:?} not found in {:?}",
+                sol.state_variable_names
+            )
+        });
     *sol.state[row].last().expect("at least one output time")
 }
 
@@ -218,9 +226,20 @@ fn refresh_regrid_band_matches_golden() {
         let mut opts = base_opts();
         opts.output_times = Some(vec![a]);
         compiled
-            .simulate_inspect((a, a + 1.0), &HashMap::new(), &HashMap::new(), &opts, Some(&mut insp))
+            .simulate_inspect(
+                (a, a + 1.0),
+                &HashMap::new(),
+                &HashMap::new(),
+                &opts,
+                Some(&mut insp),
+            )
             .expect("simulate_inspect");
-        assert_field("M.F_tgt", &by_anchor(&golden["regridded_fields"]["M.F_tgt"], a), &insp, a);
+        assert_field(
+            "M.F_tgt",
+            &by_anchor(&golden["regridded_fields"]["M.F_tgt"], a),
+            &insp,
+            a,
+        );
         assert_field("M.scale_tgt", &scale_tgt_want, &insp, a);
     }
 }

@@ -86,7 +86,9 @@ fn compile(n: usize) -> ArrayCompiled {
 /// A state that changes shape-of-values between calls, so a cached *state*
 /// read (as opposed to a cached CONST read) would show up immediately.
 fn state(n: usize, seed: f64) -> Vec<f64> {
-    (0..n).map(|k| (0.7 * k as f64 + seed).sin() + 1.5).collect()
+    (0..n)
+        .map(|k| (0.7 * k as f64 + seed).sin() + 1.5)
+        .collect()
 }
 
 fn hex(v: &[f64]) -> Vec<String> {

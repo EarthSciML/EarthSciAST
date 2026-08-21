@@ -64,18 +64,9 @@ fn manifest_inputs() -> HashMap<String, ArrayD<f64>> {
         "Advection.u_wind".to_string(),
         grid(&[[2.0, 2.2], [2.1, 2.3], [2.2, 2.4], [2.3, 2.5]]),
     );
-    m.insert(
-        "Advection.O3_inflow".to_string(),
-        line(&[35.0, 36.0]),
-    );
-    m.insert(
-        "Advection.NO_inflow".to_string(),
-        line(&[0.20, 0.25]),
-    );
-    m.insert(
-        "Advection.NO2_inflow".to_string(),
-        line(&[1.5, 1.6]),
-    );
+    m.insert("Advection.O3_inflow".to_string(), line(&[35.0, 36.0]));
+    m.insert("Advection.NO_inflow".to_string(), line(&[0.20, 0.25]));
+    m.insert("Advection.NO2_inflow".to_string(), line(&[1.5, 1.6]));
     m
 }
 
@@ -125,8 +116,10 @@ fn close(actual: f64, expected: f64, abs: f64, rel: f64) -> bool {
 #[test]
 fn loaded_ic_bc_simulation_provider_injection() {
     // ---- Full lowering pipeline (no pre-discretized shortcut) ----------------
-    let file = load_path(common::repo_fixture("valid/advection_reaction_loaded_ic_bc.esm"))
-        .expect("load fixture");
+    let file = load_path(common::repo_fixture(
+        "valid/advection_reaction_loaded_ic_bc.esm",
+    ))
+    .expect("load fixture");
     let flat = flatten(&file).expect("flatten");
 
     // The scoped-`ic` equations were classified out of the ODE set.

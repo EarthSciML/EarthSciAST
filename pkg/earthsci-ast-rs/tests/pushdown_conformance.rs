@@ -26,8 +26,8 @@ fn corpus_dir() -> PathBuf {
 }
 
 fn read_json(path: &Path) -> Value {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
@@ -164,8 +164,7 @@ fn equation_order_is_canonical_not_input_order() {
     let from_input = desugar_pushdown(&input, Some("ISRM")).expect("rewrite fires");
     let from_reversed = desugar_pushdown(&reversed, Some("ISRM")).expect("rewrite fires");
     assert_eq!(
-        from_input["models"]["ISRM"]["equations"],
-        from_reversed["models"]["ISRM"]["equations"],
+        from_input["models"]["ISRM"]["equations"], from_reversed["models"]["ISRM"]["equations"],
         "reversing the input's equations changed the rewritten order"
     );
 
@@ -178,7 +177,9 @@ fn equation_order_is_canonical_not_input_order() {
         .position(|e| e["lhs"].is_string())
         .expect("the rewrite emits definitions");
     assert!(
-        eqs[..first_definition].iter().all(|e| !e["lhs"].is_string()),
+        eqs[..first_definition]
+            .iter()
+            .all(|e| !e["lhs"].is_string()),
         "every non-bare-LHS equation must precede every definition"
     );
     let names: Vec<&str> = eqs[first_definition..]
@@ -187,5 +188,8 @@ fn equation_order_is_canonical_not_input_order() {
         .collect();
     let mut sorted = names.clone();
     sorted.sort_unstable();
-    assert_eq!(names, sorted, "definitions must be sorted by the defined name");
+    assert_eq!(
+        names, sorted,
+        "definitions must be sorted by the defined name"
+    );
 }

@@ -852,7 +852,10 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
 
     // (2) A name that NO enclosing construct binds is STILL undefined — the fix
     //     must not degenerate into allowlisting short names.
-    let bad = validate_complete(&doc("", "{ \"op\": \"+\", \"args\": [\"GHOST\", 1] }"), None);
+    let bad = validate_complete(
+        &doc("", "{ \"op\": \"+\", \"args\": [\"GHOST\", 1] }"),
+        None,
+    );
     assert!(
         bad.structural_errors.iter().any(|e| {
             matches!(e.code, StructuralErrorCode::UndefinedVariable) && e.message.contains("GHOST")
@@ -1067,7 +1070,10 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
         r#""coupling": [{ "type": "couple", "systems": ["Advection", "Wind"] }]"#,
         r#""coupling": []"#,
     );
-    assert_ne!(uncoupled, coupled, "the coupling block must actually be removed");
+    assert_ne!(
+        uncoupled, coupled,
+        "the coupling block must actually be removed"
+    );
     let r = validate_complete(&uncoupled, None);
     assert!(
         r.structural_errors
@@ -1167,7 +1173,9 @@ fn default_units_must_match_declared_units() {
 
     // A `default_units` that AGREES is redundant but clean.
     assert!(
-        validate_complete(&doc("K"), None).structural_errors.is_empty(),
+        validate_complete(&doc("K"), None)
+            .structural_errors
+            .is_empty(),
         "matching default_units must not be reported"
     );
 }
@@ -1255,8 +1263,10 @@ fn assert_structural(fixture: &str, code: StructuralErrorCode, path: &str) {
         result
             .structural_errors
             .iter()
-            .any(|e| std::mem::discriminant(&e.code) == std::mem::discriminant(&code)
-                && e.path == path),
+            .any(
+                |e| std::mem::discriminant(&e.code) == std::mem::discriminant(&code)
+                    && e.path == path
+            ),
         "expected {code} @ {path}; got {:?}",
         result
             .structural_errors

@@ -2037,17 +2037,15 @@ pub(super) fn reduce_contraction_gated(
             }
             reduce_over_pairs(contract_names, &tuples, body, reduce, filter, cell, ctx)
         }
-        DrivePlan::Pairs | DrivePlan::Full => {
-            reduce_over_sources(
-                contract_names,
-                &full_sources(ranges),
-                body,
-                reduce,
-                filter,
-                cell,
-                ctx,
-            )
-        }
+        DrivePlan::Pairs | DrivePlan::Full => reduce_over_sources(
+            contract_names,
+            &full_sources(ranges),
+            body,
+            reduce,
+            filter,
+            cell,
+            ctx,
+        ),
     }
 }
 
@@ -2842,7 +2840,10 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         let materialized = with_arrayop_pool(|pool| {
             let mut ops = 0usize;
             eval_vec_makearray(node, &bx, &*ctx, pool, &mut ops).map(|vv| {
-                let out = vv.view().expect("vectorized makearray has a view").to_owned();
+                let out = vv
+                    .view()
+                    .expect("vectorized makearray has a view")
+                    .to_owned();
                 vv.release(pool);
                 out
             })

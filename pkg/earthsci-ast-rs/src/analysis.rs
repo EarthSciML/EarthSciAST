@@ -343,7 +343,11 @@ pub fn find_longest_dependency_chain(graph: &ComponentGraph) -> usize {
 
 /// Depth-first longest simple path starting at `node_id` (revisits are pruned
 /// via `visited`, so cycles do not diverge).
-pub fn dfs_longest_path(graph: &ComponentGraph, node_id: &str, visited: &mut HashSet<String>) -> usize {
+pub fn dfs_longest_path(
+    graph: &ComponentGraph,
+    node_id: &str,
+    visited: &mut HashSet<String>,
+) -> usize {
     if visited.contains(node_id) {
         return 0; // Avoid cycles
     }
@@ -366,8 +370,8 @@ pub fn dfs_longest_path(graph: &ComponentGraph, node_id: &str, visited: &mut Has
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{ComponentGraph, ComponentNode, ComponentType, CouplingEdge};
     use crate::graph::CouplingEdgeKind;
+    use crate::graph::{ComponentGraph, ComponentNode, ComponentType, CouplingEdge};
 
     fn node(id: &str) -> ComponentNode {
         ComponentNode {
@@ -404,12 +408,18 @@ mod tests {
         };
         assert_eq!(sizes, vec![1, 3]);
 
-        let cycle = sccs.iter().find(|c| c.len() == 3).expect("cycle SCC exists");
+        let cycle = sccs
+            .iter()
+            .find(|c| c.len() == 3)
+            .expect("cycle SCC exists");
         let mut members: Vec<&str> = cycle.iter().map(|s| s.as_str()).collect();
         members.sort_unstable();
         assert_eq!(members, vec!["A", "B", "C"]);
 
-        let singleton = sccs.iter().find(|c| c.len() == 1).expect("singleton exists");
+        let singleton = sccs
+            .iter()
+            .find(|c| c.len() == 1)
+            .expect("singleton exists");
         assert_eq!(singleton[0], "D");
     }
 

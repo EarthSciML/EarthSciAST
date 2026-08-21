@@ -667,9 +667,7 @@ fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
                 collect_coordinate_symbols(&eq.rhs, &mut symbols);
             }
             for var in model.variables.values() {
-                var.for_each_expression(&mut |expr| {
-                    collect_coordinate_symbols(expr, &mut symbols)
-                });
+                var.for_each_expression(&mut |expr| collect_coordinate_symbols(expr, &mut symbols));
             }
         }
     }
@@ -1150,7 +1148,10 @@ fn check_physical_constant_units(
             .iter()
             .find(|(_, rhs)| expr_references_name(rhs, constant_name))
             .and_then(|(name, _)| {
-                model.variables.get_key_value(name.as_str()).map(|(k, _)| k.as_str())
+                model
+                    .variables
+                    .get_key_value(name.as_str())
+                    .map(|(k, _)| k.as_str())
             });
         let target = usage_site.unwrap_or(constant_name);
         let target_path = format!("/models/{model_name}/variables/{target}");
@@ -2227,9 +2228,7 @@ fn validate_event_affects(
         // changes during a run declares its own `update` block (esm-spec §5.4),
         // which is what replaced `discrete_parameters` and `functional_affect`.
         // The check keys off the AFFECTS TARGET, never off the trigger kind.
-        if variables.get(&affect.lhs).map(|v| v.var_type)
-            == Some(crate::VariableType::Parameter)
-        {
+        if variables.get(&affect.lhs).map(|v| v.var_type) == Some(crate::VariableType::Parameter) {
             let mut details = serde_json::json!({
                 "variable": affect.lhs,
                 "variable_type": "parameter",

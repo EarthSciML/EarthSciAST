@@ -182,7 +182,11 @@ fn a_retargeted_scratch_does_not_reuse_a_stale_classification() {
     // Reference answers, each computed on its own private scratch.
     let (want_a, _) = compile(&repeated_subexpr_json(N)).debug_eval_rhs(&u, 0.0, &params, false);
     let (want_b, _) = compile(&contracted_repeat_json(N)).debug_eval_rhs(&u, 0.0, &params, false);
-    assert_eq!(want_a.len(), want_b.len(), "the two fixtures share a state shape");
+    assert_eq!(
+        want_a.len(),
+        want_b.len(),
+        "the two fixtures share a state shape"
+    );
 
     let a = compile(&repeated_subexpr_json(N));
     // One scratch, carried across all three models below.

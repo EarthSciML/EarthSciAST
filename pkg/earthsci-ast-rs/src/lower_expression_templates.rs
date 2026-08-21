@@ -95,11 +95,9 @@ fn to_shared(v: &Value) -> Sv {
         Value::Number(n) => SNode::Num(n.clone()),
         Value::String(s) => SNode::Str(s.clone()),
         Value::Array(arr) => SNode::Arr(arr.iter().map(to_shared).collect()),
-        Value::Object(obj) => SNode::Obj(
-            obj.iter()
-                .map(|(k, v)| (k.clone(), to_shared(v)))
-                .collect(),
-        ),
+        Value::Object(obj) => {
+            SNode::Obj(obj.iter().map(|(k, v)| (k.clone(), to_shared(v))).collect())
+        }
     })
 }
 
@@ -1916,14 +1914,12 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
                     comp.insert(k, to_value(&rewritten));
                 }
             }
-            registries
-                .entry(cname.clone())
-                .or_insert(CompRegistry {
-                    named,
-                    rules,
-                    shape_env,
-                    target_bearing,
-                });
+            registries.entry(cname.clone()).or_insert(CompRegistry {
+                named,
+                rules,
+                shape_env,
+                target_bearing,
+            });
         }
     }
 
@@ -2417,8 +2413,12 @@ pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
             let Some(named) = named else { continue };
             let shared = to_shared(&transform);
             let mut memo = PtrMemo::default();
-            let expanded =
-                expand_all(&shared, named, &format!("coupling[{idx}].transform"), &mut memo)?;
+            let expanded = expand_all(
+                &shared,
+                named,
+                &format!("coupling[{idx}].transform"),
+                &mut memo,
+            )?;
             if !Rc::ptr_eq(&expanded, &shared) {
                 obj.insert("transform".to_string(), to_value(&expanded));
             }
@@ -2582,7 +2582,10 @@ pub fn emit_document(
             if emit_block.is_empty() {
                 comp.remove("expression_templates");
             } else {
-                comp.insert("expression_templates".to_string(), Value::Object(emit_block));
+                comp.insert(
+                    "expression_templates".to_string(),
+                    Value::Object(emit_block),
+                );
             }
             comp.remove("expression_template_imports");
         }
@@ -3412,7 +3415,8 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            *crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation"),
+            *crate::classification::observed_definition_json(&v["models"]["M"], "area")
+                .expect("area defining equation"),
             json!({"op": "polygon_intersection_area", "manifold": "planar",
                    "args": ["pa", "pb"]})
         );
@@ -3442,7 +3446,8 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            *crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation"),
+            *crate::classification::observed_definition_json(&v["models"]["M"], "area")
+                .expect("area defining equation"),
             json!({"op": "*", "args": [
               {"op": "polygon_intersection_area", "manifold": "spherical",
                "args": ["pa", "pb"]},
@@ -3484,7 +3489,8 @@ mod tests {
         lower_expression_templates(&mut v).expect("rewrite");
         expand(&mut v).expect("expand");
         assert_eq!(
-            crate::classification::observed_definition_json(&v["models"]["M"], "area").expect("area defining equation")["manifold"],
+            crate::classification::observed_definition_json(&v["models"]["M"], "area")
+                .expect("area defining equation")["manifold"],
             json!("spherical")
         );
     }

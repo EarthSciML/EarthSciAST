@@ -887,11 +887,7 @@ fn run_model_tests(
         times.dedup();
         let mut run_opts = opts.clone();
         run_opts.output_times = Some(times);
-        let params = scope_to_component(
-            t.parameter_overrides.as_ref(),
-            model_name,
-            run_file,
-        );
+        let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
         let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
         // Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
         // slot) read their state-free materialized field from here

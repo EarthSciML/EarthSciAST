@@ -343,10 +343,7 @@ pub(super) fn run_reference(
                                     swap,
                                     out,
                                 } => {
-                                    let t = binary_kernel_of(*op1)(
-                                        get(a, &regs),
-                                        get(b, &regs),
-                                    );
+                                    let t = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
                                     let cv = get(c, &regs);
                                     regs[*out as usize] = if *swap {
                                         binary_kernel_of(*op2)(cv, t)
@@ -366,10 +363,7 @@ pub(super) fn run_reference(
                                     swap3,
                                     out,
                                 } => {
-                                    let t1 = binary_kernel_of(*op1)(
-                                        get(a, &regs),
-                                        get(b, &regs),
-                                    );
+                                    let t1 = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
                                     let cv = get(c, &regs);
                                     let t2 = if *swap2 {
                                         binary_kernel_of(*op2)(cv, t1)

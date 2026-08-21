@@ -463,7 +463,10 @@ fn varying_array_observed_vectorizes_and_matches_oracle() {
         sstats.obs_scalar_rules, 1,
         "force_scalar did not run the observed per-cell: {sstats:?}"
     );
-    assert_eq!(sstats.obs_vectorized_rules, 0, "force_scalar still vectorized: {sstats:?}");
+    assert_eq!(
+        sstats.obs_vectorized_rules, 0,
+        "force_scalar still vectorized: {sstats:?}"
+    );
 
     // The two materialization strategies are numerically identical (the vectorized
     // path is a verified-equivalent overlay, reusing the same apply_binary kernel).
@@ -511,8 +514,14 @@ fn filtered_contraction_vectorizes_and_matches_oracle() {
         vstats.vectorized_rules, 1,
         "filtered contraction did not vectorize: {vstats:?}"
     );
-    assert_eq!(vstats.scalar_rules, 0, "filtered contraction fell back: {vstats:?}");
-    assert_eq!(sstats.scalar_rules, 1, "force_scalar did not use oracle: {sstats:?}");
+    assert_eq!(
+        vstats.scalar_rules, 0,
+        "filtered contraction fell back: {vstats:?}"
+    );
+    assert_eq!(
+        sstats.scalar_rules, 1,
+        "force_scalar did not use oracle: {sstats:?}"
+    );
     for (k, (a, b)) in dy_vec.iter().zip(dy_scalar.iter()).enumerate() {
         assert!(
             (a - b).abs() <= 1e-12,
@@ -572,8 +581,15 @@ fn array_valued_ifelse_vectorizes_and_matches_oracle() {
             (a - b).abs() <= 1e-12,
             "array-ifelse vectorized vs oracle mismatch at {k}: {a} vs {b}"
         );
-        let expect = if state[k] > 0.5 { 2.0 * state[k] } else { 3.0 * state[k] };
-        assert!((a - expect).abs() <= 1e-12, "cell {k}: got {a} want {expect}");
+        let expect = if state[k] > 0.5 {
+            2.0 * state[k]
+        } else {
+            3.0 * state[k]
+        };
+        assert!(
+            (a - expect).abs() <= 1e-12,
+            "cell {k}: got {a} want {expect}"
+        );
     }
 }
 
@@ -626,8 +642,14 @@ fn regrid_table_gather_vectorizes_and_matches_oracle() {
         vstats.vectorized_rules, 1,
         "regrid table-gather did not vectorize: {vstats:?}"
     );
-    assert_eq!(vstats.scalar_rules, 0, "regrid gather fell back: {vstats:?}");
-    assert_eq!(sstats.scalar_rules, 1, "force_scalar did not use oracle: {sstats:?}");
+    assert_eq!(
+        vstats.scalar_rules, 0,
+        "regrid gather fell back: {vstats:?}"
+    );
+    assert_eq!(
+        sstats.scalar_rules, 1,
+        "force_scalar did not use oracle: {sstats:?}"
+    );
     for (k, (a, b)) in dy_vec.iter().zip(dy_scalar.iter()).enumerate() {
         assert!(
             (a - b).abs() <= 1e-12,

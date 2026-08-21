@@ -540,8 +540,14 @@ mod tests {
             "reservoir R must lower to a parameter"
         );
         assert_eq!(model.variables["R"].default, Some(2.0));
-        assert!(matches!(model.variables["A"].var_type, VariableType::Unknown));
-        assert!(matches!(model.variables["B"].var_type, VariableType::Unknown));
+        assert!(matches!(
+            model.variables["A"].var_type,
+            VariableType::Unknown
+        ));
+        assert!(matches!(
+            model.variables["B"].var_type,
+            VariableType::Unknown
+        ));
 
         // No dR/dt equation; A and B keep theirs (2 equations total, not 3).
         let eq_species: Vec<String> = model

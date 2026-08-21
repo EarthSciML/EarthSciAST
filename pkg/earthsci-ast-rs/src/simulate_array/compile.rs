@@ -905,7 +905,8 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
 fn is_builtin_fn_name(name: &str) -> bool {
     matches!(
         name,
-        "exp" | "log"
+        "exp"
+            | "log"
             | "log10"
             | "sqrt"
             | "abs"
@@ -1340,8 +1341,7 @@ fn build_observed_rules(
     //   over them, so a readable intermediate decomposition runs as authored.
     let mut def_eq: HashMap<String, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
-        if let crate::classification::LhsForm::Bare(name) =
-            crate::classification::lhs_form(&eq.lhs)
+        if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
         {
             def_eq.entry(name).or_insert(eq);
         }
@@ -2063,7 +2063,9 @@ fn expr_contains_arg_witness(expr: &Expr) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
         Expr::Operator(node) => {
-            node.op == "argmin" || node.op == "argmax" || node.any_child(&mut expr_contains_arg_witness)
+            node.op == "argmin"
+                || node.op == "argmax"
+                || node.any_child(&mut expr_contains_arg_witness)
         }
     }
 }

@@ -39,7 +39,10 @@ fn f64s(v: &Value, what: &str) -> Vec<f64> {
     v.as_array()
         .unwrap_or_else(|| panic!("{what} is not an array"))
         .iter()
-        .map(|x| x.as_f64().unwrap_or_else(|| panic!("{what} holds a non-number")))
+        .map(|x| {
+            x.as_f64()
+                .unwrap_or_else(|| panic!("{what} holds a non-number"))
+        })
         .collect()
 }
 

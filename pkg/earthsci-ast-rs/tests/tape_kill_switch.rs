@@ -113,7 +113,10 @@ fn ess_tape_disable_reverts_wholesale_to_the_legacy_path() {
     compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
     assert_eq!(stats.taped_rules, 0, "no rule may run through the tape");
     assert_eq!(stats.fallback_rules, 0);
-    assert!(stats.vectorized_rules > 0, "legacy vectorized path must run");
+    assert!(
+        stats.vectorized_rules > 0,
+        "legacy vectorized path must run"
+    );
     let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
     for (a, b) in dy.iter().zip(oracle.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
@@ -128,9 +131,7 @@ fn ess_tape_disable_reverts_wholesale_to_the_legacy_path() {
         output_times: Some(vec![1.0]),
         ..Default::default()
     };
-    let ics: HashMap<String, f64> = (1..=n)
-        .map(|k| (format!("u[{k}]"), 2.0))
-        .collect();
+    let ics: HashMap<String, f64> = (1..=n).map(|k| (format!("u[{k}]"), 2.0)).collect();
     let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts)
         .expect("legacy simulate must run");
     let ti = sol.time.len() - 1;

@@ -26,7 +26,9 @@ fn main() -> Result<(), String> {
     let mut i = 0;
     while i < argv.len() {
         let v = || -> Result<String, String> {
-            argv.get(i + 1).cloned().ok_or(format!("{} needs a value", argv[i]))
+            argv.get(i + 1)
+                .cloned()
+                .ok_or(format!("{} needs a value", argv[i]))
         };
         match argv[i].as_str() {
             "--model" => model = v()?,
@@ -88,8 +90,13 @@ fn main() -> Result<(), String> {
 
     let f = std::fs::File::create(&out).map_err(|e| format!("{out}: {e}"))?;
     let mut w = std::io::BufWriter::new(f);
-    writeln!(w, "# rows={} times={}", sol.state_variable_names.len(), sol.time.len())
-        .map_err(|e| e.to_string())?;
+    writeln!(
+        w,
+        "# rows={} times={}",
+        sol.state_variable_names.len(),
+        sol.time.len()
+    )
+    .map_err(|e| e.to_string())?;
     for (i, t) in sol.time.iter().enumerate() {
         writeln!(w, "t {i} {:016x}", t.to_bits()).map_err(|e| e.to_string())?;
     }

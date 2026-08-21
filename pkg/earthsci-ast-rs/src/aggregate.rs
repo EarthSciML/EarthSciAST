@@ -300,10 +300,10 @@ pub(crate) fn resolve_expr_ranges(
 fn contains_unresolved_range(e: &Expr) -> bool {
     match e {
         Expr::Operator(node) => {
-            node.ranges
-                .as_ref()
-                .is_some_and(|r| r.values().any(|s| matches!(s, RangeSpec::IndexSetRef { .. })))
-                || node.any_child(&mut contains_unresolved_range)
+            node.ranges.as_ref().is_some_and(|r| {
+                r.values()
+                    .any(|s| matches!(s, RangeSpec::IndexSetRef { .. }))
+            }) || node.any_child(&mut contains_unresolved_range)
         }
         _ => false,
     }

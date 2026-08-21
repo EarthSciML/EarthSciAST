@@ -51,8 +51,9 @@ fn l1_geometry(prefix: &str) -> HashMap<String, ArrayD<f64>> {
 }
 
 /// The single aggregate RHS of the flattened fixture.
-fn flattened_producer(flat_eqs: &[earthsci_ast::types::Equation]) -> &earthsci_ast::types::ExpressionNode
-{
+fn flattened_producer(
+    flat_eqs: &[earthsci_ast::types::Equation],
+) -> &earthsci_ast::types::ExpressionNode {
     match &flat_eqs[0].rhs {
         Expr::Operator(n) => n,
         other => panic!("expected an aggregate RHS, got {other:?}"),

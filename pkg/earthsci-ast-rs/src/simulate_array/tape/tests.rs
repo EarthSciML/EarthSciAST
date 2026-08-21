@@ -140,7 +140,10 @@ fn ab_check(doc: serde_json::Value, expect_fallbacks: usize, lo: f64, hi: f64) -
             }
         }
     }
-    assert!(fast_stats.taped_rules > 0, "the fast executor must have run");
+    assert!(
+        fast_stats.taped_rules > 0,
+        "the fast executor must have run"
+    );
     prog
 }
 
@@ -991,9 +994,7 @@ fn value_numbering_scope_behaviour() {
             .fused
             .iter()
             .flat_map(|fs| fs.micro.iter())
-            .filter(
-                |m| matches!(m, MicroOp::Bin { op, .. } if *op == super::super::BinCode::Sub),
-            )
+            .filter(|m| matches!(m, MicroOp::Bin { op, .. } if *op == super::super::BinCode::Sub))
             .count();
     assert_eq!(subs, 1, "repeated subtree must be lowered once");
 }
@@ -1263,9 +1264,7 @@ fn ab_model_file_if_available() {
 #[test]
 fn ab_shifted_read_folding_wrap_ghost_linear() {
     let (ni, nj) = (8, 6);
-    let idx2 = |var: &str, i: serde_json::Value, j: serde_json::Value| {
-        json!({"op": "index", "args": [var, i, j]})
-    };
+    let idx2 = |var: &str, i: serde_json::Value, j: serde_json::Value| json!({"op": "index", "args": [var, i, j]});
     // Wrap Laplacian along i on u[i,j]; ghost Laplacian along i on v[i,j];
     // plus a level-slice coupling w[i,3] broadcast down the j axis via a
     // 1-D observed.
@@ -1498,7 +1497,10 @@ fn ab_superop_bin3_and_extended_pairs() {
     // BOTH executors must stay bitwise equal to the production interpreter.
     let compiled = compile(doc);
     let (prog3, _) = compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()));
-    assert!(has_bin3(&prog3), "expected a Bin3 superop with bin3 enabled");
+    assert!(
+        has_bin3(&prog3),
+        "expected a Bin3 superop with bin3 enabled"
+    );
     for f in &prog3.fused {
         let has3 = f.micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. }));
         if has3 {
@@ -1512,7 +1514,11 @@ fn ab_superop_bin3_and_extended_pairs() {
     let param_vec = compiled.debug_resolve_params(&params);
     let mut fast3 = super::super::RhsScratch::new(&compiled.var_shapes);
     fast3.install_tape(
-        std::rc::Rc::new(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg())).0),
+        std::rc::Rc::new(
+            compiled
+                .build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))
+                .0,
+        ),
         std::rc::Rc::new(compiled.observed_rules.clone()),
     );
     let mut stats = RhsStats::default();

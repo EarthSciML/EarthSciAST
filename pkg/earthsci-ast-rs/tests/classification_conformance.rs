@@ -135,7 +135,11 @@ fn rust_classification_matches_golden() {
             // `system_kind` field never overrides the derivation, it only has
             // to agree with it.
             let want_kind = want["system_kind"].as_str().expect("golden system_kind");
-            assert_eq!(class.system_kind.as_str(), want_kind, "[{id}] {key}.system_kind");
+            assert_eq!(
+                class.system_kind.as_str(),
+                want_kind,
+                "[{id}] {key}.system_kind"
+            );
             assert_eq!(
                 want["declared_system_kind"],
                 model

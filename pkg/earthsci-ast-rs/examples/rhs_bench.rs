@@ -17,7 +17,9 @@ fn main() -> Result<(), String> {
     let n = compiled.state_variable_names().len();
     let params = compiled.debug_resolve_params(&HashMap::new());
     // A plausible positive state.
-    let state: Vec<f64> = (0..n).map(|k| 1.0 + 0.1 * ((k as f64) * 0.37).sin()).collect();
+    let state: Vec<f64> = (0..n)
+        .map(|k| 1.0 + 0.1 * ((k as f64) * 0.37).sin())
+        .collect();
     let mut dy = vec![0.0f64; n];
 
     let only = std::env::var("BENCH_ONLY").unwrap_or_default();
@@ -35,7 +37,10 @@ fn main() -> Result<(), String> {
         for _ in 0..3 {
             compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
         }
-        let iters: usize = std::env::var("BENCH_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+        let iters: usize = std::env::var("BENCH_ITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
         let t0 = std::time::Instant::now();
         for _ in 0..iters {
             compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);

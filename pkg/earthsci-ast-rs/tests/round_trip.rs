@@ -351,9 +351,15 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
         .expect("OU model missing");
     let bw = model.variables.get("Bw").expect("Bw variable missing");
     assert_eq!(bw.var_type, VariableType::Parameter);
-    assert!(bw.distribution.is_some(), "a wiener update needs a distribution");
+    assert!(
+        bw.distribution.is_some(),
+        "a wiener update needs a distribution"
+    );
     assert!(bw.update.as_ref().expect("update").is_wiener());
-    assert_eq!(earthsci_ast::classification::brownian_parameters(model), ["Bw"]);
+    assert_eq!(
+        earthsci_ast::classification::brownian_parameters(model),
+        ["Bw"]
+    );
     assert_eq!(
         earthsci_ast::classification::system_kind(model),
         earthsci_ast::SystemKind::Sde
@@ -410,7 +416,10 @@ fn test_correlated_noise_sde_round_trip() {
         Some(&vec![vec![1.0, 0.5], vec![0.5, 1.0]]),
         "the correlation is the explicit off-diagonal of `cov`"
     );
-    assert_eq!(earthsci_ast::classification::brownian_parameters(model), ["B"]);
+    assert_eq!(
+        earthsci_ast::classification::brownian_parameters(model),
+        ["B"]
+    );
 
     let serialized = save(&parsed).expect("failed to serialize");
     let reparsed: EsmFile = load(&serialized).expect("failed to reparse");

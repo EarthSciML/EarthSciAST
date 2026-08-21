@@ -33,9 +33,9 @@
 //! reached flatten without being discretized.
 
 use crate::types::{
-    ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr,
-    ExpressionNode, IndexSet, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec,
-    ReactionSystem, VariableMapTransform, VariableType,
+    ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr, ExpressionNode,
+    IndexSet, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec, ReactionSystem,
+    VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -851,7 +851,6 @@ struct SystemBlock {
     discrete_events: Vec<DiscreteEvent>,
 }
 
-
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
@@ -1074,7 +1073,6 @@ fn build_reaction_block(
 fn namespace_expr(expr: &Expr, system_name: &str, locals: &HashSet<String>) -> Expr {
     namespace_expr_scoped(expr, system_name, &HashSet::new(), &HashSet::new(), locals)
 }
-
 
 /// Dot-prefix the plain-string names carried by a node's `join` clauses
 /// (CONFORMANCE_SPEC §5.5.6). Applies the SAME rule [`namespace_expr_scoped`]

@@ -407,9 +407,7 @@ fn canon_neg_value(arg: Expr) -> Result<Expr, CanonicalizeError> {
     match arg {
         Expr::Integer(i) => Ok(Expr::Integer(-i)),
         Expr::Number(f) => Ok(Expr::Number(-f)),
-        Expr::Operator(n) if n.op == "neg" && n.args.len() == 1 => {
-            Ok(n.args[0].clone())
-        }
+        Expr::Operator(n) if n.op == "neg" && n.args.len() == 1 => Ok(n.args[0].clone()),
         other => Ok(Expr::operator(ExpressionNode {
             op: "neg".into(),
             args: vec![other],

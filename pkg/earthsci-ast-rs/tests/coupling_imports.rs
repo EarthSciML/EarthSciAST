@@ -85,7 +85,9 @@ fn import_entry(bind: Value) -> Value {
 #[test]
 fn identifies_a_coupling_library_by_top_level_coupling_roles() {
     assert!(is_coupling_library_doc(&lib()));
-    assert!(!is_coupling_library_doc(&json!({ "esm": "1.0.0", "models": {} })));
+    assert!(!is_coupling_library_doc(
+        &json!({ "esm": "1.0.0", "models": {} })
+    ));
     assert!(!is_coupling_library_doc(&Value::Null));
 }
 
@@ -341,7 +343,8 @@ fn subsystem_ref_targeting_a_coupling_library_is_rejected() {
     let e = load_with_options(wrapper, &load_opts(dir.path()))
         .expect_err("subsystem ref to a coupling library must fail");
     assert!(
-        e.to_string().contains("[subsystem_ref_is_coupling_library]"),
+        e.to_string()
+            .contains("[subsystem_ref_is_coupling_library]"),
         "got: {e}"
     );
 }
@@ -407,8 +410,7 @@ fn template_import_targeting_a_coupling_library_is_rejected() {
 #[test]
 fn unresolved_when_the_ref_is_a_remote_url_under_the_default_loader() {
     // Default (filesystem) loader rejects http(s) refs as unresolved.
-    let coupling =
-        json!([{ "type": "coupling_import", "ref": "https://example.com/lib.esm", "bind": {
+    let coupling = json!([{ "type": "coupling_import", "ref": "https://example.com/lib.esm", "bind": {
             "Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"
         } }]);
     let file = assembly(coupling);

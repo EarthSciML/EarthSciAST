@@ -89,12 +89,14 @@ fn scale_factor(
             if !free_variables(expr).is_empty() {
                 return Ok(None);
             }
-            evaluate_scalar(expr, &HashMap::new()).map(Some).map_err(|e| {
-                err(format!(
-                    "variable {variable_name:?} unit_conversion is a constant \
+            evaluate_scalar(expr, &HashMap::new())
+                .map(Some)
+                .map_err(|e| {
+                    err(format!(
+                        "variable {variable_name:?} unit_conversion is a constant \
                      expression but did not evaluate: {e}"
-                ))
-            })
+                    ))
+                })
         }
     }
 }
@@ -166,7 +168,11 @@ mod tests {
     #[test]
     fn an_absent_conversion_is_none() {
         assert!(parse_unit_conversion(None, "v").unwrap().is_none());
-        assert!(parse_unit_conversion(Some(&json!(null)), "v").unwrap().is_none());
+        assert!(
+            parse_unit_conversion(Some(&json!(null)), "v")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -482,7 +482,9 @@ fn write_fields(
     written: &mut Vec<String>,
 ) -> Result<(), ProviderError> {
     for (var, native) in fields {
-        forcing.borrow_mut().insert(var.clone(), native.array.clone());
+        forcing
+            .borrow_mut()
+            .insert(var.clone(), native.array.clone());
         written.push(var.clone());
     }
     Ok(())
@@ -669,12 +671,7 @@ mod tests {
             ),
             ("met".to_string(), Box::new(met) as Box<dyn CadenceProvider>),
         ]);
-        let mut exec = RefreshExecutor::new(
-            &doc["models"]["M"],
-            &doc,
-            providers,
-        )
-        .unwrap();
+        let mut exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
 
         let forcing = buffer();
         let written = exec.materialize_const(&forcing).unwrap();
@@ -734,12 +731,7 @@ mod tests {
                 Box::new(FakeProvider::const_loader("elev", 7.0)) as Box<dyn CadenceProvider>,
             ),
         ]);
-        let exec = RefreshExecutor::new(
-            &doc["models"]["M"],
-            &doc,
-            providers,
-        )
-        .unwrap();
+        let exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
 
         // Union of {0,6,12} and {0,3,6,9,12}, sorted+deduped; CONST `topo` adds none.
         assert_eq!(exec.refresh_times(), vec![0.0, 3.0, 6.0, 9.0, 12.0]);
@@ -761,12 +753,7 @@ mod tests {
                 Box::new(FakeProvider::const_loader("elev", 7.0)) as Box<dyn CadenceProvider>,
             ),
         ]);
-        let mut exec = RefreshExecutor::new(
-            &doc["models"]["M"],
-            &doc,
-            providers,
-        )
-        .unwrap();
+        let mut exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
         let forcing = buffer();
 
         // Anchor t=0: record advances → buffer gets [10].
@@ -844,13 +831,9 @@ mod tests {
                 vec![(0.0, Some(1.0))],
             )) as Box<dyn CadenceProvider>,
         )]);
-        let e = RefreshExecutor::new(
-            &doc["models"]["M"],
-            &doc,
-            providers,
-        )
-        .map(|_| ())
-        .unwrap_err();
+        let e = RefreshExecutor::new(&doc["models"]["M"], &doc, providers)
+            .map(|_| ())
+            .unwrap_err();
         assert!(
             e.0.contains("topo"),
             "error names the unprovided loader: {}",
@@ -972,12 +955,8 @@ mod tests {
         );
         let providers: HashMap<String, Box<dyn CadenceProvider>> =
             HashMap::from([("met".to_string(), Box::new(met) as Box<dyn CadenceProvider>)]);
-        let mut exec = RefreshExecutor::new(
-            &class_doc["models"]["Forced"],
-            &class_doc,
-            providers,
-        )
-        .unwrap();
+        let mut exec =
+            RefreshExecutor::new(&class_doc["models"]["Forced"], &class_doc, providers).unwrap();
 
         let forcing = compiled.forcing_handle();
         let params = HashMap::new();
