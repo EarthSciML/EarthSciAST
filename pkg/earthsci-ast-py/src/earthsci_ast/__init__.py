@@ -5,6 +5,7 @@ A Python package for handling Earth System Model serialization and mathematical 
 This is the core implementation of the ESM Library Specification (see ``esm-spec.md``);
 the supported format version is tracked by ``earthsci_ast.parse._CURRENT_VERSION``.
 """
+
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version

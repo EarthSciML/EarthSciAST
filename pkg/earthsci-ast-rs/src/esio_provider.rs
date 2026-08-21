@@ -548,8 +548,13 @@ impl EsioProviderBuilder {
     /// When no mapping is declared the on-disk names are used verbatim, which is
     /// the common case for a loader whose variables are already named as the
     /// model refers to them.
-    pub fn var(mut self, file_variable: impl Into<String>, model_variable: impl Into<String>) -> Self {
-        self.var_map.insert(file_variable.into(), model_variable.into());
+    pub fn var(
+        mut self,
+        file_variable: impl Into<String>,
+        model_variable: impl Into<String>,
+    ) -> Self {
+        self.var_map
+            .insert(file_variable.into(), model_variable.into());
         self
     }
 
@@ -1060,9 +1065,7 @@ mod prepare_impl {
 
     /// The single field of a `materialize` result (the `prepare` providers
     /// contract is one provider per fed variable).
-    fn single_field(
-        fields: HashMap<String, NativeField>,
-    ) -> Result<ArrayD<f64>, PrepareError> {
+    fn single_field(fields: HashMap<String, NativeField>) -> Result<ArrayD<f64>, PrepareError> {
         if fields.len() != 1 {
             let mut keys: Vec<_> = fields.keys().cloned().collect();
             keys.sort();
@@ -1115,7 +1118,9 @@ mod prepare_impl {
             // select is not applied again — but the declared unit_conversion
             // still is: it is a property of the VALUES, not of which of them
             // were fetched.
-            let fields = self.convert_units(fields).map_err(|e| perr(e.to_string()))?;
+            let fields = self
+                .convert_units(fields)
+                .map_err(|e| perr(e.to_string()))?;
             single_field(fields)
         }
 
@@ -1273,7 +1278,9 @@ mod prepare_impl {
         let dls = doc
             .get("data_sources")
             .and_then(|v| v.as_object())
-            .ok_or_else(|| perr("providers_from_document: the document declares no data_sources"))?;
+            .ok_or_else(|| {
+                perr("providers_from_document: the document declares no data_sources")
+            })?;
         let bindings = document_bindings(doc);
         let mut out = Vec::new();
         for (lname, ld) in dls {

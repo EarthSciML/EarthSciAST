@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/area_faq.py
+# hypothesis_version: 6.141.1
+
+[0.0, 0.5, 1.0, 2.0, 180.0, '*', '+', '-', 'aggregate', 'atan2', 'clip_ring', 'cos', 'derived', 'from', 'from_faq', 'index', 'kind', 'overlap_clip', 'planar', 'polygon_area_via_faq', 'sin', 'sum_product', 'v']

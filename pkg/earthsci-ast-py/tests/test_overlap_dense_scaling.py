@@ -276,9 +276,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
     broad_phase.ENUM_VISITS[0] = 0
     # `prepare` runs the SAME rewrite itself (and aliases the bare authored
     # const-array names onto the flattened spellings while doing it).
-    prep = prepare(
-        doc, const_arrays=ca, model_name="Fwd", inspect=insp, pushdown_rewrite=True
-    )
+    prep = prepare(doc, const_arrays=ca, model_name="Fwd", inspect=insp, pushdown_rewrite=True)
     field = observed_field(prep, "Emis")
     visits = broad_phase.ENUM_VISITS[0]
 
@@ -521,8 +519,13 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
     }
     _lift_observed(doc)
     ca = {
-        "Ord.X": px, "Ord.Y": py, "Ord.V": vals,
-        "Ord.W": w, "Ord.S": s, "Ord.E": e, "Ord.N": n,
+        "Ord.X": px,
+        "Ord.Y": py,
+        "Ord.V": vals,
+        "Ord.W": w,
+        "Ord.S": s,
+        "Ord.E": e,
+        "Ord.N": n,
     }
 
     broad_phase.ENUM_VISITS[0] = 0
@@ -538,8 +541,8 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
     undriven_visits = broad_phase.ENUM_VISITS[0]
     monkeypatch.setattr(broad_phase, "overlap_drive_plan", real_plan)
 
-    assert undriven_visits == ncell * npt          # the untouched full product
-    assert driven_visits == npt                    # one candidate cell per point
+    assert undriven_visits == ncell * npt  # the untouched full product
+    assert driven_visits == npt  # one candidate cell per point
     assert np.array_equal(driven, undriven), "the driver reassociated the ⊕-fold"
     # ...and the aggregate really is doing multi-term sums, so the check bites.
     assert (driven != 0.0).all()

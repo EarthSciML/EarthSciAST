@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/registered_functions.py
+# hypothesis_version: 6.141.1
+
+[43200.0, 86400.0, 100, 120, 121, 151, 152, 181, 182, 212, 213, 243, 244, 273, 274, 304, 305, 334, 335, 367, 400, 1461, 1970, 4800, 4900, 32075, '-inf', 'axis', 'axis_x', 'axis_y', 'const', 'datetime.day', 'datetime.day_of_year', 'datetime.hour', 'datetime.julian_day', 'datetime.minute', 'datetime.month', 'datetime.second', 'datetime.year', 'enum', 'expression', 'from_source', 'interp.bilinear', 'interp.linear', 'interp.searchsorted', 'nan', 'when']

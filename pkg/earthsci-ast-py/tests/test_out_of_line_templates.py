@@ -44,7 +44,9 @@ def _load(dir_: str, fixture: str = "fixture.esm"):
 
 def _emit(dir_: str, fixture: str = "fixture.esm") -> str:
     fp = _conf(dir_, fixture)
-    return emit_esm_string(emit_document(json.loads(open(fp, encoding="utf-8").read()), os.path.dirname(fp)))
+    return emit_esm_string(
+        emit_document(json.loads(open(fp, encoding="utf-8").read()), os.path.dirname(fp))
+    )
 
 
 def _isapply(x) -> bool:
@@ -175,9 +177,10 @@ def test_eager_target_bearing():
     dsurv = _defining(loaded, "m", "d_survive")
     assert _isapply(dsurv["args"][0]) and dsurv["args"][0]["name"] == "scale_c"
     # Emit golden.
-    assert _emit("eager_target_bearing") == open(
-        _conf("eager_target_bearing", "emitted.esm"), encoding="utf-8"
-    ).read()
+    assert (
+        _emit("eager_target_bearing")
+        == open(_conf("eager_target_bearing", "emitted.esm"), encoding="utf-8").read()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -190,9 +193,10 @@ def test_opacity_negative():
     assert flux["op"] == "D"  # compound did NOT fire (no marker 999)
     assert _isapply(flux["args"][0])  # its arg is the surviving reference
     assert flux["args"][0]["name"] == "flux_prod"
-    assert _emit("opacity_negative") == open(
-        _conf("opacity_negative", "emitted.esm"), encoding="utf-8"
-    ).read()
+    assert (
+        _emit("opacity_negative")
+        == open(_conf("opacity_negative", "emitted.esm"), encoding="utf-8").read()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +211,10 @@ def test_opacity_priority_shadowing():
     assert flux["args"][0] == 1  # generic marker (NOT compound 999)
     assert _isapply(flux["args"][1])  # reference bound WHOLE by metavariable f
     assert flux["args"][1]["name"] == "flux_prod"
-    assert _emit("opacity_priority_shadowing") == open(
-        _conf("opacity_priority_shadowing", "emitted.esm"), encoding="utf-8"
-    ).read()
+    assert (
+        _emit("opacity_priority_shadowing")
+        == open(_conf("opacity_priority_shadowing", "emitted.esm"), encoding="utf-8").read()
+    )
 
 
 # ---------------------------------------------------------------------------

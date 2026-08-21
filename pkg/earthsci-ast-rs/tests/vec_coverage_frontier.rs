@@ -26,8 +26,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::load;
+use earthsci_ast::simulate_array::ArrayCompiled;
 use std::collections::HashMap;
 
 fn compile(json: &str) -> ArrayCompiled {

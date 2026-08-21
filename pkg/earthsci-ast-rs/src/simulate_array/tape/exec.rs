@@ -291,7 +291,10 @@ pub(in crate::simulate_array) struct TapeCtx {
 }
 
 impl TapeCtx {
-    pub(in crate::simulate_array) fn new(prog: Rc<TapeProgram>, observed_rules: Rc<Vec<AlgebraicRule>>) -> Self {
+    pub(in crate::simulate_array) fn new(
+        prog: Rc<TapeProgram>,
+        observed_rules: Rc<Vec<AlgebraicRule>>,
+    ) -> Self {
         let exec = TapeExec::new(&prog);
         TapeCtx {
             prog,
@@ -444,7 +447,6 @@ pub(in crate::simulate_array) fn run_tape_call(
         run_range(&env, const_end..prime_end, exec, dy, stats);
     }
     run_range(&env, prime_end..prog.instrs.len(), exec, dy, stats);
-    drop(env);
     exec.state_rm = state_rm;
 
     stats.taped_rules += exec.n_taped;
@@ -508,7 +510,10 @@ fn resolve_scalar(
         Operand::Param(p) => env.params[*p as usize],
         Operand::Time => env.t,
         Operand::Slot(s) => {
-            debug_assert!(env.prog.slots[*s as usize].scalar, "scalar read of array slot");
+            debug_assert!(
+                env.prog.slots[*s as usize].scalar,
+                "scalar read of array slot"
+            );
             unsafe { *slab_ptr.add(slot_off[*s as usize]) }
         }
         Operand::State(ix) => {
@@ -1276,11 +1281,8 @@ unsafe fn fch3(
                     std::slice::from_raw_parts(pa, n),
                     std::slice::from_raw_parts(pc, n),
                 );
-                lp!(
-                    |k: usize| *a.get_unchecked(k),
-                    |_k: usize| y,
-                    |k: usize| *c.get_unchecked(k)
-                );
+                lp!(|k: usize| *a.get_unchecked(k), |_k: usize| y, |k: usize| *c
+                    .get_unchecked(k));
             }
             (MSrc::P(pa), MSrc::C(y), MSrc::C(z)) => {
                 let a = std::slice::from_raw_parts(pa, n);
@@ -1291,11 +1293,8 @@ unsafe fn fch3(
                     std::slice::from_raw_parts(pb, n),
                     std::slice::from_raw_parts(pc, n),
                 );
-                lp!(
-                    |_k: usize| x,
-                    |k: usize| *b.get_unchecked(k),
-                    |k: usize| *c.get_unchecked(k)
-                );
+                lp!(|_k: usize| x, |k: usize| *b.get_unchecked(k), |k: usize| *c
+                    .get_unchecked(k));
             }
             (MSrc::C(x), MSrc::P(pb), MSrc::C(z)) => {
                 let b = std::slice::from_raw_parts(pb, n);
@@ -1461,9 +1460,7 @@ unsafe fn exec_fused(
     // at executor construction. Same source, same scalar semantics — the
     // `#[target_feature]` wrappers only widen the auto-vectorized lanes.
     match simd {
-        SimdLevel::Generic => unsafe {
-            exec_fused_runs_generic(fs, &svals, &bases, &outs, fregs)
-        },
+        SimdLevel::Generic => unsafe { exec_fused_runs_generic(fs, &svals, &bases, &outs, fregs) },
         #[cfg(target_arch = "x86_64")]
         SimdLevel::Avx2 => unsafe { exec_fused_runs_avx2(fs, &svals, &bases, &outs, fregs) },
         #[cfg(target_arch = "x86_64")]
@@ -1524,7 +1521,8 @@ unsafe fn exec_fused_runs(
                 }
                 unsafe {
                     let dst = rp.add(inp.load_reg as usize * FCHUNK);
-                    let base = bases[i].offset(o as isize + done as isize * inp.elem_stride as isize);
+                    let base =
+                        bases[i].offset(o as isize + done as isize * inp.elem_stride as isize);
                     for k in 0..c {
                         *dst.add(k) = *base.offset(k as isize * inp.elem_stride as isize);
                     }
@@ -1661,13 +1659,9 @@ unsafe fn exec_fused_runs(
                         macro_rules! b2 {
                             ($f1:expr, $f2:expr) => {
                                 if *swap {
-                                    unsafe {
-                                        fch3(dst, c, av, bv, cv, |x, y, z| $f2(z, $f1(x, y)))
-                                    }
+                                    unsafe { fch3(dst, c, av, bv, cv, |x, y, z| $f2(z, $f1(x, y))) }
                                 } else {
-                                    unsafe {
-                                        fch3(dst, c, av, bv, cv, |x, y, z| $f2($f1(x, y), z))
-                                    }
+                                    unsafe { fch3(dst, c, av, bv, cv, |x, y, z| $f2($f1(x, y), z)) }
                                 }
                             };
                         }
@@ -1726,8 +1720,7 @@ unsafe fn exec_fused_runs(
                         swap3,
                         out,
                     } => {
-                        let (pa, pb, pc, pd) =
-                            (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
+                        let (pa, pb, pc, pd) = (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
                         let dst = unsafe { rp.add(*out as usize * FCHUNK) };
                         use BinCode::{Add, Div, Mul, Sub};
                         // Monomorphized composition of the same three kernel
@@ -1845,7 +1838,12 @@ unsafe fn exec_fused_runs_avx2(
 /// preferred vector width at 256 bits for these targets unless told
 /// otherwise, so this may codegen close to the AVX2 clone.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f", enable = "avx512vl", enable = "avx512dq", enable = "avx512bw")]
+#[target_feature(
+    enable = "avx512f",
+    enable = "avx512vl",
+    enable = "avx512dq",
+    enable = "avx512bw"
+)]
 unsafe fn exec_fused_runs_avx512(
     fs: &FusedSpec,
     svals: &[f64],
@@ -2302,9 +2300,7 @@ fn run_range(
                 if desc.scalar {
                     a[IxDyn(&[])] = unsafe { *slab_ptr.add(off) };
                 } else {
-                    let dst = a
-                        .as_slice_mut()
-                        .expect("export arrays are standard layout");
+                    let dst = a.as_slice_mut().expect("export arrays are standard layout");
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             slab_ptr.add(off) as *const f64,
@@ -2335,9 +2331,7 @@ fn run_range(
                             dbase += w.dest_lo[d] as i64 * cm[d];
                         }
                         debug_assert!(
-                            sv.flat_offset
-                                + sv.shape.iter().product::<usize>().max(1)
-                                <= dy.len()
+                            sv.flat_offset + sv.shape.iter().product::<usize>().max(1) <= dy.len()
                         );
                         unsafe {
                             copy_strided(
@@ -2476,10 +2470,10 @@ mod simd_tests {
             -0.0,
             f64::INFINITY,
             f64::NEG_INFINITY,
-            f64::MIN_POSITIVE,          // smallest normal
-            5e-324,                     // smallest denormal
+            f64::MIN_POSITIVE, // smallest normal
+            5e-324,            // smallest denormal
             -5e-324,
-            2.2e-308,                   // denormal
+            2.2e-308, // denormal
             f64::MAX,
             f64::MIN,
             1.0,
@@ -2488,7 +2482,7 @@ mod simd_tests {
             -2.5,
             1e308,
             -1e308,
-            3.5e-320,                   // denormal
+            3.5e-320, // denormal
             0.1,
         ];
         let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
@@ -2611,7 +2605,10 @@ mod simd_tests {
             micro.push(MicroOp::Un { op: *op, a, out });
         }
         let out = micro.len() as u16;
-        micro.push(MicroOp::Neg { a: MRef::In(3), out });
+        micro.push(MicroOp::Neg {
+            a: MRef::In(3),
+            out,
+        });
         let out = micro.len() as u16;
         micro.push(MicroOp::Select {
             cond: MRef::Reg(9), // an Lt mask
@@ -2634,7 +2631,10 @@ mod simd_tests {
             out,
         });
         let out = micro.len() as u16;
-        micro.push(MicroOp::Mov { a: MRef::In(3), out });
+        micro.push(MicroOp::Mov {
+            a: MRef::In(3),
+            out,
+        });
         let arith = [BinCode::Add, BinCode::Sub, BinCode::Mul, BinCode::Div];
         for op1 in arith {
             for op2 in arith {
@@ -2673,7 +2673,11 @@ mod simd_tests {
                     a: MRef::In(1),
                     b: MRef::In(2),
                     op2: *op2,
-                    c: if i % 2 == 0 { MRef::In(0) } else { MRef::Scal(i as u16 % 5) },
+                    c: if i % 2 == 0 {
+                        MRef::In(0)
+                    } else {
+                        MRef::Scal(i as u16 % 5)
+                    },
                     swap,
                     out,
                 });
@@ -2739,15 +2743,16 @@ mod simd_tests {
             micro,
             n_regs,
             n_load_regs: 1,
-            n_splat_regs: 6, // 5 scalars + the zero register
+            n_splat_regs: 6,          // 5 scalars + the zero register
             outputs: SmallVec::new(), // outs are passed directly
             runs,
             n_fused_instrs: 0,
             n_folded_gathers: 0,
         };
 
-        let bases: Vec<*const f64> = vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
-        let mut run_level = |wider: u8| -> Vec<Vec<f64>> {
+        let bases: Vec<*const f64> =
+            vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
+        let run_level = |wider: u8| -> Vec<Vec<f64>> {
             let mut outbufs: Vec<Vec<f64>> = (0..n_ops).map(|_| vec![0.0f64; N]).collect();
             let outs: Vec<(u16, *mut f64)> = outbufs
                 .iter_mut()
@@ -2756,9 +2761,7 @@ mod simd_tests {
                 .collect();
             let mut fregs = vec![0.0f64; (n_regs as usize + 1 + 6) * FCHUNK];
             match wider {
-                0 => unsafe {
-                    exec_fused_runs_generic(&fs, &svals, &bases, &outs, &mut fregs)
-                },
+                0 => unsafe { exec_fused_runs_generic(&fs, &svals, &bases, &outs, &mut fregs) },
                 #[cfg(target_arch = "x86_64")]
                 1 => unsafe { exec_fused_runs_avx2(&fs, &svals, &bases, &outs, &mut fregs) },
                 #[cfg(target_arch = "x86_64")]

@@ -8,6 +8,7 @@ coupling rules have been resolved into the equation set itself.
 
 This module is the Python equivalent of EarthSciAST.jl/src/flatten.jl.
 """
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -673,9 +674,7 @@ def _lookup_variable_units(esm_file: EsmFile, qualified: str) -> str | None:
     return None
 
 
-def _check_variable_map_units(
-    esm_file: EsmFile, coupling_entries: list[CouplingEntry]
-) -> None:
+def _check_variable_map_units(esm_file: EsmFile, coupling_entries: list[CouplingEntry]) -> None:
     """Raise :class:`DomainUnitMismatchError` for any ``identity``-transform
     ``variable_map`` whose ``from``/``to`` variables carry declared, non-empty,
     and DIFFERENT units (spec §4.7.6).

@@ -63,7 +63,8 @@ fn lcc_inv(x: f64, y: f64, c: &Lcc) -> (f64, f64) {
     let rho = c.n.signum() * (x * x + (c.rho0 - y) * (c.rho0 - y)).sqrt();
     let theta = x.atan2(c.rho0 - y);
     let lon = (c.lam0 + theta / c.n).to_degrees();
-    let lat = (2.0 * (c.rf / rho).powf(1.0 / c.n).atan() - std::f64::consts::FRAC_PI_2).to_degrees();
+    let lat =
+        (2.0 * (c.rf / rho).powf(1.0 / c.n).atan() - std::f64::consts::FRAC_PI_2).to_degrees();
     (lon, lat)
 }
 
@@ -98,7 +99,10 @@ impl PrepareProvider for MockGated {
         true
     }
 
-    fn sample_with_selection(&mut self, selection: &[AxisSel]) -> Result<ArrayD<f64>, PrepareError> {
+    fn sample_with_selection(
+        &mut self,
+        selection: &[AxisSel],
+    ) -> Result<ArrayD<f64>, PrepareError> {
         self.calls
             .borrow_mut()
             .push(Call::Selection(selection.to_vec()));
@@ -118,7 +122,13 @@ fn arr1(v: &[f64]) -> ArrayD<f64> {
 
 fn assert_close(name: &str, got: &ArrayD<f64>, want: &[f64]) {
     let g: Vec<f64> = got.iter().copied().collect();
-    assert_eq!(g.len(), want.len(), "{name}: length {} != {}", g.len(), want.len());
+    assert_eq!(
+        g.len(),
+        want.len(),
+        "{name}: length {} != {}",
+        g.len(),
+        want.len()
+    );
     for (i, (a, b)) in g.iter().zip(want).enumerate() {
         // Julia-isapprox semantics: exact equality (covers ±inf — the L1
         // numerics deliberately overflow the deaths exponent) or rel-tol.
@@ -126,10 +136,7 @@ fn assert_close(name: &str, got: &ArrayD<f64>, want: &[f64]) {
             continue;
         }
         let tol = 1e-9 * b.abs().max(1.0);
-        assert!(
-            (a - b).abs() <= tol,
-            "{name}[{i}]: {a} != {b} (tol {tol})"
-        );
+        assert!((a - b).abs() <= tol, "{name}[{i}]: {a} != {b} (tol {tol})");
     }
 }
 
@@ -200,8 +207,10 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
         for l in 0..N_LAYER {
             for s in 0..GRID {
                 for r in 0..N_RCV {
-                    a[[l, s, r]] =
-                        l as f64 * 1.0e6 + base[name] * 1000.0 + (s + 1) as f64 * 10.0 + (r + 1) as f64;
+                    a[[l, s, r]] = l as f64 * 1.0e6
+                        + base[name] * 1000.0
+                        + (s + 1) as f64 * 10.0
+                        + (r + 1) as f64;
                 }
             }
         }
@@ -272,7 +281,10 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
 
     // ---- providers: mocks only, keyed by the document's loader variables ----
     let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
-        ("ISRM.TotalPop".into(), Box::new(MockConst(total_pop.to_vec()))),
+        (
+            "ISRM.TotalPop".into(),
+            Box::new(MockConst(total_pop.to_vec())),
+        ),
         (
             "ISRM.MortalityRate".into(),
             Box::new(MockConst(mortality.to_vec())),
@@ -348,7 +360,11 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
     }
 
     // ---- results through the prepared document's own graph ------------------
-    assert_close("E_VOC", prep.observed_field("E_VOC").unwrap(), &oracle_e(&is_voc));
+    assert_close(
+        "E_VOC",
+        prep.observed_field("E_VOC").unwrap(),
+        &oracle_e(&is_voc),
+    );
     assert_close(
         "E_PM25",
         prep.observed_field("E_PM25").unwrap(),
@@ -446,8 +462,10 @@ fn prepare_pushdown_l1_single_member_support_set() {
         for l in 0..N_LAYER {
             for s in 0..GRID {
                 for r in 0..N_RCV {
-                    a[[l, s, r]] =
-                        l as f64 * 1.0e6 + base[name] * 1000.0 + (s + 1) as f64 * 10.0 + (r + 1) as f64;
+                    a[[l, s, r]] = l as f64 * 1.0e6
+                        + base[name] * 1000.0
+                        + (s + 1) as f64 * 10.0
+                        + (r + 1) as f64;
                 }
             }
         }
@@ -464,9 +482,8 @@ fn prepare_pushdown_l1_single_member_support_set() {
     ]
     .into_iter()
     .collect();
-    let oracle_e = |is_p: &[f64; 5]| -> Vec<f64> {
-        vec![(0..N_REC).map(|r| emis_annual[r] * is_p[r]).sum()]
-    };
+    let oracle_e =
+        |is_p: &[f64; 5]| -> Vec<f64> { vec![(0..N_REC).map(|r| emis_annual[r] * is_p[r]).sum()] };
     let oracle_conc = |name: &str| -> Vec<f64> {
         let ep = oracle_e(pathway_is[name]);
         (0..N_RCV)
@@ -496,7 +513,10 @@ fn prepare_pushdown_l1_single_member_support_set() {
             .expect("parse pushdown_l1.esm");
 
     let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
-        ("ISRM.TotalPop".into(), Box::new(MockConst(total_pop.to_vec()))),
+        (
+            "ISRM.TotalPop".into(),
+            Box::new(MockConst(total_pop.to_vec())),
+        ),
         (
             "ISRM.MortalityRate".into(),
             Box::new(MockConst(mortality.to_vec())),
@@ -551,7 +571,11 @@ fn prepare_pushdown_l1_single_member_support_set() {
     ];
     for v in LVARS {
         let calls = call_logs[v].borrow();
-        assert_eq!(calls.len(), 1, "{v}: expected one gated fetch, got {calls:?}");
+        assert_eq!(
+            calls.len(),
+            1,
+            "{v}: expected one gated fetch, got {calls:?}"
+        );
         match &calls[0] {
             Call::Selection(sel) => assert_eq!(sel, &expect_sel, "{v}: wrong selection"),
             Call::Wholesale => panic!("{v}: fetched WHOLESALE"),

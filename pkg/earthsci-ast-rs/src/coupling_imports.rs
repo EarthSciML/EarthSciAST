@@ -75,9 +75,10 @@ pub fn is_coupling_library_doc(raw: &Value) -> bool {
 /// True when `file` carries at least one `coupling_import` entry in its
 /// `coupling` array.
 pub fn has_coupling_import(file: &EsmFile) -> bool {
-    file.coupling
-        .as_ref()
-        .is_some_and(|c| c.iter().any(|e| matches!(e, CouplingEntry::CouplingImport { .. })))
+    file.coupling.as_ref().is_some_and(|c| {
+        c.iter()
+            .any(|e| matches!(e, CouplingEntry::CouplingImport { .. }))
+    })
 }
 
 // ---------------------------------------------------------------------------

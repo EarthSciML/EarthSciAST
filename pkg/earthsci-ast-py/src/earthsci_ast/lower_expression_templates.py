@@ -244,6 +244,7 @@ def _substitute(body: Any, bindings: dict[str, Any]) -> Any:
     each referencing its predecessor twice expands to 2^depth copies of the leaf
     and OOMs the loader well within the documented depth limits.
     """
+
     # Routed through the shared sharing-preserving rebuild
     # (:func:`json_walk._rewrite_json`, ``share=True``): the identity-preserving,
     # id-memoized DAG rebuild is the combinator's job. This pass supplies only
@@ -745,12 +746,12 @@ def _expand_eager(
     node, and only eager nodes. Non-eager (surviving) references are returned
     intact. Consumes no ``MAX_REWRITE_PASSES`` budget (a separate pre-pass).
     Sharing is preserved via an identity memo."""
-    return _expand(
-        node, templates, scope, lambda n: _ref_is_eager(n, target_bearing), memo
-    )
+    return _expand(node, templates, scope, lambda n: _ref_is_eager(n, target_bearing), memo)
 
 
-def _expand_all(node: Any, templates: dict, scope: str, memo: dict[int, tuple] | None = None) -> Any:
+def _expand_all(
+    node: Any, templates: dict, scope: str, memo: dict[int, tuple] | None = None
+) -> Any:
     """Fully expand EVERY ``apply_expression_template`` node in ``node`` by pure
     substitution to a fixpoint (innermost-first: bindings are expanded before
     the body is instantiated, and the instantiated body is re-expanded). This is

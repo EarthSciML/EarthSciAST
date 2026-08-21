@@ -195,7 +195,10 @@ pub trait PrepareProvider {
     /// Sample with a per-axis selection pushed down. EVERY requested axis is
     /// present in the result (a fixed axis comes back length-1 and is dropped
     /// by the engine).
-    fn sample_with_selection(&mut self, _selection: &[AxisSel]) -> Result<ArrayD<f64>, PrepareError> {
+    fn sample_with_selection(
+        &mut self,
+        _selection: &[AxisSel],
+    ) -> Result<ArrayD<f64>, PrepareError> {
         Err(err("provider does not support selection pushdown"))
     }
 
@@ -566,9 +569,8 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
     crate::classification::observed_definitions(model)
         .into_iter()
         .filter(|(_, def)| {
-            serde_json::to_value(def).is_ok_and(|raw| {
-                !crate::value_invention::is_value_invention_assignment(&raw)
-            })
+            serde_json::to_value(def)
+                .is_ok_and(|raw| !crate::value_invention::is_value_invention_assignment(&raw))
         })
         .collect()
 }
@@ -790,17 +792,14 @@ fn gated_fetch_plan(
                         })
                     })
                     .collect::<Result<_, _>>()?;
-                gated_extent = extents
-                    .get(&faq)
-                    .map(|&e| e as usize)
-                    .unwrap_or(mem0.len());
+                gated_extent = extents.get(&faq).map(|&e| e as usize).unwrap_or(mem0.len());
                 selection.push(AxisSel::Indices(mem0));
                 gated_pos = Some(ax_i);
             }
         }
     }
-    let gated_pos =
-        gated_pos.ok_or_else(|| err(format!("gated provider '{key}' declares no gated_by axis")))?;
+    let gated_pos = gated_pos
+        .ok_or_else(|| err(format!("gated provider '{key}' declares no gated_by axis")))?;
     let gated_pos_out = gated_pos - drop_axes.iter().filter(|&&d| d < gated_pos).count();
     Ok(GatedFetchPlan {
         selection,
@@ -927,8 +926,11 @@ fn drop_fixed_axes(
         .filter(|(i, _)| !drop_axes.contains(i))
         .map(|(_, &s)| s)
         .collect();
-    arr.into_shape_with_order(IxDyn(&out))
-        .map_err(|e| err(format!("gated provider '{key}': reshape after fixed-axis drop: {e}")))
+    arr.into_shape_with_order(IxDyn(&out)).map_err(|e| {
+        err(format!(
+            "gated provider '{key}': reshape after fixed-axis drop: {e}"
+        ))
+    })
 }
 
 /// FALLBACK slice for a provider that cannot push a selection down: fetch

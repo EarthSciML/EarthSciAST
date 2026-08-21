@@ -69,16 +69,14 @@ def test_pushdown_rewrite_matches_golden(fixture):
     fires = fixture.get("fires", True) is not False
 
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")   # the residual diagnostic is a warning
+        warnings.simplefilter("ignore")  # the residual diagnostic is a warning
         rewritten = desugar_pushdown(doc, model_name=mn)
 
         if fires:
             golden = json.loads((_TESTS_DIR / fixture["golden"]).read_text())
             assert rewritten is not doc, "the pattern must fire on the input fixture"
             diffs = _deep_eq(rewritten, golden)
-            assert not diffs, "rewritten document differs from golden:\n" + "\n".join(
-                diffs[:40]
-            )
+            assert not diffs, "rewritten document differs from golden:\n" + "\n".join(diffs[:40])
             # Idempotency: the golden (and our own output) never re-desugars.
             assert desugar_pushdown(rewritten) is rewritten
             assert desugar_pushdown(golden) is golden

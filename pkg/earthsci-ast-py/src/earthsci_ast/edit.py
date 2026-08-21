@@ -4,6 +4,7 @@ Editing operations for ESM Format structures.
 Provides functions to modify ESM files, models, reaction systems, and their
 components in a safe and consistent manner.
 """
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -395,9 +396,7 @@ class ESMEditor:
                             should_include = True
                     elif isinstance(coupling, VariableMapCoupling):
                         # from_var/to_var fields (for variable_map)
-                        if coupling.from_var and coupling.from_var.startswith(
-                            f"{component_name}."
-                        ):
+                        if coupling.from_var and coupling.from_var.startswith(f"{component_name}."):
                             should_include = True
                         if coupling.to_var and coupling.to_var.startswith(f"{component_name}."):
                             should_include = True
@@ -512,9 +511,7 @@ class ESMEditor:
                             f"{', '.join(sorted(unknown))}"
                         ],
                     )
-                model.variables[operation.target_id] = replace(
-                    current_var, **operation.data
-                )
+                model.variables[operation.target_id] = replace(current_var, **operation.data)
                 return EditResult(success=True, modified_object=model)
 
             if operation.operation_type == "rename":
@@ -739,19 +736,25 @@ def rename_variable_in_model(
     return editor.rename_variable(model, old_name, new_name)
 
 
-def remove_variable_from_model(model: Model, var_name: str, validate_after_edit: bool = True) -> EditResult:
+def remove_variable_from_model(
+    model: Model, var_name: str, validate_after_edit: bool = True
+) -> EditResult:
     """Remove a variable from a model."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_variable(model, var_name)
 
 
-def add_equation_to_model(model: Model, equation: Equation, validate_after_edit: bool = True) -> EditResult:
+def add_equation_to_model(
+    model: Model, equation: Equation, validate_after_edit: bool = True
+) -> EditResult:
     """Add an equation to a model."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.add_equation(model, equation)
 
 
-def remove_equation_from_model(model: Model, index: int, validate_after_edit: bool = True) -> EditResult:
+def remove_equation_from_model(
+    model: Model, index: int, validate_after_edit: bool = True
+) -> EditResult:
     """Remove an equation from a model by index."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_equation(model, index)
@@ -805,7 +808,9 @@ def add_discrete_event_to_model(
     return editor.add_discrete_event(model, event)
 
 
-def remove_event_from_model(model: Model, event_name: str, validate_after_edit: bool = True) -> EditResult:
+def remove_event_from_model(
+    model: Model, event_name: str, validate_after_edit: bool = True
+) -> EditResult:
     """Remove an event from a model."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_event(model, event_name)
@@ -819,13 +824,17 @@ def add_coupling_to_file(
     return editor.add_coupling(esm_file, coupling)
 
 
-def remove_coupling_from_file(esm_file: EsmFile, index: int, validate_after_edit: bool = True) -> EditResult:
+def remove_coupling_from_file(
+    esm_file: EsmFile, index: int, validate_after_edit: bool = True
+) -> EditResult:
     """Remove a coupling entry from an ESM file."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_coupling(esm_file, index)
 
 
-def merge_esm_files(file_a: EsmFile, file_b: EsmFile, validate_after_edit: bool = True) -> EditResult:
+def merge_esm_files(
+    file_a: EsmFile, file_b: EsmFile, validate_after_edit: bool = True
+) -> EditResult:
     """Merge two ESM files."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.merge(file_a, file_b)

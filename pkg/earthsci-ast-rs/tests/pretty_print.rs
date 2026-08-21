@@ -214,8 +214,8 @@ fn test_display_fixtures_exact() {
     for path in &fixtures {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("cannot read required fixture {path}: {e}"));
-        let groups: serde_json::Value =
-            serde_json::from_str(&content).unwrap_or_else(|e| panic!("invalid JSON in {path}: {e}"));
+        let groups: serde_json::Value = serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("invalid JSON in {path}: {e}"));
         let groups = groups
             .as_array()
             .unwrap_or_else(|| panic!("fixture {path} is not a JSON array"));
@@ -225,7 +225,10 @@ fn test_display_fixtures_exact() {
                 continue;
             };
             for test in tests {
-                let name = test.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+                let name = test
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unnamed>");
                 let input = test
                     .get("input")
                     .unwrap_or_else(|| panic!("{path} :: {name}: missing `input`"));
@@ -259,7 +262,10 @@ fn test_display_fixtures_exact() {
         checked,
         failures.join("\n")
     );
-    assert!(checked > 0, "no fixture assertions ran — check fixture paths");
+    assert!(
+        checked > 0,
+        "no fixture assertions ran — check fixture paths"
+    );
 }
 
 /// Test that display functions handle edge cases gracefully

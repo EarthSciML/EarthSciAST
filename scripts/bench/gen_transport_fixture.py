@@ -27,6 +27,7 @@ Usage:
 where OUT_ESM must sit exactly three directory levels below a directory that
 contains (a symlink to) EarthSciDiscretizations, so the relative refs resolve.
 """
+
 import json
 import sys
 
@@ -46,8 +47,9 @@ def main(esd_root, out, nlev, hybrid_json=None):
     else:
         co = json.load(open(hybrid_json))
         Ap, Bp = co["Ap"], co["Bp"]
-        assert len(Ap) == NLEV + 1 and len(Bp) == NLEV + 1, \
+        assert len(Ap) == NLEV + 1 and len(Bp) == NLEV + 1, (
             f"hybrid table has {len(Ap)} edges, need NLEV+1={NLEV + 1}"
+        )
     dA = [Ap[k] - Ap[k + 1] for k in range(NLEV)]
     dB = [Bp[k] - Bp[k + 1] for k in range(NLEV)]
 
@@ -80,54 +82,118 @@ def main(esd_root, out, nlev, hybrid_json=None):
         m["equations"].append({"lhs": nm, "rhs": expression})
 
     # 2. CONUS-centered native GEOS-FP 4x5 slice
-    v["lon0_deg"] = {"type": "parameter", "units": "deg", "default": -112.5,
-                     "description": "West EDGE of the slice (native GEOS-FP 4x5 cell edge)."}
-    v["lat0_deg"] = {"type": "parameter", "units": "deg", "default": 26.0,
-                     "description": "Southern-most lat POINT of the slice (native GEOS-FP 4x5 point)."}
-    derived("dlon_deg", 5.0, units="deg",
-            description="GEOS-FP 4x5 native zonal spacing. Open west/east walls.")
-    derived("dlat_deg", 4.0, units="deg",
-            description="GEOS-FP 4x5 native meridional spacing. Open south/north walls.")
+    v["lon0_deg"] = {
+        "type": "parameter",
+        "units": "deg",
+        "default": -112.5,
+        "description": "West EDGE of the slice (native GEOS-FP 4x5 cell edge).",
+    }
+    v["lat0_deg"] = {
+        "type": "parameter",
+        "units": "deg",
+        "default": 26.0,
+        "description": "Southern-most lat POINT of the slice (native GEOS-FP 4x5 point).",
+    }
+    derived(
+        "dlon_deg",
+        5.0,
+        units="deg",
+        description="GEOS-FP 4x5 native zonal spacing. Open west/east walls.",
+    )
+    derived(
+        "dlat_deg",
+        4.0,
+        units="deg",
+        description="GEOS-FP 4x5 native meridional spacing. Open south/north walls.",
+    )
 
     def agg(idx, ranges, args, expr):
-        return {"op": "aggregate", "output_idx": idx,
-                "ranges": {k: {"from": r} for k, r in ranges.items()},
-                "args": args, "expr": expr}
+        return {
+            "op": "aggregate",
+            "output_idx": idx,
+            "ranges": {k: {"from": r} for k, r in ranges.items()},
+            "args": args,
+            "expr": expr,
+        }
 
     def ix(a, *s):
         return {"op": "index", "args": [a, *s]}
 
     # 3a. Hybrid coefficient differences as SHAPED PARAMETERS via const_arrays.
-    v["dA"] = {"type": "parameter", "units": "Pa", "shape": ["lev"], "default": 0.0,
-               "description": "dA[k] = Ap[k]-Ap[k+1], native GEOS-FP hybrid table. Supplied via const_arrays."}
-    v["dB"] = {"type": "parameter", "units": "1", "shape": ["lev"], "default": 0.0,
-               "description": "dB[k] = Bp[k]-Bp[k+1], native GEOS-FP hybrid table. Supplied via const_arrays."}
+    v["dA"] = {
+        "type": "parameter",
+        "units": "Pa",
+        "shape": ["lev"],
+        "default": 0.0,
+        "description": "dA[k] = Ap[k]-Ap[k+1], native GEOS-FP hybrid table. Supplied via const_arrays.",
+    }
+    v["dB"] = {
+        "type": "parameter",
+        "units": "1",
+        "shape": ["lev"],
+        "default": 0.0,
+        "description": "dB[k] = Bp[k]-Bp[k+1], native GEOS-FP hybrid table. Supplied via const_arrays.",
+    }
 
     # 3. PS constant for this analytic stage
     PS0 = 101325.0
-    derived("PS", agg(["gi", "gj"], {"gi": "lon", "gj": "lat"}, [], PS0),
-            units="Pa", shape=["lon", "lat"],
-            description="Surface pressure, constant 101325 Pa (analytic Stage-B forcing).")
+    derived(
+        "PS",
+        agg(["gi", "gj"], {"gi": "lon", "gj": "lat"}, [], PS0),
+        units="Pa",
+        shape=["lon", "lat"],
+        description="Surface pressure, constant 101325 Pa (analytic Stage-B forcing).",
+    )
 
     # 4. dp = dA[k] + dB[k]*PS(i,j)
-    derived("dp",
-            agg(["gi", "gj", "gk"], {"gi": "lon", "gj": "lat", "gk": "lev"},
-                ["PS", "dA", "dB"],
-                {"op": "+", "args": [ix("dA", "gk"),
-                                     {"op": "*", "args": [ix("dB", "gk"), ix("PS", "gi", "gj")]}]}),
-            units="Pa", shape=["lon", "lat", "lev"],
-            description="Hybrid sigma-pressure thickness dp = dA[k] + dB[k]*PS(i,j).")
+    derived(
+        "dp",
+        agg(
+            ["gi", "gj", "gk"],
+            {"gi": "lon", "gj": "lat", "gk": "lev"},
+            ["PS", "dA", "dB"],
+            {
+                "op": "+",
+                "args": [
+                    ix("dA", "gk"),
+                    {"op": "*", "args": [ix("dB", "gk"), ix("PS", "gi", "gj")]},
+                ],
+            },
+        ),
+        units="Pa",
+        shape=["lon", "lat", "lev"],
+        description="Hybrid sigma-pressure thickness dp = dA[k] + dB[k]*PS(i,j).",
+    )
 
     # 6. Mz: analytic vertical air-mass flux, vanishing at both walls
     s = {"op": "/", "args": [{"op": "-", "args": ["ck", 1]}, float(NLEV)]}
-    derived("Mz",
-            agg(["ci", "cj", "ck"], {"ci": "lon", "cj": "lat", "ck": "lev_nodes"}, [],
-                {"op": "*", "args": [0.05, {"op": "*", "args": [
-                    4.0, s, {"op": "-", "args": [1.0, s]},
-                    {"op": "-", "args": [1.0, {"op": "*", "args": [2.0, s]}]}]}]}),
-            units="Pa/s", shape=["lon", "lat", "lev_nodes"],
-            description="Analytic vertical face-normal air-mass flux, positive UPWARD; "
-                        "vanishes exactly at surface (k=1) and lid (k=NLEV+1).")
+    derived(
+        "Mz",
+        agg(
+            ["ci", "cj", "ck"],
+            {"ci": "lon", "cj": "lat", "ck": "lev_nodes"},
+            [],
+            {
+                "op": "*",
+                "args": [
+                    0.05,
+                    {
+                        "op": "*",
+                        "args": [
+                            4.0,
+                            s,
+                            {"op": "-", "args": [1.0, s]},
+                            {"op": "-", "args": [1.0, {"op": "*", "args": [2.0, s]}]},
+                        ],
+                    },
+                ],
+            },
+        ),
+        units="Pa/s",
+        shape=["lon", "lat", "lev_nodes"],
+        description="Analytic vertical face-normal air-mass flux, positive UPWARD; "
+        "vanishes exactly at surface (k=1) and lid (k=NLEV+1).",
+    )
 
     # 7. add the vertical term to the three tendency equations
     def Dlev(a):
@@ -149,7 +215,8 @@ def main(esd_root, out, nlev, hybrid_json=None):
     d["metadata"]["description"] = (
         f"Bench fixture: monotone PPM 3-D transport, {NLON}x{NLAT}x{NLEV} CONUS-centered native "
         "GEOS-FP 4x5 slice, analytic winds/PS, hybrid sigma-pressure vertical. Regenerated from the "
-        "EarthSciDiscretizations exemplar by scripts/bench/gen_transport_fixture.py (see header).")
+        "EarthSciDiscretizations exemplar by scripts/bench/gen_transport_fixture.py (see header)."
+    )
     d["models"] = {"Transport3D": m}
     json.dump(d, open(out, "w"), indent=1)
     json.dump({"dA": dA, "dB": dB}, open(out + ".hybrid_coefs.json", "w"))

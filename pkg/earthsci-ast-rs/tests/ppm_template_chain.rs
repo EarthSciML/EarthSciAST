@@ -59,9 +59,15 @@ fn assert_lowered(expr: &Expr, count: &mut usize) {
     for a in &node.args {
         assert_lowered(a, count);
     }
-    for sub in [&node.expr, &node.lower, &node.upper, &node.filter, &node.key]
-        .into_iter()
-        .flatten()
+    for sub in [
+        &node.expr,
+        &node.lower,
+        &node.upper,
+        &node.filter,
+        &node.key,
+    ]
+    .into_iter()
+    .flatten()
     {
         assert_lowered(sub, count);
     }

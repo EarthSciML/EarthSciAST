@@ -7,6 +7,7 @@ dense-output point budget — so the pathway submodules
 :mod:`.simulation_scalar`) can share them without importing each other.
 ``earthsci_ast.simulation`` re-exports this module's API.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -94,7 +95,8 @@ class SimulationResult:
                 else:
                     warnings.warn(
                         f"Variable '{var}' not found in simulation results",
-                        UserWarning, stacklevel=2,
+                        UserWarning,
+                        stacklevel=2,
                     )
 
         if not plot_vars:

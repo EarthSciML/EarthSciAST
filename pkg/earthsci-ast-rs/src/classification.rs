@@ -333,9 +333,11 @@ impl Classification {
             .map(String::as_str)
             .collect();
         if param_union.len() != param_total {
-            return Err("parameter sets overlap: brownian / discrete / sampled / constant \
+            return Err(
+                "parameter sets overlap: brownian / discrete / sampled / constant \
                         must be disjoint"
-                .to_string());
+                    .to_string(),
+            );
         }
         if param_union != declared_parameters {
             return Err(format!(

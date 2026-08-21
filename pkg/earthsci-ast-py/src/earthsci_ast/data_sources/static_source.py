@@ -46,9 +46,7 @@ class StaticLoader:
     consumers supplies them here. Empty means no remap.
     """
 
-    def __init__(
-        self, data_source: DataSource, bindings: Mapping[str, Any] | None = None
-    ) -> None:
+    def __init__(self, data_source: DataSource, bindings: Mapping[str, Any] | None = None) -> None:
         if data_source.kind != DataSourceKind.STATIC:
             raise StaticLoaderError(f"StaticLoader requires kind=static; got {data_source.kind}")
         self.dl = data_source
@@ -74,9 +72,7 @@ class StaticLoader:
         ds = open_with_fallback(urls, opener)
         raw = _ds_to_mapping(ds)
         remapped = (
-            apply_variable_mapping(raw, self.bindings, strict=True)
-            if self.bindings
-            else dict(raw)
+            apply_variable_mapping(raw, self.bindings, strict=True) if self.bindings else dict(raw)
         )
         return StaticLoadResult(urls_tried=urls, dataset=ds, variables=remapped)
 

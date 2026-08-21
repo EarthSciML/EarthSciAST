@@ -139,9 +139,7 @@ def test_flattened_overlap_producer_materializes_the_golden_support_set():
     with open(FIXTURE) as fh:
         doc = json.load(fh)
     flat = flatten_doc(doc)
-    vi = materialize_value_invention(
-        flattened_model(doc, flat), const_arrays=l1_geometry("ISRM.")
-    )
+    vi = materialize_value_invention(flattened_model(doc, flat), const_arrays=l1_geometry("ISRM."))
     assert vi.members["emis_src_cells_faq"] == [1, 2, 4, 9], (
         "flattening must not change the support set (§5.5.6: integer keys)"
     )
@@ -170,9 +168,7 @@ def test_join_on_key_column_naming_a_local_buffer_is_namespaced():
     model = doc["models"]["EmissionsAggregate"]
     model["variables"]["src_bin"] = {"type": "parameter"}
     model["variables"]["tgt_bin"] = {"type": "parameter"}
-    model["equations"][0]["rhs"]["join"] = [
-        {"on": [["src_bin", "tgt_bin"], ["src", "sourceType"]]}
-    ]
+    model["equations"][0]["rhs"]["join"] = [{"on": [["src_bin", "tgt_bin"], ["src", "sourceType"]]}]
     node = producer(flatten_doc(doc))
     assert node.join[0]["on"] == [
         ["EmissionsAggregate.src_bin", "EmissionsAggregate.tgt_bin"],

@@ -19,7 +19,6 @@ fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Valu
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
-
 mod common;
 
 fn conf(dir: &str) -> PathBuf {
@@ -105,7 +104,11 @@ fn bridge_expand_equals_expanded_oracle() {
         ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
         ("arrhenius_smoke", "fixture.esm", "expanded.esm"),
         ("constrained_match_scope", "fixture.esm", "expanded.esm"),
-        ("coupling_transform_expression", "fixture.esm", "expanded.esm"),
+        (
+            "coupling_transform_expression",
+            "fixture.esm",
+            "expanded.esm",
+        ),
         ("fixpoint_nested_deriv", "fixture.esm", "expanded.esm"),
         ("godunov_beats_inner_deriv", "fixture.esm", "expanded.esm"),
         ("import_diamond", "fixture.esm", "expanded.esm"),
@@ -128,7 +131,11 @@ fn bridge_expand_equals_expanded_oracle() {
             "fixture.esm",
             "expanded.esm",
         ),
-        ("per_variable_scheme_literal_args", "fixture.esm", "expanded.esm"),
+        (
+            "per_variable_scheme_literal_args",
+            "fixture.esm",
+            "expanded.esm",
+        ),
         ("scalar_field_param", "fixture.esm", "expanded.esm"),
         ("two_div_two_meshes", "fixture.esm", "expanded.esm"),
     ];
@@ -181,9 +188,7 @@ fn emit_materialized_registry_imports_gone_stencils_materialized() {
     let keys: std::collections::HashSet<&str> = reg.keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["central_D_lon_interior", "dlon_deg"]
-            .into_iter()
-            .collect()
+        ["central_D_lon_interior", "dlon_deg"].into_iter().collect()
     ); // match-less only; match rule not materialized
     // Call site intact: the makearray interior region is a surviving reference.
     let interior = &adv["equations"][0]["rhs"]["args"][1]["values"][0];
@@ -206,8 +211,12 @@ fn emit_rename_dotted_keys_on_disk() {
         .unwrap();
     let keys: std::collections::HashSet<&str> = reg.keys().map(String::as_str).collect();
     assert_eq!(keys, ["fine.dx", "coarse.dx"].into_iter().collect());
-    let isets: std::collections::HashSet<&str> =
-        doc["index_sets"].as_object().unwrap().keys().map(String::as_str).collect();
+    let isets: std::collections::HashSet<&str> = doc["index_sets"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     assert_eq!(isets, ["fine.x", "coarse.x"].into_iter().collect());
 }
 
@@ -240,7 +249,10 @@ fn eager_target_bearing_positive_and_negative() {
 #[test]
 fn opacity_negative_compound_does_not_see_through_reference() {
     let loaded = load_b("opacity_negative", "fixture.esm").unwrap();
-    let flux = normj(earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux").expect("flux defining equation"));
+    let flux = normj(
+        earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux")
+            .expect("flux defining equation"),
+    );
     assert_eq!(flux["op"], "D"); // compound did NOT fire (no marker 999)
     assert!(is_apply(&flux["args"][0])); // its arg is the surviving reference
     assert_eq!(flux["args"][0]["name"], "flux_prod");
@@ -258,7 +270,10 @@ fn opacity_negative_compound_does_not_see_through_reference() {
 #[test]
 fn opacity_priority_shadowing_generic_fires_compound_silently_does_not() {
     let loaded = load_b("opacity_priority_shadowing", "fixture.esm").unwrap();
-    let flux = normj(earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux").expect("flux defining equation"));
+    let flux = normj(
+        earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux")
+            .expect("flux defining equation"),
+    );
     assert_eq!(flux["op"], "*");
     assert_eq!(flux["args"][0], 1); // generic marker (NOT compound 999)
     assert!(is_apply(&flux["args"][1])); // reference bound WHOLE by metavariable f
@@ -277,7 +292,11 @@ fn opacity_priority_shadowing_generic_fires_compound_silently_does_not() {
 fn per_instantiation_validation_names_call_site() {
     let err = load_b("per_instantiation_validation", "fixture.esm").expect_err("must reject");
     assert_eq!(err.code, "geometry_manifold_invalid");
-    assert!(err.message.contains("area_bad"), "call site: {}", err.message);
+    assert!(
+        err.message.contains("area_bad"),
+        "call site: {}",
+        err.message
+    );
     assert!(err.message.contains("overlap"), "template: {}", err.message);
 }
 
@@ -295,10 +314,26 @@ fn flatten_registry_merge_dedup_and_collision_rename() {
         serde_json::json!({"op": "*", "args": [2, "f"]})
     );
     // references rewritten in lockstep
-    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "za").expect("za defining equation")["name"], "A.s");
-    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "zb").expect("zb defining equation")["name"], "B.s");
-    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "ya").expect("ya defining equation")["name"], "sten");
-    assert_eq!(earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "yb").expect("yb defining equation")["name"], "sten");
+    assert_eq!(
+        earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "za")
+            .expect("za defining equation")["name"],
+        "A.s"
+    );
+    assert_eq!(
+        earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "zb")
+            .expect("zb defining equation")["name"],
+        "B.s"
+    );
+    assert_eq!(
+        earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "ya")
+            .expect("ya defining equation")["name"],
+        "sten"
+    );
+    assert_eq!(
+        earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "yb")
+            .expect("yb defining equation")["name"],
+        "sten"
+    );
     // per-component blocks surrendered to the merged registry
     assert!(root["models"]["A"].get("expression_templates").is_none());
     assert!(root["models"]["B"].get("expression_templates").is_none());
@@ -352,11 +387,23 @@ fn flatten_registry_merge_transitive_collisions_propagate() {
         .collect()
     );
     // Each owner's wrapper reaches its OWN leaf, never the other model's.
-    assert_eq!(apply_names(&merged["A.outer_stencil"]["body"]), ["A.interior_stencil"]);
-    assert_eq!(apply_names(&merged["B.outer_stencil"]["body"]), ["B.interior_stencil"]);
+    assert_eq!(
+        apply_names(&merged["A.outer_stencil"]["body"]),
+        ["A.interior_stencil"]
+    );
+    assert_eq!(
+        apply_names(&merged["B.outer_stencil"]["body"]),
+        ["B.interior_stencil"]
+    );
     // Component reference sites follow in lockstep.
-    assert_eq!(apply_names(&root["models"]["A"]["equations"]), ["A.outer_stencil"]);
-    assert_eq!(apply_names(&root["models"]["B"]["equations"]), ["B.outer_stencil"]);
+    assert_eq!(
+        apply_names(&root["models"]["A"]["equations"]),
+        ["A.outer_stencil"]
+    );
+    assert_eq!(
+        apply_names(&root["models"]["B"]["equations"]),
+        ["B.outer_stencil"]
+    );
     // Nothing dangles: every surviving reference resolves in the merged registry.
     for decl in merged.values() {
         for r in apply_names(decl) {
@@ -398,9 +445,18 @@ fn flatten_registry_merge_is_the_union_half_only() {
         keys,
         ["interior_stencil", "outer_stencil"].into_iter().collect()
     );
-    assert_eq!(apply_names(&merged["outer_stencil"]["body"]), ["interior_stencil"]);
-    assert_eq!(apply_names(&root["models"]["A"]["equations"]), ["outer_stencil"]);
-    assert_eq!(apply_names(&root["models"]["B"]["equations"]), ["outer_stencil"]);
+    assert_eq!(
+        apply_names(&merged["outer_stencil"]["body"]),
+        ["interior_stencil"]
+    );
+    assert_eq!(
+        apply_names(&root["models"]["A"]["equations"]),
+        ["outer_stencil"]
+    );
+    assert_eq!(
+        apply_names(&root["models"]["B"]["equations"]),
+        ["outer_stencil"]
+    );
     // Nothing dangles at this layer.
     for decl in merged.values() {
         for r in apply_names(decl) {
@@ -411,7 +467,10 @@ fn flatten_registry_merge_is_the_union_half_only() {
     // `inv_dx`, not `A.inv_dx`. Scoping belongs to the caller that namespaces.
     let body = merged["interior_stencil"]["body"].to_string();
     assert!(body.contains("\"inv_dx\""), "{body}");
-    assert!(!body.contains("A.inv_dx") && !body.contains("B.inv_dx"), "{body}");
+    assert!(
+        !body.contains("A.inv_dx") && !body.contains("B.inv_dx"),
+        "{body}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -455,5 +514,8 @@ fn emit_load_byte_wise_fixed_point_all_fixtures() {
             checked += 1;
         }
     }
-    assert!(checked >= 15, "expected many emittable fixtures, got {checked}");
+    assert!(
+        checked >= 15,
+        "expected many emittable fixtures, got {checked}"
+    );
 }

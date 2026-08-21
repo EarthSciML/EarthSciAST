@@ -1,6 +1,7 @@
 """
 Type definitions for ESM Format using dataclasses.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -21,24 +22,36 @@ class ExprNode:
 
     op: str = field(metadata={"kind": "scalar"})
     args: list[Expr] = field(default_factory=list, metadata={"kind": "expr_list"})
-    wrt: str | None = field(default=None, metadata={"kind": "scalar"})  # with respect to (for derivatives)
+    wrt: str | None = field(
+        default=None, metadata={"kind": "scalar"}
+    )  # with respect to (for derivatives)
     dim: str | None = field(default=None, metadata={"kind": "scalar"})  # dimension information
-    var: str | None = field(default=None, metadata={"kind": "scalar"})  # integration variable name (for integral operator, JSON key "var")
-    lower: Expr | None = field(default=None, metadata={"kind": "expr"})  # lower integration bound (for integral operator)
-    upper: Expr | None = field(default=None, metadata={"kind": "expr"})  # upper integration bound (for integral operator)
+    var: str | None = field(
+        default=None, metadata={"kind": "scalar"}
+    )  # integration variable name (for integral operator, JSON key "var")
+    lower: Expr | None = field(
+        default=None, metadata={"kind": "expr"}
+    )  # lower integration bound (for integral operator)
+    upper: Expr | None = field(
+        default=None, metadata={"kind": "expr"}
+    )  # upper integration bound (for integral operator)
 
     # Aggregate extensions (schema §ExpressionNode). None unless the op uses them.
     # The canonical Functional Aggregate Query op tag is "aggregate".
     output_idx: list[str | int] | None = field(default=None, metadata={"kind": "scalar"})
     expr: Expr | None = field(default=None, metadata={"kind": "expr"})
-    reduce: str | None = field(default=None, metadata={"kind": "scalar"})  # default "+"; names only the semiring ⊕ operator
+    reduce: str | None = field(
+        default=None, metadata={"kind": "scalar"}
+    )  # default "+"; names only the semiring ⊕ operator
     # Named semiring (⊕, ⊗) parameterizing the reduction (RFC §5.1). When present
     # it supersedes ``reduce``; absent ⇒ "sum_product" (today's semantics).
     semiring: str | None = field(default=None, metadata={"kind": "scalar"})
     # Each range value is EITHER a dense integer tuple ([start, stop] or
     # [start, step, stop]) OR an index-set reference {"from": <name>, "of": [...]}
     # resolved against the document ``index_sets`` registry (RFC §5.2).
-    ranges: dict[str, list[int] | dict[str, Any]] | None = field(default=None, metadata={"kind": "canonical_nested"})
+    ranges: dict[str, list[int] | dict[str, Any]] | None = field(
+        default=None, metadata={"kind": "canonical_nested"}
+    )
     # Value-equality joins (RFC §5.3): an array of join clauses, each
     # ``{"on": [[left, right], ...]}`` naming key-column pairs. An inner
     # equi-join — a ⊗-product term is contributed only for index combinations
@@ -64,7 +77,9 @@ class ExprNode:
     # "label". Mirrors the Julia reference `label` field.
     label: str | None = field(default=None, metadata={"kind": "scalar"})
     # makearray:
-    regions: list[list[list[int]]] | None = field(default=None, metadata={"kind": "canonical_nested"})
+    regions: list[list[list[int]]] | None = field(
+        default=None, metadata={"kind": "canonical_nested"}
+    )
     values: list[Expr] | None = field(default=None, metadata={"kind": "expr_list"})
     # reshape:
     shape: list[int | str] | None = field(default=None, metadata={"kind": "canonical_nested"})
@@ -103,7 +118,9 @@ class ExprNode:
     # the axis names declared on the referenced FunctionTable; values are
     # arbitrary scalar Expressions (number, variable reference, or AST node).
     # Stored under the JSON key ``axes`` on the wire.
-    table_axes: dict[str, Expr] | None = field(default=None, metadata={"wire": "axes", "kind": "expr_dict"})
+    table_axes: dict[str, Expr] | None = field(
+        default=None, metadata={"wire": "axes", "kind": "expr_dict"}
+    )
     # table_lookup: which output of a multi-output table to return. Either a
     # non-negative integer (0-based index into the leading data dimension) or
     # a string (an entry of the table's outputs list). Single-output tables
@@ -141,10 +158,37 @@ Expr = Union[int, float, str, ExprNode]
 # emits between ``name`` and ``value`` (verified against the goldens). This tuple
 # pins ORDER only; each field's wire key and codec kind live in its metadata.
 _EXPR_WIRE_ORDER: tuple[str, ...] = (
-    "op", "args", "wrt", "dim", "var", "lower", "upper", "output_idx", "expr",
-    "reduce", "semiring", "ranges", "join", "filter", "distinct", "key",
-    "regions", "values", "shape", "perm", "axis", "fn", "id", "manifold",
-    "handler_id", "name", "label", "value", "table", "table_axes", "output",
+    "op",
+    "args",
+    "wrt",
+    "dim",
+    "var",
+    "lower",
+    "upper",
+    "output_idx",
+    "expr",
+    "reduce",
+    "semiring",
+    "ranges",
+    "join",
+    "filter",
+    "distinct",
+    "key",
+    "regions",
+    "values",
+    "shape",
+    "perm",
+    "axis",
+    "fn",
+    "id",
+    "manifold",
+    "handler_id",
+    "name",
+    "label",
+    "value",
+    "table",
+    "table_axes",
+    "output",
 )
 
 #: ExprNode fields ALWAYS emitted (never omitted when None/empty); every other

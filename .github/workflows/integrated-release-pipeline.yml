@@ -22,6 +22,7 @@ jobs:
   # Analyze what needs to be released
   release-analysis:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       needs_release: ${{ steps.analysis.outputs.needs_release }}
       new_version: ${{ steps.analysis.outputs.new_version }}
@@ -135,6 +136,7 @@ jobs:
   security-scan:
     needs: release-analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: needs.release-analysis.outputs.needs_release == 'true'
     outputs:
       security_status: ${{ steps.security_check.outputs.status }}
@@ -145,7 +147,7 @@ jobs:
         fetch-depth: 0
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -207,6 +209,7 @@ jobs:
   create-release:
     needs: [release-analysis, security-scan]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed' && needs.release-analysis.outputs.tag_exists != 'true'
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -240,6 +243,7 @@ jobs:
     needs: [release-analysis, security-scan, create-release]
     if: always() && needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed' && needs.create-release.result != 'failure'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: pypi
       url: https://pypi.org/p/earthsci-ast
@@ -309,6 +313,7 @@ jobs:
       run-conformance-tests
     ]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: always() && needs.release-analysis.outputs.needs_release == 'true'
     steps:
     - uses: actions/checkout@v4

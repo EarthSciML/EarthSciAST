@@ -221,10 +221,7 @@ fn run(
         ("ISRM.is_NOx".into(), Box::new(MockConst(is_nox.to_vec()))),
         ("ISRM.is_NH3".into(), Box::new(MockConst(is_nh3.to_vec()))),
         ("ISRM.is_SOx".into(), Box::new(MockConst(is_sox.to_vec()))),
-        (
-            "ISRM.is_PM25".into(),
-            Box::new(MockConst(is_pm25.to_vec())),
-        ),
+        ("ISRM.is_PM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
     ];
     let mut call_logs: HashMap<String, Rc<RefCell<Vec<Vec<AxisSel>>>>> = HashMap::new();
     for v in LVARS {

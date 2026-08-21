@@ -177,7 +177,7 @@ Rewrite §9.6.8 so it describes the **mechanism** and disclaims the vocabulary:
 >
 > **This format ships no discretization rules.** The standard library of finite-difference /
 > finite-volume rules (and their conformance golden) lives in
-> [EarthSciDiscretizations](../earthscidiscretizations). A `.esm` file obtains discretization
+> [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations). A `.esm` file obtains discretization
 > either by declaring in-file `expression_templates` with `match` on `D`, or by composing
 > with rules that library provides.
 >

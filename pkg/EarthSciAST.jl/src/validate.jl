@@ -919,7 +919,7 @@ The three static aggregate/relational checks of F-6. Walks every
 expression-bearing field of every model (and its subsystems) and, for each
 `aggregate` node it finds, applies:
 
-- [`_check_undefined_index_set!`](@ref-less) — a `ranges` `{from: NAME}` whose
+- [`_check_undefined_index_set!`] — a `ranges` `{from: NAME}` whose
   NAME is not a key of the document `index_sets` registry;
 - [`_check_join_key_type!`] — a value-equality `join` key column resolving to a
   categorical set with a float/null member;

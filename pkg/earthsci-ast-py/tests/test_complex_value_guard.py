@@ -86,7 +86,11 @@ def _pow_x():
             },
         ),
         # a SELECTED ifelse branch
-        ("ifelse_taken", None, {"op": "ifelse", "args": [{"op": "true", "args": []}, _pow_x(), 1.0]}),
+        (
+            "ifelse_taken",
+            None,
+            {"op": "ifelse", "args": [{"op": "true", "args": []}, _pow_x(), 1.0]},
+        ),
     ],
 )
 def test_complex_result_is_a_named_error_not_a_plausible_number(label, shape, expression):

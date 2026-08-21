@@ -142,7 +142,6 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
 /// let result = evaluate(&expr, &bindings).unwrap();
 /// assert!((result - 3.14).abs() < 1e-10);
 /// ```
-#[cfg(not(target_arch = "wasm32"))]
 pub fn evaluate(expr: &Expr, bindings: &HashMap<String, f64>) -> Result<f64, Vec<String>> {
     crate::simulate::fold_constant_expr(expr, bindings)
 }

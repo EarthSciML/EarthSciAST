@@ -56,9 +56,7 @@ class PointsLoader:
     consumers supplies them here. Empty means no remap.
     """
 
-    def __init__(
-        self, data_source: DataSource, bindings: Mapping[str, Any] | None = None
-    ) -> None:
+    def __init__(self, data_source: DataSource, bindings: Mapping[str, Any] | None = None) -> None:
         if data_source.kind != DataSourceKind.POINTS:
             raise PointsLoaderError(f"PointsLoader requires kind=points; got {data_source.kind}")
         self.dl = data_source
@@ -97,9 +95,7 @@ class PointsLoader:
         records = parser(body)
         raw = _records_to_columns(records)
         mapped = (
-            apply_variable_mapping(raw, self.bindings, strict=False)
-            if self.bindings
-            else dict(raw)
+            apply_variable_mapping(raw, self.bindings, strict=False) if self.bindings else dict(raw)
         )
         return PointsLoadResult(urls_tried=urls, records=records, variables=mapped)
 

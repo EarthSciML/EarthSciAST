@@ -214,7 +214,8 @@ const MODEL: &str = r#"
     "#;
 
 fn has(v: &[String], name: &str) -> bool {
-    v.iter().any(|n| n == name || n.ends_with(&format!(".{name}")))
+    v.iter()
+        .any(|n| n == name || n.ends_with(&format!(".{name}")))
 }
 
 #[test]
@@ -231,7 +232,10 @@ fn forcing_derived_state_free_observed_is_discrete_not_continuous() {
         has(&discrete, "g"),
         "g should be DISCRETE (per-segment), got const={const_:?} discrete={discrete:?} continuous={continuous:?}"
     );
-    assert!(!has(&continuous, "g"), "g must not be CONTINUOUS: {continuous:?}");
+    assert!(
+        !has(&continuous, "g"),
+        "g must not be CONTINUOUS: {continuous:?}"
+    );
 
     // Critically, `g` must NOT be CONST: a discrete forcing buffer is refreshed
     // between segments, so freezing `g` at setup would read a stale first record.

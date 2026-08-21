@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/canonicalize.py
+# hypothesis_version: 6.141.1
+
+[0.0, 1e-06, 1.0, 1e+21, '*', '+', ',', '-', '-0.0', '.', '.0', '/', '0', '0.0', 'E', '[', ']', 'arg', 'args', 'bindings', 'dim', 'e', 'e+', 'f', 'false', 'fn', 'name', 'neg', 'null', 'op', 'true', 'value', 'wrt', '{', '}']

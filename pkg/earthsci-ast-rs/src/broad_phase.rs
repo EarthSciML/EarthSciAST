@@ -558,7 +558,10 @@ mod tests {
         let c1 = broad_phase_candidates(&src, &tgt, 1.0);
         // eps grows the candidate set (superset).
         for pair in &c0 {
-            assert!(c1.contains(pair), "eps=1 dropped a eps=0 candidate {pair:?}");
+            assert!(
+                c1.contains(pair),
+                "eps=1 dropped a eps=0 candidate {pair:?}"
+            );
         }
         assert!(c1.len() >= c0.len());
         // The true strict containments (p0∈c0, p1∈c1) are always candidates.
@@ -572,7 +575,9 @@ mod tests {
         // brute-force oracle must agree pair-for-pair at several eps.
         let mut state: u64 = 0x9E3779B97F4A7C15;
         let mut next = || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((state >> 33) as f64) / (1u64 << 31) as f64 // in [0, 1)
         };
         let mk = |n: usize, next: &mut dyn FnMut() -> f64| -> Vec<Envelope> {

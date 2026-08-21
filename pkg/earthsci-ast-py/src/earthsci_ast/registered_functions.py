@@ -163,9 +163,7 @@ _CLOSED_FUNCTION_NAMES: frozenset = frozenset(_CLOSED_FUNCTIONS)
 # ``_CLOSED_FUNCTIONS`` (single source of truth); any closed function absent here
 # has all-dynamic arguments (e.g. ``datetime.*`` takes a single scalar ``t_utc``).
 INTERP_CONST_ARG_POSITIONS: dict[str, tuple] = {
-    name: spec.const_positions
-    for name, spec in _CLOSED_FUNCTIONS.items()
-    if spec.const_positions
+    name: spec.const_positions for name, spec in _CLOSED_FUNCTIONS.items() if spec.const_positions
 }
 
 

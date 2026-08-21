@@ -305,7 +305,11 @@ fn pd_parse_containment(pred: &Value, c_sym: &str, r_sym: &str) -> Option<Contai
             return None;
         };
         let opn = if cell_on_left { opn0 } else { pd_flip(opn0) };
-        let kind = if matches!(opn, "<" | "<=") { "min" } else { "max" };
+        let kind = if matches!(opn, "<" | "<=") {
+            "min"
+        } else {
+            "max"
+        };
         let entry = bounds.entry(fp.to_string()).or_insert_with(|| {
             rec_order.push(fp.to_string());
             HashMap::new()
@@ -566,8 +570,7 @@ fn pd_templates(model: &Value) -> Option<&Map<String, Value>> {
 fn pd_has_apply(node: &Value) -> bool {
     match node {
         Value::Object(m) => {
-            m.get("op").and_then(Value::as_str) == Some(APPLY_OP)
-                || m.values().any(pd_has_apply)
+            m.get("op").and_then(Value::as_str) == Some(APPLY_OP) || m.values().any(pd_has_apply)
         }
         Value::Array(xs) => xs.iter().any(pd_has_apply),
         _ => false,
@@ -675,8 +678,7 @@ fn pd_def_view<'a>(
 // --------------------------------------------------------------------------- //
 
 /// The fixed, cross-binding `consequence` string of a residual diagnostic.
-pub const PD_UNGATED_CONSEQUENCE: &str =
-    "the provider-backed array is fetched WHOLESALE — no derived support set \
+pub const PD_UNGATED_CONSEQUENCE: &str = "the provider-backed array is fetched WHOLESALE — no derived support set \
 is produced and no gate is emitted";
 
 /// Why [`pd_detect_binning`] refused `ev`, for a caller that has ALREADY
@@ -912,9 +914,7 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
                 .get("shape")
                 .and_then(Value::as_array)
                 .map(|s| {
-                    s.len() == 2
-                        && s[0].as_str() == Some(c_set)
-                        && s[1].as_str() == Some(r_set)
+                    s.len() == 2 && s[0].as_str() == Some(c_set) && s[1].as_str() == Some(r_set)
                 })
                 .unwrap_or(false);
         if !a_ok {
@@ -1012,8 +1012,7 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     // trigger, so a document holding only mirrored binning aggregates is not
     // rewritten at all (§5.5.7).
     let forward_names: Vec<String> = e_specs.iter().map(|(e, ..)| e.clone()).collect();
-    plan.mirror_specs =
-        pd_mirror_specs(model, defs, &plan.c_set, &plan.r_set, &forward_names);
+    plan.mirror_specs = pd_mirror_specs(model, defs, &plan.c_set, &plan.r_set, &forward_names);
     plan.conc_specs = conc_specs;
     plan.a_names = a_names;
     plan.e_specs = e_specs;
@@ -1100,7 +1099,11 @@ fn pd_collect_stale_rects(
     match node {
         Value::Object(m) => {
             if m.get("op").and_then(Value::as_str) == Some("index")
-                && let Some(f) = m.get("args").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str)
+                && let Some(f) = m
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .and_then(|a| a.first())
+                    .and_then(Value::as_str)
                 && rectmap.contains_key(f)
             {
                 out.insert(f.to_string());
@@ -1219,8 +1222,7 @@ fn pd_apply(
             rects.push(f.clone());
         }
     }
-    let rectmap: HashMap<String, String> =
-        rects.iter().map(|f| (f.clone(), cellgath(f))).collect();
+    let rectmap: HashMap<String, String> = rects.iter().map(|f| (f.clone(), cellgath(f))).collect();
 
     let root = d
         .as_object_mut()
@@ -1251,11 +1253,9 @@ fn pd_apply(
     //     BEFORE E is rewritten (they must keep full-grid rect factor refs).
     //     Read off the DEFINING EQUATION: esm 1.0.0 has no variable
     //     `expression` field. ---
-    let repexpr = pd_def(model, &plan.rep_ename)
-        .cloned()
-        .ok_or_else(|| {
-            PushdownRewriteError("representative E lost its defining equation".into())
-        })?;
+    let repexpr = pd_def(model, &plan.rep_ename).cloned().ok_or_else(|| {
+        PushdownRewriteError("representative E lost its defining equation".into())
+    })?;
     // When the call site hides the predicate behind a template reference, read it
     // off the EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID
     // rect references, which is exactly what the pre-rewrite expansion yields.
@@ -1263,7 +1263,9 @@ fn pd_apply(
     // comparisons, so the document's template block and call sites are untouched.
     // A template-free document never builds one, so its emitted filter is
     // byte-identical to before.
-    let rep_expanded = repexpr.get("expr").and_then(|e| pd_expand_for_detection(e, templates));
+    let rep_expanded = repexpr
+        .get("expr")
+        .and_then(|e| pd_expand_for_detection(e, templates));
     let ifcond = repexpr
         .get("expr")
         .and_then(pd_find_ifelse_cond)
@@ -1374,8 +1376,10 @@ fn pd_apply(
         if expr.get("join").is_none()
             && let Some(eo) = expr.as_object_mut()
         {
-            let gathered: Vec<String> =
-                e_tgt.iter().map(|f| rectmap.get(f).cloned().unwrap_or_else(|| f.clone())).collect();
+            let gathered: Vec<String> = e_tgt
+                .iter()
+                .map(|f| rectmap.get(f).cloned().unwrap_or_else(|| f.clone()))
+                .collect();
             eo.insert(
                 "join".to_string(),
                 Value::Array(vec![pd_overlap_clause(e_src, &gathered)]),
@@ -1747,9 +1751,10 @@ pub fn pushdown_coupling_pairs(doc: &Value) -> Vec<(String, String)> {
                     continue;
                 };
                 for rule in var.update.iter().flat_map(|spec| spec.rules()) {
-                    let (Some(source), Some(binding)) =
-                        (rule.data_source(), rule.value().and_then(|v| v.from.as_ref()))
-                    else {
+                    let (Some(source), Some(binding)) = (
+                        rule.data_source(),
+                        rule.value().and_then(|v| v.from.as_ref()),
+                    ) else {
                         continue;
                     };
                     out.push((
@@ -1788,7 +1793,10 @@ fn pushdown_gated_rank(doc: &Value, applies: &[String]) -> usize {
                 continue;
             };
             for a in applies {
-                if let Some(shp) = mv.get(a).and_then(|v| v.get("shape")).and_then(Value::as_array)
+                if let Some(shp) = mv
+                    .get(a)
+                    .and_then(|v| v.get("shape"))
+                    .and_then(Value::as_array)
                     && !shp.is_empty()
                 {
                     return shp.len();

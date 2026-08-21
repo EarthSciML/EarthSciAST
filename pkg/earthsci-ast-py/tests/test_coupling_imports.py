@@ -8,7 +8,6 @@ instantiation, the §4.2 substitution surface, and each §10.11 diagnostic code.
 import json
 import os
 
-import pytest
 
 from earthsci_ast import flatten, is_coupling_library_doc, load
 from earthsci_ast.coupling_imports import (
@@ -29,8 +28,18 @@ LIB = {
         "Spread": {"description": "Rothermel spread model"},
     },
     "coupling": [
-        {"type": "variable_map", "from": "Fuel.sigma", "to": "Spread.sigma", "transform": "param_to_var"},
-        {"type": "variable_map", "from": "Fuel.w_0", "to": "Spread.w0", "transform": "param_to_var"},
+        {
+            "type": "variable_map",
+            "from": "Fuel.sigma",
+            "to": "Spread.sigma",
+            "transform": "param_to_var",
+        },
+        {
+            "type": "variable_map",
+            "from": "Fuel.w_0",
+            "to": "Spread.w0",
+            "transform": "param_to_var",
+        },
     ],
 }
 
@@ -97,9 +106,7 @@ def test_is_coupling_library_doc_identifies_by_coupling_roles():
 
 
 def test_expand_substitutes_roles_into_library_edges():
-    f = _assembly(
-        _import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})
-    )
+    f = _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}))
     expanded = expand_coupling_imports(f, load_ref=_load_ref)
     assert all(isinstance(e, VariableMapCoupling) for e in expanded)
     assert [(e.from_var, e.to_var, e.transform) for e in expanded] == [
@@ -110,7 +117,12 @@ def test_expand_substitutes_roles_into_library_edges():
 
 def test_expand_leaves_file_without_import_untouched():
     coupling = [
-        {"type": "variable_map", "from": "FuelModelLookup.sigma", "to": "RothermelFireSpread.sigma", "transform": "param_to_var"}
+        {
+            "type": "variable_map",
+            "from": "FuelModelLookup.sigma",
+            "to": "RothermelFireSpread.sigma",
+            "transform": "param_to_var",
+        }
     ]
     f = _assembly(coupling)
     out = expand_coupling_imports(f)  # no options needed, never touches disk
@@ -121,8 +133,16 @@ def test_expand_leaves_file_without_import_untouched():
 def test_expand_supports_multiple_instantiation():
     f = _assembly(
         [
-            {"type": "coupling_import", "ref": "lib.esm", "bind": {"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}},
-            {"type": "coupling_import", "ref": "lib.esm", "bind": {"Fuel": "RothermelFireSpread", "Spread": "FuelModelLookup"}},
+            {
+                "type": "coupling_import",
+                "ref": "lib.esm",
+                "bind": {"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"},
+            },
+            {
+                "type": "coupling_import",
+                "ref": "lib.esm",
+                "bind": {"Fuel": "RothermelFireSpread", "Spread": "FuelModelLookup"},
+            },
         ]
     )
     expanded = expand_coupling_imports(f, load_ref=_load_ref)
@@ -145,7 +165,9 @@ def test_rewrite_surface_operator_compose():
         "translate": {"A.u": "B.v", "A.w": {"var": "B.z", "factor": 2}},
     }
     bind = {"A": "Adv", "B": "React"}
-    _rewrite_entry_in_place(edge, lambda r: _rewrite_scoped_ref(r, bind), lambda r: _rewrite_scoped_ref(r, bind))
+    _rewrite_entry_in_place(
+        edge, lambda r: _rewrite_scoped_ref(r, bind), lambda r: _rewrite_scoped_ref(r, bind)
+    )
     assert edge["systems"] == ["Adv", "React"]
     assert edge["translate"] == {"Adv.u": "React.v", "Adv.w": {"var": "React.z", "factor": 2}}
 
@@ -166,7 +188,10 @@ def test_rewrite_surface_event_full():
         "trigger": {"type": "condition", "expression": {"op": "<", "args": ["Sensor.temp", "t"]}},
     }
     bind = {"Sensor": "TempProbe", "Fire": "Burn"}
-    rw = lambda r: _rewrite_scoped_ref(r, bind)
+
+    def rw(r):
+        return _rewrite_scoped_ref(r, bind)
+
     _rewrite_entry_in_place(edge, rw, rw)
     assert edge["conditions"][0]["args"][0] == "TempProbe.temp"
     assert edge["affects"][0]["lhs"] == "Burn.burned"
@@ -194,7 +219,10 @@ def test_rewrite_surface_apply_expression_template_binding_values():
         },
     }
     bind = {"Fuel": "FML", "Spread": "RFS"}
-    rw = lambda r: _rewrite_scoped_ref(r, bind)
+
+    def rw(r):
+        return _rewrite_scoped_ref(r, bind)
+
     _rewrite_entry_in_place(edge, rw, rw)
     assert edge["from"] == "FML.sigma"
     assert edge["to"] == "RFS.sigma"
@@ -214,8 +242,18 @@ def test_import_and_inline_flatten_identically():
     inline = flatten(
         _assembly(
             [
-                {"type": "variable_map", "from": "FuelModelLookup.sigma", "to": "RothermelFireSpread.sigma", "transform": "param_to_var"},
-                {"type": "variable_map", "from": "FuelModelLookup.w_0", "to": "RothermelFireSpread.w0", "transform": "param_to_var"},
+                {
+                    "type": "variable_map",
+                    "from": "FuelModelLookup.sigma",
+                    "to": "RothermelFireSpread.sigma",
+                    "transform": "param_to_var",
+                },
+                {
+                    "type": "variable_map",
+                    "from": "FuelModelLookup.w_0",
+                    "to": "RothermelFireSpread.w0",
+                    "transform": "param_to_var",
+                },
             ]
         )
     )
@@ -244,7 +282,11 @@ def test_diag_unknown_role():
             lambda: expand_coupling_imports(
                 _assembly(
                     _import_entry(
-                        {"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread", "Ghost": "FuelModelLookup"}
+                        {
+                            "Fuel": "FuelModelLookup",
+                            "Spread": "RothermelFireSpread",
+                            "Ghost": "FuelModelLookup",
+                        }
                     )
                 ),
                 load_ref=_load_ref,
@@ -270,7 +312,9 @@ def test_diag_not_library():
     assert (
         _err_code(
             lambda: expand_coupling_imports(
-                _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})),
+                _assembly(
+                    _import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})
+                ),
                 load_ref=lambda r, b: {"esm": "1.0.0", "metadata": {"name": "x"}, "models": {}},
             )
         )
@@ -282,7 +326,9 @@ def test_diag_illegal_payload_declares_models():
     assert (
         _err_code(
             lambda: expand_coupling_imports(
-                _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})),
+                _assembly(
+                    _import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})
+                ),
                 load_ref=lambda r, b: {**LIB, "models": {}},
             )
         )
@@ -296,10 +342,17 @@ def test_diag_role_unused():
             lambda: expand_coupling_imports(
                 _assembly(
                     _import_entry(
-                        {"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread", "Extra": "FuelModelLookup"}
+                        {
+                            "Fuel": "FuelModelLookup",
+                            "Spread": "RothermelFireSpread",
+                            "Extra": "FuelModelLookup",
+                        }
                     )
                 ),
-                load_ref=lambda r, b: {**LIB, "coupling_roles": {**LIB["coupling_roles"], "Extra": {}}},
+                load_ref=lambda r, b: {
+                    **LIB,
+                    "coupling_roles": {**LIB["coupling_roles"], "Extra": {}},
+                },
             )
         )
         == "coupling_role_unused"
@@ -310,10 +363,19 @@ def test_diag_edge_unknown_role():
     assert (
         _err_code(
             lambda: expand_coupling_imports(
-                _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})),
+                _assembly(
+                    _import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})
+                ),
                 load_ref=lambda r, b: {
                     **LIB,
-                    "coupling": [{"type": "variable_map", "from": "Ghost.sigma", "to": "Spread.sigma", "transform": "param_to_var"}],
+                    "coupling": [
+                        {
+                            "type": "variable_map",
+                            "from": "Ghost.sigma",
+                            "to": "Spread.sigma",
+                            "transform": "param_to_var",
+                        }
+                    ],
                 },
             )
         )
@@ -325,10 +387,13 @@ def test_diag_nested_import():
     assert (
         _err_code(
             lambda: expand_coupling_imports(
-                _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})),
+                _assembly(
+                    _import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"})
+                ),
                 load_ref=lambda r, b: {
                     **LIB,
-                    "coupling": LIB["coupling"] + [{"type": "coupling_import", "ref": "other.esm", "bind": {}}],
+                    "coupling": LIB["coupling"]
+                    + [{"type": "coupling_import", "ref": "other.esm", "bind": {}}],
                 },
             )
         )
@@ -338,7 +403,9 @@ def test_diag_nested_import():
 
 def test_diag_unresolved_missing_file():
     # The default disk loader reports a missing ref as coupling_import_unresolved.
-    f = _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}, ref="nope.esm"))
+    f = _assembly(
+        _import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}, ref="nope.esm")
+    )
     assert (
         _err_code(lambda: expand_coupling_imports(f, base_path="/nonexistent-dir"))
         == "coupling_import_unresolved"
@@ -350,7 +417,9 @@ def test_diag_unresolved_loader_raises():
         raise RuntimeError("kaboom")
 
     f = _assembly(_import_entry({"Fuel": "FuelModelLookup", "Spread": "RothermelFireSpread"}))
-    assert _err_code(lambda: expand_coupling_imports(f, load_ref=boom)) == "coupling_import_unresolved"
+    assert (
+        _err_code(lambda: expand_coupling_imports(f, load_ref=boom)) == "coupling_import_unresolved"
+    )
 
 
 # ---------------------------------------------------------------------------

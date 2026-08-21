@@ -1872,10 +1872,7 @@ fn run_graph(
                             earthsci_ast::graph::ComponentType::ReactionSystem => "box",
                             earthsci_ast::graph::ComponentType::DataSource => "diamond",
                         };
-                        println!(
-                            "  \"{}\" [label=\"{}\", shape={}];",
-                            node.id, label, shape
-                        );
+                        println!("  \"{}\" [label=\"{}\", shape={}];", node.id, label, shape);
                     }
 
                     println!();
@@ -3044,8 +3041,7 @@ fn run_conformance_test(
     fs::create_dir_all(out_dir)?;
 
     let manifest_file = locate_manifest(out_dir, manifest_path)?;
-    let manifest: ConformanceManifest =
-        serde_json::from_str(&fs::read_to_string(&manifest_file)?)?;
+    let manifest: ConformanceManifest = serde_json::from_str(&fs::read_to_string(&manifest_file)?)?;
     let repo_root = find_repo_root()
         .ok_or("Could not locate repo root by walking up from the current directory")?;
 
@@ -3077,7 +3073,13 @@ fn run_conformance_test(
                 let structural = validate(esm_file);
                 record.insert(
                     "schema_errors".into(),
-                    json!(schema.schema_errors.iter().map(schema_error_json).collect::<Vec<_>>()),
+                    json!(
+                        schema
+                            .schema_errors
+                            .iter()
+                            .map(schema_error_json)
+                            .collect::<Vec<_>>()
+                    ),
                 );
                 record.insert(
                     "structural_errors".into(),
@@ -3122,7 +3124,12 @@ fn run_conformance_test(
 
                 record.insert(
                     "schema_errors".into(),
-                    json!(raw.schema_errors.iter().map(schema_error_json).collect::<Vec<_>>()),
+                    json!(
+                        raw.schema_errors
+                            .iter()
+                            .map(schema_error_json)
+                            .collect::<Vec<_>>()
+                    ),
                 );
                 record.insert(
                     "structural_errors".into(),
@@ -3243,7 +3250,6 @@ fn run_conformance_test(
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -128,3 +128,6 @@ docs/.hugo_build.lock
 
 # Gas City
 .beads/
+
+# Hypothesis property-test database (local cache, not source)
+.hypothesis/

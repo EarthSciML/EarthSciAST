@@ -9,6 +9,7 @@ and join-key buffers, the :class:`BuildInspection` observability sink,
 :func:`_simulate_with_numpy`.
 ``earthsci_ast.simulation`` re-exports this module's API.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -984,8 +985,7 @@ def resolve_scalar_ic(
         ) from err
     if value is None or np.ndim(value) != 0:
         raise SimulationError(
-            f"ic({target}): RHS of a 0-D state must fold to a SCALAR "
-            f"(esm-spec §11.4), not a field"
+            f"ic({target}): RHS of a 0-D state must fold to a SCALAR (esm-spec §11.4), not a field"
         )
     return float(value)
 
@@ -1314,9 +1314,7 @@ def _frontdoor_join_keys_and_extents(
         # reference — `_inject_pushdown_aliases` never copies). Before the
         # document could declare its own `select`, only the model name existed
         # here, so the tail resolved by uniqueness and this case never arose.
-        if len(_best) > 1 and all(
-            const_arrays[k] is const_arrays[_best[0]] for k in _best
-        ):
+        if len(_best) > 1 and all(const_arrays[k] is const_arrays[_best[0]] for k in _best):
             _best = _best[:1]
         if len(_best) == 1:
             const_arrays[_tail] = const_arrays[_best[0]]
@@ -1410,11 +1408,7 @@ def _gated_const_keys(
     missing const array is a loud failure at gather time, an arbitrarily chosen
     one is a silently wrong answer."""
     aliases = _const_factor_alias_names(all_var_names, nm)
-    ks = [
-        a
-        for a in sorted(aliases)
-        if len(claims.get(a, {key})) == 1 or a == key
-    ]
+    ks = [a for a in sorted(aliases) if len(claims.get(a, {key})) == 1 or a == key]
     if not ks:
         raise SimulationError(
             f"gated provider '{key}' variable '{nm}': every const-array key it "
@@ -1609,9 +1603,7 @@ def _fetch_gated_providers(
                     f'{{"gated_by":set}})'
                 )
         if gated_pos < 0:
-            raise SimulationError(
-                f"gated provider '{key}' declares no {{\"gated_by\":…}} axis"
-            )
+            raise SimulationError(f"gated provider '{key}' declares no {{\"gated_by\":…}} axis")
         if len(applies) != 1:
             # The Python provider seam binds ONE provider per consumer variable
             # (a sample is a single field), so a gate fanning one provider out
@@ -1630,9 +1622,7 @@ def _fetch_gated_providers(
             sample = _gated_sample(prov, t0, selection)
             arr = np.asarray(sample, dtype=float)
             if drop_axes:
-                arr = arr.reshape(
-                    tuple(s for d, s in enumerate(arr.shape) if d not in drop_axes)
-                )
+                arr = arr.reshape(tuple(s for d, s in enumerate(arr.shape) if d not in drop_axes))
         else:
             # FALLBACK: provider cannot push down — fetch whole, then slice. A
             # fixed axis is sliced with a scalar (dropping it), so the result
@@ -1651,9 +1641,7 @@ def _fetch_gated_providers(
                 f"{arr.shape[gated_pos_out]} but the gating set extent is {gated_extent}"
             )
         for name in applies:
-            for k in _gated_const_keys(
-                alias_claims, all_var_names, str(key), str(name)
-            ):
+            for k in _gated_const_keys(alias_claims, all_var_names, str(key), str(name)):
                 out[k] = arr
     return out
 
@@ -1758,9 +1746,7 @@ def _partition_and_materialize_observeds(
     derived_extents: dict[str, int] | None = None,
     axis_valued_input_names: frozenset[str] = frozenset(),
     var_index_sets: dict[str, str] | None = None,
-) -> tuple[
-    list[tuple[str, Expr]], dict[str, float], dict[str, np.ndarray], dict[str, str]
-]:
+) -> tuple[list[tuple[str, Expr]], dict[str, float], dict[str, np.ndarray], dict[str, str]]:
     """Split the dependency-ordered observeds and materialize the static ones ONCE.
 
     Performs the const-geometry hoist for :func:`_build_numpy_rhs`: a first split
@@ -2199,9 +2185,7 @@ def _build_numpy_rhs(
     # generated `cell_*[c] = index(F, index(member_factor, c))` gathers resolve
     # in the observed hoist below. No-op without such a set.
     _all_var_names = (
-        list(flat.state_variables)
-        + list(flat.parameters)
-        + list(flat.observed_variables)
+        list(flat.state_variables) + list(flat.parameters) + list(flat.observed_variables)
     )
     # Names both hooks bind are DECLARED axis-valued (a member-factor feedback
     # vector spans its derived set; a gated slab spans the gate's axes), so the
@@ -2209,9 +2193,7 @@ def _build_numpy_rhs(
     # them when a derived set materialises exactly ONE member (size-1 array).
     axis_valued_input_names: set[str] = set()
     if vi_members:
-        for _k, _v in _feed_back_vi_members(
-            flat.index_sets, vi_members, _all_var_names
-        ).items():
+        for _k, _v in _feed_back_vi_members(flat.index_sets, vi_members, _all_var_names).items():
             loader_arrays[_k] = _v  # engine-derived: overwrites, like Julia merge!
             axis_valued_input_names.add(_k)
 

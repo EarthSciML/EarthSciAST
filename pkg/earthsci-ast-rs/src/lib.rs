@@ -47,9 +47,8 @@ pub mod analysis;
 /// projection-pushdown overlap join-gate.
 pub mod broad_phase;
 pub mod cadence;
-pub mod classification;
 pub mod canonicalize;
-pub mod intern;
+pub mod classification;
 pub mod coupling;
 pub mod coupling_imports;
 pub mod dae;
@@ -65,6 +64,7 @@ pub mod expression;
 pub mod flatten;
 pub mod geometry;
 pub mod graph;
+pub mod intern;
 pub mod join;
 pub mod lower_enums;
 pub mod lower_expression_templates;
@@ -154,9 +154,8 @@ pub use canonicalize::{CanonicalizeError, canonical_json, canonicalize, format_c
 // Brownian / discrete / sampled / constant.
 pub use classification::{
     Classification, LhsForm, SystemKind, algebraic_unknowns, brownian_parameters,
-    observed_definition_json,
-    constant_parameters, discrete_parameters, is_ode_state, observed_definitions,
-    observed_unknowns, ode_states, sampled_parameters, system_kind,
+    constant_parameters, discrete_parameters, is_ode_state, observed_definition_json,
+    observed_definitions, observed_unknowns, ode_states, sampled_parameters, system_kind,
 };
 pub use coupling_imports::{
     CouplingImportOptions, expand_coupling_imports, has_coupling_import, is_coupling_library_doc,

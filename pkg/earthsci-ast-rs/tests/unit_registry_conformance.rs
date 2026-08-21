@@ -35,12 +35,16 @@ fn read_json(path: &Path) -> Value {
 fn golden() -> Value {
     let tests = tests_dir();
     let manifest = read_json(&tests.join("conformance/unit_registry/manifest.json"));
-    let rel = manifest["golden"].as_str().expect("manifest names a golden");
+    let rel = manifest["golden"]
+        .as_str()
+        .expect("manifest names a golden");
     read_json(&tests.join(rel))
 }
 
 fn entries<'a>(g: &'a Value, key: &str) -> &'a Vec<Value> {
-    let list = g[key].as_array().unwrap_or_else(|| panic!("golden has no `{key}` array"));
+    let list = g[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("golden has no `{key}` array"));
     assert!(!list.is_empty(), "golden's `{key}` list is empty");
     list
 }

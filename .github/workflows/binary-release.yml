@@ -28,13 +28,23 @@ on:
         required: false
         default: 'linux-x64 macos-x64 macos-arm64 windows-x64'
 
+# Creates the release and uploads binaries to it.
+permissions:
+  contents: write
+
+# Releases must not race each other; queue rather than cancel, so a
+# half-uploaded set of assets is never abandoned.
+concurrency:
+  group: binary-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: github.event_name != 'release'
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
     - name: Checkout
@@ -53,12 +63,10 @@ jobs:
 
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.get_version.outputs.version }}
-        release_name: EarthSciAST ${{ steps.get_version.outputs.version }}
+        name: EarthSciAST ${{ steps.get_version.outputs.version }}
         body: |
           # Cross-Platform Binary Release
 
@@ -85,6 +93,7 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
+    timeout-minutes: 60
     needs: [create-release]
     if: always() && (needs.create-release.result == 'success' || github.event_name == 'release')
     strategy:
@@ -158,7 +167,7 @@ jobs:
         node-version: '20'
 
     - name: Setup Python (for Python build)
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -276,29 +285,18 @@ jobs:
 
         echo "archive_file=$ARCHIVE_FILE" >> $GITHUB_ENV
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload Release Asset and Checksum
+      uses: softprops/action-gh-release@v2
       with:
-        upload_url: ${{ needs.create-release.outputs.upload_url || github.event.release.upload_url }}
-        asset_path: ./${{ env.archive_file }}
-        asset_name: ${{ env.archive_file }}
-        asset_content_type: application/octet-stream
-
-    - name: Upload Checksum
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url || github.event.release.upload_url }}
-        asset_path: ./${{ env.archive_file }}.sha256
-        asset_name: ${{ env.archive_file }}.sha256
-        asset_content_type: text/plain
+        tag_name: ${{ needs.create-release.outputs.version || github.event.release.tag_name }}
+        files: |
+          ./${{ env.archive_file }}
+          ./${{ env.archive_file }}.sha256
 
   create-universal-installer:
     name: Create Universal Installer
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [create-release, build-binaries]
     if: always() && needs.build-binaries.result == 'success'
 
@@ -437,18 +435,15 @@ jobs:
         chmod +x update.sh
 
     - name: Upload Universal Installer
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v2
       with:
-        upload_url: ${{ needs.create-release.outputs.upload_url || github.event.release.upload_url }}
-        asset_path: ./update.sh
-        asset_name: update.sh
-        asset_content_type: application/x-sh
+        tag_name: ${{ needs.create-release.outputs.version || github.event.release.tag_name }}
+        files: ./update.sh
 
   update-release-notes:
     name: Update Release Notes
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [create-release, build-binaries, create-universal-installer]
     if: always() && needs.build-binaries.result == 'success'
 

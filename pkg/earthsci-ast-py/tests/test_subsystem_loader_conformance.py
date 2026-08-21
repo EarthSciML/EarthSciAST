@@ -42,8 +42,9 @@ def _provider(golden: dict):
     the golden's own PARAMETER names (``Box.k`` / ``Box.wind``) — which are
     exactly the flattened loader-field names from 1.0.0, since the parameter IS
     the loaded field."""
-    native = {name: np.asarray(spec["native"], dtype=float)
-              for name, spec in golden["loaders"].items()}
+    native = {
+        name: np.asarray(spec["native"], dtype=float) for name, spec in golden["loaders"].items()
+    }
 
     def provider(field: LoaderField, t: float) -> np.ndarray:
         return native[field.name]
@@ -78,8 +79,9 @@ def test_subsystem_loader_trajectory_matches_golden() -> None:
     golden = _golden()
     esm = load(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
-    result = simulate(esm, tspan=(float(t0), float(t1)), method="LSODA",
-                      loader_provider=_provider(golden))
+    result = simulate(
+        esm, tspan=(float(t0), float(t1)), method="LSODA", loader_provider=_provider(golden)
+    )
     assert result.success, result.message
     assert result.vars == golden["state_order"]
 

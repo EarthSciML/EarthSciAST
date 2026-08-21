@@ -43,7 +43,15 @@ fn eranges() -> Value {
 }
 
 fn eargs() -> Value {
-    json!(["src_W", "src_S", "src_E", "src_N", "px", "py", "emis_annual"])
+    json!([
+        "src_W",
+        "src_S",
+        "src_E",
+        "src_N",
+        "px",
+        "py",
+        "emis_annual"
+    ])
 }
 
 /// The minimal forward document: one provider-backed SR array, one binning
@@ -51,17 +59,29 @@ fn eargs() -> Value {
 fn base_doc() -> Value {
     let mut v = serde_json::Map::new();
     for n in ["src_W", "src_S", "src_E", "src_N"] {
-        v.insert(n.into(), json!({"type": "parameter", "default": 0.0, "shape": ["src_cells"]}));
+        v.insert(
+            n.into(),
+            json!({"type": "parameter", "default": 0.0, "shape": ["src_cells"]}),
+        );
     }
     for n in ["px", "py", "emis_annual"] {
-        v.insert(n.into(), json!({"type": "parameter", "default": 0.0, "shape": ["emis_records"]}));
+        v.insert(
+            n.into(),
+            json!({"type": "parameter", "default": 0.0, "shape": ["emis_records"]}),
+        );
     }
     v.insert(
         "SR_PM25".into(),
         json!({"type": "parameter", "default": 0.0, "shape": ["src_cells", "rcv_cells"]}),
     );
-    v.insert("E_PM25".into(), json!({"type": "unknown", "shape": ["src_cells"]}));
-    v.insert("conc_PM25".into(), json!({"type": "unknown", "shape": ["rcv_cells"]}));
+    v.insert(
+        "E_PM25".into(),
+        json!({"type": "unknown", "shape": ["src_cells"]}),
+    );
+    v.insert(
+        "conc_PM25".into(),
+        json!({"type": "unknown", "shape": ["rcv_cells"]}),
+    );
     json!({
         "esm": "1.0.0",
         "metadata": {"name": "pd_tmpl"},
@@ -110,7 +130,11 @@ fn defs_of(doc: &Value) -> std::collections::BTreeMap<String, Value> {
         .as_array()
         .expect("equations is an array")
         .iter()
-        .filter_map(|eq| eq["lhs"].as_str().map(|n| (n.to_string(), eq["rhs"].clone())))
+        .filter_map(|eq| {
+            eq["lhs"]
+                .as_str()
+                .map(|n| (n.to_string(), eq["rhs"].clone()))
+        })
         .collect()
 }
 
@@ -157,15 +181,21 @@ fn bare_factor_name_bindings_are_repointed() {
                 {"op": "<=", "args": [ix("ymin", "c"), ix("pty", "r")]},
                 {"op": "<",  "args": [ix("pty", "r"), ix("ymax", "c")]}]}, 1.0, 0.0]},
             ix("wgt", "r")]}}});
-    set_e(&mut d, json!({"op": "apply_expression_template", "args": [],
+    set_e(
+        &mut d,
+        json!({"op": "apply_expression_template", "args": [],
                          "name": "bin_into_cell",
                          "bindings": {"xmin": "src_W", "ymin": "src_S",
                                       "xmax": "src_E", "ymax": "src_N",
-                                      "ptx": "px", "pty": "py", "wgt": "emis_annual"}}));
+                                      "ptx": "px", "pty": "py", "wgt": "emis_annual"}}),
+    );
     let tpl_before = d["models"]["Binned"]["expression_templates"].clone();
 
     let r = desugar_pushdown(&d, Some("Binned")).unwrap();
-    assert!(matches!(r, Cow::Owned(_)), "the rewrite must fire on the factored body");
+    assert!(
+        matches!(r, Cow::Owned(_)),
+        "the rewrite must fire on the factored body"
+    );
     // The DECLARATIONS match exactly: the two forms differ in how the binning
     // body is written, which in 1.0.0 lives in the defining equation — so even
     // E_PM25's declaration, re-pointed onto the derived axis either way, is
@@ -180,9 +210,11 @@ fn bare_factor_name_bindings_are_repointed() {
     assert_eq!(structural_of(&r), structural_of(&lr));
     // …and among the DEFINITIONS only E_PM25's body differs.
     let (rdef, ldef) = (defs_of(&r), defs_of(&lr));
-    let differing: Vec<&String> =
-        rdef.keys().filter(|k| rdef[*k] != ldef[*k]).collect();
-    assert_eq!(rdef.keys().collect::<Vec<_>>(), ldef.keys().collect::<Vec<_>>());
+    let differing: Vec<&String> = rdef.keys().filter(|k| rdef[*k] != ldef[*k]).collect();
+    assert_eq!(
+        rdef.keys().collect::<Vec<_>>(),
+        ldef.keys().collect::<Vec<_>>()
+    );
     assert_eq!(differing, vec!["E_PM25"]);
     // the CALL SITE moved; the shared body did not (Option B survives)
     let b = &def_of(&r, "E_PM25")["expr"]["bindings"];
@@ -191,7 +223,10 @@ fn bare_factor_name_bindings_are_repointed() {
     assert_eq!(b["ptx"], json!("px"));
     assert_eq!(r["models"]["Binned"]["expression_templates"], tpl_before);
     // idempotent
-    assert!(matches!(desugar_pushdown(&r, Some("Binned")).unwrap(), Cow::Borrowed(_)));
+    assert!(matches!(
+        desugar_pushdown(&r, Some("Binned")).unwrap(),
+        Cow::Borrowed(_)
+    ));
     assert!(pushdown_diagnostics(&d, Some("Binned")).is_empty());
 }
 
@@ -209,11 +244,14 @@ fn subscripted_bindings_are_repointed() {
                 {"op": "<=", "args": ["lo_y", "y"]},
                 {"op": "<",  "args": ["y", "hi_y"]}]}, 1.0, 0.0]},
             "wgt"]}}});
-    set_e(&mut d, json!({"op": "apply_expression_template", "args": [], "name": "bin2",
+    set_e(
+        &mut d,
+        json!({"op": "apply_expression_template", "args": [], "name": "bin2",
                          "bindings": {"lo_x": ix("src_W", "c"), "lo_y": ix("src_S", "c"),
                                       "hi_x": ix("src_E", "c"), "hi_y": ix("src_N", "c"),
                                       "x": ix("px", "r"), "y": ix("py", "r"),
-                                      "wgt": ix("emis_annual", "r")}}));
+                                      "wgt": ix("emis_annual", "r")}}),
+    );
     let tpl_before = d["models"]["Binned"]["expression_templates"].clone();
 
     let r = desugar_pushdown(&d, Some("Binned")).unwrap();
@@ -227,7 +265,10 @@ fn subscripted_bindings_are_repointed() {
     assert_eq!(b["hi_y"]["args"][0], json!("pd_cell__src_cells__src_N"));
     assert_eq!(b["x"]["args"][0], json!("px")); // records untouched
     assert_eq!(r["models"]["Binned"]["expression_templates"], tpl_before);
-    assert!(matches!(desugar_pushdown(&r, Some("Binned")).unwrap(), Cow::Borrowed(_)));
+    assert!(matches!(
+        desugar_pushdown(&r, Some("Binned")).unwrap(),
+        Cow::Borrowed(_)
+    ));
 }
 
 /// The rewrite edits call sites only (that is what keeps the body shared and
@@ -241,14 +282,23 @@ fn free_rect_in_template_body_is_rejected() {
         "params": ["wgt"],
         "body": {"op": "*", "args": [
             {"op": "ifelse", "args": [contain(), 1.0, 0.0]}, ix("wgt", "r")]}}});
-    set_e(&mut d, json!({"op": "apply_expression_template", "args": [], "name": "bin3",
-                         "bindings": {"wgt": "emis_annual"}}));
+    set_e(
+        &mut d,
+        json!({"op": "apply_expression_template", "args": [], "name": "bin3",
+                         "bindings": {"wgt": "emis_annual"}}),
+    );
     let err = desugar_pushdown(&d, Some("Binned")).expect_err("must be rejected");
     let msg = err.0;
-    assert!(msg.contains("template_body_references_pushdown_rewritten_variable"), "{msg}");
+    assert!(
+        msg.contains("template_body_references_pushdown_rewritten_variable"),
+        "{msg}"
+    );
     assert!(msg.contains("src_W"), "{msg}");
     assert!(msg.contains("E_PM25"), "{msg}");
-    assert!(msg.contains("Bind the value through the template's params"), "{msg}");
+    assert!(
+        msg.contains("Bind the value through the template's params"),
+        "{msg}"
+    );
 }
 
 /// "Not a join" is not a defect: an aggregate with no containment predicate is a
@@ -266,7 +316,10 @@ fn dense_reduction_is_silent() {
         }
     }
     assert!(pushdown_diagnostics(&d, Some("Binned")).is_empty());
-    assert!(matches!(desugar_pushdown(&d, Some("Binned")).unwrap(), Cow::Borrowed(_)));
+    assert!(matches!(
+        desugar_pushdown(&d, Some("Binned")).unwrap(),
+        Cow::Borrowed(_)
+    ));
 }
 
 /// A surviving reference the detector could NOT see through — here because the
@@ -275,8 +328,11 @@ fn dense_reduction_is_silent() {
 #[test]
 fn unexpandable_reference_in_the_join_position_is_reported() {
     let mut d = base_doc();
-    set_e(&mut d, json!({"op": "apply_expression_template", "args": [], "name": "gone",
-                         "bindings": {"wgt": "emis_annual"}}));
+    set_e(
+        &mut d,
+        json!({"op": "apply_expression_template", "args": [], "name": "gone",
+                         "bindings": {"wgt": "emis_annual"}}),
+    );
     let dg = pushdown_diagnostics(&d, Some("Binned"));
     assert_eq!(dg.len(), 1);
     assert_eq!(dg[0]["code"], json!("pushdown_join_unrecognised"));
@@ -285,5 +341,8 @@ fn unexpandable_reference_in_the_join_position_is_reported() {
     assert_eq!(dg[0]["variable"], json!("E_PM25"));
     assert_eq!(dg[0]["array"], json!("SR_PM25"));
     assert_eq!(dg[0]["index_set"], json!("src_cells"));
-    assert!(matches!(desugar_pushdown(&d, Some("Binned")).unwrap(), Cow::Borrowed(_)));
+    assert!(matches!(
+        desugar_pushdown(&d, Some("Binned")).unwrap(),
+        Cow::Borrowed(_)
+    ));
 }

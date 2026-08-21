@@ -203,8 +203,8 @@ fn op_arrayop(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
         Just(Some("min".to_string())),
         Just(None::<String>),
     ];
-    let range_pair = (0_i64..=8, 0_i64..=8)
-        .prop_map(|(a, b)| earthsci_ast::types::RangeSpec::Interval([a, b]));
+    let range_pair =
+        (0_i64..=8, 0_i64..=8).prop_map(|(a, b)| earthsci_ast::types::RangeSpec::Interval([a, b]));
     let ranges = prop::option::of(prop::collection::hash_map(index_name(), range_pair, 0..=3));
     let args = prop::collection::vec(child.clone(), 1..=2);
     (args, output_idx, child, reduce, ranges)
@@ -367,7 +367,10 @@ fn negative_zero_canonicalizes_to_integer_zero() {
         ..Default::default()
     });
     let s = serde_json::to_string(&expr).unwrap();
-    assert!(!s.contains("0.0"), "integral zero must not serialize with a fraction: {s}");
+    assert!(
+        !s.contains("0.0"),
+        "integral zero must not serialize with a fraction: {s}"
+    );
     assert!(!s.contains("-0"), "signed zero must collapse to `0`: {s}");
     let parsed: Expr = serde_json::from_str(&s).unwrap();
     match parsed {

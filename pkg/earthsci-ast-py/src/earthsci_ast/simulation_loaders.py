@@ -8,6 +8,7 @@ piecewise-constant forcing segments, refreshing the loader arrays between
 segments (RFC pure-io-data-loaders §4.3).
 ``earthsci_ast.simulation`` re-exports this module's API.
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -352,8 +353,7 @@ def _run_cadence_segmented_solve(
         last_message = sol.message
         if not sol.success:
             return _failure_result(
-                f"Simulation failed in cadence segment "
-                f"[{t_current}, {seg_end}]: {sol.message}",
+                f"Simulation failed in cadence segment [{t_current}, {seg_end}]: {sol.message}",
                 nfev=nfev,
                 njev=njev,
                 nlu=nlu,

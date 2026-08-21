@@ -14,7 +14,10 @@ def test_roundtrip_minimal():
         "esm": "1.0.0",
         "metadata": {"name": "Minimal Test"},
         "models": {
-            "simple": {"variables": {"x": {"type": "unknown"}}, "equations": [{"lhs": "x", "rhs": 1}]}
+            "simple": {
+                "variables": {"x": {"type": "unknown"}},
+                "equations": [{"lhs": "x", "rhs": 1}],
+            }
         },
     }
 

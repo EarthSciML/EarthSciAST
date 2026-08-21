@@ -190,9 +190,7 @@ fn benchmark_parsing(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("simd_parse", size),
             &json_str,
-            |b, json| {
-                b.iter(|| earthsci_ast::performance::fast_parse(black_box(json)).unwrap())
-            },
+            |b, json| b.iter(|| earthsci_ast::performance::fast_parse(black_box(json)).unwrap()),
         );
     }
 

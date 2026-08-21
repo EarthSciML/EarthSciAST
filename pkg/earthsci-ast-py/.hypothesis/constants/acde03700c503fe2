@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/flatten.py
+# hypothesis_version: 6.141.1
+
+[1.0, ' + ', ' <-> ', ' [translate: ', '(', ')', '*', '**', '+', ',', ', ', '-', '.', '/', '?', 'D', ']', '^', '_var', 'additive', 'aggregate', 'arrayop', 'broadcast', 'concat', 'const', 'conversion_factor', 'data', 'data_sources', 'discrete', 'factor', 'identity', 'index', 'index_sets', 'join', 'makearray', 'multiplicative', 'observed', 'on', 'overlap', 'param_to_var', 'parameter', 'pointwise', 'replacement', 'reshape', 'shape', 'species', 'src_env', 'state', 't', 'target', 'tgt_env', 'to', 'transpose', 'unknown', 'unlowered_operator', 'var']

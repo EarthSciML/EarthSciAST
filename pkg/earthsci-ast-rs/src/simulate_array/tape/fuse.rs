@@ -104,6 +104,11 @@ enum SrcKey {
 type AxisSegs = SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]>;
 
 /// Geometry of one folded (shifted-read) gather input.
+// `Segs` is deliberately far larger than `Linear`: the SmallVec-of-SmallVec is
+// inline storage, chosen so the common segment counts never touch the heap on
+// this hot fold path. Boxing it to even the variants out -- clippy's suggested
+// fix -- would reintroduce exactly the indirection that layout is avoiding.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum ShiftedGeom {
     /// Piecewise per-axis segments (stride-1 within runs; ghost gaps).
@@ -248,9 +253,7 @@ impl GBuilder {
     fn try_add(&mut self, ix: u32, ins: &Instr, prog: &TapeProgram) -> bool {
         let (ops, out): (SmallVec<[&Operand; 3]>, SlotId) = match ins {
             Instr::Bin { a, b, out, .. } => (SmallVec::from_slice(&[a, b]), *out),
-            Instr::Un { a, out, .. } | Instr::Neg { a, out } => {
-                (SmallVec::from_slice(&[a]), *out)
-            }
+            Instr::Un { a, out, .. } | Instr::Neg { a, out } => (SmallVec::from_slice(&[a]), *out),
             Instr::Select { cond, a, b, out } => (SmallVec::from_slice(&[cond, a, b]), *out),
             Instr::Fill { v, out } => (SmallVec::from_slice(&[v]), *out),
             Instr::Copy { a, out } => (SmallVec::from_slice(&[a]), *out),
@@ -674,19 +677,20 @@ impl SuperopCfg {
 fn bin2_pair_ok(op1: BinCode, op2: BinCode, ext_pairs: bool) -> bool {
     use BinCode::{Ge, Gt, Le, Lt, Max, Min, Mul};
     (bin2_arith(op1) && bin2_arith(op2))
-        || ext_pairs && matches!(
-            (op1, op2),
-            (Mul, Gt)
-                | (Mul, Ge)
-                | (Mul, Lt)
-                | (Mul, Le)
-                | (Min, Max)
-                | (Max, Min)
-                | (Mul, Min)
-                | (Min, Mul)
-                | (Mul, Max)
-                | (Max, Mul)
-        )
+        || ext_pairs
+            && matches!(
+                (op1, op2),
+                (Mul, Gt)
+                    | (Mul, Ge)
+                    | (Mul, Lt)
+                    | (Mul, Le)
+                    | (Min, Max)
+                    | (Max, Min)
+                    | (Mul, Min)
+                    | (Min, Mul)
+                    | (Mul, Max)
+                    | (Max, Mul)
+            )
 }
 
 /// Visit every operand of a micro-op.
@@ -1042,7 +1046,9 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u16, SlotId)]) -> u
                 remap(c);
                 *out = phys_of[*out as usize];
             }
-            MicroOp::Bin3 { a, b, c, d, out, .. } => {
+            MicroOp::Bin3 {
+                a, b, c, d, out, ..
+            } => {
                 remap(a);
                 remap(b);
                 remap(c);
@@ -1056,7 +1062,6 @@ fn allocate_registers(micro: &mut [MicroOp], outputs: &mut [(u16, SlotId)]) -> u
     }
     n_phys
 }
-
 
 // ---------------------------------------------------------------------------
 // The pass.
@@ -1401,10 +1406,7 @@ fn fuse_section(
                     if !foldable_plan(plan_ref) {
                         return None;
                     }
-                    let g = ShiftedGeom::Segs(
-                        plan_ref.segs.clone(),
-                        plan_ref.src_shape.clone(),
-                    );
+                    let g = ShiftedGeom::Segs(plan_ref.segs.clone(), plan_ref.src_shape.clone());
                     fold_runs_acceptable(&out_desc.shape, &g).then_some(g)
                 })
             } else {
@@ -1415,7 +1417,15 @@ fn fuse_section(
                 // that group to materialize first.
                 flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
                 let shape = out_desc.shape.clone();
-                let gi = find_or_open(&mut open, shape, prog.provenance[i], prog, readers, sink, cfg);
+                let gi = find_or_open(
+                    &mut open,
+                    shape,
+                    prog.provenance[i],
+                    prog,
+                    readers,
+                    sink,
+                    cfg,
+                );
                 open[gi].add_folded_gather(i as u32, *src, plan_ref, geom, *out);
                 i += 1;
                 continue;

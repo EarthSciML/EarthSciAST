@@ -249,9 +249,7 @@ def prepare(
         # that factors its binning body through an imported library fail
         # detection silently and fetch every provider-backed array whole.
         if _has_template_import_edge(raw):
-            resolved = resolve_template_machinery(
-                raw, base_path or os.getcwd(), metaparameters
-            )
+            resolved = resolve_template_machinery(raw, base_path or os.getcwd(), metaparameters)
             if resolved is not None:
                 raw = resolved
         rewritten = desugar_pushdown(raw, model_name=model_name)

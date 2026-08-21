@@ -438,33 +438,22 @@ mod tests {
     #[test]
     fn identical_subtrees_share_one_allocation() {
         let _scope = InternScope::new();
-        let mk = || {
-            Expr::operator(op(
-                "+",
-                vec![Expr::Variable("a".into()), Expr::Integer(1)],
-            ))
-        };
+        let mk = || Expr::operator(op("+", vec![Expr::Variable("a".into()), Expr::Integer(1)]));
         let (a, b) = (mk(), mk());
         let (Expr::Operator(x), Expr::Operator(y)) = (&a, &b) else {
             unreachable!()
         };
         assert!(Arc::ptr_eq(x, y), "identical nodes must intern together");
-        let c = Expr::operator(op(
-            "+",
-            vec![Expr::Variable("a".into()), Expr::Integer(2)],
-        ));
-        let Expr::Operator(z) = &c else { unreachable!() };
+        let c = Expr::operator(op("+", vec![Expr::Variable("a".into()), Expr::Integer(2)]));
+        let Expr::Operator(z) = &c else {
+            unreachable!()
+        };
         assert!(!Arc::ptr_eq(x, z), "different nodes must not merge");
     }
 
     #[test]
     fn no_scope_means_no_sharing() {
-        let mk = || {
-            Expr::operator(op(
-                "+",
-                vec![Expr::Variable("a".into()), Expr::Integer(1)],
-            ))
-        };
+        let mk = || Expr::operator(op("+", vec![Expr::Variable("a".into()), Expr::Integer(1)]));
         let (a, b) = (mk(), mk());
         let (Expr::Operator(x), Expr::Operator(y)) = (&a, &b) else {
             unreachable!()
@@ -478,10 +467,8 @@ mod tests {
     fn nesting_shares_whole_subtrees() {
         let _scope = InternScope::new();
         let mk = || {
-            let inner = Expr::operator(op(
-                "*",
-                vec![Expr::Variable("x".into()), Expr::Number(0.5)],
-            ));
+            let inner =
+                Expr::operator(op("*", vec![Expr::Variable("x".into()), Expr::Number(0.5)]));
             Expr::operator(op("sin", vec![inner]))
         };
         let (a, b) = (mk(), mk());
@@ -581,12 +568,7 @@ mod tests {
     #[test]
     fn make_mut_splits_shared_nodes() {
         let _scope = InternScope::new();
-        let mk = || {
-            Expr::operator(op(
-                "+",
-                vec![Expr::Variable("a".into()), Expr::Integer(1)],
-            ))
-        };
+        let mk = || Expr::operator(op("+", vec![Expr::Variable("a".into()), Expr::Integer(1)]));
         let (mut a, b) = (mk(), mk());
         let n = a.node_mut().expect("operator");
         n.op = "-".to_string();
@@ -611,6 +593,9 @@ mod tests {
         let (Expr::Operator(p), Expr::Operator(q)) = (&sin.args[0], &cos.args[0]) else {
             unreachable!()
         };
-        assert!(Arc::ptr_eq(p, q), "the shared '+' subtree interns to one node");
+        assert!(
+            Arc::ptr_eq(p, q),
+            "the shared '+' subtree interns to one node"
+        );
     }
 }

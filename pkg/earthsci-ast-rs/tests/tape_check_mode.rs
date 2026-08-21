@@ -205,5 +205,9 @@ fn ess_tape_check_runs_both_paths_without_panicking() {
     let ics: HashMap<String, f64> = (1..=n).map(|k| (format!("u[{k}]"), 1.0)).collect();
     let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts)
         .expect("checked simulate must run");
-    assert!(sol.state.iter().all(|row| row.iter().all(|v| v.is_finite())));
+    assert!(
+        sol.state
+            .iter()
+            .all(|row| row.iter().all(|v| v.is_finite()))
+    );
 }

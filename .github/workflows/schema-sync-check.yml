@@ -34,9 +34,17 @@ on:
       - 'docs/static/lib/*.esm'
       - 'scripts/sync-lib.sh'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: schema-sync-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check-schema-sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
 

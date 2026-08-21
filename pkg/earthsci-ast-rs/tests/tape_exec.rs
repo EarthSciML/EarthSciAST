@@ -74,7 +74,9 @@ fn compile(n: usize) -> ArrayCompiled {
 }
 
 fn state(n: usize, seed: f64) -> Vec<f64> {
-    (0..n).map(|k| (0.9 * k as f64 + seed).sin() + 1.5).collect()
+    (0..n)
+        .map(|k| (0.9 * k as f64 + seed).sin() + 1.5)
+        .collect()
 }
 
 fn hex(v: &[f64]) -> Vec<String> {

@@ -17,7 +17,7 @@ nothing here touches the engine itself.
 
 §9.6.1 declares templates **component-local** and defers "top-level templates and
 cross-component sharing … to a follow-up RFC". This is that RFC. The forcing use case is
-the rewrite of [EarthSciDiscretizations](../earthscidiscretizations) — the standard
+the rewrite of [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations) — the standard
 library of discretization rules that §9.6.8 promises — as a **layered, pure-data library
 of `.esm` files**:
 

@@ -16,10 +16,7 @@ function applyNode(name: string) {
 
 const LEAF_BODY = {
   op: '*',
-  args: [
-    1.8e-12,
-    { op: 'exp', args: [{ op: '/', args: [{ op: '-', args: [1500.0] }, 'T'] }] },
-  ],
+  args: [1.8e-12, { op: 'exp', args: [{ op: '/', args: [{ op: '-', args: [1500.0] }, 'T'] }] }],
 }
 
 /** T0 = an Arrhenius-style leaf; each T_i = T_{i-1} + T_{i-1}; one call site. */

@@ -37,10 +37,10 @@ use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value};
 
 use crate::aggregate::{ReduceKind, effective_reduce_kind};
+use crate::broad_phase::OverlapIndex;
 use crate::cadence::{self, Cadence};
 use crate::relational::{self, Key, Num, SemiringOp, group_aggregate};
 use crate::types::{Expr, IndexSet, Model};
-use crate::broad_phase::OverlapIndex;
 
 /// A value-invention build-time materialisation error (the Rust analog of
 /// Julia's `TreeWalkError` value-invention codes).
@@ -1021,10 +1021,10 @@ fn overlap_candidate_set(
     ctx: &ViCtx,
     eps: f64,
 ) -> Result<OverlapIndex, ValueInventionError> {
-    let src_envs =
-        crate::broad_phase::envelope_vectors(src_env, ctx.const_arrays).map_err(ValueInventionError)?;
-    let tgt_envs =
-        crate::broad_phase::envelope_vectors(tgt_env, ctx.const_arrays).map_err(ValueInventionError)?;
+    let src_envs = crate::broad_phase::envelope_vectors(src_env, ctx.const_arrays)
+        .map_err(ValueInventionError)?;
+    let tgt_envs = crate::broad_phase::envelope_vectors(tgt_env, ctx.const_arrays)
+        .map_err(ValueInventionError)?;
     let pairs = crate::broad_phase::broad_phase_candidates(&src_envs, &tgt_envs, eps);
     // Broad-phase pairs are 0-based positions; the enumeration bindings are
     // 1-based (`vi_range_values` binds interval/categorical position p to p), so
@@ -1114,7 +1114,8 @@ fn vi_join_ok(
 ) -> Result<bool, ValueInventionError> {
     // `join.on` names and index symbols come from user JSON, so a missing map
     // buffer or unbound symbol is a diagnostic, not a panicking `Index` lookup.
-    let unbound = |sym: &str| ValueInventionError(format!("join index symbol {sym:?} is not bound"));
+    let unbound =
+        |sym: &str| ValueInventionError(format!("join index symbol {sym:?} is not bound"));
     for g in gates {
         match g {
             ViJoinGate::Equality {

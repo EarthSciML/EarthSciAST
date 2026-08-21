@@ -218,10 +218,7 @@ fn the_document_alone_decodes_maps_and_filters_the_ff10_table() {
         vec![36.0, 36.0, 1.0],
         "POLID text -> the declared enum, unmapped records dropped"
     );
-    assert_eq!(
-        sample(&doc, &cache, "Ingest.annual"),
-        vec![100.0, 7.0, 3.0]
-    );
+    assert_eq!(sample(&doc, &cache, "Ingest.annual"), vec![100.0, 7.0, 3.0]);
     assert_eq!(
         sample(&doc, &cache, "Ingest.lon"),
         vec![-90.0, -92.0, -93.0]
@@ -459,8 +456,7 @@ fn an_unrecognised_reader_option_is_refused_at_construction() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
     doc["data_sources"]["EGU_Emis"]["reader_options"]["member_filter"] = json!("*egu*");
-    let e = match providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
-    {
+    let e = match providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new()) {
         Ok(_) => panic!("a mis-typed reader option must not build a provider"),
         Err(e) => e.0,
     };
@@ -475,9 +471,8 @@ fn reader_options_are_load_bearing_not_decorative() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mut doc = document(tmp.path());
     doc["data_sources"]["EGU_Emis"]["reader_options"] = json!({});
-    let mut provs =
-        providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
-            .expect("providers build");
+    let mut provs = providers_from_document(&doc, &tmp.path().join("cache"), None, &HashMap::new())
+        .expect("providers build");
     let (_, p) = provs
         .iter_mut()
         .find(|(k, _)| k == "Ingest.annual")

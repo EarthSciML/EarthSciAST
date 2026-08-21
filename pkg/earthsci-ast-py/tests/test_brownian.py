@@ -77,9 +77,7 @@ def test_schema_rejects_wiener_update_without_distribution(tmp_path):
         "metadata": {"name": "Bad"},
         "models": {
             "M": {
-                "variables": {
-                    "b": {"type": "parameter", "update": {"kind": "wiener"}}
-                },
+                "variables": {"b": {"type": "parameter", "update": {"kind": "wiener"}}},
                 "equations": [],
             }
         },

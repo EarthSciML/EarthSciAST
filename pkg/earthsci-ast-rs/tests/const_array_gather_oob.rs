@@ -45,20 +45,12 @@ fn gather(i: i64) -> Expr {
 
 fn eval_with(scope: &ConstArrayScope, i: i64) -> Result<f64, String> {
     let extents: HashMap<String, i64> = HashMap::new();
-    eval_expression_with_extents_and_consts(
-        &gather(i),
-        &m_arrays(),
-        &[],
-        &[],
-        0.0,
-        &extents,
-        scope,
-    )
-    .map(|v| match v {
-        EvalValue::Scalar(s) => s,
-        EvalValue::Array(a) => a.iter().next().copied().unwrap_or(f64::NAN),
-    })
-    .map_err(|e| e.to_string())
+    eval_expression_with_extents_and_consts(&gather(i), &m_arrays(), &[], &[], 0.0, &extents, scope)
+        .map(|v| match v {
+            EvalValue::Scalar(s) => s,
+            EvalValue::Array(a) => a.iter().next().copied().unwrap_or(f64::NAN),
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[test]
@@ -136,7 +128,8 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
         Err(e) => e,
         Ok(prep) => panic!(
             "an entirely off-the-end const-array gather must fail closed; got {:?}",
-            prep.observed_field("shifted").map(|a| a.iter().copied().collect::<Vec<_>>())
+            prep.observed_field("shifted")
+                .map(|a| a.iter().copied().collect::<Vec<_>>())
         ),
     };
     assert!(

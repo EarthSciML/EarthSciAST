@@ -164,19 +164,19 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
             "shape": ["points"]}),
     );
     eqs.push(json!({"lhs": "P", "rhs": {
-                "op": "aggregate",
-                "reduce": "+",
-                "output_idx": ["p"],
-                "ranges": {"p": {"from": "points"}, "c": {"from": "cells"}},
-                "join": [{"overlap": {
-                    "src_env": ["px", "py"],
-                    "tgt_env": ["src_W", "src_S", "src_E", "src_N"],
-                    "eps": 0.0
-                }}],
-                "filter": contains("c", "p"),
-                "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
-                "expr": {"op": "+", "args": [ix("src_W", "c"), ix("src_S", "c")]}
-            }}));
+        "op": "aggregate",
+        "reduce": "+",
+        "output_idx": ["p"],
+        "ranges": {"p": {"from": "points"}, "c": {"from": "cells"}},
+        "join": [{"overlap": {
+            "src_env": ["px", "py"],
+            "tgt_env": ["src_W", "src_S", "src_E", "src_N"],
+            "eps": 0.0
+        }}],
+        "filter": contains("c", "p"),
+        "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
+        "expr": {"op": "+", "args": [ix("src_W", "c"), ix("src_S", "c")]}
+    }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_mirror"},
@@ -256,16 +256,16 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
             "shape": ["cells"]}),
     );
     eqs.push(json!({"lhs": "E", "rhs": {
-                "op": "aggregate",
-                "reduce": "+",
-                "output_idx": ["c"],
-                "ranges": {"c": {"from": "cells"}, "r": {"from": "records"}},
-                "args": ["src_W", "src_S", "src_E", "src_N", "px", "py", "annual"],
-                "expr": {"op": "*", "args": [
-                    {"op": "ifelse", "args": [contains("c", "r"), 1.0, 0.0]},
-                    ix("annual", "r")
-                ]}
-            }}));
+        "op": "aggregate",
+        "reduce": "+",
+        "output_idx": ["c"],
+        "ranges": {"c": {"from": "cells"}, "r": {"from": "records"}},
+        "args": ["src_W", "src_S", "src_E", "src_N", "px", "py", "annual"],
+        "expr": {"op": "*", "args": [
+            {"op": "ifelse", "args": [contains("c", "r"), 1.0, 0.0]},
+            ix("annual", "r")
+        ]}
+    }}));
     // conc[o] = SUM_{s in cells} SR[s, o] * E[s]  — the provider-backed mat-vec
     // whose presence is what makes the binning aggregate a FORWARD match.
     vars.insert(
@@ -275,16 +275,16 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
             "shape": ["rcv"]}),
     );
     eqs.push(json!({"lhs": "conc", "rhs": {
-                "op": "aggregate",
-                "reduce": "+",
-                "output_idx": ["o"],
-                "ranges": {"s": {"from": "cells"}, "o": {"from": "rcv"}},
-                "args": ["SR", "E"],
-                "expr": {"op": "*", "args": [
-                    {"op": "index", "args": ["SR", "s", "o"]},
-                    ix("E", "s")
-                ]}
-            }}));
+        "op": "aggregate",
+        "reduce": "+",
+        "output_idx": ["o"],
+        "ranges": {"s": {"from": "cells"}, "o": {"from": "rcv"}},
+        "args": ["SR", "E"],
+        "expr": {"op": "*", "args": [
+            {"op": "index", "args": ["SR", "s", "o"]},
+            ix("E", "s")
+        ]}
+    }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "dense_overlap_forward"},
@@ -300,7 +300,9 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
     let rewritten = earthsci_ast::pushdown_rewrite::desugar_pushdown(&doc, Some("Fwd"))
         .expect("desugar")
         .into_owned();
-    let ov = &earthsci_ast::classification::observed_definition_json(&rewritten["models"]["Fwd"], "E").expect("E defining equation")["join"][0]["overlap"];
+    let ov =
+        &earthsci_ast::classification::observed_definition_json(&rewritten["models"]["Fwd"], "E")
+            .expect("E defining equation")["join"][0]["overlap"];
     assert_eq!(ov["src_env"], json!(["px", "py"]));
     assert_eq!(
         ov["tgt_env"],
@@ -433,19 +435,19 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
             "shape": ["one"]}),
     );
     eqs.push(json!({"lhs": "total", "rhs": {
-                "op": "aggregate",
-                "reduce": "+",
-                "output_idx": ["k"],
-                "ranges": {
-                    "k": {"from": "one"},
-                    "c": {"from": "cells"},
-                    "r": {"from": "points"}
-                },
-                "join": overlap_clause(),
-                "filter": contains("c", "r"),
-                "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
-                "expr": {"op": "+", "args": [ix("src_W", "c"), ix("px", "r")]}
-            }}));
+        "op": "aggregate",
+        "reduce": "+",
+        "output_idx": ["k"],
+        "ranges": {
+            "k": {"from": "one"},
+            "c": {"from": "cells"},
+            "r": {"from": "points"}
+        },
+        "join": overlap_clause(),
+        "filter": contains("c", "r"),
+        "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
+        "expr": {"op": "+", "args": [ix("src_W", "c"), ix("px", "r")]}
+    }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "overlap_pair_drive"},
@@ -489,14 +491,14 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
             "shape": ["points", "cells"]}),
     );
     eqs.push(json!({"lhs": "hit", "rhs": {
-                "op": "aggregate",
-                "reduce": "+",
-                "output_idx": ["r", "c"],
-                "ranges": {"r": {"from": "points"}, "c": {"from": "cells"}},
-                "join": overlap_clause(),
-                "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
-                "expr": {"op": "ifelse", "args": [contains("c", "r"), 1.0, 0.0]}
-            }}));
+        "op": "aggregate",
+        "reduce": "+",
+        "output_idx": ["r", "c"],
+        "ranges": {"r": {"from": "points"}, "c": {"from": "cells"}},
+        "join": overlap_clause(),
+        "args": ["src_W", "src_S", "src_E", "src_N", "px", "py"],
+        "expr": {"op": "ifelse", "args": [contains("c", "r"), 1.0, 0.0]}
+    }}));
     let doc = json!({
         "esm": "1.0.0",
         "metadata": {"name": "overlap_membership"},

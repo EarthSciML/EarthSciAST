@@ -124,14 +124,7 @@ export interface VariableNode {
    * `parameter` a sampled or constant one, and `species` a reaction-system
    * species.
    */
-  kind:
-    | 'state'
-    | 'algebraic'
-    | 'parameter'
-    | 'observed'
-    | 'brownian'
-    | 'discrete'
-    | 'species'
+  kind: 'state' | 'algebraic' | 'parameter' | 'observed' | 'brownian' | 'discrete' | 'species'
   /** Units if specified */
   units?: string
   /** System/component this variable belongs to */

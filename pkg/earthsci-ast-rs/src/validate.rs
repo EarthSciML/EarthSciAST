@@ -1797,8 +1797,10 @@ mod tests {
         // invalid `type` enum value must surface as an `enum` error at the
         // variable's `type` pointer.
         assert!(
-            result.schema_errors.iter().any(|e| e.keyword == "enum"
-                && e.path == "/models/test_model/variables/x/type"),
+            result
+                .schema_errors
+                .iter()
+                .any(|e| e.keyword == "enum" && e.path == "/models/test_model/variables/x/type"),
             "expected a per-error `enum` schema violation at the variable's type pointer; got {:?}",
             result.schema_errors
         );
@@ -1893,7 +1895,8 @@ mod tests {
             result.structural_errors.iter().any(|e| matches!(
                 e.code,
                 StructuralErrorCode::EventVarUndeclared
-            ) && e.path == "/models/TestModel/continuous_events/0/affects/0/lhs"),
+            ) && e.path
+                == "/models/TestModel/continuous_events/0/affects/0/lhs"),
             "expected pinned event_var_undeclared @ /models/TestModel/continuous_events/0/affects/0/lhs, got: {:?}",
             result.structural_errors
         );

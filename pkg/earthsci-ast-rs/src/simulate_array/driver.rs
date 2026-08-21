@@ -6,7 +6,7 @@
 use super::tape::{TapeProgram, tape_disabled};
 use super::*;
 use crate::simulate::{
-    Progress, ProgressFn, SimulateError, SimulateOptions, SolveStats, Solution, SolutionMetadata,
+    Progress, ProgressFn, SimulateError, SimulateOptions, Solution, SolutionMetadata, SolveStats,
     SolverChoice,
 };
 use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
@@ -241,9 +241,8 @@ impl ArrayCompiled {
         // `<namespace>.` prefix: rule 2 resolves `M.A` against a bare-named
         // single-model system, and rule 3 resolves the LOCAL `A` against a
         // flattening-qualified `M.A` — which the prefix strip could not do.
-        let params =
-            crate::simulate::canonicalize_override_keys(&self.param_index, params)
-                .map_err(crate::simulate::param_key_error)?;
+        let params = crate::simulate::canonicalize_override_keys(&self.param_index, params)
+            .map_err(crate::simulate::param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -398,8 +397,8 @@ impl ArrayCompiled {
         // trajectory built on a const-array bug fails loudly instead of carrying
         // the `NaN` the gather substituted.
         crate::simulate_array::take_const_array_oob();
-        let param_vec = self.build_param_vec(&params_owned)?;
-        let ic_vec = self.build_initial_state(&ics_owned, &param_vec)?;
+        let param_vec = self.build_param_vec(params_owned)?;
+        let ic_vec = self.build_initial_state(ics_owned, &param_vec)?;
 
         // Seed the forcing buffer at t0 BEFORE the static hoist reads it — a
         // no-op for the CONST/single-segment path; for DISCRETE it primes the
@@ -431,8 +430,7 @@ impl ArrayCompiled {
         // coupled loader model. `varying_rules` (DISCRETE ∪ CONTINUOUS) is retained
         // for the non-hot observed-trajectory output pass.
         let static_names = self.classify_static_observeds(discrete_forcing);
-        let seg_invariant_names =
-            self.classify_segment_invariant_observeds(discrete_forcing, true);
+        let seg_invariant_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let static_rules: Vec<AlgebraicRule> = self
             .observed_rules
             .iter()
@@ -460,8 +458,7 @@ impl ArrayCompiled {
             .filter(|r| !static_names.contains(observed_rule_var(r)))
             .cloned()
             .collect();
-        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> =
-            RefCell::new(HashMap::new());
+        let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let sa0 = build_state_arrays(&self.var_shapes, &ic_vec);
         let static_obs = materialize_observeds(
             &static_rules,
@@ -573,7 +570,9 @@ impl ArrayCompiled {
                 &varying_rules,
             );
             if let Some(details) = crate::simulate_array::take_const_array_oob() {
-                return Err(crate::compile_error::CompileError::InterpreterBuildError { details }.into());
+                return Err(
+                    crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
+                );
             }
             return Ok(Solution {
                 time,
@@ -670,7 +669,7 @@ impl ArrayCompiled {
                 if t == b {
                     u0 = (0..n_states).map(|r| seg_state[r][i]).collect();
                 }
-                if requested.iter().any(|&g| g == t) {
+                if requested.contains(&t) {
                     time.push(t);
                     for r in 0..n_states {
                         state[r].push(seg_state[r][i]);
@@ -696,7 +695,9 @@ impl ArrayCompiled {
         );
 
         if let Some(details) = crate::simulate_array::take_const_array_oob() {
-            return Err(crate::compile_error::CompileError::InterpreterBuildError { details }.into());
+            return Err(
+                crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
+            );
         }
         Ok(Solution {
             time,
@@ -758,8 +759,7 @@ impl ArrayCompiled {
             static_obs.clone()
         } else {
             let sa_seg = build_state_arrays(&self.var_shapes, u0);
-            let seg_rings: RefCell<HashMap<String, ArrayD<f64>>> =
-                RefCell::new(HashMap::new());
+            let seg_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
             let mut seed = static_obs.clone();
             materialize_observeds_append(
                 &mut seed,
@@ -863,7 +863,7 @@ impl ArrayCompiled {
             let mut f_y = vec![0.0f64; n];
             let mut f_yp = vec![0.0f64; n];
             let mut scratch_slot = jac_scratch.borrow_mut();
-            let mut scratch = scratch_slot.get_or_insert_with(|| {
+            let scratch = scratch_slot.get_or_insert_with(|| {
                 let mut s = RhsScratch::new(&var_shapes_jac);
                 s.set_const_arrays(Rc::clone(&const_scope_jac));
                 s.set_static((*jac_seed).clone());
@@ -881,7 +881,7 @@ impl ArrayCompiled {
                 &mut f_y,
                 false,
                 &mut RhsStats::default(),
-                &mut scratch,
+                scratch,
             );
             evaluate_rhs_with_scratch(
                 &rhs_rules_jac,
@@ -895,7 +895,7 @@ impl ArrayCompiled {
                 &mut f_yp,
                 false,
                 &mut RhsStats::default(),
-                &mut scratch,
+                scratch,
             );
             let jv_s = jv.as_mut_slice();
             for i in 0..n {
@@ -1261,8 +1261,10 @@ impl ArrayCompiled {
             insp.params.insert(name.clone(), param_vec[i]);
         }
         for rule in &self.observed_rules {
-            insp.observed_exprs
-                .insert(observed_rule_var(rule).clone(), observed_rule_body(rule).clone());
+            insp.observed_exprs.insert(
+                observed_rule_var(rule).clone(),
+                observed_rule_body(rule).clone(),
+            );
         }
         for name in static_names {
             if let Some(a) = static_obs.get(name) {

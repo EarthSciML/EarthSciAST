@@ -307,12 +307,32 @@ pub(crate) enum MRef {
 /// applied in program order per element.
 #[derive(Clone, Debug)]
 pub(crate) enum MicroOp {
-    Bin { op: BinCode, a: MRef, b: MRef, out: u16 },
-    Un { op: UnCode, a: MRef, out: u16 },
-    Neg { a: MRef, out: u16 },
-    Select { cond: MRef, a: MRef, b: MRef, out: u16 },
+    Bin {
+        op: BinCode,
+        a: MRef,
+        b: MRef,
+        out: u16,
+    },
+    Un {
+        op: UnCode,
+        a: MRef,
+        out: u16,
+    },
+    Neg {
+        a: MRef,
+        out: u16,
+    },
+    Select {
+        cond: MRef,
+        a: MRef,
+        b: MRef,
+        out: u16,
+    },
     /// `out = a` (a fused `Fill`/`Copy`).
-    Mov { a: MRef, out: u16 },
+    Mov {
+        a: MRef,
+        out: u16,
+    },
     /// Superop: `t = kernel(op1)(a, b); out = swap ? kernel(op2)(c, t)
     /// : kernel(op2)(t, c)` — two adjacent Bin micro-ops whose intermediate
     /// `t` has exactly one consumer, merged into one loop. Element semantics

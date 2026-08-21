@@ -723,7 +723,11 @@ pub struct ExpressionNode {
     /// the JS/Julia/Python bindings holds. Symbolic index names are always
     /// identifiers, never bare decimal integers, so the "looks like an integer ⇒
     /// emit as integer" rule cannot misfire on a real name.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "output_idx_serde")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "output_idx_serde"
+    )]
     pub output_idx: Option<Vec<String>>,
 
     /// Per-index ranges for `arrayop`/`aggregate`. Each entry is either a dense
@@ -915,7 +919,10 @@ const fn child_keys<const N: usize>(tag: u8) -> [&'static str; N] {
         }
         i += 1;
     }
-    assert!(j == N, "child-key count does not match the declared array length");
+    assert!(
+        j == N,
+        "child-key count does not match the declared array length"
+    );
     out
 }
 
@@ -929,38 +936,58 @@ const fn child_keys<const N: usize>(tag: u8) -> [&'static str; N] {
 macro_rules! expr_child_visit {
     // for_each_child: immutable; maps visited in sorted-key order.
     (@each array, $node:tt, $f:ident, $field:ident) => {
-        for a in &$node.$field { $f(a); }
+        for a in &$node.$field {
+            $f(a);
+        }
     };
     (@each opt_array, $node:tt, $f:ident, $field:ident) => {
-        if let Some(vs) = &$node.$field { for v in vs { $f(v); } }
+        if let Some(vs) = &$node.$field {
+            for v in vs {
+                $f(v);
+            }
+        }
     };
     (@each scalar, $node:tt, $f:ident, $field:ident) => {
-        if let Some(e) = $node.$field.as_deref() { $f(e); }
+        if let Some(e) = $node.$field.as_deref() {
+            $f(e);
+        }
     };
     (@each map, $node:tt, $f:ident, $field:ident) => {
         if let Some(m) = &$node.$field {
             let mut keys: Vec<&String> = m.keys().collect();
             keys.sort();
-            for k in keys { $f(&m[k]); }
+            for k in keys {
+                $f(&m[k]);
+            }
         }
     };
 
     // for_each_child_mut: mutable; maps visited in sorted-key order.
     (@each_mut array, $node:tt, $f:ident, $field:ident) => {
-        for a in &mut $node.$field { $f(a); }
+        for a in &mut $node.$field {
+            $f(a);
+        }
     };
     (@each_mut opt_array, $node:tt, $f:ident, $field:ident) => {
-        if let Some(vs) = &mut $node.$field { for v in vs { $f(v); } }
+        if let Some(vs) = &mut $node.$field {
+            for v in vs {
+                $f(v);
+            }
+        }
     };
     (@each_mut scalar, $node:tt, $f:ident, $field:ident) => {
-        if let Some(e) = $node.$field.as_deref_mut() { $f(e); }
+        if let Some(e) = $node.$field.as_deref_mut() {
+            $f(e);
+        }
     };
     (@each_mut map, $node:tt, $f:ident, $field:ident) => {
         if let Some(m) = &mut $node.$field {
             let mut keys: Vec<String> = m.keys().cloned().collect();
             keys.sort();
             for k in keys {
-                if let Some(v) = m.get_mut(&k) { $f(v); }
+                if let Some(v) = m.get_mut(&k) {
+                    $f(v);
+                }
             }
         }
     };
@@ -971,13 +998,19 @@ macro_rules! expr_child_visit {
         $node.$field.iter().any(&mut *$f)
     };
     (@any opt_array, $node:tt, $f:ident, $field:ident) => {
-        $node.$field.as_ref().is_some_and(|vs| vs.iter().any(&mut *$f))
+        $node
+            .$field
+            .as_ref()
+            .is_some_and(|vs| vs.iter().any(&mut *$f))
     };
     (@any scalar, $node:tt, $f:ident, $field:ident) => {
         $node.$field.as_deref().is_some_and(|e| $f(e))
     };
     (@any map, $node:tt, $f:ident, $field:ident) => {
-        $node.$field.as_ref().is_some_and(|m| m.values().any(&mut *$f))
+        $node
+            .$field
+            .as_ref()
+            .is_some_and(|m| m.values().any(&mut *$f))
     };
 
     // map_children: rebuild each child field onto `$out` (maps not reordered —
@@ -986,20 +1019,34 @@ macro_rules! expr_child_visit {
         $out.$field = $node.$field.iter().map(&mut *$f).collect();
     };
     (@map opt_array, $node:tt, $out:ident, $f:ident, $field:ident) => {
-        $out.$field = $node.$field.as_ref().map(|vs| vs.iter().map(&mut *$f).collect());
+        $out.$field = $node
+            .$field
+            .as_ref()
+            .map(|vs| vs.iter().map(&mut *$f).collect());
     };
     (@map scalar, $node:tt, $out:ident, $f:ident, $field:ident) => {
         $out.$field = $node.$field.as_deref().map(|e| Box::new($f(e)));
     };
     (@map map, $node:tt, $out:ident, $f:ident, $field:ident) => {
-        $out.$field = $node.$field.as_ref().map(|m| m.iter().map(|(k, v)| (k.clone(), $f(v))).collect());
+        $out.$field = $node
+            .$field
+            .as_ref()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), $f(v))).collect());
     };
 
     // Shape → JSON-key-constant bucket tag.
-    (@tag array) => { CHILD_ARRAY };
-    (@tag opt_array) => { CHILD_ARRAY };
-    (@tag scalar) => { CHILD_SCALAR };
-    (@tag map) => { CHILD_MAP };
+    (@tag array) => {
+        CHILD_ARRAY
+    };
+    (@tag opt_array) => {
+        CHILD_ARRAY
+    };
+    (@tag scalar) => {
+        CHILD_SCALAR
+    };
+    (@tag map) => {
+        CHILD_MAP
+    };
 }
 
 /// Declare the ordered child-field spec once; expand it into the flat
@@ -1184,7 +1231,15 @@ mod expr_deserialize_token_mapping_tests {
         // `{"op":"x"}` covers the required-field rule: `ExpressionNode::args`
         // carries no `#[serde(default)]`, so an operator node without `args`
         // is rejected here exactly as it was under the derive.
-        for src in ["null", "true", "false", "[]", "[1,2]", "{}", r#"{"op":"x"}"#] {
+        for src in [
+            "null",
+            "true",
+            "false",
+            "[]",
+            "[1,2]",
+            "{}",
+            r#"{"op":"x"}"#,
+        ] {
             assert!(parse(src).is_err(), "{src} must not parse as an Expr");
             assert!(
                 parse_via_value(src).is_err(),
@@ -1246,7 +1301,10 @@ mod expr_child_spec_tests {
     #[test]
     fn child_key_constants_match_pinned_sets() {
         assert_eq!(EXPR_ARRAY_CHILD_KEYS, ["args", "values"]);
-        assert_eq!(EXPR_SCALAR_CHILD_KEYS, ["lower", "upper", "expr", "filter", "key"]);
+        assert_eq!(
+            EXPR_SCALAR_CHILD_KEYS,
+            ["lower", "upper", "expr", "filter", "key"]
+        );
         assert_eq!(EXPR_MAP_CHILD_KEYS, ["axes", "bindings"]);
 
         let bucketed =
@@ -1291,8 +1349,8 @@ mod expr_child_spec_tests {
         assert_eq!(
             seen,
             vec![
-                "args0", "lower", "upper", "expr", "filter", "values0",
-                "axes_a", "axes_z", // axes: sorted by key
+                "args0", "lower", "upper", "expr", "filter", "values0", "axes_a",
+                "axes_z", // axes: sorted by key
                 "key", "bind_a", "bind_z", // bindings: sorted by key
             ]
         );
@@ -1765,10 +1823,8 @@ impl ModelVariable {
             if let Some(expr) = &mut value.expression {
                 f(expr);
             }
-            if let Some(UnitConversion::Expression(expr)) = value
-                .from
-                .as_mut()
-                .and_then(|b| b.unit_conversion.as_mut())
+            if let Some(UnitConversion::Expression(expr)) =
+                value.from.as_mut().and_then(|b| b.unit_conversion.as_mut())
             {
                 f(expr);
             }

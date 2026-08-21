@@ -40,8 +40,11 @@ fn write_v2_array(root: &Path, name: &str, shape: [usize; 2], chunks: [usize; 2]
         ),
     )
     .expect("write .zarray");
-    fs::write(dir.join(".zattrs"), r#"{"_ARRAY_DIMENSIONS":["src","rcv"]}"#)
-        .expect("write .zattrs");
+    fs::write(
+        dir.join(".zattrs"),
+        r#"{"_ARRAY_DIMENSIONS":["src","rcv"]}"#,
+    )
+    .expect("write .zattrs");
 
     let (nc0, nc1) = (shape[0].div_ceil(chunks[0]), shape[1].div_ceil(chunks[1]));
     for c0 in 0..nc0 {
@@ -102,7 +105,10 @@ fn materialize_renames_to_the_model_variable() {
         "adapter must key by the MODEL variable; got {:?}",
         fields.keys().collect::<Vec<_>>()
     );
-    assert!(!fields.contains_key("SOA"), "the on-disk name must not leak through");
+    assert!(
+        !fields.contains_key("SOA"),
+        "the on-disk name must not leak through"
+    );
     let f = &fields["SR_SOA"];
     assert_eq!(f.array.shape(), &[3, 4]);
     assert_eq!(f.array[ndarray::IxDyn(&[0, 0])], 0.0);
@@ -189,7 +195,10 @@ fn an_unknown_format_fails_at_construction_not_mid_solve() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let loader = DataSource::new("bogus", "not-a-format", "file:///nowhere");
     let built = EsioProvider::builder(loader, cache(tmp.path())).build();
-    assert!(built.is_err(), "an unresolvable reader must fail at build()");
+    assert!(
+        built.is_err(),
+        "an unresolvable reader must fail at build()"
+    );
 }
 
 /// A HashMap of model-variable -> array is exactly what the refresh executor

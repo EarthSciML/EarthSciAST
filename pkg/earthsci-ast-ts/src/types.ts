@@ -159,8 +159,7 @@ export type CovarianceMatrix = number[][]
  * optional fields.
  */
 export type NormalDistribution = { kind: 'normal'; mean: number | number[] } & (
-  | { std: number | number[]; cov?: never }
-  | { cov: CovarianceMatrix; std?: never }
+  { std: number | number[]; cov?: never } | { cov: CovarianceMatrix; std?: never }
 )
 
 /**
@@ -168,8 +167,7 @@ export type NormalDistribution = { kind: 'normal'; mean: number | number[] } & (
  * Both spread forms are on the LOG scale. Exactly one of `sigma` or `cov`.
  */
 export type LognormalDistribution = { kind: 'lognormal'; mu: number | number[] } & (
-  | { sigma: number | number[]; cov?: never }
-  | { cov: CovarianceMatrix; sigma?: never }
+  { sigma: number | number[]; cov?: never } | { cov: CovarianceMatrix; sigma?: never }
 )
 
 /**
@@ -279,11 +277,7 @@ export type RemeshUpdate = { kind: 'remesh'; hook?: string } & UpdateValueForm
  * is what this type names.
  */
 export type NonWienerParameterUpdate =
-  | ScheduleUpdate
-  | ConditionUpdate
-  | CrossingUpdate
-  | DataUpdate
-  | RemeshUpdate
+  ScheduleUpdate | ConditionUpdate | CrossingUpdate | DataUpdate | RemeshUpdate
 
 /** One update rule. Six kinds, discriminated by `kind`. */
 export type ParameterUpdate = WienerUpdate | NonWienerParameterUpdate

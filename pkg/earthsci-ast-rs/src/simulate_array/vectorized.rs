@@ -351,9 +351,7 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
                         }
                     }
                 }
-                Some(mask) => {
-                    vec_select(mask, body_v, VecValue::Scalar(reduce.identity()), pool)?
-                }
+                Some(mask) => vec_select(mask, body_v, VecValue::Scalar(reduce.identity()), pool)?,
             },
         }
     } else {
@@ -954,7 +952,6 @@ fn eval_vec_op_code<'a>(
         }
     }
 }
-
 
 /// Whether `expr` mentions the variable `name` anywhere (including in an
 /// `index` axis position, a nested aggregate body, or a `makearray` region
@@ -1588,7 +1585,7 @@ pub(super) fn eval_vec_index<'a>(
     // index (descending axis order so the lower axis indices stay valid).
     let mut fixed_desc: SmallVec<[(usize, usize); 4]> =
         fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
-    fixed_desc.sort_by(|a, b| b.0.cmp(&a.0));
+    fixed_desc.sort_by_key(|x| std::cmp::Reverse(x.0));
     let mut rv = arg0.view().expect("array");
     for (d, i0) in fixed_desc {
         rv = rv.index_axis_move(ndarray::Axis(d), i0);
@@ -2453,13 +2450,22 @@ mod op_dispatch_equivalence {
     fn every_box_transparent_dispatch_arm_is_listed() {
         let listed = |op: &str| super::super::cse::BOX_TRANSPARENT_OPS.contains(&op);
         for op in ARITH.iter().chain(CMP).chain(UNARY) {
-            assert!(listed(op), "`{op}` has a dispatch arm but is not CSE-transparent");
+            assert!(
+                listed(op),
+                "`{op}` has a dispatch arm but is not CSE-transparent"
+            );
         }
         for op in ["neg", "index", "ifelse", "broadcast"] {
-            assert!(listed(op), "`{op}` has a dispatch arm but is not CSE-transparent");
+            assert!(
+                listed(op),
+                "`{op}` has a dispatch arm but is not CSE-transparent"
+            );
         }
         for op in ["aggregate", "makearray"] {
-            assert!(!listed(op), "`{op}` rebinds the box and must not be CSE-transparent");
+            assert!(
+                !listed(op),
+                "`{op}` rebinds the box and must not be CSE-transparent"
+            );
         }
     }
 }

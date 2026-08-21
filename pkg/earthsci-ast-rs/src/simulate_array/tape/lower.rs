@@ -972,7 +972,7 @@ impl<'m> TapeBuilder<'m> {
         // the mapped source axes into output order, then broadcast axes.
         let mut fixed_desc: SmallVec<[(usize, usize); 4]> =
             fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
-        fixed_desc.sort_by(|a, b| b.0.cmp(&a.0));
+        fixed_desc.sort_by_key(|x| std::cmp::Reverse(x.0));
         let mut mapped_src: SmallVec<[usize; 4]> =
             mapped.iter().flatten().map(|(d, _)| *d).collect();
         mapped_src.sort_unstable();
@@ -1991,7 +1991,7 @@ impl<'m> TapeBuilder<'m> {
     fn end_rule(&mut self) {
         // Record the rule's home-stream chunk (for export insertion).
         let stream = &self.streams[self.home as usize];
-        if let Some((idx, c)) = stream.iter().enumerate().last() {
+        if let Some((idx, c)) = stream.iter().enumerate().next_back() {
             if c.rule == self.cur_rule {
                 self.rule_home_chunk[self.cur_rule as usize] = Some(idx);
             }

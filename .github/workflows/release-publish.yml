@@ -30,6 +30,14 @@ on:
   push:
     tags: [ 'v*' ]
 
+# Publishes to the registries and attaches artifacts to the GitHub release.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ---------------------------------------------------------------------------
   # NOTE: Python/PyPI is deliberately NOT published from this workflow. PyPI's
@@ -41,6 +49,7 @@ jobs:
   # ---------------------------------------------------------------------------
   julia-register:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: >-
       inputs.version != ''
       || (github.event_name == 'release' && github.event.action == 'published')
@@ -82,6 +91,7 @@ jobs:
   # ---------------------------------------------------------------------------
   rust-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: >-
       inputs.version != ''
       || (github.event_name == 'release' && github.event.action == 'published')
@@ -138,6 +148,7 @@ jobs:
   # ---------------------------------------------------------------------------
   go-build-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: >-
       inputs.version != ''
       || (github.event_name == 'release' && github.event.action == 'published')
@@ -189,6 +200,7 @@ jobs:
 
   go-publish-module:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: >-
       inputs.version != ''
       || (github.event_name == 'release' && github.event.action == 'published')
@@ -233,6 +245,7 @@ jobs:
   # ---------------------------------------------------------------------------
   npm-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: >-
       inputs.version != ''
       || (github.event_name == 'release' && github.event.action == 'published')

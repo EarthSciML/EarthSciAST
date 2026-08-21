@@ -4,6 +4,7 @@ ESM Format serialization module.
 This module provides functions to serialize ESM format objects to JSON,
 with optional file writing capability.
 """
+
 from __future__ import annotations
 
 import json
@@ -991,9 +992,7 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
         if coupling.trigger:
             result["trigger"] = _serialize_discrete_event_trigger(coupling.trigger)
         if coupling.affects:
-            result["affects"] = [
-                _serialize_affect_equation(affect) for affect in coupling.affects
-            ]
+            result["affects"] = [_serialize_affect_equation(affect) for affect in coupling.affects]
         if coupling.affect_neg:
             result["affect_neg"] = [
                 _serialize_affect_equation(affect) for affect in coupling.affect_neg

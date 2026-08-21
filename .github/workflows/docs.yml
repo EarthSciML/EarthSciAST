@@ -14,20 +14,28 @@ on:
       - 'docs/**'
       - 'scripts/generate_docs.py'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   generate-docs:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
     - name: Set up Julia
-      uses: julia-actions/setup-julia@v1
+      uses: julia-actions/setup-julia@v2
       with:
         version: '1.9'
 
@@ -37,10 +45,7 @@ jobs:
         node-version: '18'
 
     - name: Set up Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
+      uses: dtolnay/rust-toolchain@stable
 
     - name: Generate documentation
       run: |

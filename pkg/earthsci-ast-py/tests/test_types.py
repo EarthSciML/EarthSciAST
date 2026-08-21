@@ -92,9 +92,7 @@ def test_parameter_update_rule_list():
     applied in declaration order."""
     rules = [
         ParameterUpdate(kind="schedule", interval=3600.0, expression=1.0),
-        ParameterUpdate(
-            kind="condition", when=ExprNode(op=">", args=["x", 5.0]), expression=0.0
-        ),
+        ParameterUpdate(kind="condition", when=ExprNode(op=">", args=["x", 5.0]), expression=0.0),
     ]
     var = ModelVariable(type="parameter", units="1", shape=[], update=rules)
     assert [rule.kind for rule in var.update] == ["schedule", "condition"]

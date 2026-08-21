@@ -488,10 +488,7 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
 
                 # --- relational_node_in_continuous: a distinct value-invention
                 # node under a relational semiring that reads a STATE variable.
-                if (
-                    agg.get("distinct") is True
-                    and agg.get("semiring") in _RELATIONAL_SEMIRINGS
-                ):
+                if agg.get("distinct") is True and agg.get("semiring") in _RELATIONAL_SEMIRINGS:
                     refs = _bare_string_leaves(agg.get("key")) | _bare_string_leaves(
                         agg.get("expr")
                     )
@@ -1353,9 +1350,13 @@ def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> N
     for mname, m in data.get("models", {}).items():
         if not isinstance(m, dict):
             continue
-        var_types = {n: v.get("type") for n, v in (m.get("variables") or {}).items()
-                     if isinstance(v, dict)}
-        for event_kind, key in (("continuous", "continuous_events"), ("discrete", "discrete_events")):
+        var_types = {
+            n: v.get("type") for n, v in (m.get("variables") or {}).items() if isinstance(v, dict)
+        }
+        for event_kind, key in (
+            ("continuous", "continuous_events"),
+            ("discrete", "discrete_events"),
+        ):
             for ei, event in enumerate(m.get(key, []) or []):
                 if not isinstance(event, dict):
                     continue
@@ -1382,13 +1383,12 @@ def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> N
                         if trigger_type == "periodic" and trigger.get("interval") is not None:
                             details["trigger_type"] = trigger_type
                             details["remedy"] = (
-                                f"declare the change as update: {{kind: \"schedule\", "
+                                f'declare the change as update: {{kind: "schedule", '
                                 f"interval: {trigger['interval']}}} on '{lhs}' (esm-spec 5.4)"
                             )
                         else:
                             details["remedy"] = (
-                                "declare the change as the parameter's own update "
-                                "(esm-spec 5.4)"
+                                "declare the change as the parameter's own update (esm-spec 5.4)"
                             )
                         errors.append(
                             (

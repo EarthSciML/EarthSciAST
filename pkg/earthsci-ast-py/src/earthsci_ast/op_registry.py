@@ -171,28 +171,48 @@ class OpSpec:
 # through the OPS dict below.
 _ALL: tuple[OpSpec, ...] = (
     # --- arithmetic (esm-spec §4.2 Arithmetic) ---
-    OpSpec("+", "arithmetic", "nary", arity_bounds=(1, None),
-           note="n-ary with NO lower bound beyond one operand (esm-spec §4.2 says "
-                "simply \"n-ary\"). A one-operand `+` folds to the identity — `+(x)` "
-                "IS `x` — so it is degenerate, not wrong, and the shared property "
-                "corpus already contains the form. Python pinned (2, None) here while "
-                "Rust (`Arity::AtLeast(1)`) and Julia (`arity=1:typemax(Int)`) both "
-                "allow one; Python was the outlier and is now reconciled. Contrast "
-                "`min`/`max`, which the spec explicitly floors at two."),
-    OpSpec("-", "arithmetic", "variadic", arity_bounds=(1, None),
-           note="unary negation .. n-ary subtraction (corpus has a 3-operand `-`)"),
-    OpSpec("neg", "arithmetic", "unary", arity_bounds=(1, 1),
-           note="explicit unary negation. NOT a spelling alias of `-`: `-` is variadic "
-                "(1..n operands) while `neg` is strictly unary, so the two carry "
-                "different arity contracts. `canonicalize()` REWRITES a 1-operand `-` "
-                "into `neg`, so a canonicalized document contains `neg` nodes and every "
-                "consumer (evaluator, display, broadcast `fn` resolution) must accept "
-                "it. Registered in the Rust (`Arity::Exact(1)`) and Julia "
-                "(`category=:arithmetic, arity=1:1`) registries too; Python's omission "
-                "was a binding-local gap that made its own canonicalizer's output "
-                "unevaluable."),
-    OpSpec("*", "arithmetic", "nary", arity_bounds=(1, None),
-           note="n-ary with no lower bound beyond one operand; see `+`."),
+    OpSpec(
+        "+",
+        "arithmetic",
+        "nary",
+        arity_bounds=(1, None),
+        note="n-ary with NO lower bound beyond one operand (esm-spec §4.2 says "
+        'simply "n-ary"). A one-operand `+` folds to the identity — `+(x)` '
+        "IS `x` — so it is degenerate, not wrong, and the shared property "
+        "corpus already contains the form. Python pinned (2, None) here while "
+        "Rust (`Arity::AtLeast(1)`) and Julia (`arity=1:typemax(Int)`) both "
+        "allow one; Python was the outlier and is now reconciled. Contrast "
+        "`min`/`max`, which the spec explicitly floors at two.",
+    ),
+    OpSpec(
+        "-",
+        "arithmetic",
+        "variadic",
+        arity_bounds=(1, None),
+        note="unary negation .. n-ary subtraction (corpus has a 3-operand `-`)",
+    ),
+    OpSpec(
+        "neg",
+        "arithmetic",
+        "unary",
+        arity_bounds=(1, 1),
+        note="explicit unary negation. NOT a spelling alias of `-`: `-` is variadic "
+        "(1..n operands) while `neg` is strictly unary, so the two carry "
+        "different arity contracts. `canonicalize()` REWRITES a 1-operand `-` "
+        "into `neg`, so a canonicalized document contains `neg` nodes and every "
+        "consumer (evaluator, display, broadcast `fn` resolution) must accept "
+        "it. Registered in the Rust (`Arity::Exact(1)`) and Julia "
+        "(`category=:arithmetic, arity=1:1`) registries too; Python's omission "
+        "was a binding-local gap that made its own canonicalizer's output "
+        "unevaluable.",
+    ),
+    OpSpec(
+        "*",
+        "arithmetic",
+        "nary",
+        arity_bounds=(1, None),
+        note="n-ary with no lower bound beyond one operand; see `+`.",
+    ),
     OpSpec("/", "arithmetic", "binary", arity_bounds=(2, 2)),
     OpSpec("^", "arithmetic", "binary", arity_bounds=(2, 2), note="power"),
     OpSpec("**", "arithmetic", "binary", alias_of="^", note="Python-style power spelling"),
@@ -217,15 +237,24 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("asinh", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("acosh", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("atanh", "elementary", "unary", arity_bounds=(1, 1)),
-    OpSpec("min", "elementary", "nary", arity_bounds=(2, None),
-           note="n-ary (>= 2); clamp/clip primitive. The floor of two is SPEC-MANDATED "
-                "-- \"Conforming bindings MUST reject `min`/`max` nodes with fewer than "
-                "two arguments\" (esm-spec §4.2) -- which is why these keep a lower "
-                "bound where the other n-ary ops (`+`, `*`) do not. A one-operand "
-                "`min` has no meaningful identity to fold to, unlike `+(x) = x`."),
-    OpSpec("max", "elementary", "nary", arity_bounds=(2, None),
-           note="n-ary (>= 2); clamp/clip primitive. Floor of two is spec-mandated; "
-                "see `min`."),
+    OpSpec(
+        "min",
+        "elementary",
+        "nary",
+        arity_bounds=(2, None),
+        note="n-ary (>= 2); clamp/clip primitive. The floor of two is SPEC-MANDATED "
+        '-- "Conforming bindings MUST reject `min`/`max` nodes with fewer than '
+        'two arguments" (esm-spec §4.2) -- which is why these keep a lower '
+        "bound where the other n-ary ops (`+`, `*`) do not. A one-operand "
+        "`min` has no meaningful identity to fold to, unlike `+(x) = x`.",
+    ),
+    OpSpec(
+        "max",
+        "elementary",
+        "nary",
+        arity_bounds=(2, None),
+        note="n-ary (>= 2); clamp/clip primitive. Floor of two is spec-mandated; see `min`.",
+    ),
     OpSpec("floor", "elementary", "unary", arity_bounds=(1, 1)),
     OpSpec("ceil", "elementary", "unary", arity_bounds=(1, 1)),
     # --- comparison (esm-spec §4.2 Conditionals) ---
@@ -235,8 +264,13 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("<=", "comparison", "binary", arity_bounds=(2, 2)),
     OpSpec("==", "comparison", "binary", arity_bounds=(2, 2)),
     OpSpec("!=", "comparison", "binary", arity_bounds=(2, 2)),
-    OpSpec("=", "comparison", "binary", alias_of="==",
-           note="equality spelling used by the equation/display layer"),
+    OpSpec(
+        "=",
+        "comparison",
+        "binary",
+        alias_of="==",
+        note="equality spelling used by the equation/display layer",
+    ),
     # --- logical (esm-spec §4.2 Conditionals + boolean literals) ---
     OpSpec("and", "logical", "nary", arity_bounds=(2, None)),
     OpSpec("or", "logical", "nary", arity_bounds=(2, None)),
@@ -246,27 +280,51 @@ _ALL: tuple[OpSpec, ...] = (
     # --- conditional ---
     OpSpec("ifelse", "conditional", "ternary", arity_bounds=(3, 3)),
     # --- calculus (esm-spec §4.2 Calculus) ---
-    OpSpec("D", "calculus", "unary", arity_bounds=(1, 1),
-           note="STRUCTURAL time-derivative LHS (`wrt` 't', or absent): STRICTLY UNARY. "
-                "A REWRITE-TARGET D (spatial `wrt`) relaxes to "
-                "REWRITE_TARGET_DERIVATIVE_ARITY_BOUNDS — see "
-                "`is_rewrite_target_derivative`"),
-    OpSpec("ic", "calculus", "unary", arity_bounds=(1, 1),
-           note="initial-condition declaration (esm-spec §11.4)"),
+    OpSpec(
+        "D",
+        "calculus",
+        "unary",
+        arity_bounds=(1, 1),
+        note="STRUCTURAL time-derivative LHS (`wrt` 't', or absent): STRICTLY UNARY. "
+        "A REWRITE-TARGET D (spatial `wrt`) relaxes to "
+        "REWRITE_TARGET_DERIVATIVE_ARITY_BOUNDS — see "
+        "`is_rewrite_target_derivative`",
+    ),
+    OpSpec(
+        "ic",
+        "calculus",
+        "unary",
+        arity_bounds=(1, 1),
+        note="initial-condition declaration (esm-spec §11.4)",
+    ),
     # --- event-specific (esm-spec §4.2 Event-specific / §5) ---
     OpSpec("Pre", "event", "unary", arity_bounds=(1, 1)),
     # --- closed-registry invocation (esm-spec §4.4 / §4.5 / §9.5) ---
     OpSpec("fn", "closed_registry", "variadic", note="closed function call; carries `name`"),
-    OpSpec("enum", "closed_registry", "binary", arity_bounds=(2, 2),
-           note="[enum_name, symbol]; lowered at load"),
-    OpSpec("table_lookup", "closed_registry", "nullary",
-           note="args empty; `table`/`axes` fields; lowered at load"),
+    OpSpec(
+        "enum",
+        "closed_registry",
+        "binary",
+        arity_bounds=(2, 2),
+        note="[enum_name, symbol]; lowered at load",
+    ),
+    OpSpec(
+        "table_lookup",
+        "closed_registry",
+        "nullary",
+        note="args empty; `table`/`axes` fields; lowered at load",
+    ),
     # --- expression templates (esm-spec §9.6) ---
-    OpSpec("apply_expression_template", "template", "nullary",
-           note="args empty; `name`/`bindings` fields; expanded at load"),
+    OpSpec(
+        "apply_expression_template",
+        "template",
+        "nullary",
+        note="args empty; `name`/`bindings` fields; expanded at load",
+    ),
     # --- inline constants (esm-spec §4.2 Inline Constants) ---
-    OpSpec("const", "constant", "nullary", arity_bounds=(0, 0),
-           note="args empty; literal in `value`"),
+    OpSpec(
+        "const", "constant", "nullary", arity_bounds=(0, 0), note="args empty; literal in `value`"
+    ),
     # --- array / tensor (esm-spec §4.2 Array / Tensor, §4.3) ---
     OpSpec("aggregate", "array", "special", note="FAQ semiring aggregate"),
     OpSpec("makearray", "array", "special"),
@@ -280,13 +338,23 @@ _ALL: tuple[OpSpec, ...] = (
     OpSpec("rank", "relational", "variadic", note="build-time dense IDs"),
     OpSpec("argmin", "relational", "special", note="index-returning reduction"),
     OpSpec("argmax", "relational", "special", note="index-returning reduction"),
-    OpSpec("distinct", "relational", "variadic",
-           note="dedup reducer / aggregate distinct flag (cadence guard)"),
+    OpSpec(
+        "distinct",
+        "relational",
+        "variadic",
+        note="dedup reducer / aggregate distinct flag (cadence guard)",
+    ),
     OpSpec("join", "relational", "special", note="equi-join gate (cadence guard)"),
     # --- geometry kernel leaves (esm-spec §8.6) ---
-    OpSpec("intersect_polygon", "geometry", "binary", note="clipped overlap ring; carries `manifold`"),
-    OpSpec("polygon_intersection_area", "geometry", "binary",
-           note="fused scalar overlap area; carries `manifold`"),
+    OpSpec(
+        "intersect_polygon", "geometry", "binary", note="clipped overlap ring; carries `manifold`"
+    ),
+    OpSpec(
+        "polygon_intersection_area",
+        "geometry",
+        "binary",
+        note="fused scalar overlap area; carries `manifold`",
+    ),
     # --- open-tier rewrite-target sugar (esm-spec §4.2) is NOT registered ---
     # grad/div/laplacian/curl/integral are ORDINARY open-tier rewrite-target ops
     # with NO privilege over any other user op (`godunov_hamiltonian`): no
@@ -338,7 +406,8 @@ def unary_elementary() -> frozenset[str]:
     (n-ary). The single source those two value-tables derive their key sets from.
     """
     return frozenset(
-        name for name, spec in OPS.items()
+        name
+        for name, spec in OPS.items()
         if spec.category == "elementary" and spec.arity == "unary"
     )
 
@@ -416,11 +485,7 @@ def arity_bounds_map() -> dict[str, tuple[int, int | None]]:
     have no fixed operand count and are absent, so structural validation skips
     their arity exactly as before).
     """
-    return {
-        name: spec.arity_bounds
-        for name, spec in OPS.items()
-        if spec.arity_bounds is not None
-    }
+    return {name: spec.arity_bounds for name, spec in OPS.items() if spec.arity_bounds is not None}
 
 
 #: The ``wrt`` value that marks the STRUCTURAL time derivative. A ``D`` node with

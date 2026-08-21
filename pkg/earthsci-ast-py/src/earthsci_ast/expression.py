@@ -1,6 +1,7 @@
 """
 Expression manipulation and analysis functions.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -358,8 +359,7 @@ _UNARY_SYMPY_IMPL: dict[str, tuple] = {
 # registry-derived key set makes forgetting a value a loud import-time KeyError
 # and makes a stray mapping for an unregistered op impossible.
 _UNARY_SYMPY: dict[str, tuple] = {
-    op: _UNARY_SYMPY_IMPL[op]
-    for op in (op_registry.unary_elementary() - {"abs"}) | {"not"}
+    op: _UNARY_SYMPY_IMPL[op] for op in (op_registry.unary_elementary() - {"abs"}) | {"not"}
 }
 
 # Pure binary math/relational ops: each takes exactly 2 ESM arguments and maps
@@ -381,7 +381,8 @@ _BINARY_SYMPY_IMPL: dict[str, tuple] = {
 # (non-alias) comparison ops.
 _BINARY_SYMPY: dict[str, tuple] = {
     op: _BINARY_SYMPY_IMPL[op]
-    for op in {"/", "atan2"} | (op_registry.by_category("comparison") & op_registry.canonical_names())
+    for op in {"/", "atan2"}
+    | (op_registry.by_category("comparison") & op_registry.canonical_names())
 }
 
 #: The evaluable-core op vocabulary (esm-spec §4.2), DERIVED from the single-source
@@ -470,9 +471,7 @@ def _expr_to_sympy(
                 _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops) for a in expr.args
             ]
             if len(sympy_args) != 1:
-                raise SimulationError(
-                    f"D requires exactly 1 argument, got {len(sympy_args)}"
-                )
+                raise SimulationError(f"D requires exactly 1 argument, got {len(sympy_args)}")
             if not expr.wrt:
                 raise SimulationError("D operator requires a `wrt` field")
             wrt_symbol = _expr_to_sympy(expr.wrt, symbol_map, fn_callable_map, structural_ops)
@@ -580,9 +579,7 @@ def _expr_to_sympy(
                 return -sympy_args[0]
             if len(sympy_args) == 2:
                 return sympy_args[0] - sympy_args[1]
-            raise SimulationError(
-                f"Invalid number of arguments for subtraction: {len(sympy_args)}"
-            )
+            raise SimulationError(f"Invalid number of arguments for subtraction: {len(sympy_args)}")
         if expr.op == "*":
             result = 1
             for arg in sympy_args:

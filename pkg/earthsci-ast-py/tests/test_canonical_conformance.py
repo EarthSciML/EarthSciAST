@@ -28,9 +28,7 @@ def _wire_to_expr(node):
     """Convert a JSON-deserialized fixture into an ESM expression tree."""
     if isinstance(node, dict) and "op" in node and "args" in node:
         kwargs = {
-            _WIRE_FIELD_RENAMES.get(k, k): v
-            for k, v in node.items()
-            if k not in ("op", "args")
+            _WIRE_FIELD_RENAMES.get(k, k): v for k, v in node.items() if k not in ("op", "args")
         }
         return ExprNode(
             op=node["op"],

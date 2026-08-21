@@ -114,9 +114,7 @@ def load_language_results(output_dir: Path, language: str) -> dict[str, Any] | N
 # --- A. coverage -------------------------------------------------------------
 
 
-def check_coverage(
-    manifest: dict[str, Any], results: dict[str, dict[str, Any]]
-) -> list[Failure]:
+def check_coverage(manifest: dict[str, Any], results: dict[str, dict[str, Any]]) -> list[Failure]:
     """Every binding must have emitted a record for every manifest entry.
 
     Without this, a producer that skips a subdirectory reports 100% consistency
@@ -151,9 +149,7 @@ def check_coverage(
 # --- B. expected outcome -----------------------------------------------------
 
 
-def check_outcomes(
-    manifest: dict[str, Any], results: dict[str, dict[str, Any]]
-) -> list[Failure]:
+def check_outcomes(manifest: dict[str, Any], results: dict[str, dict[str, Any]]) -> list[Failure]:
     """`tests/valid/**` and `lib/**` MUST validate; `tests/invalid/**` MUST be rejected.
 
     This is the assertion nobody wrote. `lib/**` is in the corpus because
@@ -194,7 +190,9 @@ def _first_reason(record: dict[str, Any]) -> str:
         errs = record.get(key) or []
         if errs:
             first = errs[0]
-            return f"{key[:-7]}: [{first.get('code') or first.get('keyword')}] @ {first.get('path')}"
+            return (
+                f"{key[:-7]}: [{first.get('code') or first.get('keyword')}] @ {first.get('path')}"
+            )
     return ""
 
 
@@ -405,7 +403,13 @@ def check_rendering(
                 got_by_lang[language] = record.get(fmt)
                 notes[language] = (record.get("errors") or {}).get(fmt, "")
             _route_pin_mismatch(
-                "display", f"{case['id']}[{fmt}]", want, got_by_lang, notes, failures, corpus_failures
+                "display",
+                f"{case['id']}[{fmt}]",
+                want,
+                got_by_lang,
+                notes,
+                failures,
+                corpus_failures,
             )
 
     for case in manifest["substitution_cases"]:
@@ -430,9 +434,7 @@ def check_rendering(
 # --- E. cross-language agreement --------------------------------------------
 
 
-def check_agreement(
-    manifest: dict[str, Any], results: dict[str, dict[str, Any]]
-) -> list[Failure]:
+def check_agreement(manifest: dict[str, Any], results: dict[str, dict[str, Any]]) -> list[Failure]:
     """The bindings must agree with each other.
 
     Weaker than checks B/C/D — five bindings can agree on the wrong answer — but
@@ -574,9 +576,7 @@ def build_analysis(
                 "divergent_tests": divergent,
                 "consistent_tests": max(total - divergent, 0),
             },
-            "divergence": {
-                f.item: f.to_dict() for f in failures if f.check.startswith(name)
-            },
+            "divergence": {f.item: f.to_dict() for f in failures if f.check.startswith(name)},
         }
 
     n_val = len(manifest["validation_files"])

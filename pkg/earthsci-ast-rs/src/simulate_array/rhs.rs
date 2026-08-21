@@ -801,8 +801,7 @@ fn evaluate_rhs_legacy(
     // integration segment, which is exactly when they can change. Built at most
     // once per `retarget`.
     scratch.cse.set_const_names(|| {
-        let mut all: rustc_hash::FxHashSet<String> =
-            scratch.static_keys.iter().cloned().collect();
+        let mut all: rustc_hash::FxHashSet<String> = scratch.static_keys.iter().cloned().collect();
         let varying: HashSet<&str> = observed_rules
             .iter()
             .map(|r| observed_rule_var(r).as_str())

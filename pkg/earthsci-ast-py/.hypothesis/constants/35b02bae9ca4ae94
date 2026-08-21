@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/expr_walk.py
+# hypothesis_version: 6.141.1
+
+['any_child', 'expr', 'expr_dict', 'expr_list', 'iter_children', 'map_children', 'walk']

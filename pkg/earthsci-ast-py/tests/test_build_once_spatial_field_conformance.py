@@ -53,8 +53,7 @@ def test_build_once_spatial_field_trajectory_matches_golden() -> None:
     golden = _golden()
     esm = load(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
-    result = simulate(esm, tspan=(float(t0), float(t1)), method="LSODA",
-                      rtol=1e-10, atol=1e-12)
+    result = simulate(esm, tspan=(float(t0), float(t1)), method="LSODA", rtol=1e-10, atol=1e-12)
     assert result.success, result.message
 
     idx = {name: k for k, name in enumerate(result.vars)}

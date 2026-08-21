@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/esm_types.py
+# hypothesis_version: 6.141.1
+
+['1.0', 'aggregate', 'all', 'args', 'array', 'axes', 'axis', 'callback', 'canonical_nested', 'condition', 'couple', 'coupling_import', 'crossing', 'data', 'dim', 'distinct', 'event', 'expr', 'expr_dict', 'expr_list', 'filter', 'fn', 'geometry', 'grid', 'handler_id', 'id', 'join', 'key', 'kind', 'label', 'left', 'lognormal', 'lower', 'manifold', 'name', 'normal', 'op', 'operator_apply', 'operator_compose', 'output', 'output_idx', 'parameter', 'periodic', 'perm', 'points', 'preset_times', 'ranges', 'reduce', 'regions', 'remesh', 'right', 'scalar', 'schedule', 'semiring', 'shape', 'static', 'table', 'table_axes', 'uniform', 'unknown', 'upper', 'value', 'values', 'var', 'variable_map', 'wiener', 'wire', 'wrt']

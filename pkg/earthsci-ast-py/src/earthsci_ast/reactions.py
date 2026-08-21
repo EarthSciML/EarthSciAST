@@ -6,6 +6,7 @@ This module provides functions to:
 2. Compute stoichiometric matrices for reaction networks
 3. Handle substrate and product matrices separately
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -185,9 +186,7 @@ def derive_odes(system: ReactionSystem) -> Model:
         if param.value is not None:
             derived_equations.append(Equation(lhs=param.name, rhs=param.value))
 
-    equations = derived_equations + lower_reactions_to_equations(
-        system.reactions, system.species
-    )
+    equations = derived_equations + lower_reactions_to_equations(system.reactions, system.species)
 
     return Model(
         name=f"{system.name}_odes",

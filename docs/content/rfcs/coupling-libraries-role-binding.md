@@ -7,7 +7,7 @@
 (coupling-library files), §10.10 (coupling imports and role binding), §10.11 (diagnostics);
 `esm-libraries-spec.md` §4.7.5 (flatten-time expansion of `coupling_import`); `esm-schema.json`
 (+ 4 binding mirrors); conformance fixtures; and follow-up rig migration in
-[EarthSciModels](../earthscimodels) (strip `coupletype`; reissue `couplings/*.esm` as
+[EarthSciModels](https://github.com/EarthSciML/EarthSciModels) (strip `coupletype`; reissue `couplings/*.esm` as
 coupling-library files). Coupling *content* — which components wire to which — stays in
 EarthSciModels; this RFC only adds the mechanism.
 **Depends on:** the §9.7 template-library-imports resolver for **reference resolution only** (§4.7
@@ -37,7 +37,7 @@ assembly that stands the stack up (`wildlandfire.esm` today; any future fire mod
 re-author all ~15 of those edges by hand. The same is true of every recurring coupling in the
 standard library.
 
-The format *knows* these couplings recur — [EarthSciModels](../earthscimodels) ships a
+The format *knows* these couplings recur — [EarthSciModels](https://github.com/EarthSciML/EarthSciModels) ships a
 `couplings/` directory (`fastjx_geoschem.esm`, `earthscidata_spatial_params.esm`, …). But those
 files are inert. Each is a standalone document of interface *stubs* plus edges, migrated from a
 Julia source it cites in its own metadata (e.g. `GasChem.jl@8c12c048:src/fastjx_couplings.jl`).

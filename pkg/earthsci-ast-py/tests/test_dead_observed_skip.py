@@ -99,7 +99,7 @@ def _doc(dead_body):
                             "ranges": {"i": {"from": "cells"}},
                             "expr": "live",
                         },
-                    }
+                    },
                 ],
             }
         },

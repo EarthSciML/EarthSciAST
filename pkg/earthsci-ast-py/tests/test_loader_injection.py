@@ -136,9 +136,7 @@ def test_a_parameter_naming_an_undeclared_source_is_rejected() -> None:
         "esm": "1.0.0",
         "metadata": {"name": "dangling"},
         "index_sets": {"cells": {"kind": "interval", "size": 3}},
-        "data_sources": {
-            "real": {"kind": "static", "source": {"url_template": "file:///x.nc"}}
-        },
+        "data_sources": {"real": {"kind": "static", "source": {"url_template": "file:///x.nc"}}},
         "models": {
             "M": {
                 "variables": {

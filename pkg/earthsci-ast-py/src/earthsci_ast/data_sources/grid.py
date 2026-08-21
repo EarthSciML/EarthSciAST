@@ -46,9 +46,7 @@ class GridLoader:
     come back under their own names.
     """
 
-    def __init__(
-        self, data_source: DataSource, bindings: Mapping[str, Any] | None = None
-    ) -> None:
+    def __init__(self, data_source: DataSource, bindings: Mapping[str, Any] | None = None) -> None:
         if data_source.kind != DataSourceKind.GRID:
             raise GridLoaderError(f"GridLoader requires kind=grid; got {data_source.kind}")
         self.dl = data_source

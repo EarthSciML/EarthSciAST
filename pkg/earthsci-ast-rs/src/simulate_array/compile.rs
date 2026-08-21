@@ -905,7 +905,8 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
 fn is_builtin_fn_name(name: &str) -> bool {
     matches!(
         name,
-        "exp" | "log"
+        "exp"
+            | "log"
             | "log10"
             | "sqrt"
             | "abs"
@@ -977,10 +978,8 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
 /// used to credit an `ic` RHS's coordinate symbols into the bound set.
 fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
     match expr {
-        Expr::Variable(name) => {
-            if !name.contains('.') && !is_builtin_fn_name(name) {
-                out.insert(name.clone());
-            }
+        Expr::Variable(name) if !name.contains('.') && !is_builtin_fn_name(name) => {
+            out.insert(name.clone());
         }
         Expr::Operator(node) => {
             node.for_each_child(&mut |child| collect_free_bare_symbols(child, out));
@@ -1340,8 +1339,7 @@ fn build_observed_rules(
     //   over them, so a readable intermediate decomposition runs as authored.
     let mut def_eq: HashMap<String, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
-        if let crate::classification::LhsForm::Bare(name) =
-            crate::classification::lhs_form(&eq.lhs)
+        if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
         {
             def_eq.entry(name).or_insert(eq);
         }
@@ -2063,7 +2061,9 @@ fn expr_contains_arg_witness(expr: &Expr) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) | Expr::Variable(_) => false,
         Expr::Operator(node) => {
-            node.op == "argmin" || node.op == "argmax" || node.any_child(&mut expr_contains_arg_witness)
+            node.op == "argmin"
+                || node.op == "argmax"
+                || node.any_child(&mut expr_contains_arg_witness)
         }
     }
 }
@@ -2527,10 +2527,8 @@ fn collect_wrapped_array_leaves(
     out: &mut Vec<String>,
 ) {
     match expr {
-        Expr::Variable(v) => {
-            if array_axes.contains_key(v) {
-                out.push(v.clone());
-            }
+        Expr::Variable(v) if array_axes.contains_key(v) => {
+            out.push(v.clone());
         }
         Expr::Operator(node) => {
             if !crate::op_registry::is_elementwise_node(node) {

@@ -2,7 +2,7 @@
 name = "earthsci-ast"
 version = "0.1.1"
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.89.0"
 authors = ["EarthSciML Authors and Contributors"]
 description = "Rust implementation of EarthSciML Serialization Format"
 license = "AGPL-3.0-only"

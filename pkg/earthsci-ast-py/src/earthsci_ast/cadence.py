@@ -365,7 +365,10 @@ def check_expect_cadence(
 
 
 def tally_classes(
-    node: Any, model: Mapping[str, Any], counts: dict[str, int], _cache: dict[int, str] | None = None
+    node: Any,
+    model: Mapping[str, Any],
+    counts: dict[str, int],
+    _cache: dict[int, str] | None = None,
 ) -> None:
     """Count **annotated** nodes (those carrying ``expect_cadence``) by derived
     class — the golden ``class_summary``."""
@@ -440,7 +443,9 @@ def materialization_frontier(
             materialization_frontier(c, model, out, _cache)
 
 
-def has_continuous(node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None) -> bool:
+def has_continuous(
+    node: Any, model: Mapping[str, Any], _cache: dict[int, str] | None = None
+) -> bool:
     """True if any node in the tree classifies ``continuous`` (the per-step hot
     tree is non-empty)."""
     if isinstance(node, Mapping):

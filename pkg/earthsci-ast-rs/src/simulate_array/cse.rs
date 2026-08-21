@@ -201,10 +201,48 @@ use std::cell::RefCell;
 /// re-enters `try_eval_arrayop_vectorized`; `eval_vec_makearray` builds a
 /// per-region `rbx`), and everything else in `eval_vec_op` bails.
 pub(super) const BOX_TRANSPARENT_OPS: &[&str] = &[
-    "+", "-", "*", "/", "^", "min", "max", "atan2", "and", "or", "neg", "index", "==", "!=", "<",
-    "<=", ">", ">=", "ifelse", "exp", "log", "ln", "log10", "sqrt", "abs", "sign", "floor", "ceil",
-    "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-    "not", "broadcast",
+    "+",
+    "-",
+    "*",
+    "/",
+    "^",
+    "min",
+    "max",
+    "atan2",
+    "and",
+    "or",
+    "neg",
+    "index",
+    "==",
+    "!=",
+    "<",
+    "<=",
+    ">",
+    ">=",
+    "ifelse",
+    "exp",
+    "log",
+    "ln",
+    "log10",
+    "sqrt",
+    "abs",
+    "sign",
+    "floor",
+    "ceil",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "sinh",
+    "cosh",
+    "tanh",
+    "asinh",
+    "acosh",
+    "atanh",
+    "not",
+    "broadcast",
 ];
 
 /// `true` when the CSE overlay is switched off by `ESS_CSE_DISABLE=1`. The A/B
@@ -390,11 +428,7 @@ impl ClassTable {
         // tombstone any existing mark, permanently ([`NOT_MEMO`] is filtered to
         // `None` on every read path, and the loops below skip every analysed
         // root, so the address can never be re-marked).
-        if self
-            .memoizable
-            .get(&key)
-            .is_some_and(|&c| c != NOT_MEMO)
-        {
+        if self.memoizable.get(&key).is_some_and(|&c| c != NOT_MEMO) {
             self.memoizable.insert(key, NOT_MEMO);
             self.pending.push((key, NOT_MEMO));
         }
@@ -990,7 +1024,10 @@ impl Default for MemoCell {
     fn default() -> Self {
         // 0 is not a scope id (`next_scope` is pre-incremented), so a default
         // cell is a guaranteed miss.
-        MemoCell { stamp: 0, slot: Slot::Scalar(0.0) }
+        MemoCell {
+            stamp: 0,
+            slot: Slot::Scalar(0.0),
+        }
     }
 }
 
@@ -1606,7 +1643,12 @@ mod tests {
     #[test]
     fn repeated_sibling_is_memoizable_singleton_is_not() {
         // (a - b) * (a - b) + c
-        let dup = || op("-", vec![Expr::Variable("a".into()), Expr::Variable("b".into())]);
+        let dup = || {
+            op(
+                "-",
+                vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
+            )
+        };
         let body = op(
             "+",
             vec![op("*", vec![dup(), dup()]), Expr::Variable("c".into())],
@@ -1638,7 +1680,10 @@ mod tests {
     /// occurrences evaluate under different boxes.
     #[test]
     fn repeat_across_a_binder_is_not_shared() {
-        let inner = op("-", vec![Expr::Variable("a".into()), Expr::Variable("b".into())]);
+        let inner = op(
+            "-",
+            vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
+        );
         let agg = Expr::operator(ExpressionNode {
             op: "aggregate".to_string(),
             args: vec![],
@@ -1646,7 +1691,10 @@ mod tests {
             expr: Some(Box::new(inner)),
             ..Default::default()
         });
-        let outer = op("-", vec![Expr::Variable("a".into()), Expr::Variable("b".into())]);
+        let outer = op(
+            "-",
+            vec![Expr::Variable("a".into()), Expr::Variable("b".into())],
+        );
         let body = op("+", vec![agg, outer]);
         let mut t = ClassTable::default();
         analyse_plain(&mut t, &body);
@@ -1823,8 +1871,7 @@ mod tests {
     fn the_resolved_table_round_trips_a_dense_run() {
         let base = 0x7f00_0000_0000usize;
         let stride = std::mem::size_of::<Expr>();
-        let entries: Vec<(usize, u32)> =
-            (0..5000).map(|k| (base + k * stride, k as u32)).collect();
+        let entries: Vec<(usize, u32)> = (0..5000).map(|k| (base + k * stride, k as u32)).collect();
         let mut t = AddrClasses::default();
         // Fed in chunks, so the table grows and rehashes mid-stream.
         for chunk in entries.chunks(97) {
@@ -1876,12 +1923,18 @@ mod tests {
         }
         {
             let _b = rt.scope(&mut pool);
-            assert!(rt.get(5, &nobox()).is_none(), "a sibling scope must not see the entry");
+            assert!(
+                rt.get(5, &nobox()).is_none(),
+                "a sibling scope must not see the entry"
+            );
         }
         drop(outer);
         // …nor may the next top-level evaluation.
         let _next = rt.scope(&mut pool);
-        assert!(rt.get(5, &nobox()).is_none(), "a new evaluation must not see it either");
+        assert!(
+            rt.get(5, &nobox()).is_none(),
+            "a new evaluation must not see it either"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1935,7 +1988,9 @@ mod tests {
             unreachable!()
         };
         let powi = &root.args[1];
-        let Expr::Operator(pn) = powi else { unreachable!() };
+        let Expr::Operator(pn) = powi else {
+            unreachable!()
+        };
         assert!(is_pure(&t, powi), "sin(j)^2 must be box-pure");
         assert!(
             !is_pure(&t, &pn.args[0]),
@@ -2027,7 +2082,10 @@ mod tests {
                 Expr::Variable("q".into()),
                 op(
                     "*",
-                    vec![Expr::Variable("a_earth".into()), Expr::Variable("Rd".into())],
+                    vec![
+                        Expr::Variable("a_earth".into()),
+                        Expr::Variable("Rd".into()),
+                    ],
                 ),
             ],
         );
@@ -2136,7 +2194,9 @@ mod tests {
         // Both `sq()`s are pure, so their PARENT `+` is the maximal pure node:
         // it carries the mark, and the subsumed `^` children keep their PLAIN
         // memoizable classes (they repeat within the scope).
-        let c_plus = rt.class_of(&root.args[1]).expect("sin(j)^2+sin(j)^2 is classified");
+        let c_plus = rt
+            .class_of(&root.args[1])
+            .expect("sin(j)^2+sin(j)^2 is classified");
         assert!(
             c_plus & PURE_BIT != 0,
             "the maximal pure node's PURE mark must win in the resolved table"
@@ -2313,7 +2373,10 @@ mod tests {
         );
         // … and must not store (the value would be state-dependent there).
         let out = rt.put(class, VecValue::Scalar(9.0), &box_k);
-        assert!(matches!(out, VecValue::Scalar(v) if v == 9.0), "passthrough");
+        assert!(
+            matches!(out, VecValue::Scalar(v) if v == 9.0),
+            "passthrough"
+        );
         assert!(
             rt.get(class, &box_k).is_none(),
             "a mismatched-context store must be refused"

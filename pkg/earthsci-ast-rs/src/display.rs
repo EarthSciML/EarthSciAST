@@ -758,8 +758,7 @@ fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
         let clauses = join
             .iter()
             .map(|c| {
-                c.on
-                    .iter()
+                c.on.iter()
                     .map(|p| format!("{}={}", p[0], p[1]))
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -940,7 +939,11 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
                 })
                 .unwrap_or_default();
             Some(match fmt {
-                Fmt::Latex => format!("\\mathrm{{{}}}\\langle {} \\rangle", latex_name(name), inner),
+                Fmt::Latex => format!(
+                    "\\mathrm{{{}}}\\langle {} \\rangle",
+                    latex_name(name),
+                    inner
+                ),
                 Fmt::Unicode => format!("{name}⟨{inner}⟩"),
                 Fmt::Ascii => format!("{name}<{inner}>"),
             })
@@ -998,7 +1001,12 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
             } else {
                 "reshape"
             };
-            Some(format!("{}({}, [{}])", name, render_fmt(&args[0], fmt), shape))
+            Some(format!(
+                "{}({}, [{}])",
+                name,
+                render_fmt(&args[0], fmt),
+                shape
+            ))
         }
 
         "transpose" => {
@@ -1175,11 +1183,9 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     },
                     // The exponent sits inside `^{...}`, which groups visually,
                     // so it renders at precedence 0.
-                    Fmt::Latex => format!(
-                        "{}^{{{}}}",
-                        render_at(&args[0], fmt, op_prec),
-                        r0(&args[1])
-                    ),
+                    Fmt::Latex => {
+                        format!("{}^{{{}}}", render_at(&args[0], fmt, op_prec), r0(&args[1]))
+                    }
                     Fmt::Ascii => format!(
                         "{}^{}",
                         render_at(&args[0], fmt, op_prec),
@@ -1416,7 +1422,15 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
         "sin" | "cos" | "tan" | "sinh" | "cosh" | "tanh" => {
             // LaTeX prefixes a backslash (`\sin`); the others use the bare name.
             let latex = format!("\\{op}");
-            call_form(if fmt == Fmt::Latex { latex.as_str() } else { op }, args, r0)
+            call_form(
+                if fmt == Fmt::Latex {
+                    latex.as_str()
+                } else {
+                    op
+                },
+                args,
+                r0,
+            )
         }
         // `Pre` renders as a call form, matching the cross-language contract.
         "Pre" => call_form(pick(fmt, "Pre", "\\mathrm{Pre}", "Pre"), args, r0),
@@ -1424,7 +1438,15 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
         // unknown user op. LaTeX wraps in `\mathrm{…}`, escaping underscores.
         _ => {
             let latex = format!("\\mathrm{{{}}}", latex_name(op));
-            call_form(if fmt == Fmt::Latex { latex.as_str() } else { op }, args, r0)
+            call_form(
+                if fmt == Fmt::Latex {
+                    latex.as_str()
+                } else {
+                    op
+                },
+                args,
+                r0,
+            )
         }
     };
 
@@ -1648,8 +1670,11 @@ fn format_chemical_latex(variable: &str) -> String {
             // Split into per-segment subscripts when the first segment is a
             // complete formula (ends in a digit) or the prefix is multi-char;
             // otherwise the whole suffix stays one `\mathrm{...}` block.
-            let should_split =
-                segments[0].chars().last().is_some_and(|c| c.is_ascii_digit()) || prefix_multi;
+            let should_split = segments[0]
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_ascii_digit())
+                || prefix_multi;
             if should_split {
                 let mut result = if prefix_multi {
                     format!("\\mathrm{{{prefix}}}")
@@ -1699,14 +1724,14 @@ fn format_chemical_latex(variable: &str) -> String {
         let parts: Vec<&str> = variable.split('_').collect();
         if parts.iter().any(|p| has_element_pattern(p)) {
             let base = parts[0];
-            let mut result = if base.chars().count() == 1 && base.chars().all(|c| c.is_ascii_alphabetic())
-            {
-                base.to_string()
-            } else if has_element_pattern(base) {
-                format_chemical_latex(base)
-            } else {
-                format!("\\mathrm{{{base}}}")
-            };
+            let mut result =
+                if base.chars().count() == 1 && base.chars().all(|c| c.is_ascii_alphabetic()) {
+                    base.to_string()
+                } else if has_element_pattern(base) {
+                    format_chemical_latex(base)
+                } else {
+                    format!("\\mathrm{{{base}}}")
+                };
             for part in &parts[1..] {
                 if has_element_pattern(part) {
                     result.push_str(&format!("_{{\\mathrm{{{}}}}}", latex_chemical_inner(part)));
@@ -2371,7 +2396,12 @@ mod tests {
 
         // multiplication (·/juxtaposition/*) and precedence parens
         chk(opn("*", vec![a(), b()]), "a·b", r"a \cdot b", "a * b");
-        chk(opn("*", vec![ab(), c()]), "(a + b)·c", r"(a + b) \cdot c", "(a + b) * c");
+        chk(
+            opn("*", vec![ab(), c()]),
+            "(a + b)·c",
+            r"(a + b) \cdot c",
+            "(a + b) * c",
+        );
         chk(
             opn("*", vec![var("\\mathrm{O_3}"), var("\\mathrm{N_2}")]),
             r"\mathrm{O_3}·\mathrm{N_2}",
@@ -2380,7 +2410,12 @@ mod tests {
         );
         // division (`\frac` is the LaTeX shape-divergent leaf)
         chk(opn("/", vec![a(), b()]), "a/b", r"\frac{a}{b}", "a / b");
-        chk(opn("/", vec![ab(), c()]), "(a + b)/c", r"\frac{a + b}{c}", "(a + b) / c");
+        chk(
+            opn("/", vec![ab(), c()]),
+            "(a + b)/c",
+            r"\frac{a + b}{c}",
+            "(a + b) / c",
+        );
         chk(
             opn("*", vec![a(), opn("/", vec![b(), c()])]),
             "a·(b/c)",
@@ -2390,10 +2425,30 @@ mod tests {
         // powers: LaTeX braces, Unicode integer superscripts
         chk(opn("^", vec![a(), b()]), "a^b", r"a^{b}", "a^b");
         chk(opn("^", vec![a(), Expr::Integer(2)]), "a²", r"a^{2}", "a^2");
-        chk(opn("^", vec![a(), Expr::Number(2.0)]), "a²", r"a^{2}", "a^2");
-        chk(opn("^", vec![a(), Expr::Number(2.5)]), "a^2.5", r"a^{2.5}", "a^2.5");
-        chk(opn("^", vec![ab(), Expr::Integer(2)]), "(a + b)²", r"(a + b)^{2}", "(a + b)^2");
-        chk(opn("^", vec![a(), Expr::Integer(-3)]), "a⁻³", r"a^{-3}", "a^-3");
+        chk(
+            opn("^", vec![a(), Expr::Number(2.0)]),
+            "a²",
+            r"a^{2}",
+            "a^2",
+        );
+        chk(
+            opn("^", vec![a(), Expr::Number(2.5)]),
+            "a^2.5",
+            r"a^{2.5}",
+            "a^2.5",
+        );
+        chk(
+            opn("^", vec![ab(), Expr::Integer(2)]),
+            "(a + b)²",
+            r"(a + b)^{2}",
+            "(a + b)^2",
+        );
+        chk(
+            opn("^", vec![a(), Expr::Integer(-3)]),
+            "a⁻³",
+            r"a^{-3}",
+            "a^-3",
+        );
         // subtraction: Unicode U+2212 minus, right-operand parens, `+(-b)` sugar
         chk(opn("-", vec![a()]), "−a", "-a", "-a");
         chk(
@@ -2402,9 +2457,19 @@ mod tests {
             "a - (b - c)",
             "a - (b - c)",
         );
-        chk(opn("+", vec![a(), opn("-", vec![b()])]), "a − b", "a - b", "a - b");
+        chk(
+            opn("+", vec![a(), opn("-", vec![b()])]),
+            "a − b",
+            "a - b",
+            "a - b",
+        );
         // derivative: three divergent forms + call fallback
-        chk(dop("t", a()), "∂a/∂t", r"\frac{\partial a}{\partial t}", "D(a)/Dt");
+        chk(
+            dop("t", a()),
+            "∂a/∂t",
+            r"\frac{\partial a}{\partial t}",
+            "D(a)/Dt",
+        );
         chk(
             dop("t", ab()),
             "∂(a + b)/∂t",
@@ -2425,30 +2490,110 @@ mod tests {
         chk(opn("and", vec![a(), b()]), "a ∧ b", r"a \land b", "a and b");
         chk(opn("or", vec![a(), b()]), "a ∨ b", r"a \lor b", "a or b");
         chk(opn("not", vec![a()]), "¬a", r"\neg a", "not a");
-        chk(opn("not", vec![opn("==", vec![a(), b()])]), "¬(a = b)", r"\neg (a = b)", "not (a == b)");
-        chk(opn("not", vec![a(), b()]), "not(a, b)", r"\neg(a, b)", "not(a, b)");
+        chk(
+            opn("not", vec![opn("==", vec![a(), b()])]),
+            "¬(a = b)",
+            r"\neg (a = b)",
+            "not (a == b)",
+        );
+        chk(
+            opn("not", vec![a(), b()]),
+            "not(a, b)",
+            r"\neg(a, b)",
+            "not(a, b)",
+        );
         // elementary functions: unicode name vs LaTeX command vs bare ASCII
         chk(opn("log", vec![a()]), "ln(a)", r"\ln(a)", "log(a)");
-        chk(opn("log", vec![a(), b()]), "log(a, b)", r"\log(a, b)", "log(a, b)");
-        chk(opn("log10", vec![a()]), "log₁₀(a)", r"\log_{10}(a)", "log10(a)");
-        chk(opn("log10", vec![a(), b()]), "log10(a, b)", r"\log_{10}(a, b)", "log10(a, b)");
+        chk(
+            opn("log", vec![a(), b()]),
+            "log(a, b)",
+            r"\log(a, b)",
+            "log(a, b)",
+        );
+        chk(
+            opn("log10", vec![a()]),
+            "log₁₀(a)",
+            r"\log_{10}(a)",
+            "log10(a)",
+        );
+        chk(
+            opn("log10", vec![a(), b()]),
+            "log10(a, b)",
+            r"\log_{10}(a, b)",
+            "log10(a, b)",
+        );
         chk(opn("sqrt", vec![a()]), "√a", r"\sqrt{a}", "sqrt(a)");
-        chk(opn("sqrt", vec![a(), b()]), "sqrt(a, b)", r"\sqrt{a, b}", "sqrt(a, b)");
-        chk(opn("sqrt", vec![ab()]), "√(a + b)", r"\sqrt{a + b}", "sqrt(a + b)");
-        chk(opn("asin", vec![a()]), "arcsin(a)", r"\arcsin(a)", "asin(a)");
+        chk(
+            opn("sqrt", vec![a(), b()]),
+            "sqrt(a, b)",
+            r"\sqrt{a, b}",
+            "sqrt(a, b)",
+        );
+        chk(
+            opn("sqrt", vec![ab()]),
+            "√(a + b)",
+            r"\sqrt{a + b}",
+            "sqrt(a + b)",
+        );
+        chk(
+            opn("asin", vec![a()]),
+            "arcsin(a)",
+            r"\arcsin(a)",
+            "asin(a)",
+        );
         chk(opn("abs", vec![a()]), "|a|", "|a|", "abs(a)");
-        chk(opn("abs", vec![a(), b()]), "abs(a, b)", "|a, b|", "abs(a, b)");
-        chk(opn("sign", vec![a()]), "sgn(a)", r"\mathrm{sgn}(a)", "sign(a)");
-        chk(opn("floor", vec![a()]), "⌊a⌋", r"\lfloor a \rfloor", "floor(a)");
-        chk(opn("floor", vec![a(), b()]), "floor(a, b)", r"\lfloor a, b \rfloor", "floor(a, b)");
+        chk(
+            opn("abs", vec![a(), b()]),
+            "abs(a, b)",
+            "|a, b|",
+            "abs(a, b)",
+        );
+        chk(
+            opn("sign", vec![a()]),
+            "sgn(a)",
+            r"\mathrm{sgn}(a)",
+            "sign(a)",
+        );
+        chk(
+            opn("floor", vec![a()]),
+            "⌊a⌋",
+            r"\lfloor a \rfloor",
+            "floor(a)",
+        );
+        chk(
+            opn("floor", vec![a(), b()]),
+            "floor(a, b)",
+            r"\lfloor a, b \rfloor",
+            "floor(a, b)",
+        );
         chk(opn("ceil", vec![a()]), "⌈a⌉", r"\lceil a \rceil", "ceil(a)");
-        chk(opn("asinh", vec![a()]), "sinh⁻¹(a)", r"\sinh^{-1}(a)", "asinh(a)");
+        chk(
+            opn("asinh", vec![a()]),
+            "sinh⁻¹(a)",
+            r"\sinh^{-1}(a)",
+            "asinh(a)",
+        );
         chk(opn("exp", vec![a()]), "exp(a)", r"\exp(a)", "exp(a)");
-        chk(opn("exp", vec![ab()]), "exp(a + b)", r"\exp\left(a + b\right)", "exp(a + b)");
+        chk(
+            opn("exp", vec![ab()]),
+            "exp(a + b)",
+            r"\exp\left(a + b\right)",
+            "exp(a + b)",
+        );
         chk(opn("min", vec![a()]), "min(a)", r"\min(a)", "min(a)");
-        chk(opn("atan2", vec![a()]), "atan2(a)", r"\mathrm{atan2}(a)", "atan2(a)");
+        chk(
+            opn("atan2", vec![a()]),
+            "atan2(a)",
+            r"\mathrm{atan2}(a)",
+            "atan2(a)",
+        );
         chk(opn("sin", vec![a()]), "sin(a)", r"\sin(a)", "sin(a)");
-        chk(opn("Pre", vec![a()]), "Pre(a)", r"\mathrm{Pre}(a)", "Pre(a)");
+        chk(
+            opn("Pre", vec![a()]),
+            "Pre(a)",
+            r"\mathrm{Pre}(a)",
+            "Pre(a)",
+        );
         // ifelse: LaTeX `\begin{cases}` leaf vs the call fallback everywhere else
         chk(
             opn("ifelse", vec![a(), b(), c()]),
@@ -2456,9 +2601,24 @@ mod tests {
             r"\begin{cases} b & \text{if } a \\ c & \text{otherwise} \end{cases}",
             "ifelse(a, b, c)",
         );
-        chk(opn("ifelse", vec![a(), b()]), "ifelse(a, b)", r"\mathrm{ifelse}(a, b)", "ifelse(a, b)");
+        chk(
+            opn("ifelse", vec![a(), b()]),
+            "ifelse(a, b)",
+            r"\mathrm{ifelse}(a, b)",
+            "ifelse(a, b)",
+        );
         // unknown ops: generic fallback + LaTeX underscore escaping
-        chk(opn("grad", vec![a()]), "grad(a)", r"\mathrm{grad}(a)", "grad(a)");
-        chk(opn("my_op", vec![a(), b()]), "my_op(a, b)", r"\mathrm{my\_op}(a, b)", "my_op(a, b)");
+        chk(
+            opn("grad", vec![a()]),
+            "grad(a)",
+            r"\mathrm{grad}(a)",
+            "grad(a)",
+        );
+        chk(
+            opn("my_op", vec![a(), b()]),
+            "my_op(a, b)",
+            r"\mathrm{my\_op}(a, b)",
+            "my_op(a, b)",
+        );
     }
 }

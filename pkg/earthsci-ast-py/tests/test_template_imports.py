@@ -270,9 +270,7 @@ def test_round_trip_emits_expanded_folded_form():
     assert reloaded.models["Advection"].equations[0].rhs.args[1].op == "makearray"
 
 
-@pytest.mark.parametrize(
-    "lib", ["template_import_lib.esm", "template_import_rename_lib.esm"]
-)
+@pytest.mark.parametrize("lib", ["template_import_lib.esm", "template_import_rename_lib.esm"])
 def test_template_library_round_trips_to_itself(lib):
     """A TEMPLATE-LIBRARY file MUST round-trip to ITSELF (§9.6.4 rule 5, §9.7.6).
 

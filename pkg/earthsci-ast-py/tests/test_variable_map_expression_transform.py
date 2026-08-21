@@ -24,7 +24,6 @@ from earthsci_ast.esm_types import (
 )
 from earthsci_ast.flatten import FlattenError, flatten
 from earthsci_ast.lower_expression_templates import (
-    ExpressionTemplateError,
     expand_document,
     lower_expression_templates,
 )

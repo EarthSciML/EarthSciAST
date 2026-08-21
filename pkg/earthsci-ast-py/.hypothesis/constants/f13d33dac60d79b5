@@ -1,0 +1,4 @@
+# file: /projects/illinois/eng/cee/ctessum/ctessum/code/EarthSciAST/.claude/worktrees/unknown-variable-type/pkg/earthsci-ast-py/src/earthsci_ast/data_sources/time_resolution.py
+# hypothesis_version: 6.141.1
+
+[0.0, 30.436875, 365.2425, 86400.0, 3600, 86400, '+00:00', 'Z', 'auto', 'days', 'hours', 'minutes', 'months', 'seconds', 'weeks', 'years']

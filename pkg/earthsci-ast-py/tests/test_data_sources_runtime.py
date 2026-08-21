@@ -235,9 +235,7 @@ class TestUnitConversion:
         assert parse_unit_conversion(None, variable_name="x") is None
         assert parse_unit_conversion(0.3048, variable_name="x") == 0.3048
         assert parse_unit_conversion(2, variable_name="x") == 2.0
-        expr = parse_unit_conversion(
-            {"op": "+", "args": ["T", 273.15]}, variable_name="T"
-        )
+        expr = parse_unit_conversion({"op": "+", "args": ["T", 273.15]}, variable_name="T")
         assert list(apply_unit_conversion([0.0], expr, variable_name="T")) == [273.15]
 
     def test_parse_rejects_a_non_conversion(self):
@@ -457,9 +455,9 @@ class TestStaticLoader:
             data_vars={"elev": np.array([[100.0, 110.0]])},
             coords={"lon": [0.0, 1.0], "lat": [0.0]},
         )
-        result = StaticLoader(
-            dl, {"elevation": DataSourceBinding(file_variable="elev")}
-        ).load(opener=lambda _url: ds)
+        result = StaticLoader(dl, {"elevation": DataSourceBinding(file_variable="elev")}).load(
+            opener=lambda _url: ds
+        )
         assert result.urls_tried == ["mem://elevation.tif"]
         assert np.allclose(result.variables["elevation"].values, [[100.0, 110.0]])
 

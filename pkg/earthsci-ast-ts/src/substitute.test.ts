@@ -392,7 +392,7 @@ describe('substituteInModel', () => {
     expect(result.variables).toEqual(model.variables) // Variables unchanged
   })
 
-  it('substitutes in an observed unknown\'s defining equation', () => {
+  it("substitutes in an observed unknown's defining equation", () => {
     // An observed unknown's definition is an EQUATION from esm 1.0.0, so
     // substituting into the model reaches it through the equation list rather
     // than through a field on the variable.

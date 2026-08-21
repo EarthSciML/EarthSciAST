@@ -23,7 +23,10 @@ const FIXTURE: &str = include_str!("fixtures/pushdown/overlap_gate_point_in_rect
 #[test]
 fn member_factor_is_parsed_from_a_derived_set() {
     let file = parse::load(FIXTURE).expect("fixture parses");
-    let sets = file.index_sets.as_ref().expect("document declares index_sets");
+    let sets = file
+        .index_sets
+        .as_ref()
+        .expect("document declares index_sets");
     let derived = sets
         .get("emis_src_cells")
         .expect("fixture declares emis_src_cells");
@@ -75,7 +78,9 @@ fn a_set_without_member_factor_does_not_gain_one() {
     let emitted = serialize::save(&file).expect("serializes");
     let doc: serde_json::Value = serde_json::from_str(&emitted).expect("valid JSON");
     assert!(
-        doc["index_sets"]["pop_cells"].get("member_factor").is_none(),
+        doc["index_sets"]["pop_cells"]
+            .get("member_factor")
+            .is_none(),
         "an ordinary interval set must not gain a member_factor key"
     );
 }

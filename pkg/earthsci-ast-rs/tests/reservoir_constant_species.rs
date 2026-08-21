@@ -24,7 +24,8 @@ mod common;
 #[test]
 fn reservoir_reactant_held_fixed() {
     let path = common::repo_fixture("simulation/reservoir_reactant_held_fixed.esm");
-    let file = load_path(&path).unwrap_or_else(|e| panic!("fixture {} does not load: {e}", path.display()));
+    let file = load_path(&path)
+        .unwrap_or_else(|e| panic!("fixture {} does not load: {e}", path.display()));
 
     let compiled = Compiled::from_file(&file).expect("compile failed");
 
@@ -90,10 +91,7 @@ fn reservoir_reactant_held_fixed() {
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .expect("non-empty time grid");
-        assert!(
-            (sol.time[i] - t).abs() < 1e-9,
-            "no output sample at t={t}"
-        );
+        assert!((sol.time[i] - t).abs() < 1e-9, "no output sample at t={t}");
         let expected_a = (-t).exp();
         let expected_b = 1.0 - expected_a;
         let a = sol.state[a_idx][i];
