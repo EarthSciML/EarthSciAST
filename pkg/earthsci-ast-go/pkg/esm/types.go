@@ -75,7 +75,10 @@ type ExprNode struct {
 	// `polygon_intersection_area` ops.
 	Manifold *string `json:"manifold,omitempty"`
 	// OutputIdx are the surviving (free) index names of an `aggregate` op.
-	OutputIdx []any `json:"output_idx,omitempty"`
+	// `esm:"keepempty"`: esm-schema.json REQUIRES `output_idx` on every
+	// aggregate, so an allocated-but-empty list (a full reduction, `sum[] (…)`)
+	// must still serialize as `[]` rather than vanishing.
+	OutputIdx []any `json:"output_idx,omitempty" esm:"keepempty"`
 	// Expr is the reduced sub-expression of an `aggregate` / `argmin` / `argmax`
 	// op.
 	Expr any `json:"expr,omitempty"`
@@ -84,8 +87,10 @@ type ExprNode struct {
 	// Semiring is the optional named semiring of an `aggregate` op.
 	Semiring *string `json:"semiring,omitempty"`
 	// Ranges maps a bound index name to its iteration range for `aggregate` /
-	// `argmin` / `argmax` ops.
-	Ranges map[string]any `json:"ranges,omitempty"`
+	// `argmin` / `argmax` ops. `esm:"keepempty"`: an allocated-but-empty map (an
+	// aggregate authored with no `where` clause) serializes as `{}`, matching
+	// the other language bindings; a nil map is still omitted.
+	Ranges map[string]any `json:"ranges,omitempty" esm:"keepempty"`
 	// Join is the optional list of join clauses of an `aggregate` op.
 	Join []any `json:"join,omitempty"`
 	// Filter is the optional predicate of an `aggregate` op.
