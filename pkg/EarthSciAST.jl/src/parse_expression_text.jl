@@ -23,8 +23,12 @@ Coverage:
    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax`
    arg-witnesses `argmin[g] (expr) where {…}`, template application
    `name<binding = value, …>` (`apply_expression_template`),
-   `polygon_intersection_area(a, b, manifold=…)`, and the piecewise-region
-   array `makearray([lo:hi, …] = value, …)`.
+   `polygon_intersection_area(a, b, manifold=…)`,
+   `intersect_polygon(a, b, manifold=…[, id=…])`, the `table_lookup` bracket
+   form `visc[T=temp]` / `k_rate[T=temp, p=pres]:1`, and the piecewise-region
+   array `makearray([lo:hi, …] = value, …)`. The RFC §6.1 node `id` is read
+   back wherever `to_ascii` emits it: as a trailing named argument on the
+   geometry ops, and as a bare-name clause on aggregates and arg-witnesses.
 
 Aggregate `args` is a derived operand cache the printer doesn't emit; it's
 reconstructed best-effort (see `_tp_derive_aggregate_args`) and is
@@ -32,9 +36,9 @@ reprint-neutral. `sum` with neither an explicit `[semiring=…]` nor a `join`
 reconstructs as a plain `+` reduction — the join-less `sum_product` annotation
 (semantically identical there) is not recovered; both reprint identically.
 
-Still deferred (need dedicated surface syntax — a later pass): `table_lookup`,
-`broadcast`, `enum`, and `intersect_polygon` (its `id` field is not printed, so
-it can't round-trip). Those are refused with an [`ExpressionParseError`](@ref).
+Still deferred (need dedicated surface syntax — a later pass): `broadcast` and
+`enum`. Those are refused with an [`ExpressionParseError`](@ref), as is the
+CALL spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
 
 Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
 juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -99,13 +103,14 @@ const _TP_TEMPLATE_ARG_MIN = get_operator_precedence("+")
 Structural ops whose defining data lives OUTSIDE `args` AND which have no text
 surface yet — refused, pending a dedicated syntax pass. (`integral`, `reshape`,
 `transpose`, `concat`, `fn`, `const`, `index`, `true`, `aggregate`,
-`apply_expression_template`, `polygon_intersection_area`, `makearray` DO have a
-surface and are reconstructed below; they are intentionally absent here.
-`intersect_polygon` stays refused: its `id` field is not printed, so it can't
-round-trip.)
+`apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
+`makearray` DO have a surface and are reconstructed below; they are
+intentionally absent here. `table_lookup` IS listed: its surface is the bracket
+form `visc[T=temp]`, parsed in `_tp_parse_table_lookup` without going through
+`_tp_make_call`, so the CALL spelling `table_lookup(a)` — which the printer
+never emits — stays refused.)
 """
-const _TP_STRUCTURAL_OPS =
-    Set{String}(["table_lookup", "broadcast", "enum", "intersect_polygon"])
+const _TP_STRUCTURAL_OPS = Set{String}(["table_lookup", "broadcast", "enum"])
 
 """
 The aggregate reduction symbols `to_ascii` emits (`format_aggregate`). Each maps
@@ -384,6 +389,14 @@ function _tp_parse_postfix(ps::_TPParser)
         # expression).
         nxt = _tp_peek(ps, 1)
         (nxt.kind === :name && nxt.val == "semiring") && break
+        # `name[axis=expr, …]` is a `table_lookup` (format_structural_op), not an
+        # index: `=` is never an expression operator (only `==` is), so a `name`
+        # `=` pair inside the brackets discriminates the two unambiguously. Only
+        # a bare variable can name a table.
+        if node isa VarExpr && nxt.kind === :name && _tp_peek(ps, 2).kind === :eq
+            node = _tp_parse_table_lookup(ps, (node::VarExpr).name)
+            continue
+        end
         _tp_next!(ps)  # '['
         idx = ASTExpr[_tp_parse_expr(ps, 0)]
         while _tp_peek(ps).kind === :comma
@@ -593,6 +606,9 @@ function _tp_parse_aggregate(ps::_TPParser, sym::AbstractString)
         _tp_next!(ps)  # '='
         key = _tp_parse_expr(ps, 0)
     end
+    # `id=<name>` (RFC §6.1 node identity), emitted by `format_aggregate` after
+    # `key=`. A bare-name clause, so it adds no bracket ambiguity.
+    id = _tp_parse_id_clause!(ps)
     semiring = nothing
     nxt = _tp_peek(ps, 1)
     if _tp_peek(ps).kind === :lbracket && nxt.kind === :name && nxt.val == "semiring"
@@ -619,6 +635,7 @@ function _tp_parse_aggregate(ps::_TPParser, sym::AbstractString)
         filter=filt,
         distinct=distinct ? true : nothing,
         key=key,
+        id=id,
         expr_body=body)
 end
 
@@ -640,10 +657,62 @@ function _tp_parse_arg_witness(ps::_TPParser, op::AbstractString)
         _tp_next!(ps)
         ranges = _tp_parse_ranges(ps)
     end
+    # `id=<name>` (RFC §6.1 node identity), emitted by `format_arg_witness`
+    # after the where-clause. Mirrors the aggregate tail.
+    id = _tp_parse_id_clause!(ps)
     return OpExpr(String(op),
         ASTExpr[VarExpr(n) for n in
                 _tp_derive_aggregate_args(body, Any[], nothing, nothing)];
-        arg=at.val::String, ranges=ranges, expr_body=body)
+        arg=at.val::String, ranges=ranges, id=id, expr_body=body)
+end
+
+"""
+Read the optional bare-name `id=<name>` clause (RFC §6.1 node identity) that
+`format_aggregate` / `format_arg_witness` emit, returning `nothing` when absent.
+Deliberately NOT part of the `[…]` suffix — putting it there would collide with
+`table_lookup`'s `name[axis=…]` bracket surface.
+"""
+function _tp_parse_id_clause!(ps::_TPParser)
+    (_tp_at_word(ps, "id") && _tp_peek(ps, 1).kind === :eq) || return nothing
+    _tp_next!(ps)  # 'id'
+    _tp_next!(ps)  # '='
+    nm = _tp_next!(ps)
+    nm.kind === :name || _tp_fail_at(nm, "Expected a name after id=")
+    return nm.val::String
+end
+
+"""
+Parse a `table_lookup` from the surface `format_structural_op` emits:
+`table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`, e.g.
+`visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis names,
+so the reconstructed `axes` map reprints identically.
+"""
+function _tp_parse_table_lookup(ps::_TPParser, table::AbstractString)
+    _tp_expect!(ps, :lbracket, "'['")
+    axes = Dict{String,ASTExpr}()
+    while true
+        nm = _tp_next!(ps)
+        nm.kind === :name || _tp_fail_at(nm, "Expected an axis name in table[axis=…]")
+        _tp_expect!(ps, :eq, "'=' in table[axis=…]")
+        axes[nm.val::String] = _tp_parse_expr(ps, 0)
+        if _tp_peek(ps).kind === :comma
+            _tp_next!(ps)
+            continue
+        end
+        break
+    end
+    _tp_expect!(ps, :rbracket, "']' after table[axis=…]")
+    # The optional `:N` output selector picks one column of a multi-output table.
+    output = nothing
+    if _tp_peek(ps).kind === :colon
+        _tp_next!(ps)
+        out = _tp_next!(ps)
+        (out.kind === :num && isinteger(out.val::Float64)) ||
+            _tp_fail_at(out, "Expected an integer output index after table[…]:")
+        output = Int(out.val::Float64)
+    end
+    return OpExpr("table_lookup", ASTExpr[];
+        table=String(table), table_axes=axes, output=output)
 end
 
 """Parse a `{ k in <rhs>, … }` where-body into a ranges map."""
@@ -868,18 +937,24 @@ function _tp_make_call(name::String, args::Vector{ASTExpr},
         return OpExpr("concat", args;
             axis=_tp_int_literal(axis, "concat(...) axis", pos))
     end
-    # Geometry area query `polygon_intersection_area(a, b, manifold=<name>)`.
-    # (Its sibling `intersect_polygon` stays refused: its `id` isn't printed.)
-    if name == "polygon_intersection_area"
+    # Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
+    # `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
+    # node identity) is optional and only emitted by the printer when present.
+    if name == "polygon_intersection_area" || name == "intersect_polygon"
         manifold = get(named, "manifold", nothing)
         manifold isa VarExpr ||
             throw(ExpressionParseError("$name(...) requires manifold=<name>", pos))
         for k in order
-            k == "manifold" ||
+            (k == "manifold" || k == "id") ||
                 throw(ExpressionParseError("unexpected $k=… in $name(...)", pos))
         end
-        return OpExpr("polygon_intersection_area", args;
-            manifold=(manifold::VarExpr).name)
+        idv = get(named, "id", nothing)
+        if idv !== nothing && !(idv isa VarExpr)
+            throw(ExpressionParseError("$name(...) id=… must be a name", pos))
+        end
+        return OpExpr(name, args;
+            manifold=(manifold::VarExpr).name,
+            id=idv === nothing ? nothing : (idv::VarExpr).name)
     end
     _tp_no_named(named, order, name, pos)
     if name in _TP_STRUCTURAL_OPS
