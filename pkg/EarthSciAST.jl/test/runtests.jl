@@ -6,6 +6,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
 @testset "EarthSciAST.jl Tests" begin
 
+    # ---- Public API surface (api-surface.json at the repo root; API_SPEC.md) ----
+    # First, deliberately: if the export block and the manifest have diverged,
+    # that is the failure you want to read before 200 other tests scroll past.
+    include("api_surface_test.jl")
+
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
     #      validate.jl, display.jl, graph.jl) ----
     include("types_test.jl")

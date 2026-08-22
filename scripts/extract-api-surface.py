@@ -109,24 +109,45 @@ def extract_editor() -> dict:
 # --------------------------------------------------------------------------
 # Python — __all__
 # --------------------------------------------------------------------------
-def extract_python() -> list[str]:
+_PY_INTROSPECT = r"""
+import inspect, json, sys
+sys.path.insert(0, __SRC__)
+import earthsci_ast as m
+
+def kind(name):
+    obj = getattr(m, name, None)
+    if inspect.isclass(obj):
+        return "error" if issubclass(obj, BaseException) else "type"
+    if obj is not None and (inspect.isfunction(obj) or inspect.isbuiltin(obj)
+                            or inspect.ismethod(obj)):
+        return "function"
+    if isinstance(obj, (str, int, float, bool, tuple, frozenset)) and name.isupper():
+        return "constant"
+    return None   # let the caller fall back to the spelling heuristic
+
+names = sorted(set(m.__all__))
+print(json.dumps({"names": names, "kinds": {n: kind(n) for n in names}}))
+"""
+
+
+def extract_python() -> dict:
     pkg_src = os.path.join(ROOT, "pkg/earthsci-ast-py/src")
-    code = (
-        "import json,sys;sys.path.insert(0,%r);"
-        "import earthsci_ast as m;print(json.dumps(sorted(set(m.__all__))))" % pkg_src
-    )
+    code = _PY_INTROSPECT.replace("__SRC__", repr(pkg_src))
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     if proc.returncode == 0:
-        return json.loads(proc.stdout)
+        out = json.loads(proc.stdout)
+        out["kinds"] = {k: v for k, v in out["kinds"].items() if v}
+        return out
     # Fall back to a static parse when the package cannot be imported (no deps
     # installed): the conditional `__all__.extend([...])` tiers are literal lists.
-    sys.stderr.write("earthsci_ast import failed; static __all__ parse\n")
+    sys.stderr.write("earthsci_ast import failed; static __all__ parse "
+                     "(kinds fall back to the spelling heuristic)\n")
     src = open(os.path.join(pkg_src, "earthsci_ast/__init__.py")).read()
     names: set[str] = set()
     for m in re.finditer(r"__all__(?:\s*=\s*|\.extend\()\s*\[(.*?)\]", src, re.S):
         names.update(re.findall(r'"([^"]+)"', m.group(1)))
         names.update(re.findall(r"'([^']+)'", m.group(1)))
-    return sorted(names)
+    return {"names": sorted(names), "kinds": {}}
 
 
 # --------------------------------------------------------------------------
@@ -283,7 +304,7 @@ def live_names(surfaces: dict) -> dict[str, set[str]]:
     return {
         "julia": set(surfaces["julia"]),
         "typescript": set(ts["values"]) | set(ts["types"]),
-        "python": set(surfaces["python"]),
+        "python": set(surfaces["python"]["names"]),
         "rust": set(rs["reexports"]) | set(rs["consts"]),
         "go": {s["name"] for s in surfaces["go"]},
         "editor": set(ed["values"]) | set(ed["types"]),

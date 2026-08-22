@@ -145,7 +145,7 @@
     }
   },
   "counts": {
-    "symbols": 876,
+    "symbols": 878,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 279,
@@ -156,8 +156,8 @@
       "editor": 71
     },
     "by_tier": {
-      "extension": 640,
-      "stable": 236
+      "extension": 641,
+      "stable": 237
     }
   },
   "planned": [
@@ -765,7 +765,7 @@
     },
     {
       "name": "cache_miss",
-      "kind": "type",
+      "kind": "error",
       "tier": "extension",
       "bindings": {
         "python": "CacheMiss"
@@ -2815,17 +2815,18 @@
     {
       "name": "expand",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "Expand"
-      }
+        "go": "Expand",
+        "python": "Expand"
+      },
+      "notes": "spelling differs from the §2 rule: python=Expand (expected expand)"
     },
     {
       "name": "expand",
       "kind": "type",
-      "tier": "stable",
+      "tier": "extension",
       "bindings": {
-        "python": "Expand",
         "typescript": "Expand"
       }
     },
@@ -3574,7 +3575,7 @@
     },
     {
       "name": "geometry_backend_unavailable",
-      "kind": "type",
+      "kind": "error",
       "tier": "extension",
       "bindings": {
         "python": "GeometryBackendUnavailable"
@@ -5990,8 +5991,15 @@
       "tier": "stable",
       "bindings": {
         "go": "SchemaError",
+        "rust": "SchemaError"
+      }
+    },
+    {
+      "name": "schema_error",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
         "julia": "SchemaError",
-        "rust": "SchemaError",
         "typescript": "SchemaError"
       }
     },
@@ -6469,8 +6477,15 @@
       "tier": "stable",
       "bindings": {
         "go": "StructuralError",
-        "julia": "StructuralError",
         "rust": "StructuralError"
+      }
+    },
+    {
+      "name": "structural_error",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "StructuralError"
       }
     },
     {
@@ -6805,7 +6820,7 @@
     },
     {
       "name": "template_schema_error",
-      "kind": "error",
+      "kind": "type",
       "tier": "extension",
       "bindings": {
         "typescript": "TemplateSchemaError"
@@ -7481,7 +7496,7 @@
     },
     {
       "name": "validation_error",
-      "kind": "error",
+      "kind": "type",
       "tier": "stable",
       "bindings": {
         "python": "ValidationError",

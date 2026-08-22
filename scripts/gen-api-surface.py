@@ -85,6 +85,19 @@ def kind_of(name: str) -> str:
 
 _GO_KIND = {"func": "function", "type": "type", "const": "constant", "var": "constant"}
 
+# Julia's surface is read textually (the `export` block), so its kinds come from
+# the spelling rule -- which reads any `...Error` as a throwable. These two are
+# not: they are diagnostic RECORDS (`SchemaError{path, keyword, message}`,
+# `StructuralError{path, message, error_type}`) that `validate_schema` /
+# `validate_structural` RETURN in a vector, exactly like their TypeScript twins.
+# `pkg/EarthSciAST.jl/test/api_surface_test.jl` is what keeps this list honest:
+# it checks every manifest `error` against `<: Exception` and fails if one of
+# these entries becomes wrong.
+KIND_OVERRIDES = {
+    ("julia", "SchemaError"): "type",
+    ("julia", "StructuralError"): "type",
+}
+
 
 def binding_kinds(surfaces: dict) -> dict[str, dict[str, str]]:
     """binding -> spelling -> kind, using each extractor's own evidence."""
@@ -99,11 +112,16 @@ def binding_kinds(surfaces: dict) -> dict[str, dict[str, str]]:
         if s["kind"] == "var" and s["name"].startswith("Err"):
             k = "error"
         kinds["go"][s["name"]] = k
-    for binding, key in (("typescript", "typescript"), ("editor", "editor")):
-        for n in surfaces[key]["types"]:
-            kinds[binding][n] = "error" if n.endswith(("Error", "Exception")) else "type"
-        for n in surfaces[key]["values"]:
+    for binding in ("typescript", "editor"):
+        # A TypeScript error is a class, so it is a VALUE export. A `export type`
+        # named `...Error` is a diagnostic record, not something you throw.
+        for n in surfaces[binding]["types"]:
+            kinds[binding][n] = "type"
+        for n in surfaces[binding]["values"]:
             kinds[binding][n] = kind_of(n)
+    kinds["python"].update(surfaces["python"]["kinds"])
+    for (binding, name), kind in KIND_OVERRIDES.items():
+        kinds[binding][name] = kind
     return kinds
 
 
