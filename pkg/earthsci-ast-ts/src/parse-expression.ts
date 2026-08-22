@@ -28,9 +28,9 @@
  * reconstructs as a plain `+` reduction — the join-less `sum_product` annotation
  * (semantically identical there) is not recovered; both reprint identically.
  *
- * Still deferred (need dedicated surface syntax — a later pass): `table_lookup`,
- * `broadcast`, `enum`, and `intersect_polygon` (its `id` field is not printed, so
- * it can't round-trip). Those are refused with an {@link ExpressionParseError}.
+ * Still deferred (need dedicated surface syntax — a later pass): `broadcast` and
+ * `enum`. Those are refused with an {@link ExpressionParseError}, as is the
+ * call spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
  *
  * Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
  * juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -101,12 +101,14 @@ const TEMPLATE_ARG_MIN = opPrecedence('+')
  * Structural ops whose defining data lives OUTSIDE `args` AND which have no
  * text surface yet — refused, pending a dedicated syntax pass. (`integral`,
  * `reshape`, `transpose`, `concat`, `fn`, `const`, `index`, `true`, `aggregate`,
- * `apply_expression_template`, `polygon_intersection_area`, `makearray` DO have a
- * surface and are reconstructed below; they are intentionally absent here.
- * `intersect_polygon` stays refused: its `id` field is not printed, so it can't
- * round-trip.)
+ * `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
+ * `makearray` DO have a surface and are reconstructed below; they are
+ * intentionally absent here. `table_lookup` IS listed: its surface is the
+ * bracket form `visc[T=temp]`, parsed in `parseTableLookup` without going
+ * through `makeCall`, so the CALL spelling `table_lookup(a)` — which the printer
+ * never emits — stays refused.)
  */
-const STRUCTURAL_OPS = new Set<string>(['table_lookup', 'broadcast', 'enum', 'intersect_polygon'])
+const STRUCTURAL_OPS = new Set<string>(['table_lookup', 'broadcast', 'enum'])
 
 /**
  * The aggregate reduction symbols `toAscii` emits (`formatAggregate`). Each maps
@@ -319,6 +321,18 @@ class Parser {
       // A trailing `[semiring=…]` is an aggregate suffix, never an index — leave
       // it for parseAggregate's tail (it can follow a `key=`/`if` expression).
       if (this.peek(1).k === 'name' && (this.peek(1) as { v: string }).v === 'semiring') break
+      // `name[axis=expr, …]` is a `table_lookup` (formatStructuralOp), not an
+      // index: `=` is never an expression operator, so a `name` `=` pair inside
+      // the brackets discriminates the two unambiguously. Only a bare variable
+      // can name a table.
+      if (
+        typeof node === 'string' &&
+        this.peek(1).k === 'name' &&
+        this.peek(2).k === 'eq'
+      ) {
+        node = this.parseTableLookup(node)
+        continue
+      }
       this.next() // '['
       const idx: Expr[] = [this.parseExpr(0)]
       while (this.peek().k === ',') {
@@ -522,6 +536,16 @@ class Parser {
       this.next() // '='
       key = this.parseExpr(0)
     }
+    // `id=<name>` (RFC §6.1 node identity), emitted by formatAggregate after
+    // `key=`. A bare-name clause, so it adds no bracket ambiguity.
+    let id: string | undefined
+    if (this.atWord('id') && this.peek(1).k === 'eq') {
+      this.next() // 'id'
+      this.next() // '='
+      const nm = this.next()
+      if (nm.k !== 'name') this.fail('Expected a name after id=', nm)
+      id = nm.v
+    }
     let semiring: string | undefined
     if (
       this.peek().k === '[' &&
@@ -550,8 +574,44 @@ class Parser {
     if (filter !== undefined) node.filter = filter
     if (distinct) node.distinct = true
     if (key !== undefined) node.key = key
+    if (id !== undefined) node.id = id
     node.expr = expr
     node.args = deriveAggregateArgs(expr, join, filter, key)
+    return node as unknown as Expr
+  }
+
+  /**
+   * Parse a `table_lookup` from the surface `formatStructuralOp` emits:
+   * `table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`, e.g.
+   * `visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis
+   * names, so the reconstructed `axes` map is rebuilt in the emitted order and
+   * reprints identically.
+   */
+  private parseTableLookup(table: string): Expr {
+    this.expect('[', "'['")
+    const axes: Record<string, Expr> = {}
+    for (;;) {
+      const nm = this.next()
+      if (nm.k !== 'name') this.fail('Expected an axis name in table[axis=…]', nm)
+      this.expect('eq', "'=' in table[axis=…]")
+      axes[nm.v] = this.parseExpr(0)
+      if (this.peek().k === ',') {
+        this.next()
+        continue
+      }
+      break
+    }
+    this.expect(']', "']' after table[axis=…]")
+    const node: Record<string, unknown> = { op: 'table_lookup', args: [], table, axes }
+    // The optional `:N` output selector picks one column of a multi-output table.
+    if (this.peek().k === ':') {
+      this.next()
+      const out = this.next()
+      if (out.k !== 'num' || !Number.isInteger(out.v)) {
+        this.fail('Expected an integer output index after table[…]:', out)
+      }
+      node.output = (out as { v: number }).v
+    }
     return node as unknown as Expr
   }
 
@@ -573,13 +633,25 @@ class Parser {
       this.next()
       ranges = this.parseRanges()
     }
-    return {
+    // `id=<name>` (RFC §6.1 node identity), emitted by formatArgWitness after
+    // the where-clause. Mirrors the aggregate tail.
+    let id: string | undefined
+    if (this.atWord('id') && this.peek(1).k === 'eq') {
+      this.next() // 'id'
+      this.next() // '='
+      const nm = this.next()
+      if (nm.k !== 'name') this.fail('Expected a name after id=', nm)
+      id = nm.v
+    }
+    const node: Record<string, unknown> = {
       op,
       args: deriveAggregateArgs(expr, [], undefined, undefined),
       arg: at.v,
       ranges,
       expr,
-    } as unknown as Expr
+    }
+    if (id !== undefined) node.id = id
+    return node as unknown as Expr
   }
 
   /** Parse a `{ k in <rhs>, … }` where-body into a ranges object. */
@@ -764,17 +836,27 @@ function makeCall(name: string, args: Expr[], named: Record<string, Expr>, pos: 
     if (axis === undefined) throw new ExpressionParseError('concat(...) requires axis=<n>', pos)
     return { op: 'concat', args, axis }
   }
-  // Geometry area query `polygon_intersection_area(a, b, manifold=<name>)`. (Its
-  // sibling `intersect_polygon` stays refused: its `id` field isn't printed.)
-  if (name === 'polygon_intersection_area') {
+  // Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
+  // `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
+  // node identity) is optional and only emitted by the printer when present.
+  if (name === 'polygon_intersection_area' || name === 'intersect_polygon') {
     const manifold = named.manifold
     if (typeof manifold !== 'string') {
       throw new ExpressionParseError(`${name}(...) requires manifold=<name>`, pos)
     }
     for (const k of Object.keys(named)) {
-      if (k !== 'manifold') throw new ExpressionParseError(`unexpected ${k}=… in ${name}(...)`, pos)
+      if (k !== 'manifold' && k !== 'id') {
+        throw new ExpressionParseError(`unexpected ${k}=… in ${name}(...)`, pos)
+      }
     }
-    return { op: 'polygon_intersection_area', args, manifold }
+    const node: Record<string, unknown> = { op: name, args, manifold }
+    if (named.id !== undefined) {
+      if (typeof named.id !== 'string') {
+        throw new ExpressionParseError(`${name}(...) id=… must be a name`, pos)
+      }
+      node.id = named.id
+    }
+    return node as unknown as Expr
   }
   noNamed(named, name, pos)
   if (STRUCTURAL_OPS.has(name)) {

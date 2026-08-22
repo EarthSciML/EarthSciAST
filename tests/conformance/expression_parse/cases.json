@@ -989,6 +989,195 @@
       "reprint": "makearray([2:NLON, 1:NLAT] = central_D<f=f>, [1:1, 1:NLAT] = sum[j] (u[1, j]) where {j in lat})"
     },
     {
+      "text": "visc[T=temp]",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "table_lookup",
+        "args": [],
+        "table": "visc",
+        "axes": {
+          "T": "temp"
+        }
+      },
+      "reprint": "visc[T=temp]"
+    },
+    {
+      "text": "k_rate[T=temp, p=pres]:1",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "table_lookup",
+        "args": [],
+        "table": "k_rate",
+        "axes": {
+          "T": "temp",
+          "p": "pres"
+        },
+        "output": 1
+      },
+      "reprint": "k_rate[T=temp, p=pres]:1"
+    },
+    {
+      "text": "intersect_polygon(P, Q, manifold=spherical)",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "intersect_polygon",
+        "args": [
+          "P",
+          "Q"
+        ],
+        "manifold": "spherical"
+      },
+      "reprint": "intersect_polygon(P, Q, manifold=spherical)"
+    },
+    {
+      "text": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "intersect_polygon",
+        "args": [
+          "src_poly",
+          "tgt_poly"
+        ],
+        "manifold": "planar",
+        "id": "overlap_clip"
+      },
+      "reprint": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)"
+    },
+    {
+      "text": "polygon_intersection_area(a[i], b[j], manifold=planar, id=area_faq)",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "polygon_intersection_area",
+        "args": [
+          {
+            "op": "index",
+            "args": [
+              "a",
+              "i"
+            ]
+          },
+          {
+            "op": "index",
+            "args": [
+              "b",
+              "j"
+            ]
+          }
+        ],
+        "manifold": "planar",
+        "id": "area_faq"
+      },
+      "reprint": "polygon_intersection_area(a[i], b[j], manifold=planar, id=area_faq)"
+    },
+    {
+      "text": "any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "aggregate",
+        "output_idx": [
+          "p"
+        ],
+        "semiring": "bool_and_or",
+        "ranges": {
+          "a": {
+            "from": "atmos_cells"
+          }
+        },
+        "id": "rg_candidate_pairs",
+        "expr": {
+          "op": "index",
+          "args": [
+            "u",
+            "a"
+          ]
+        },
+        "args": [
+          "u"
+        ]
+      },
+      "reprint": "any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]"
+    },
+    {
+      "text": "sum[i] (u[i]) where {i in cells} id=cell_total",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "aggregate",
+        "output_idx": [
+          "i"
+        ],
+        "ranges": {
+          "i": {
+            "from": "cells"
+          }
+        },
+        "id": "cell_total",
+        "expr": {
+          "op": "index",
+          "args": [
+            "u",
+            "i"
+          ]
+        },
+        "args": [
+          "u"
+        ]
+      },
+      "reprint": "sum[i] (u[i]) where {i in cells} id=cell_total"
+    },
+    {
+      "text": "argmin[g] (a[g]) where {g in gens} id=cheapest",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "argmin",
+        "args": [
+          "a"
+        ],
+        "arg": "g",
+        "ranges": {
+          "g": {
+            "from": "gens"
+          }
+        },
+        "expr": {
+          "op": "index",
+          "args": [
+            "a",
+            "g"
+          ]
+        },
+        "id": "cheapest"
+      },
+      "reprint": "argmin[g] (a[g]) where {g in gens} id=cheapest"
+    },
+    {
+      "text": "visc[T=temp] * k_rate[T=temp, p=pres]:1",
+      "tier": "id-and-table",
+      "ast": {
+        "op": "*",
+        "args": [
+          {
+            "op": "table_lookup",
+            "args": [],
+            "table": "visc",
+            "axes": {
+              "T": "temp"
+            }
+          },
+          {
+            "op": "table_lookup",
+            "args": [],
+            "table": "k_rate",
+            "axes": {
+              "T": "temp",
+              "p": "pres"
+            },
+            "output": 1
+          }
+        ]
+      },
+      "reprint": "visc[T=temp] * k_rate[T=temp, p=pres]:1"
+    },
+    {
       "text": "(-a) * b",
       "tier": "display-fixture",
       "ast": {
@@ -1101,6 +1290,168 @@
       "reprint": "(a^b)^c"
     },
     {
+      "text": "(b * c)^d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b * c)^d"
+    },
+    {
+      "text": "(b + c) * d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b + c) * d"
+    },
+    {
+      "text": "(b + c) / d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b + c) / d"
+    },
+    {
+      "text": "(b + c)^d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b + c)^d"
+    },
+    {
+      "text": "(b - c) * d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b - c) * d"
+    },
+    {
+      "text": "(b - c) / d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b - c) / d"
+    },
+    {
+      "text": "(b - c)^d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b - c)^d"
+    },
+    {
+      "text": "(b / c)^d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b / c)^d"
+    },
+    {
+      "text": "(b^c)^d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "(b^c)^d"
+    },
+    {
       "text": "(x + y)^2",
       "tier": "display-fixture",
       "ast": {
@@ -1152,6 +1503,23 @@
         ]
       },
       "reprint": "-a * b"
+    },
+    {
+      "text": "-a - b",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "a",
+              "b"
+            ]
+          }
+        ]
+      },
+      "reprint": "-a - b"
     },
     {
       "text": "-a^b",
@@ -1522,6 +1890,42 @@
       "reprint": "a != b"
     },
     {
+      "text": "a * (b + c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          "a",
+          {
+            "op": "+",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a * (b + c)"
+    },
+    {
+      "text": "a * (b - c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          "a",
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a * (b - c)"
+    },
+    {
       "text": "a * b",
       "tier": "display-fixture",
       "ast": {
@@ -1565,6 +1969,42 @@
       "reprint": "a * b + c"
     },
     {
+      "text": "a * b / c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "a",
+              "b"
+            ]
+          },
+          "c"
+        ]
+      },
+      "reprint": "a * b / c"
+    },
+    {
+      "text": "a * b^c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          "a",
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a * b^c"
+    },
+    {
       "text": "a + b",
       "tier": "display-fixture",
       "ast": {
@@ -1575,6 +2015,24 @@
         ]
       },
       "reprint": "a + b"
+    },
+    {
+      "text": "a + b * c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          "a",
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a + b * c"
     },
     {
       "text": "a + b + c",
@@ -1590,6 +2048,78 @@
       "reprint": "a + b + c"
     },
     {
+      "text": "a + b - c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              "a",
+              "b"
+            ]
+          },
+          "c"
+        ]
+      },
+      "reprint": "a + b - c"
+    },
+    {
+      "text": "a + b / c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          "a",
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a + b / c"
+    },
+    {
+      "text": "a + b^c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          "a",
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a + b^c"
+    },
+    {
+      "text": "a - (b + c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          "a",
+          {
+            "op": "+",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a - (b + c)"
+    },
+    {
       "text": "a - b",
       "tier": "display-fixture",
       "ast": {
@@ -1602,6 +2132,132 @@
       "reprint": "a - b"
     },
     {
+      "text": "a - b * c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          "a",
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a - b * c"
+    },
+    {
+      "text": "a - b / c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          "a",
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a - b / c"
+    },
+    {
+      "text": "a - b^c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          "a",
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a - b^c"
+    },
+    {
+      "text": "a / (b * c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          "a",
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a / (b * c)"
+    },
+    {
+      "text": "a / (b + c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          "a",
+          {
+            "op": "+",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a / (b + c)"
+    },
+    {
+      "text": "a / (b - c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          "a",
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a / (b - c)"
+    },
+    {
+      "text": "a / (b / c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          "a",
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a / (b / c)"
+    },
+    {
       "text": "a / b",
       "tier": "display-fixture",
       "ast": {
@@ -1612,6 +2268,24 @@
         ]
       },
       "reprint": "a / b"
+    },
+    {
+      "text": "a / b^c",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          "a",
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a / b^c"
     },
     {
       "text": "a < b",
@@ -1674,6 +2348,24 @@
       "reprint": "a >= b"
     },
     {
+      "text": "a^(b * c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          "a",
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a^(b * c)"
+    },
+    {
       "text": "a^(b + c)",
       "tier": "display-fixture",
       "ast": {
@@ -1690,6 +2382,42 @@
         ]
       },
       "reprint": "a^(b + c)"
+    },
+    {
+      "text": "a^(b - c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          "a",
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a^(b - c)"
+    },
+    {
+      "text": "a^(b / c)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "^",
+        "args": [
+          "a",
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          }
+        ]
+      },
+      "reprint": "a^(b / c)"
     },
     {
       "text": "a^(b^c)",
@@ -1825,6 +2553,284 @@
         ]
       },
       "reprint": "atanh(x)"
+    },
+    {
+      "text": "b * c * d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          "b",
+          "c",
+          "d"
+        ]
+      },
+      "reprint": "b * c * d"
+    },
+    {
+      "text": "b * c + d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b * c + d"
+    },
+    {
+      "text": "b * c - d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b * c - d"
+    },
+    {
+      "text": "b * c / d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b * c / d"
+    },
+    {
+      "text": "b + c + d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          "b",
+          "c",
+          "d"
+        ]
+      },
+      "reprint": "b + c + d"
+    },
+    {
+      "text": "b + c - d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b + c - d"
+    },
+    {
+      "text": "b - c + d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b - c + d"
+    },
+    {
+      "text": "b - c - d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "-",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b - c - d"
+    },
+    {
+      "text": "b / c * d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b / c * d"
+    },
+    {
+      "text": "b / c + d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b / c + d"
+    },
+    {
+      "text": "b / c - d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b / c - d"
+    },
+    {
+      "text": "b / c / d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          {
+            "op": "/",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b / c / d"
+    },
+    {
+      "text": "b^c * d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "*",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b^c * d"
+    },
+    {
+      "text": "b^c + d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "+",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b^c + d"
+    },
+    {
+      "text": "b^c - d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "-",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b^c - d"
+    },
+    {
+      "text": "b^c / d",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "/",
+        "args": [
+          {
+            "op": "^",
+            "args": [
+              "b",
+              "c"
+            ]
+          },
+          "d"
+        ]
+      },
+      "reprint": "b^c / d"
     },
     {
       "text": "ceil(x)",
@@ -2362,6 +3368,20 @@
       "reprint": "polygon_intersection_area(P, Q, manifold=planar)"
     },
     {
+      "text": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)",
+      "tier": "display-fixture",
+      "ast": {
+        "op": "polygon_intersection_area",
+        "args": [
+          "a",
+          "b"
+        ],
+        "manifold": "planar",
+        "id": "area_faq"
+      },
+      "reprint": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)"
+    },
+    {
       "text": "prod[i, j] (A)",
       "tier": "display-fixture",
       "ast": {
@@ -2880,24 +3900,9 @@
   ],
   "expression_errors": [
     {
-      "text": "intersect_polygon(P, Q, manifold=spherical)",
-      "tier": "display-fixture",
-      "reason": "unexpected manifold=… in intersect_polygon(...)"
-    },
-    {
-      "text": "k_rate[T=temp, p=pres]:1",
-      "tier": "display-fixture",
-      "reason": "Expected ']'"
-    },
-    {
-      "text": "visc[T=temp]",
-      "tier": "display-fixture",
-      "reason": "Expected ']'"
-    },
-    {
       "text": "table_lookup(a)",
       "tier": "refusal",
-      "reason": "structural op with no text surface"
+      "reason": "the CALL spelling is never emitted; the surface is the bracket form visc[T=temp]"
     },
     {
       "text": "broadcast(y)",

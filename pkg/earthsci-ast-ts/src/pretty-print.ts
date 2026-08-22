@@ -991,6 +991,8 @@ interface StructuralView {
   table?: unknown
   output?: unknown
   manifold?: unknown
+  /** RFC §6.1 stable node identity — the referent of a derived index set. */
+  id?: unknown
   axis?: unknown
   arg?: unknown
   output_idx?: unknown[]
@@ -1635,6 +1637,9 @@ function formatAggregate(node: ExprNode, format: TextFormat): string {
   if (n.filter !== undefined) out += ` if ${r(n.filter)}`
   if (n.distinct === true) out += ` distinct`
   if (n.key !== undefined) out += ` key=${r(n.key)}`
+  // `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
+  // no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+  if (n.id !== undefined && n.id !== null) out += ` id=${String(n.id)}`
   if (semiring && semiring !== 'sum_product') out += ` [semiring=${semiring}]`
   return out
 }
@@ -1650,6 +1655,7 @@ function formatArgWitness(node: ExprNode, format: TextFormat): string {
   let out = `${name}${idxPart} (${exprStr})`
   const ranges = n.ranges
   if (ranges && Object.keys(ranges).length > 0) out += formatRangesClause(ranges, format)
+  if (n.id !== undefined && n.id !== null) out += ` id=${String(n.id)}`
   return out
 }
 
@@ -1779,7 +1785,12 @@ function formatStructuralOp(node: ExprNode, format: TextFormat): string | undefi
     case 'polygon_intersection_area': {
       const inner = args.map(r).join(', ')
       const name = format === 'latex' ? `\\mathrm{${latexName(op)}}` : op
-      return `${name}(${inner}, manifold=${String(n.manifold ?? '')})`
+      // `id` (RFC §6.1 node identity) is emitted as a trailing named argument
+      // when present, so a node addressable as a derived index set's `from_faq`
+      // referent survives the text round-trip. Absent `id` prints exactly as
+      // before, so every existing rendering is unchanged.
+      const idPart = n.id !== undefined && n.id !== null ? `, id=${String(n.id)}` : ''
+      return `${name}(${inner}, manifold=${String(n.manifold ?? '')}${idPart})`
     }
 
     case 'aggregate':

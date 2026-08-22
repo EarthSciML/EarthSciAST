@@ -76,6 +76,21 @@ const ARRAY_TIER = [
   'concat(a, b, axis=0)',
 ]
 
+// Ops whose text surface landed in the id/table_lookup pass: `table_lookup`'s
+// bracket form, `intersect_polygon` (previously refused because its RFC §6.1
+// `id` was not printed), and `id=` on an aggregate.
+const ID_AND_TABLE_TIER = [
+  'visc[T=temp]',
+  'k_rate[T=temp, p=pres]:1',
+  'intersect_polygon(P, Q, manifold=spherical)',
+  'intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)',
+  'polygon_intersection_area(a[i], b[j], manifold=planar, id=area_faq)',
+  'any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]',
+  'sum[i] (u[i]) where {i in cells} id=cell_total',
+  'argmin[g] (a[g]) where {g in gens} id=cheapest',
+  'visc[T=temp] * k_rate[T=temp, p=pres]:1',
+]
+
 const REDUCTION_TIER = [
   'sum[i] (i * j) where {i in 1:2, j in faces}',
   'sum[i] (u[i, k]) where {i in cells, k in edges_of_cell(i)}',
@@ -96,7 +111,10 @@ const REDUCTION_TIER = [
 // Structural ops with no text surface yet, plus malformed input. Both MUST be
 // refused with the binding's expression-parse error.
 const REFUSALS = [
-  { text: 'table_lookup(a)', reason: 'structural op with no text surface' },
+  {
+    text: 'table_lookup(a)',
+    reason: 'the CALL spelling is never emitted; the surface is the bracket form visc[T=temp]',
+  },
   { text: 'broadcast(y)', reason: 'structural op with no text surface' },
   { text: 'enum(a, b)', reason: 'structural op with no text surface' },
   { text: 'k * ', reason: 'truncated binary expression' },
@@ -178,6 +196,7 @@ function addExpression(text, tier) {
 for (const t of SCALAR) addExpression(t, 'scalar')
 for (const t of ARRAY_TIER) addExpression(t, 'array')
 for (const t of REDUCTION_TIER) addExpression(t, 'reduction')
+for (const t of ID_AND_TABLE_TIER) addExpression(t, 'id-and-table')
 for (const t of displayAsciiTexts()) addExpression(t, 'display-fixture')
 
 for (const { text, reason } of REFUSALS) {

@@ -19,8 +19,11 @@ const reprint = (ast: unknown) => toAscii(ast as never)
 // still refused. (const/true/fn/index/integral/reshape/transpose/concat and the
 // whole reduction & array-query tier — aggregate/argmin/argmax/
 // apply_expression_template/polygon_intersection_area/makearray — DO have a
-// surface now and are handled below.)
-const STRUCTURAL = new Set(['enum', 'broadcast', 'table_lookup', 'intersect_polygon'])
+// surface now and are handled below, as do `table_lookup` (the bracket form
+// `visc[T=temp]`; only the never-emitted CALL spelling stays refused) and
+// `intersect_polygon`, whose RFC §6.1 `id` the printer now emits so it
+// round-trips.)
+const STRUCTURAL = new Set(['enum', 'broadcast'])
 function hasStructuralOp(n: unknown): boolean {
   if (!n || typeof n !== 'object') return false
   if (Array.isArray(n)) return n.some(hasStructuralOp)
