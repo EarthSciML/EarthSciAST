@@ -664,3 +664,103 @@ fn test_substitute_preserves_operator_metadata() {
         panic!("Expected operator result");
     }
 }
+
+/// Chained bindings {a -> b, b -> c} rename `a` to `b` — NEVER to `c`.
+///
+/// Substitution is single-pass (CONFORMANCE_SPEC.md §2.2.3 rule 1), so a
+/// binding map doubles as a simultaneous RENAME map. Transitive expansion here
+/// would silently corrupt every chained rename.
+#[test]
+fn test_substitute_chained_binding_is_not_transitive() {
+    let expr = Expr::operator(ExpressionNode {
+        op: "+".to_string(),
+        args: vec![
+            Expr::Variable("a".to_string()),
+            Expr::Variable("b".to_string()),
+        ],
+        ..Default::default()
+    });
+    let mut substitutions = HashMap::new();
+    substitutions.insert("a".to_string(), Expr::Variable("b".to_string()));
+    substitutions.insert("b".to_string(), Expr::Variable("c".to_string()));
+
+    let result = substitute(&expr, &substitutions);
+
+    let expected = Expr::operator(ExpressionNode {
+        op: "+".to_string(),
+        args: vec![
+            Expr::Variable("b".to_string()),
+            Expr::Variable("c".to_string()),
+        ],
+        ..Default::default()
+    });
+    assert_eq!(
+        result, expected,
+        "Chained bindings must not expand transitively: a -> b, not a -> c"
+    );
+}
+
+/// A mutually-referential binding set applied across a compound expression is
+/// a simultaneous SWAP, not a cycle.
+#[test]
+fn test_substitute_mutual_binding_is_a_simultaneous_swap() {
+    let expr = Expr::operator(ExpressionNode {
+        op: "-".to_string(),
+        args: vec![
+            Expr::Variable("a".to_string()),
+            Expr::Variable("b".to_string()),
+        ],
+        ..Default::default()
+    });
+    let mut substitutions = HashMap::new();
+    substitutions.insert("a".to_string(), Expr::Variable("b".to_string()));
+    substitutions.insert("b".to_string(), Expr::Variable("a".to_string()));
+
+    let result = substitute(&expr, &substitutions);
+
+    let expected = Expr::operator(ExpressionNode {
+        op: "-".to_string(),
+        args: vec![
+            Expr::Variable("b".to_string()),
+            Expr::Variable("a".to_string()),
+        ],
+        ..Default::default()
+    });
+    assert_eq!(result, expected, "a<->b must swap, not error or iterate");
+}
+
+/// A variable appearing REPEATEDLY is not a cycle: every occurrence in the
+/// input is substituted, at every sibling position.
+#[test]
+fn test_substitute_repeated_variable_is_not_a_cycle() {
+    let replacement = Expr::operator(ExpressionNode {
+        op: "*".to_string(),
+        args: vec![
+            Expr::Variable("a".to_string()),
+            Expr::Variable("a".to_string()),
+        ],
+        ..Default::default()
+    });
+    let expr = Expr::operator(ExpressionNode {
+        op: "*".to_string(),
+        args: vec![
+            Expr::Variable("x".to_string()),
+            Expr::Variable("x".to_string()),
+        ],
+        ..Default::default()
+    });
+    let mut substitutions = HashMap::new();
+    substitutions.insert("x".to_string(), replacement.clone());
+
+    let result = substitute(&expr, &substitutions);
+
+    let expected = Expr::operator(ExpressionNode {
+        op: "*".to_string(),
+        args: vec![replacement.clone(), replacement],
+        ..Default::default()
+    });
+    assert_eq!(
+        result, expected,
+        "A repeated variable substitutes at every occurrence"
+    );
+}

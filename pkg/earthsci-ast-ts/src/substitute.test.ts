@@ -448,3 +448,78 @@ describe('substituteInReactionSystem', () => {
     expect(result.constraint_equations?.[0]?.rhs).toEqual({ op: '*', args: [2.0, 'A'] })
   })
 })
+
+// Substitution semantics (CONFORMANCE_SPEC.md §2.2.3, normative):
+// substitution is SINGLE-PASS (non-transitive) — a binding's replacement is
+// inserted verbatim and is never itself re-substituted. That is what
+// guarantees termination for self- and mutually-referential binding sets
+// without any cycle detection, and what makes a binding map usable as a
+// simultaneous RENAME map.
+//
+// The sibling bindings pin the same semantics: Julia
+// (expression_test.jl, `substitute edge cases`), Rust
+// (tests/substitution.rs, `Edge cases and error handling`), Python
+// (tests/test_substitute.py, `TestSubstitutionErrorHandling`). The shared
+// cross-language corpus is tests/substitution/cyclic_bindings.json.
+describe('substitute — single-pass (cyclic and chained bindings)', () => {
+  it('resolves mutually-referential bindings in a single pass', () => {
+    // {x -> y, y -> x}: substituting "x" yields "y". The replacement "y" is
+    // NOT re-resolved back to "x", so this terminates without cycle detection.
+    const bindings: Record<string, Expr> = { x: 'y', y: 'x' }
+    expect(substitute('x', bindings)).toBe('y')
+    expect(substitute('y', bindings)).toBe('x')
+  })
+
+  it('applies a mutually-referential binding set as a simultaneous swap', () => {
+    const bindings: Record<string, Expr> = { a: 'b', b: 'a' }
+    expect(substitute({ op: '-', args: ['a', 'b'] } as Expr, bindings)).toEqual({
+      op: '-',
+      args: ['b', 'a'],
+    })
+  })
+
+  it('terminates on a self-referential binding, leaving the inner name intact', () => {
+    // {x -> f(x)}: the inner "x" of the replacement is not recursed into.
+    const bindings: Record<string, Expr> = { x: { op: 'f', args: ['x'] } as Expr }
+    expect(substitute({ op: '+', args: ['x', 'z'] } as Expr, bindings)).toEqual({
+      op: '+',
+      args: [{ op: 'f', args: ['x'] }, 'z'],
+    })
+  })
+
+  it('terminates on the identity binding {x -> x}', () => {
+    expect(substitute('x', { x: 'x' } as Record<string, Expr>)).toBe('x')
+  })
+
+  it('does not expand chained bindings transitively', () => {
+    // {a -> b, b -> c} renames a to b — never to c. Transitive expansion here
+    // would silently corrupt every chained rename.
+    const bindings: Record<string, Expr> = { a: 'b', b: 'c' }
+    expect(substitute({ op: '+', args: ['a', 'b'] } as Expr, bindings)).toEqual({
+      op: '+',
+      args: ['b', 'c'],
+    })
+  })
+
+  it('substitutes a repeated variable at every occurrence (not a cycle)', () => {
+    // A variable appearing repeatedly is NOT a cycle: every occurrence in the
+    // input is replaced, at every sibling position.
+    const bindings: Record<string, Expr> = { x: { op: '*', args: ['a', 'a'] } as Expr }
+    expect(substitute({ op: '*', args: ['x', 'x'] } as Expr, bindings)).toEqual({
+      op: '*',
+      args: [
+        { op: '*', args: ['a', 'a'] },
+        { op: '*', args: ['a', 'a'] },
+      ],
+    })
+  })
+
+  it('preserves operator metadata around a self-referential replacement', () => {
+    const bindings: Record<string, Expr> = { u: { op: '*', args: ['u', 'k'] } as Expr }
+    expect(substitute({ op: 'D', args: ['u'], wrt: 't' } as Expr, bindings)).toEqual({
+      op: 'D',
+      args: [{ op: '*', args: ['u', 'k'] }],
+      wrt: 't',
+    })
+  })
+})

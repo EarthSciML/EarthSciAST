@@ -212,6 +212,37 @@ using JSON3
         @test result.args[1] === var_y
         @test result.args[2] === var_x
 
+        # --- Chained bindings are NOT transitive ---
+        # {a => b, b => c} renames `a` to `b`, never to `c`. Single-pass
+        # substitution is what makes a binding map usable as a simultaneous
+        # RENAME map; transitive expansion would silently corrupt every
+        # chained rename. Shared corpus:
+        # tests/substitution/cyclic_bindings.json.
+        var_a = VarExpr("a")
+        var_b = VarExpr("b")
+        var_c = VarExpr("c")
+        chained_bindings = Dict{String,EarthSciAST.ASTExpr}(
+            "a" => var_b,
+            "b" => var_c,
+        )
+        @test substitute(var_a, chained_bindings) === var_b
+        chained_result = substitute(
+            OpExpr("+", EarthSciAST.ASTExpr[var_a, var_b]), chained_bindings)
+        @test chained_result isa OpExpr
+        @test chained_result.args[1] === var_b
+        @test chained_result.args[2] === var_c
+
+        # --- A REPEATED variable is not a cycle ---
+        # Every occurrence in the input is substituted, at every sibling
+        # position; repetition alone must never be mistaken for a cycle.
+        a_times_a = OpExpr("*", EarthSciAST.ASTExpr[var_a, var_a])
+        repeated_bindings = Dict{String,EarthSciAST.ASTExpr}("x" => a_times_a)
+        repeated_result = substitute(
+            OpExpr("*", EarthSciAST.ASTExpr[var_x, var_x]), repeated_bindings)
+        @test repeated_result isa OpExpr
+        @test repeated_result.args[1] === a_times_a
+        @test repeated_result.args[2] === a_times_a
+
         # Self-reference inside a nested replacement: inner x NOT re-substituted.
         inner_x_plus_one = OpExpr("+", EarthSciAST.ASTExpr[var_x, NumExpr(1.0)])
         nested_self = Dict{String,EarthSciAST.ASTExpr}("x" => inner_x_plus_one)
