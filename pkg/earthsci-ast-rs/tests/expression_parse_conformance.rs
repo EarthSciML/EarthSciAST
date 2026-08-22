@@ -46,7 +46,7 @@ fn text_of(case: &Value) -> &str {
 fn expression_corpus_parses_to_the_oracle_ast() {
     let root = corpus();
     let cases = section(&root, "expressions");
-    assert_eq!(cases.len(), 184, "corpus expression count changed");
+    assert_eq!(cases.len(), 240, "corpus expression count changed");
 
     let mut failures: Vec<String> = Vec::new();
 
@@ -113,7 +113,7 @@ fn expression_corpus_parses_to_the_oracle_ast() {
 fn expression_error_corpus_is_refused() {
     let root = corpus();
     let cases = section(&root, "expression_errors");
-    assert_eq!(cases.len(), 12, "corpus expression_errors count changed");
+    assert_eq!(cases.len(), 9, "corpus expression_errors count changed");
 
     let mut failures: Vec<String> = Vec::new();
     for case in cases {

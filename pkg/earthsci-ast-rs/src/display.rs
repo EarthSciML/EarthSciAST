@@ -782,6 +782,11 @@ fn format_aggregate(node: &ExpressionNode, fmt: Fmt) -> String {
     if let Some(key) = node.key.as_deref() {
         out.push_str(&format!(" key={}", render_fmt(key, fmt)));
     }
+    // `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
+    // no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+    if let Some(id) = node.id.as_deref() {
+        out.push_str(&format!(" id={id}"));
+    }
     if let Some(sr) = semiring
         && sr != "sum_product"
     {
@@ -813,6 +818,9 @@ fn format_arg_witness(node: &ExpressionNode, fmt: Fmt) -> String {
         && !ranges.is_empty()
     {
         out.push_str(&format_ranges_clause(ranges, fmt));
+    }
+    if let Some(id) = node.id.as_deref() {
+        out.push_str(&format!(" id={id}"));
     }
     out
 }
@@ -1075,7 +1083,15 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
                 op.to_string()
             };
             let manifold = node.manifold.as_deref().unwrap_or("");
-            Some(format!("{name}({inner}, manifold={manifold})"))
+            // `id` (RFC §6.1 node identity) is emitted as a trailing named
+            // argument when present, so a node addressable as a derived index
+            // set's `from_faq` referent survives the text round-trip. Absent
+            // `id` prints exactly as before.
+            let id_part = match node.id.as_deref() {
+                Some(id) => format!(", id={id}"),
+                None => String::new(),
+            };
+            Some(format!("{name}({inner}, manifold={manifold}{id_part})"))
         }
 
         "aggregate" => Some(format_aggregate(node, fmt)),

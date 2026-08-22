@@ -18,16 +18,19 @@
 //!    `sum[i] (expr) where {i in set, j in lo:hi} join(a=b) if pred distinct
 //!    key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax` arg-witnesses,
 //!    template application `name<binding = value, …>`
-//!    (`apply_expression_template`), `polygon_intersection_area(a, b, manifold=…)`,
-//!    and the piecewise-region array `makearray([lo:hi, …] = value, …)`.
+//!    (`apply_expression_template`), the geometry ops
+//!    `polygon_intersection_area(a, b, manifold=…)` and
+//!    `intersect_polygon(a, b, manifold=…[, id=…])`, the `table_lookup` bracket
+//!    surface `visc[T=temp]` / `k_rate[T=temp, p=pres]:1`, and the
+//!    piecewise-region array `makearray([lo:hi, …] = value, …)`.
 //!
 //! Aggregate `args` is a derived operand cache the printer doesn't emit; it's
 //! reconstructed best-effort (see [`derive_aggregate_args`]) and is
 //! reprint-neutral.
 //!
-//! Still deferred (they need a dedicated surface syntax): `table_lookup`,
-//! `broadcast`, `enum`, and `intersect_polygon` (its `id` field is not printed,
-//! so it can't round-trip). Those are refused with an [`ExpressionParseError`].
+//! Still deferred (they need a dedicated surface syntax): `broadcast` and
+//! `enum`. Those are refused with an [`ExpressionParseError`], as is the call
+//! spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
 //!
 //! Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
 //! juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -103,7 +106,13 @@ const TEMPLATE_ARG_MIN: i32 = 4;
 
 /// Structural ops whose defining data lives OUTSIDE `args` AND which have no
 /// text surface yet — refused, pending a dedicated syntax pass.
-const STRUCTURAL_OPS: &[&str] = &["table_lookup", "broadcast", "enum", "intersect_polygon"];
+///
+/// `table_lookup` IS listed even though it round-trips: its surface is the
+/// bracket form `visc[T=temp]`, parsed in [`Parser::parse_table_lookup`] without
+/// going through [`make_call`], so the CALL spelling `table_lookup(a)` — which
+/// the printer never emits — stays refused. `intersect_polygon` is absent: it
+/// has a surface now that its `id` is printed.
+const STRUCTURAL_OPS: &[&str] = &["table_lookup", "broadcast", "enum"];
 
 /// The aggregate reduction symbols `to_ascii` emits. Each maps to a default
 /// `reduce` when no explicit `[semiring=…]` supersedes it; `sum` and `any` carry
@@ -458,6 +467,20 @@ impl Parser {
             if self.peek_at(1).is(Kind::Name, "semiring") {
                 break;
             }
+            // `name[axis=expr, …]` is a `table_lookup` (format_structural_op),
+            // not an index: `=` is never an expression operator (only `==` is),
+            // so a `name` `=` pair inside the brackets discriminates the two
+            // unambiguously. Only a bare variable can name a table.
+            if matches!(n, Expr::Variable(_))
+                && self.peek_at(1).kind == Kind::Name
+                && self.peek_at(2).kind == Kind::Eq
+            {
+                let Expr::Variable(table) = n else {
+                    unreachable!("matched above")
+                };
+                n = self.parse_table_lookup(table)?;
+                continue;
+            }
             self.next(); // '['
             let mut idx = vec![self.parse_expr(0)?];
             while self.peek().kind == Kind::Comma {
@@ -695,6 +718,9 @@ impl Parser {
             self.next(); // '='
             key = Some(self.parse_expr(0)?);
         }
+        // `id=<name>` (RFC §6.1 node identity), emitted by `format_aggregate`
+        // after `key=`. A bare-name clause, so it adds no bracket ambiguity.
+        let id = self.parse_id_clause()?;
         let mut semiring: Option<String> = None;
         if self.peek().kind == Kind::LBrack && self.peek_at(1).is(Kind::Name, "semiring") {
             self.next(); // '['
@@ -735,6 +761,7 @@ impl Parser {
             n.distinct = Some(true);
         }
         n.key = key.map(Box::new);
+        n.id = id;
         n.expr = Some(Box::new(expr));
         Ok(Expr::operator(n))
     }
@@ -759,6 +786,9 @@ impl Parser {
             self.next();
             ranges = self.parse_ranges()?;
         }
+        // `id=<name>` (RFC §6.1 node identity), emitted by `format_arg_witness`
+        // after the where-clause. Mirrors the aggregate tail.
+        let id = self.parse_id_clause()?;
         let mut n = ExpressionNode {
             op: op.to_string(),
             args: derive_aggregate_args(&expr, &[], None, None),
@@ -767,6 +797,74 @@ impl Parser {
         n.arg = Some(at.text);
         n.ranges = Some(ranges);
         n.expr = Some(Box::new(expr));
+        n.id = id;
+        Ok(Expr::operator(n))
+    }
+
+    /// Read an optional `id=<name>` clause (RFC §6.1 stable node identity) off
+    /// the tail of an aggregate / arg-witness. Consumes nothing when absent.
+    fn parse_id_clause(&mut self) -> PResult<Option<String>> {
+        if !(self.at_word("id") && self.peek_at(1).kind == Kind::Eq) {
+            return Ok(None);
+        }
+        self.next(); // 'id'
+        self.next(); // '='
+        let nm = self.next();
+        if nm.kind != Kind::Name {
+            return Err(ExpressionParseError::new(
+                "Expected a name after id=",
+                nm.pos,
+            ));
+        }
+        Ok(Some(nm.text))
+    }
+
+    /// Parse a `table_lookup` from the surface `format_structural_op` emits:
+    /// `table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`, e.g.
+    /// `visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis
+    /// names, so the reconstructed `axes` map reprints identically.
+    fn parse_table_lookup(&mut self, table: String) -> PResult<Expr> {
+        self.expect(Kind::LBrack, "'['")?;
+        let mut axes: HashMap<String, Expr> = HashMap::new();
+        loop {
+            let nm = self.next();
+            if nm.kind != Kind::Name {
+                return Err(ExpressionParseError::new(
+                    "Expected an axis name in table[axis=…]",
+                    nm.pos,
+                ));
+            }
+            self.expect(Kind::Eq, "'=' in table[axis=…]")?;
+            let v = self.parse_expr(0)?;
+            axes.insert(nm.text, v);
+            if self.peek().kind == Kind::Comma {
+                self.next();
+                continue;
+            }
+            break;
+        }
+        self.expect(Kind::RBrack, "']' after table[axis=…]")?;
+        let mut n = ExpressionNode {
+            op: "table_lookup".to_string(),
+            args: Vec::new(),
+            ..Default::default()
+        };
+        n.table = Some(table);
+        n.axes = Some(axes);
+        // The optional `:N` output selector picks one column of a multi-output
+        // table. Emitted as a JSON integer, never a float, so the wire form is
+        // byte-identical to the other bindings'.
+        if self.peek().kind == Kind::Colon {
+            self.next();
+            let out = self.next();
+            if out.kind != Kind::Num || out.num.fract() != 0.0 || !out.num.is_finite() {
+                return Err(ExpressionParseError::new(
+                    "Expected an integer output index after table[…]:",
+                    out.pos,
+                ));
+            }
+            n.output = Some(Value::from(out.num as i64));
+        }
         Ok(Expr::operator(n))
     }
 
@@ -1139,9 +1237,10 @@ fn make_call(name: &str, args: Vec<Expr>, named: Vec<(String, Expr)>, pos: usize
         n.axis = Some(axis);
         return Ok(Expr::operator(n));
     }
-    // Geometry area query `polygon_intersection_area(a, b, manifold=<name>)`.
-    // (Its sibling `intersect_polygon` stays refused: its `id` isn't printed.)
-    if name == "polygon_intersection_area" {
+    // Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
+    // `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
+    // node identity) is optional and only emitted by the printer when present.
+    if name == "polygon_intersection_area" || name == "intersect_polygon" {
         let manifold = match take_named(&named, "manifold") {
             Some(Expr::Variable(s)) => s,
             _ => {
@@ -1151,18 +1250,27 @@ fn make_call(name: &str, args: Vec<Expr>, named: Vec<(String, Expr)>, pos: usize
                 ));
             }
         };
-        if let Some((k, _)) = named.iter().find(|(k, _)| k != "manifold") {
+        if let Some((k, _)) = named.iter().find(|(k, _)| k != "manifold" && k != "id") {
             return Err(ExpressionParseError::new(
                 format!("unexpected {k}=… in {name}(...)"),
                 pos,
             ));
         }
         let mut n = ExpressionNode {
-            op: "polygon_intersection_area".to_string(),
+            op: name.to_string(),
             args,
             ..Default::default()
         };
         n.manifold = Some(manifold);
+        if let Some(id) = take_named(&named, "id") {
+            let Expr::Variable(id) = id else {
+                return Err(ExpressionParseError::new(
+                    format!("{name}(...) id=… must be a name"),
+                    pos,
+                ));
+            };
+            n.id = Some(id);
+        }
         return Ok(Expr::operator(n));
     }
     no_named(&named, name, pos)?;
