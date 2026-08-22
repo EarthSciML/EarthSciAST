@@ -148,7 +148,7 @@
     "symbols": 899,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 279,
+      "julia": 283,
       "typescript": 203,
       "python": 228,
       "rust": 281,
@@ -900,6 +900,7 @@
       "tier": "stable",
       "bindings": {
         "go": "CanMigrate",
+        "julia": "can_migrate",
         "python": "can_migrate",
         "rust": "can_migrate",
         "typescript": "canMigrate"
@@ -4367,6 +4368,7 @@
       "tier": "stable",
       "bindings": {
         "go": "Migrate",
+        "julia": "migrate",
         "python": "migrate",
         "rust": "migrate",
         "typescript": "migrate"
@@ -4378,6 +4380,7 @@
       "tier": "stable",
       "bindings": {
         "go": "MigrationError",
+        "julia": "MigrationError",
         "python": "MigrationError",
         "rust": "MigrationError",
         "typescript": "MigrationError"
@@ -6901,6 +6904,7 @@
       "tier": "stable",
       "bindings": {
         "go": "SupportedMigrationTargets",
+        "julia": "supported_migration_targets",
         "python": "supported_migration_targets"
       }
     },

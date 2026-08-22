@@ -497,6 +497,7 @@ reading that as a gap.
 |---|---|---|---|---|---|---|
 | `algebraic_unknowns` | function | `algebraic_unknowns` | `algebraicUnknowns` | `algebraic_unknowns` | `algebraic_unknowns` | `AlgebraicUnknowns` |
 | `brownian_parameters` | function | `brownian_parameters` | `brownianParameters` | `brownian_parameters` | `brownian_parameters` | `BrownianParameters` |
+| `can_migrate` | function | `can_migrate` | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
 | `component_node` | type | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` |
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
@@ -509,6 +510,8 @@ reading that as a gap.
 | `free_variables` | function | `free_variables` | `freeVariables` | `free_variables` | `free_variables` | `FreeVariables` |
 | `is_ode_state` | function | `is_ode_state` | `isOdeState` | `is_ode_state` | `is_ode_state` | `IsODEState` |
 | `load` | function | `load` | `load` | `load` | `load` | `Load` |
+| `migrate` | function | `migrate` | `migrate` | `migrate` | `migrate` | `Migrate` |
+| `migration_error` | error | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` |
 | `observed_unknowns` | function | `observed_unknowns` | `observedUnknowns` | `observed_unknowns` | `observed_unknowns` | `ObservedUnknowns` |
 | `ode_states` | function | `ode_states` | `odeStates` | `ode_states` | `ode_states` | `ODEStates` |
 | `parse_equation` | function | `parse_equation` | `parseEquation` | `parse_equation` | `parse_equation` | `ParseEquation` |
@@ -537,7 +540,6 @@ reading that as a gap.
 | `add_variable` | function | `add_variable` | `addVariable` | – | `add_variable` | `AddVariable` |
 | `affect_equation` | type | `AffectEquation` | – | `AffectEquation` | `AffectEquation` | `AffectEquation` |
 | `build_reference_graph` | function | `build_reference_graph` | – | `build_reference_graph` | `build_reference_graph` | `BuildReferenceGraph` |
-| `can_migrate` | function | – | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
 | `canonical_json` | function | `canonical_json` | `canonicalJson` | – | `canonical_json` | `CanonicalJSON` |
 | `canonicalize` | function | `canonicalize` | `canonicalize` | – | `canonicalize` | `Canonicalize` |
 | `closed_function_error` | error | `ClosedFunctionError` | `ClosedFunctionError` | – | `ClosedFunctionError` | `ClosedFunctionError` |
@@ -564,8 +566,6 @@ reading that as a gap.
 | `lower_enums` | function | `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
 | `metadata` | type | `Metadata` | – | `Metadata` | `Metadata` | `Metadata` |
-| `migrate` | function | – | `migrate` | `migrate` | `migrate` | `Migrate` |
-| `migration_error` | error | – | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` |
 | `model` | type | `Model` | – | `Model` | `Model` | `Model` |
 | `model_variable` | type | `ModelVariable` | – | `ModelVariable` | `ModelVariable` | `ModelVariable` |
 | `observed_definitions` | function | `observed_definitions` | `observedDefinitions` | `observed_definitions` | `observed_definitions` | – |
@@ -629,6 +629,7 @@ reading that as a gap.
 | `schema_version` | constant | – | `SCHEMA_VERSION` | – | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simulate` | function | `simulate` | – | `simulate` | `simulate` | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
+| `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
 | `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
 | `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
@@ -719,7 +720,6 @@ reading that as a gap.
 | `structural_error` | error | – | – | – | `StructuralError` | `StructuralError` |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |
-| `supported_migration_targets` | function | – | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
