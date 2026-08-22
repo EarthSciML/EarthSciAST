@@ -346,7 +346,7 @@ Divergences:
 |---|---|---|
 | `free_variables(expr) -> {str}` | free variable names | no, anywhere |
 | `simplify(expr) -> Expr` | algebraic simplification | no, anywhere |
-| `substitute(expr, bindings) -> Expr` | capture-free substitution | **Go only** |
+| `substitute(expr, bindings) -> Expr` | capture-free substitution | no, anywhere |
 | `parse_expression(text) -> Expr` | inverse of `to_ascii` | yes, `ExpressionParseError` |
 | `parse_equation(text) -> Equation` | inverse of `to_ascii` on an equation | yes, `ExpressionParseError` |
 | `canonicalize(expr) -> Expr` | RFC §5.4 canonical form | yes, `CanonicalizeError` |
@@ -354,9 +354,12 @@ Divergences:
 
 Divergences:
 
-- **`substitute` fallibility.** Go alone detects substitution cycles and returns
-  `SubstitutionError{Code: "cyclic_substitution"}`. Julia, Python, Rust and
-  TypeScript are infallible and will loop or blow the stack on the same input.
+- **`substitute` fallibility.** None — resolved. `substitute` is infallible in
+  every binding. Substitution is SINGLE-PASS (CONFORMANCE_SPEC.md §2.2.3 rule
+  1): a replacement is inserted verbatim and never re-substituted, so
+  self- and mutually-referential binding sets terminate on their own and there
+  is nothing to detect. Go's `(Expression, error)` signatures are retained for
+  stability across its substitution family, but no error is returned.
 - **`substitute` arity.** TypeScript alone takes a third
   `context?: SubstitutionContext`, and it changes semantics materially: with a
   context, a dotted reference not present in `bindings` is resolved through the
@@ -812,7 +815,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. | all five |
 | 14 | raw-`Value` entry points | Rust takes untyped `serde_json::Value` for `lower_enums`, `resolve_subsystem_refs`, `resolve_template_machinery` and `prepare`, where every other binding takes a typed document. | Add typed wrappers at the canonical names; keep the raw forms as `*_raw` extension seams. | Rust |
 | 15 | `lower_enums` mutation | TypeScript is pure; Julia, Python, Rust and Go mutate in place. Julia raises `ParseError` where the rest raise `EnumLoweringError`. | Canonicalize on the pure form; mutating variants take Julia's `!`. Julia raises `EnumLoweringError`. | Julia, Python, Rust, Go |
-| 16 | `substitute` cycles | Only Go detects substitution cycles; the other four loop. | Every binding detects cycles and reports `cyclic_substitution`. This is a bug fix, not just a rename. | Julia, TS, Python, Rust |
+| 16 | `substitute` cycles | ~~Only Go detects substitution cycles; the other four loop.~~ **RESOLVED — the premise was false, and inverted.** The other four never looped: all four are single-pass, so a cyclic binding set terminates on its own, exactly as CONFORMANCE_SPEC.md §2.2.3 rule 1 requires. Go was the sole non-conformant binding: it expanded replacements *transitively*, which (a) silently corrupted chained renames — `substitute("a", {a: b, b: c})` returned `"c"`, not `"b"`, mis-applying every overlapping rename through `renameRawExpr` — and (b) made cyclic sets non-terminating, which was then patched with cycle detection instead of by removing the transitivity. | Go made single-pass; `SubstitutionError` / `cyclic_substitution` removed as unnecessary. Pinned cross-binding by `tests/substitution/cyclic_bindings.json`. | Go (done) |
 | 17 | `build_reference_graph` index sets | Python threads `index_sets` as a third argument, Rust via a separate function, **Julia not at all** — it reads the pre-0.8.0 nested shape. Julia and Python resolve v0.8.0 documents differently. | One signature carrying the document-scoped registry. Also a bug fix. | Julia, Rust |
 | 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. | Julia, Rust, Go |
 | 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. | Go |

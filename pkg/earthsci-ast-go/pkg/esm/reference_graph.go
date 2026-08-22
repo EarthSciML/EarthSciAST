@@ -82,7 +82,7 @@ func (e *ReferenceResolutionError) Error() string {
 }
 
 // DiagnosticCode exposes the stable code, matching the convention of
-// SubstitutionError / EvaluationError elsewhere in this package.
+// EvaluationError / ExpressionTemplateError elsewhere in this package.
 func (e *ReferenceResolutionError) DiagnosticCode() string { return e.Code }
 
 func refErr(code, format string, args ...any) *ReferenceResolutionError {
