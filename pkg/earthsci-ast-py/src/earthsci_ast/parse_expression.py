@@ -72,7 +72,14 @@ from .errors import EarthSciAstError
 from .esm_types import Equation, Expr  # noqa: F401  (Expr documents the return type)
 from .serialize import _canonical_number
 
-__all__ = ["ExpressionParseError", "parse_equation", "parse_expression"]
+__all__ = ["ExpressionParseError", "ParsedExpr", "parse_equation", "parse_expression"]
+
+#: What the text parser actually returns: a number, a bare reference, or a
+#: JSON-shaped operator node. Spelled out for callers that want to annotate a
+#: variable holding a parse result — the public signatures below say ``Expr``,
+#: the package-wide expression type, of which this is the raw-JSON surface (see
+#: the module docstring on why nodes are dicts, not typed ``ExprNode``s).
+ParsedExpr = Union[int, float, str, "dict[str, Any]"]
 
 
 class ExpressionParseError(EarthSciAstError, ValueError):
@@ -923,8 +930,3 @@ def parse_equation(src: str) -> Equation:
     lhs = _Parser([*toks[:split], _Tok("eof", None, toks[split].pos)])
     rhs = _Parser(toks[split + 1 :])
     return Equation(lhs=lhs.parse_entry(), rhs=rhs.parse_entry())
-
-
-# Re-exported for callers that want the union spelled out; the parser emits
-# JSON-shaped nodes rather than typed ``ExprNode`` instances (module docstring).
-ParsedExpr = Union[int, float, str, "dict[str, Any]"]
