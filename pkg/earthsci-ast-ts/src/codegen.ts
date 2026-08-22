@@ -18,6 +18,7 @@ import type { Expr, Expression, ExpressionNode } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { dispatchClosedFunction } from './closed-functions.js'
 import { getOpInfo, checkArity } from './op-registry.js'
+import { EsmDiagnosticError } from './errors.js'
 
 /**
  * Compiled expression closure produced by {@link compileExpression}.
@@ -35,10 +36,10 @@ export type CompiledExpression = (bindings: Map<string, number>) => number
  * is open); the gate fires only at evaluation, mirroring the Julia `_compile`
  * gate in tree_walk.jl.
  */
-export class UnloweredOperatorError extends Error {
-  readonly code = 'unlowered_operator'
+export class UnloweredOperatorError extends EsmDiagnosticError {
+  declare readonly code: 'unlowered_operator'
   constructor(message: string) {
-    super(`[unlowered_operator] ${message}`)
+    super('unlowered_operator', `[unlowered_operator] ${message}`)
     this.name = 'UnloweredOperatorError'
   }
 }
@@ -56,12 +57,9 @@ export class UnloweredOperatorError extends Error {
  * These `code` values are binding-local diagnostics for the in-process runner,
  * distinct from the cross-language conformance codes in `errors.ts`.
  */
-export class EvaluatorError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-  ) {
-    super(message)
+export class EvaluatorError extends EsmDiagnosticError {
+  constructor(code: string, message: string) {
+    super(code, message)
     this.name = 'EvaluatorError'
   }
 }

@@ -10,6 +10,7 @@ import type { Expr, ExpressionNode } from '../types.js'
 import type { DerivativeResult } from './types.js'
 import { simplify, freeVariables, isExprNode, deepEqualExpr } from '../expression.js'
 import { numericValue } from '../numeric-literal.js'
+import { ERROR_CODES, EsmDiagnosticError } from '../errors.js'
 
 /**
  * Thrown when {@link differentiate} encounters an operator with no
@@ -17,20 +18,20 @@ import { numericValue } from '../numeric-literal.js'
  * does not cover. Callers that need a boolean answer should use
  * {@link isDifferentiable}.
  */
-export class NonDifferentiableExpressionError extends Error {
+export class NonDifferentiableExpressionError extends EsmDiagnosticError {
   constructor(
     public readonly op: string,
     public readonly variable: string,
   ) {
-    super(`No differentiation rule for operator '${op}' (d/d${variable})`)
+    super(ERROR_CODES.ANALYSIS, `No differentiation rule for operator '${op}' (d/d${variable})`)
     this.name = 'NonDifferentiableExpressionError'
   }
 }
 
 /** Thrown by {@link higherOrderDerivative} when `order` is not positive. */
-export class InvalidDerivativeOrderError extends Error {
+export class InvalidDerivativeOrderError extends EsmDiagnosticError {
   constructor(public readonly order: number) {
-    super(`Derivative order must be positive (got ${order})`)
+    super(ERROR_CODES.ANALYSIS, `Derivative order must be positive (got ${order})`)
     this.name = 'InvalidDerivativeOrderError'
   }
 }

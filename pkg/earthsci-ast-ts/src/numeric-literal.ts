@@ -26,6 +26,8 @@
  * `E_CANONICAL_NONFINITE` per RFC §5.4.6.
  */
 
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+
 export interface NumericLiteral {
   readonly kind: 'int' | 'float'
   readonly value: number
@@ -88,12 +90,12 @@ export function numericValue(x: unknown): number | undefined {
 // Lossless JSON parser
 // ---------------------------------------------------------------------------
 
-export class LosslessJsonParseError extends Error {
+export class LosslessJsonParseError extends EsmDiagnosticError {
   constructor(
     message: string,
     public readonly position: number,
   ) {
-    super(`${message} (at pos ${position})`)
+    super(ERROR_CODES.JSON_PARSE_ERROR, `${message} (at pos ${position})`)
     this.name = 'LosslessJsonParseError'
   }
 }
@@ -343,12 +345,11 @@ class Parser {
  * `canonicalize.ts` re-exports this class under the same name, so consumers may
  * keep importing `CanonicalizeError` from either module.
  */
-export class CanonicalizeError extends Error {
+export class CanonicalizeError extends EsmDiagnosticError {
   /** Stable RFC §5.4.6 / §5.4.7 error code. */
-  readonly code: string
+  declare readonly code: string
   constructor(code: string, message?: string) {
-    super(message ?? code)
-    this.code = code
+    super(code, message ?? code)
     this.name = 'CanonicalizeError'
   }
 }

@@ -25,6 +25,8 @@
  * counts their own axis made TS the only binding that could report a mismatch
  * between the two spellings of a number density.
  */
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+
 export interface CanonicalDims {
   kg?: number
   m?: number
@@ -42,9 +44,9 @@ export interface ParsedUnit {
   offset?: number
 }
 
-export class UnitConversionError extends Error {
+export class UnitConversionError extends EsmDiagnosticError {
   constructor(message: string) {
-    super(message)
+    super(ERROR_CODES.UNIT_ERROR, message)
     this.name = 'UnitConversionError'
   }
 }

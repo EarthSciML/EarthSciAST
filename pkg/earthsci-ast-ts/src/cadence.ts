@@ -36,6 +36,7 @@
  */
 
 import type { EsmFile, Expression, Model } from './types.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { forEachChild, isExprNode } from './expression.js'
 import {
   odeStates,
@@ -65,9 +66,12 @@ export function joinAll(classes: Iterable<CadenceClass>): CadenceClass {
 }
 
 /** Raised when the observed-definition chain contains a cycle. */
-export class CadenceCycleError extends Error {
+export class CadenceCycleError extends EsmDiagnosticError {
   constructor(public readonly cycle: string[]) {
-    super(`Cyclic observed definition while seeding cadence: ${cycle.join(' -> ')}`)
+    super(
+      ERROR_CODES.CIRCULAR_DEPENDENCY,
+      `Cyclic observed definition while seeding cadence: ${cycle.join(' -> ')}`,
+    )
     this.name = 'CadenceCycleError'
   }
 }

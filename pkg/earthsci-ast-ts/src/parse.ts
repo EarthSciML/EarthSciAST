@@ -22,6 +22,7 @@ import {
   resolveTemplateMachinery,
 } from './template-imports.js'
 import { schema } from './embedded-schema.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
  * The single root-path token used when a validation diagnostic has no more
@@ -51,12 +52,12 @@ export interface SchemaError {
 /**
  * Parse error - thrown when JSON parsing fails
  */
-export class ParseError extends Error {
+export class ParseError extends EsmDiagnosticError {
   constructor(
     message: string,
     public originalError?: Error,
   ) {
-    super(message)
+    super(ERROR_CODES.PARSE_ERROR, message)
     this.name = 'ParseError'
   }
 }
@@ -64,12 +65,12 @@ export class ParseError extends Error {
 /**
  * Schema validation error - thrown when schema validation fails
  */
-export class SchemaValidationError extends Error {
+export class SchemaValidationError extends EsmDiagnosticError {
   constructor(
     message: string,
     public errors: SchemaError[],
   ) {
-    super(message)
+    super(ERROR_CODES.SCHEMA_VALIDATION_ERROR, message)
     this.name = 'SchemaValidationError'
   }
 }

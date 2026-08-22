@@ -29,13 +29,14 @@
 
 import type { EsmFile } from './types.js'
 import { SCHEMA_VERSION } from './parse.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
  * Error thrown when migration fails.
  */
-export class MigrationError extends Error {
+export class MigrationError extends EsmDiagnosticError {
   constructor(message: string) {
-    super(message)
+    super(ERROR_CODES.UNEXPECTED_ERROR, message)
     this.name = 'MigrationError'
   }
 }

@@ -22,6 +22,21 @@
 // churns with the schema, and this module owns only type definitions.
 export * from './types.js'
 
+// Export the root of the diagnostic hierarchy and the central code registry.
+// Every error class this package throws extends `EsmDiagnosticError` (finding
+// H-1), so a consumer can bracket a whole pipeline with one clause:
+//
+//   try { load(text) } catch (e) {
+//     if (e instanceof EsmDiagnosticError) console.error(e.code, e.message)
+//   }
+//
+// `ERROR_CODES` is the registry of the stable `code` strings those errors
+// carry — a cross-binding contract shared with the Julia `ERROR_CODES`
+// registry, Python's `ErrorCode` enum, Go's `codes.go` and Rust's
+// `diagnostic::codes` (finding H-2).
+export { EsmDiagnosticError, ERROR_CODES } from './errors.js'
+export type { ErrorCode } from './errors.js'
+
 // Export parsing and serialization functions
 export { load, validateSchema, ParseError, SchemaValidationError } from './parse.js'
 export type { SchemaError, LoadOptions } from './parse.js'
