@@ -79,46 +79,6 @@ type ValidationResult struct {
 	IsValid          bool              `json:"is_valid"`
 }
 
-// Structural error codes per ESM Libraries Spec Section 3.4
-const (
-	ErrorEquationCountMismatch = "equation_count_mismatch"
-	ErrorUndefinedVariable     = "undefined_variable"
-	ErrorUndefinedSpecies      = "undefined_species"
-	// ErrorUndefinedParameter is reserved for a future undeclared-parameter
-	// diagnostic; no check emits it yet (kept for cross-binding code parity).
-	ErrorUndefinedParameter  = "undefined_parameter"
-	ErrorUndefinedSystem     = "undefined_system"
-	ErrorUndefinedOperator   = "undefined_operator"
-	ErrorUnresolvedScopedRef = "unresolved_scoped_ref"
-	// ErrorEventAffectsParameter is raised when an event `affects` LHS names a
-	// PARAMETER. From esm 1.0.0 events affect unknowns only: a parameter that
-	// changes during a run carries its own `update` block (esm-spec §5.4), so
-	// there is no `discrete_parameters` list to be missing from and the write is
-	// wrong outright rather than wrong-unless-declared. It replaces both
-	// `invalid_discrete_param` and `undeclared_discrete_parameter`.
-	ErrorEventAffectsParameter = "event_affects_parameter"
-	// ErrorDataSourceUndefined is raised when a parameter's `update.source` names
-	// no declared `data_sources` entry (esm-spec §8.5).
-	ErrorDataSourceUndefined = "data_source_undefined"
-	// ErrorSystemKindMismatch is raised when a model's declared `system_kind`
-	// contradicts the esm-spec §6.3.1 derivation.
-	ErrorSystemKindMismatch = "system_kind_mismatch"
-	ErrorNullReaction       = "null_reaction"
-	ErrorEventVarUndeclared = "event_var_undeclared"
-	ErrorUnitInconsistency  = "unit_inconsistency"
-	ErrorIcInReactionSystem = "ic_in_reaction_system"
-	// ErrorUnitParseError is a declared unit string that denotes no real unit
-	// ("not_a_unit"). It is a defect in the FILE — a hard error, distinct from
-	// `unit_inconsistency` (a provable dimensional mismatch between two
-	// resolvable units) — and is the code the shared corpus pins for
-	// tests/invalid/unparseable_unit.esm.
-	ErrorUnitParseError = "unit_parse_error"
-	// ErrorCircularDependency is a cycle in the cross-model reference graph:
-	// ModelA's equations reference ModelB's variables and vice versa
-	// (tests/invalid/circular_coupling.esm).
-	ErrorCircularDependency = "circular_dependency"
-)
-
 // ValidationMessage represents a single validation issue in the legacy
 // DetailedValidationResult surface returned by Validate/ValidateStructural.
 type ValidationMessage struct {

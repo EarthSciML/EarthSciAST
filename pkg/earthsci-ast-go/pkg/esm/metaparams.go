@@ -582,7 +582,7 @@ func foldIndexSetSizes(indexSets *orderedMap, ctx string, strict bool) error {
 						seen[n] = true
 					}
 				}
-				return newETErr("metaparameter_unbound",
+				return newETErr(CodeMetaparamUnbound,
 					fmt.Sprintf("%s: index_sets.%s.size references unbound name(s) %s (esm-spec §9.7.6)",
 						ctx, name, strings.Join(uniq, ", ")))
 			}

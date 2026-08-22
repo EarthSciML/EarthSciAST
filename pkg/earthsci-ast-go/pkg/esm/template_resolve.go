@@ -261,16 +261,16 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 	// a component/subsystem file, and a coupling-library file, are not
 	// importable as a template library.
 	if isCouplingLibraryDoc(view) {
-		return nil, newETErr("template_import_is_coupling_library",
+		return nil, newETErr(CodeTemplateImportIsCouplingLibrary,
 			fmt.Sprintf("%s: import target '%s' is a coupling-library file (has `coupling_roles`), not a template library (esm-spec §10.9)", origin, ref))
 	}
 	if !isTemplateLibraryDoc(view) {
-		return nil, newETErr("template_import_not_library",
+		return nil, newETErr(CodeTemplateImportNotLibrary,
 			fmt.Sprintf("%s: import target '%s' lacks top-level `expression_templates` — not a template-library file (esm-spec §9.7.1)", origin, ref))
 	}
 	for _, k := range libraryForbiddenKeys {
 		if _, has := view[k]; has {
-			return nil, newETErr("template_import_not_library",
+			return nil, newETErr(CodeTemplateImportNotLibrary,
 				fmt.Sprintf("%s: import target '%s' declares `%s` — not a pure template-library file (esm-spec §9.7.1)", origin, ref, k))
 		}
 	}
@@ -712,7 +712,7 @@ func closeDocumentMetaparams(docMeta *orderedMap, metaparameters map[string]int6
 		values[name] = dv
 	}
 	if len(openNames) > 0 {
-		return nil, newETErr("metaparameter_unbound",
+		return nil, newETErr(CodeMetaparamUnbound,
 			fmt.Sprintf("metaparameter(s) %s still open after edge bindings, loader-API bindings, and defaults (esm-spec §9.7.6)", strings.Join(openNames, ", ")))
 	}
 	return values, nil
@@ -751,7 +751,7 @@ func checkMetaparamNameCollisions(view map[string]any, docMeta, docIsets *ordere
 	}
 	for _, name := range docMeta.keys {
 		if visible[name] {
-			return newETErr("metaparameter_name_conflict",
+			return newETErr(CodeMetaparamNameConflict,
 				fmt.Sprintf("metaparameter '%s' collides with a visible variable/parameter/species/index-set name (esm-spec §9.7.6)", name))
 		}
 	}

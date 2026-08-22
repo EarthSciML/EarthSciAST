@@ -58,17 +58,17 @@ func nameMap(raw any, field, where string) (map[string]string, error) {
 	}
 	obj, ok := raw.(map[string]any)
 	if !ok {
-		return nil, newETErr("template_import_rename_invalid",
+		return nil, newETErr(CodeTemplateImportRenameInvalid,
 			fmt.Sprintf("%s: `%s` must be an object mapping names to names (esm-spec §9.7.7)", where, field))
 	}
 	for _, k := range sortedKeys(obj) {
 		if k == "" {
-			return nil, newETErr("template_import_rename_invalid",
+			return nil, newETErr(CodeTemplateImportRenameInvalid,
 				fmt.Sprintf("%s: `%s` has an empty key (esm-spec §9.7.7)", where, field))
 		}
 		vs, ok := obj[k].(string)
 		if !ok || !isValidDottedName(vs) {
-			return nil, newETErr("template_import_rename_invalid",
+			return nil, newETErr(CodeTemplateImportRenameInvalid,
 				fmt.Sprintf("%s: `%s`.%s target %#v is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)", where, field, k, obj[k]))
 		}
 		out[k] = vs
@@ -361,7 +361,7 @@ func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref st
 	if prefixRaw, has := entry["prefix"]; has && prefixRaw != nil {
 		ps, ok := prefixRaw.(string)
 		if !ok || !isValidDottedName(ps) {
-			return nil, newETErr("template_import_rename_invalid",
+			return nil, newETErr(CodeTemplateImportRenameInvalid,
 				fmt.Sprintf("%s: `prefix` %#v is not a valid dotted identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)", where, prefixRaw))
 		}
 		prefix = ps
@@ -384,7 +384,7 @@ func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref st
 	}
 	for _, k := range sortedKeys(rename) {
 		if _, ok := exported[k]; !ok {
-			return nil, newETErr("template_import_rename_unknown_name",
+			return nil, newETErr(CodeTemplateImportRenameUnknownName,
 				fmt.Sprintf("%s: `rename` names '%s', which the target does not export at this edge (the surviving exports are templates after `only`, index sets, and metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)", where, k))
 		}
 	}
@@ -425,7 +425,7 @@ func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref st
 		for _, o := range ns.keys {
 			n := ns.m[o]
 			if prev, ok := seen[n]; ok {
-				return nil, newETErr("template_import_rename_collision",
+				return nil, newETErr(CodeTemplateImportRenameCollision,
 					fmt.Sprintf("%s: %s names '%s' and '%s' both map to '%s' after renaming (esm-spec §9.7.7)", where, ns.what, prev, o, n))
 			}
 			seen[n] = o
@@ -438,15 +438,15 @@ func applyEdgeRenames(scope *templateScope, entry map[string]any, origin, ref st
 	// --- `rebind` keys must denote free names (typo protection) ---
 	for _, k := range sortedKeys(rebind) {
 		if _, ok := exported[k]; ok {
-			return nil, newETErr("template_import_rebind_unknown_name",
+			return nil, newETErr(CodeTemplateImportRebindUnknownName,
 				fmt.Sprintf("%s: `rebind` names '%s', a declared name of the target (template / index set / metaparameter) — `rebind` addresses only free names; use `rename` for declared names (esm-spec §9.7.7)", where, k))
 		}
 		if _, ok := bound[k]; ok {
-			return nil, newETErr("template_import_rename_invalid",
+			return nil, newETErr(CodeTemplateImportRenameInvalid,
 				fmt.Sprintf("%s: `rebind` key '%s' is a bound index symbol (`output_idx` / `ranges`) of an imported template, not a free name (esm-spec §9.7.7)", where, k))
 		}
 		if _, ok := free[k]; !ok {
-			return nil, newETErr("template_import_rebind_unknown_name",
+			return nil, newETErr(CodeTemplateImportRebindUnknownName,
 				fmt.Sprintf("%s: `rebind` names '%s', which does not occur free in the imported declarations (esm-spec §9.7.7)", where, k))
 		}
 	}
@@ -591,7 +591,7 @@ func checkRenameFreshness(scope *templateScope, free, bound, paramsAll map[strin
 	}
 	for _, tk := range newnames {
 		if _, ok := taken[tk]; ok {
-			return newETErr("template_import_rename_collision",
+			return newETErr(CodeTemplateImportRenameCollision,
 				fmt.Sprintf("%s: renamed/rebound name '%s' collides with a name still in use inside the imported declarations (a remaining free name, a bound index symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)", where, tk))
 		}
 		taken[tk] = struct{}{}

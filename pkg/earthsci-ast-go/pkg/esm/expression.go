@@ -629,7 +629,7 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 			wrtDesc = fmt.Sprintf(" (wrt=%s)", *node.Wrt)
 		}
 		return 0, &EvaluationError{
-			Code: "unlowered_operator",
+			Code: CodeUnloweredOperator,
 			Message: fmt.Sprintf("unlowered derivative operator 'D'%s reached evaluation: a spatial or "+
 				"right-hand-side `D` must be lowered to a stencil by a rewrite rule before evaluation "+
 				"(esm-spec §4.2 / §9.6.8).", wrtDesc),
@@ -681,13 +681,13 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 func unevaluableOpError(node ExprNode) error {
 	if _, closed := closedNonScalarOps[node.Op]; closed {
 		return &EvaluationError{
-			Code: "unsupported_operator",
+			Code: CodeUnsupportedOperator,
 			Message: fmt.Sprintf("operator '%s' is an evaluable-core array/query op with no scalar "+
 				"evaluator: it cannot be reduced to a single number (esm-spec §4.2).", node.Op),
 		}
 	}
 	return &EvaluationError{
-		Code: "unlowered_operator",
+		Code: CodeUnloweredOperator,
 		Message: fmt.Sprintf("unlowered rewrite-target operator '%s' reached evaluation: it is not in the "+
 			"closed evaluable core, so a rewrite rule must eliminate it before evaluation "+
 			"(esm-spec §4.2 / §9.6.8).", node.Op),

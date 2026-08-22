@@ -285,7 +285,7 @@ func defaultLoadCouplingRef(ref, basePath string) (map[string]any, error) {
 	// plain error is re-wrapped in this loader's own diagnostic code.
 	data, _, err := loadRefBytes(ref, basePath)
 	if err != nil {
-		return nil, newETErr("coupling_import_unresolved",
+		return nil, newETErr(CodeCouplingImportUnresolved,
 			fmt.Sprintf("coupling_import ref '%s' failed to load: %v", ref, err))
 	}
 	return parseCouplingRefView(ref, data)
@@ -294,7 +294,7 @@ func defaultLoadCouplingRef(ref, basePath string) (map[string]any, error) {
 func parseCouplingRefView(where string, data []byte) (map[string]any, error) {
 	view, err := decodeJSONView(data)
 	if err != nil {
-		return nil, newETErr("coupling_import_unresolved",
+		return nil, newETErr(CodeCouplingImportUnresolved,
 			fmt.Sprintf("coupling-library ref '%s' is not valid JSON: %v", where, err))
 	}
 	return view, nil
@@ -309,14 +309,14 @@ func parseCouplingRefView(where string, data []byte) (map[string]any, error) {
 // Raises the esm-spec §10.11 diagnostics.
 func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]string, file *ESMFile) ([]CouplingEntry, error) {
 	if !isCouplingLibraryDoc(lib) {
-		return nil, newETErr("coupling_import_not_library",
+		return nil, newETErr(CodeCouplingImportNotLibrary,
 			fmt.Sprintf("coupling_import ref '%s' lacks top-level `coupling_roles` — not a coupling-library file (esm-spec §10.9)", ref))
 	}
 
 	// Purity (esm-spec §10.9).
 	for _, k := range couplingLibraryForbiddenKeys {
 		if _, has := lib[k]; has {
-			return nil, newETErr("coupling_library_illegal_payload",
+			return nil, newETErr(CodeCouplingLibraryIllegalPayload,
 				fmt.Sprintf("coupling-library '%s' declares `%s` — a coupling library is nothing but roles + wiring (esm-spec §10.9)", ref, k))
 		}
 	}
@@ -324,12 +324,12 @@ func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]s
 	rolesMap, _ := lib["coupling_roles"].(map[string]any)
 	roleNames := sortedKeys(rolesMap)
 	if len(roleNames) == 0 {
-		return nil, newETErr("coupling_library_illegal_payload",
+		return nil, newETErr(CodeCouplingLibraryIllegalPayload,
 			fmt.Sprintf("coupling-library '%s' declares no roles (esm-spec §10.9: `coupling_roles` is required, non-empty)", ref))
 	}
 	edges, _ := lib["coupling"].([]any)
 	if len(edges) == 0 {
-		return nil, newETErr("coupling_library_illegal_payload",
+		return nil, newETErr(CodeCouplingLibraryIllegalPayload,
 			fmt.Sprintf("coupling-library '%s' has an empty `coupling` array (esm-spec §10.9: required, non-empty)", ref))
 	}
 
@@ -347,21 +347,21 @@ func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]s
 		}
 		et, _ := edge["type"].(string)
 		if et == "coupling_import" {
-			return nil, newETErr("coupling_library_nested_import",
+			return nil, newETErr(CodeCouplingLibraryNestedImport,
 				fmt.Sprintf("coupling-library '%s' contains a nested coupling_import (v1 forbids layering, esm-spec §10.9)", ref))
 		}
 		if _, hasImports := edge["expression_template_imports"]; et == "callback" || hasImports {
-			return nil, newETErr("coupling_library_illegal_payload",
+			return nil, newETErr(CodeCouplingLibraryIllegalPayload,
 				fmt.Sprintf("coupling-library '%s' edge of type '%s' is not role-substitutable (no callback entries or edge-level expression_template_imports, esm-spec §10.9)", ref, et))
 		}
 		if !roleBearingTypes[et] {
-			return nil, newETErr("coupling_library_illegal_payload",
+			return nil, newETErr(CodeCouplingLibraryIllegalPayload,
 				fmt.Sprintf("coupling-library '%s' contains an unsupported edge type '%s' (esm-spec §10.9)", ref, et))
 		}
 		segs := collectRoleSegments(edge)
 		for _, seg := range sortedKeys(segs) {
 			if !roleSet[seg] {
-				return nil, newETErr("coupling_edge_unknown_role",
+				return nil, newETErr(CodeCouplingEdgeUnknownRole,
 					fmt.Sprintf("coupling-library '%s': edge references '%s', which is not a declared role (esm-spec §10.9)", ref, seg))
 			}
 			usedRoles[seg] = true
@@ -369,7 +369,7 @@ func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]s
 	}
 	for _, role := range roleNames {
 		if !usedRoles[role] {
-			return nil, newETErr("coupling_role_unused",
+			return nil, newETErr(CodeCouplingRoleUnused,
 				fmt.Sprintf("coupling-library '%s': role '%s' is declared but referenced by no edge (esm-spec §10.9)", ref, role))
 		}
 	}
@@ -377,18 +377,18 @@ func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]s
 	// Binding — total and checked (esm-spec §10.10.1).
 	for _, key := range sortedKeys(bind) {
 		if !roleSet[key] {
-			return nil, newETErr("coupling_import_unknown_role",
+			return nil, newETErr(CodeCouplingImportUnknownRole,
 				fmt.Sprintf("coupling_import ref '%s': bind key '%s' is not a declared role (esm-spec §10.10.1)", ref, key))
 		}
 	}
 	for _, role := range roleNames {
 		actual, ok := bind[role]
 		if !ok {
-			return nil, newETErr("coupling_import_role_unbound",
+			return nil, newETErr(CodeCouplingImportRoleUnbound,
 				fmt.Sprintf("coupling_import ref '%s': role '%s' has no bind entry (binding is total, esm-spec §10.10.1)", ref, role))
 		}
 		if !resolvesToComponent(file, actual) {
-			return nil, newETErr("coupling_import_bind_not_a_component",
+			return nil, newETErr(CodeCouplingImportBindNotAComponent,
 				fmt.Sprintf("coupling_import ref '%s': bind '%s' -> '%s' does not resolve to a component (esm-spec §10.10.1)", ref, role, actual))
 		}
 	}
@@ -417,12 +417,12 @@ func expandCouplingImportEntry(lib map[string]any, ref string, bind map[string]s
 func rawEdgeToCouplingEntry(edge map[string]any) (CouplingEntry, error) {
 	data, err := json.Marshal(edge)
 	if err != nil {
-		return nil, newETErr("coupling_import_unresolved",
+		return nil, newETErr(CodeCouplingImportUnresolved,
 			fmt.Sprintf("failed to re-encode expanded coupling edge: %v", err))
 	}
 	ce, err := UnmarshalCouplingEntry(data)
 	if err != nil {
-		return nil, newETErr("coupling_import_unresolved",
+		return nil, newETErr(CodeCouplingImportUnresolved,
 			fmt.Sprintf("failed to decode expanded coupling edge: %v", err))
 	}
 	return ce, nil
@@ -527,7 +527,7 @@ func expandCouplingImports(file *ESMFile, opts CouplingImportOptions) ([]Couplin
 			if errors.As(err, &etErr) {
 				return nil, err
 			}
-			return nil, newETErr("coupling_import_unresolved",
+			return nil, newETErr(CodeCouplingImportUnresolved,
 				fmt.Sprintf("coupling_import ref '%s' failed to load: %v", imp.Ref, err))
 		}
 

@@ -98,7 +98,7 @@ func validateGeometryManifolds(tree any, path string) error {
 		ms, isStr := m.(string)
 		if _, member := geometryManifoldValues[ms]; !isStr || !member {
 			return newETErr(
-				"geometry_manifold_invalid",
+				CodeGeometryManifoldInvalid,
 				fmt.Sprintf("%s: `%s` carries manifold %#v, not a member of the closed set {planar, spherical, geodesic}. The manifold enum is enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC §5.8.4) — a template parameter substituted into this scalar field must be bound to one of the closed-set literals.", p, op, m),
 			)
 		}
@@ -208,7 +208,7 @@ func assertNoNestedApply(body any, templateName, path string) error {
 	return walkJSONTree(body, path, func(p string, b map[string]any) error {
 		if op, ok := b["op"].(string); ok && op == applyExpressionTemplateOp {
 			return newETErr(
-				"apply_expression_template_invalid_declaration",
+				CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("expression_templates.%s: `match` contains an 'apply_expression_template' node at %s; match patterns MUST NOT reference templates (esm-spec §9.7.3)", templateName, p),
 			)
 		}
@@ -222,7 +222,7 @@ func validateTemplates(templates map[string]any, scope string) error {
 		declObj, ok := decl.(map[string]any)
 		if !ok {
 			return newETErr(
-				"apply_expression_template_invalid_declaration",
+				CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("%s.expression_templates.%s: entry must be an object with params + body", scope, name),
 			)
 		}
@@ -231,7 +231,7 @@ func validateTemplates(templates map[string]any, scope string) error {
 		paramsRaw, ok := declObj["params"].([]any)
 		if !ok {
 			return newETErr(
-				"apply_expression_template_invalid_declaration",
+				CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("%s.expression_templates.%s: 'params' must be an array of strings", scope, name),
 			)
 		}
@@ -240,13 +240,13 @@ func validateTemplates(templates map[string]any, scope string) error {
 			ps, ok := p.(string)
 			if !ok || ps == "" {
 				return newETErr(
-					"apply_expression_template_invalid_declaration",
+					CodeApplyExpressionTemplateInvalidDeclaration,
 					fmt.Sprintf("%s.expression_templates.%s: param names must be non-empty strings", scope, name),
 				)
 			}
 			if _, exists := seen[ps]; exists {
 				return newETErr(
-					"apply_expression_template_invalid_declaration",
+					CodeApplyExpressionTemplateInvalidDeclaration,
 					fmt.Sprintf("%s.expression_templates.%s: param '%s' declared twice", scope, name, ps),
 				)
 			}
@@ -254,7 +254,7 @@ func validateTemplates(templates map[string]any, scope string) error {
 		}
 		if _, ok := declObj["body"]; !ok {
 			return newETErr(
-				"apply_expression_template_invalid_declaration",
+				CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("%s.expression_templates.%s: 'body' is required", scope, name),
 			)
 		}
@@ -298,37 +298,37 @@ func validateWhereBlock(declObj map[string]any, seen map[string]struct{}, hasMat
 		return nil
 	}
 	if !hasMatch || matchRaw == nil {
-		return newETErr("apply_expression_template_invalid_declaration",
+		return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 			fmt.Sprintf("%s.expression_templates.%s: 'where' is only admissible alongside 'match' — constraints scope an auto-applied rewrite rule, not a named fragment (esm-spec §9.6.1)", scope, name))
 	}
 	whr, ok := whrRaw.(map[string]any)
 	if !ok || len(whr) == 0 {
-		return newETErr("apply_expression_template_invalid_declaration",
+		return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 			fmt.Sprintf("%s.expression_templates.%s: 'where' must be a non-empty object mapping declared params to constraint objects", scope, name))
 	}
 	for _, p := range sortedKeys(whr) {
 		if _, isParam := seen[p]; !isParam {
-			return newETErr("apply_expression_template_invalid_declaration",
+			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("%s.expression_templates.%s: 'where' constrains '%s', which is not a declared param (esm-spec §9.6.1)", scope, name, p))
 		}
 		cobj, ok := whr[p].(map[string]any)
 		if !ok {
-			return newETErr("apply_expression_template_invalid_declaration",
+			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("%s.expression_templates.%s: where.%s must be a constraint object (v1 admits exactly the 'shape' kind)", scope, name, p))
 		}
 		ckeys := sortedKeys(cobj)
 		if len(ckeys) != 1 || ckeys[0] != "shape" {
-			return newETErr("apply_expression_template_invalid_declaration",
+			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("%s.expression_templates.%s: where.%s carries constraint kind(s) %s; the v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)", scope, name, p, strings.Join(ckeys, ", ")))
 		}
 		shp, ok := cobj["shape"].([]any)
 		if !ok || len(shp) == 0 {
-			return newETErr("apply_expression_template_invalid_declaration",
+			return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 				fmt.Sprintf("%s.expression_templates.%s: where.%s.shape must be a non-empty array of index-set names", scope, name, p))
 		}
 		for _, s := range shp {
 			if ss, ok := s.(string); !ok || ss == "" {
-				return newETErr("apply_expression_template_invalid_declaration",
+				return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 					fmt.Sprintf("%s.expression_templates.%s: where.%s.shape entries must be non-empty strings", scope, name, p))
 			}
 		}
@@ -444,28 +444,28 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 	nameRaw, ok := node["name"].(string)
 	if !ok || nameRaw == "" {
 		return nil, newETErr(
-			"apply_expression_template_invalid_declaration",
+			CodeApplyExpressionTemplateInvalidDeclaration,
 			fmt.Sprintf("%s: apply_expression_template node missing or empty 'name'", scope),
 		)
 	}
 	declRaw, ok := templates[nameRaw]
 	if !ok {
 		return nil, newETErr(
-			"apply_expression_template_unknown_template",
+			CodeApplyExpressionTemplateUnknownTemplate,
 			fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, nameRaw),
 		)
 	}
 	decl, ok := declRaw.(map[string]any)
 	if !ok {
 		return nil, newETErr(
-			"apply_expression_template_invalid_declaration",
+			CodeApplyExpressionTemplateInvalidDeclaration,
 			fmt.Sprintf("%s: template '%s' declaration is not an object", scope, nameRaw),
 		)
 	}
 	bindingsRaw, ok := node["bindings"].(map[string]any)
 	if !ok {
 		return nil, newETErr(
-			"apply_expression_template_bindings_mismatch",
+			CodeApplyExpressionTemplateBindingsMismatch,
 			fmt.Sprintf("%s: apply_expression_template '%s' missing 'bindings' object", scope, nameRaw),
 		)
 	}
@@ -481,7 +481,7 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 	for _, p := range params {
 		if _, ok := bindingsRaw[p]; !ok {
 			return nil, newETErr(
-				"apply_expression_template_bindings_mismatch",
+				CodeApplyExpressionTemplateBindingsMismatch,
 				fmt.Sprintf("%s: apply_expression_template '%s' missing binding for param '%s'", scope, nameRaw, p),
 			)
 		}
@@ -489,7 +489,7 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 	for k := range bindingsRaw {
 		if _, ok := declared[k]; !ok {
 			return nil, newETErr(
-				"apply_expression_template_bindings_mismatch",
+				CodeApplyExpressionTemplateBindingsMismatch,
 				fmt.Sprintf("%s: apply_expression_template '%s' supplies unknown param '%s'", scope, nameRaw, k),
 			)
 		}
@@ -763,7 +763,7 @@ func registeredWhere(decl map[string]any, isetNames map[string]struct{}, scope, 
 		}
 		for _, s := range req {
 			if _, ok := isetNames[s]; !ok {
-				return nil, newETErr("template_constraint_unknown_index_set",
+				return nil, newETErr(CodeTemplateConstraintUnknownIndexSet,
 					fmt.Sprintf("%s.expression_templates.%s: where.%s.shape names index set '%s', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)", scope, tname, p, s))
 			}
 		}
@@ -833,7 +833,7 @@ func validateMakearrayRegions(tree any, path string) error {
 					continue
 				}
 				if hi < lo-1 {
-					return newETErr("makearray_region_inverted",
+					return newETErr(CodeMakearrayRegionInverted,
 						fmt.Sprintf("%s: makearray regions[%d] dimension %d bound pair [%d, %d] is inverted (stop < start - 1). An empty bound is spelled [start, start-1] and contributes no elements (esm-spec §4.3.2); a further-inverted pair is an authoring error — e.g. an interior stencil region [2, N-1] instantiated at N below the scheme's minimum extent (§9.6.8).", p, ri, di, lo, hi))
 				}
 			}
