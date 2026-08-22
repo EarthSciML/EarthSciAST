@@ -19,8 +19,10 @@ Coverage:
    key=k [semiring=…]`` (all clause shapes), the ``argmin``/``argmax``
    arg-witnesses ``argmin[g] (expr) where {…}``, template application
    ``name<binding = value, …>`` (``apply_expression_template``),
-   ``polygon_intersection_area(a, b, manifold=…)``, and the piecewise-region
-   array ``makearray([lo:hi, …] = value, …)``.
+   ``polygon_intersection_area(a, b, manifold=…)`` /
+   ``intersect_polygon(a, b, manifold=…[, id=…])``, the ``table_lookup`` bracket
+   surface ``visc[T=temp]`` / ``k_rate[T=temp, p=pres]:1``, and the
+   piecewise-region array ``makearray([lo:hi, …] = value, …)``.
 
 Aggregate ``args`` is a derived operand cache the printer doesn't emit; it's
 reconstructed best-effort (see :func:`_derive_aggregate_args`) and is
@@ -29,10 +31,9 @@ reconstructs as a plain ``+`` reduction — the join-less ``sum_product``
 annotation (semantically identical there) is not recovered; both reprint
 identically.
 
-Still deferred (need dedicated surface syntax — a later pass): ``table_lookup``,
-``broadcast``, ``enum``, and ``intersect_polygon`` (its ``id`` field is not
-printed, so it can't round-trip). Those are refused with an
-:class:`ExpressionParseError`.
+Still deferred (need dedicated surface syntax — a later pass): ``broadcast`` and
+``enum``. Those are refused with an :class:`ExpressionParseError`, as is the call
+spelling ``table_lookup(…)`` (its real surface is ``visc[T=temp]``).
 
 Design rules: multiplication is ALWAYS explicit (``k * A``) — no implicit
 juxtaposition, because identifiers are multi-letter (``NO2``, ``O3``,
@@ -122,13 +123,13 @@ _TEMPLATE_ARG_MIN = _op_precedence("+")
 # Structural ops whose defining data lives OUTSIDE `args` AND which have no text
 # surface yet — refused, pending a dedicated syntax pass. (`integral`, `reshape`,
 # `transpose`, `concat`, `fn`, `const`, `index`, `true`, `aggregate`,
-# `apply_expression_template`, `polygon_intersection_area`, `makearray` DO have a
-# surface and are reconstructed below; they are intentionally absent here.
-# `intersect_polygon` stays refused: its `id` field is not printed, so it can't
-# round-trip.)
-_STRUCTURAL_OPS: frozenset[str] = frozenset(
-    {"table_lookup", "broadcast", "enum", "intersect_polygon"}
-)
+# `apply_expression_template`, `polygon_intersection_area`, `intersect_polygon`,
+# `makearray` DO have a surface and are reconstructed below; they are
+# intentionally absent here. `table_lookup` IS listed: its surface is the bracket
+# form `visc[T=temp]`, parsed in `_parse_table_lookup` without going through
+# `_make_call`, so the CALL spelling `table_lookup(a)` — which the printer never
+# emits — stays refused.)
+_STRUCTURAL_OPS: frozenset[str] = frozenset({"table_lookup", "broadcast", "enum"})
 
 # The aggregate reduction symbols `to_ascii` emits. Each maps to a default
 # `reduce` when no explicit `[semiring=…]` supersedes it; `sum` and `any` carry
@@ -356,6 +357,13 @@ class _Parser:
             nxt = self._peek(1)
             if nxt.k == "name" and nxt.v == "semiring":
                 break
+            # `name[axis=expr, …]` is a `table_lookup` (the printer's structural
+            # rendering), not an index: `=` is never an expression operator, so a
+            # `name` `=` pair inside the brackets discriminates the two
+            # unambiguously. Only a bare variable can name a table.
+            if isinstance(node, str) and nxt.k == "name" and self._peek(2).k == "eq":
+                node = self._parse_table_lookup(node)
+                continue
             self._next()  # '['
             idx = [self._parse_expr(0)]
             while self._peek().k == ",":
@@ -527,6 +535,9 @@ class _Parser:
             self._next()  # 'key'
             self._next()  # '='
             key = self._parse_expr(0)
+        # `id=<name>` (RFC §6.1 node identity), emitted by the printer after
+        # `key=`. A bare-name clause, so it adds no bracket ambiguity.
+        node_id = self._parse_id_clause()
         semiring: str | None = None
         if self._peek().k == "[" and self._peek(1).k == "name" and self._peek(1).v == "semiring":
             self._next()  # '['
@@ -557,6 +568,8 @@ class _Parser:
             node["distinct"] = True
         if key is not _MISSING:
             node["key"] = key
+        if node_id is not None:
+            node["id"] = node_id
         node["expr"] = expr
         node["args"] = _derive_aggregate_args(
             expr,
@@ -582,13 +595,59 @@ class _Parser:
         if self._at_word("where"):
             self._next()
             ranges = self._parse_ranges()
-        return {
+        # `id=<name>` (RFC §6.1 node identity), emitted after the where-clause.
+        # Mirrors the aggregate tail.
+        node_id = self._parse_id_clause()
+        node: dict[str, Any] = {
             "op": op,
             "args": _derive_aggregate_args(expr, [], None, None),
             "arg": at.v,
             "ranges": ranges,
             "expr": expr,
         }
+        if node_id is not None:
+            node["id"] = node_id
+        return node
+
+    def _parse_id_clause(self) -> str | None:
+        """Consume an optional ``id=<name>`` clause (RFC §6.1 node identity)."""
+        if not (self._at_word("id") and self._peek(1).k == "eq"):
+            return None
+        self._next()  # 'id'
+        self._next()  # '='
+        nm = self._next()
+        if nm.k != "name":
+            self._fail("Expected a name after id=", nm)
+        return nm.v
+
+    def _parse_table_lookup(self, table: str) -> Any:
+        """Parse a ``table_lookup`` from the surface the printer emits:
+        ``table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?``,
+        e.g. ``visc[T=temp]`` and ``k_rate[T=temp, p=pres]:1``. The printer sorts
+        the axis names, so the reconstructed ``axes`` map is rebuilt in the
+        emitted order and reprints identically."""
+        self._expect("[", "'['")
+        axes: dict[str, Any] = {}
+        while True:
+            nm = self._next()
+            if nm.k != "name":
+                self._fail("Expected an axis name in table[axis=…]", nm)
+            self._expect("eq", "'=' in table[axis=…]")
+            axes[nm.v] = self._parse_expr(0)
+            if self._peek().k == ",":
+                self._next()
+                continue
+            break
+        self._expect("]", "']' after table[axis=…]")
+        node: dict[str, Any] = {"op": "table_lookup", "args": [], "table": table, "axes": axes}
+        # The optional `:N` output selector picks one column of a multi-output table.
+        if self._peek().k == ":":
+            self._next()
+            out = self._next()
+            if out.k != "num" or not isinstance(out.v, int):
+                self._fail("Expected an integer output index after table[…]:", out)
+            node["output"] = out.v
+        return node
 
     def _parse_ranges(self) -> dict[str, Any]:
         """Parse a ``{ k in <rhs>, … }`` where-body into a ranges object."""
@@ -769,16 +828,22 @@ def _make_call(name: str, args: list[Any], named: dict[str, Any], pos: int) -> A
         if "axis" not in named:
             raise ExpressionParseError("concat(...) requires axis=<n>", pos)
         return {"op": "concat", "args": args, "axis": named["axis"]}
-    # Geometry area query `polygon_intersection_area(a, b, manifold=<name>)`. (Its
-    # sibling `intersect_polygon` stays refused: its `id` field isn't printed.)
-    if name == "polygon_intersection_area":
+    # Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
+    # `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
+    # node identity) is optional and only emitted by the printer when present.
+    if name in ("polygon_intersection_area", "intersect_polygon"):
         manifold = named.get("manifold")
         if not isinstance(manifold, str):
             raise ExpressionParseError(f"{name}(...) requires manifold=<name>", pos)
         for k in named:
-            if k != "manifold":
+            if k not in ("manifold", "id"):
                 raise ExpressionParseError(f"unexpected {k}=… in {name}(...)", pos)
-        return {"op": "polygon_intersection_area", "args": args, "manifold": manifold}
+        node: dict[str, Any] = {"op": name, "args": args, "manifold": manifold}
+        if "id" in named:
+            if not isinstance(named["id"], str):
+                raise ExpressionParseError(f"{name}(...) id=… must be a name", pos)
+            node["id"] = named["id"]
+        return node
     _no_named(named, name, pos)
     if name in _STRUCTURAL_OPS:
         raise ExpressionParseError(f"'{name}' is not yet expressible in the text form", pos)

@@ -81,8 +81,8 @@ _EQUATION_ERRORS = CORPUS["equation_errors"]
 def test_corpus_is_fully_populated():
     """Guard against a truncated / silently emptied corpus making the
     parametrized tests below vacuously green."""
-    assert len(_EXPRESSIONS) == 184
-    assert len(_EXPRESSION_ERRORS) == 12
+    assert len(_EXPRESSIONS) == 240
+    assert len(_EXPRESSION_ERRORS) == 9
     assert len(_EQUATIONS) == 3
     assert len(_EQUATION_ERRORS) == 2
 
