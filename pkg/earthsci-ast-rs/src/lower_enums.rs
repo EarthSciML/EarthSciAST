@@ -24,7 +24,7 @@ const ENUM_OP: &str = "enum";
 /// codes emitted by the TS / Python / Julia / Go bindings.
 pub type EnumLoweringError = crate::diagnostic::DiagnosticError;
 
-use crate::diagnostic::err;
+use crate::diagnostic::{codes, err};
 
 fn parse_enums_block(
     value: &Value,
@@ -37,7 +37,7 @@ fn parse_enums_block(
     };
     let Some(enums_obj) = enums_value.as_object() else {
         return Err(err(
-            "invalid_enums_block",
+            codes::INVALID_ENUMS_BLOCK,
             "top-level `enums` must be an object",
         ));
     };
@@ -45,7 +45,7 @@ fn parse_enums_block(
     for (enum_name, mapping) in enums_obj {
         let Some(map_obj) = mapping.as_object() else {
             return Err(err(
-                "invalid_enums_block",
+                codes::INVALID_ENUMS_BLOCK,
                 format!("enums.{enum_name}: entry must be an object"),
             ));
         };
@@ -53,7 +53,7 @@ fn parse_enums_block(
         for (sym, intval) in map_obj {
             let Some(n) = intval.as_i64() else {
                 return Err(err(
-                    "invalid_enums_block",
+                    codes::INVALID_ENUMS_BLOCK,
                     format!("enums.{enum_name}.{sym}: value must be an integer"),
                 ));
             };
@@ -70,13 +70,13 @@ fn lower_enum_node(
 ) -> Result<Value, EnumLoweringError> {
     let args = node.get("args").and_then(|v| v.as_array()).ok_or_else(|| {
         err(
-            "enum_invalid_args",
+            codes::ENUM_INVALID_ARGS,
             "`enum` op requires an `args` array of length 2",
         )
     })?;
     if args.len() != 2 {
         return Err(err(
-            "enum_invalid_args",
+            codes::ENUM_INVALID_ARGS,
             format!(
                 "`enum` op expects 2 args (enum_name, symbol_name), got {}",
                 args.len()
@@ -85,19 +85,19 @@ fn lower_enum_node(
     }
     let enum_name = args[0].as_str().ok_or_else(|| {
         err(
-            "enum_invalid_args",
+            codes::ENUM_INVALID_ARGS,
             "`enum` op: first arg must be a string (enum name)",
         )
     })?;
     let symbol_name = args[1].as_str().ok_or_else(|| {
         err(
-            "enum_invalid_args",
+            codes::ENUM_INVALID_ARGS,
             "`enum` op: second arg must be a string (symbol name)",
         )
     })?;
     let mapping = enums.get(enum_name).ok_or_else(|| {
         err(
-            "unknown_enum",
+            codes::UNKNOWN_ENUM,
             format!(
                 "unknown_enum: enum `{enum_name}` is not declared in the file's \
                  `enums` block"
@@ -106,7 +106,7 @@ fn lower_enum_node(
     })?;
     let int_value = mapping.get(symbol_name).ok_or_else(|| {
         err(
-            "unknown_enum_symbol",
+            codes::UNKNOWN_ENUM_SYMBOL,
             format!(
                 "unknown_enum_symbol: symbol `{symbol_name}` is not declared \
                  under enum `{enum_name}`"
@@ -200,7 +200,7 @@ pub fn lower_enums(value: &mut Value) -> Result<(), EnumLoweringError> {
     find_enum_paths(value, "", &mut leftover);
     if !leftover.is_empty() {
         return Err(err(
-            "enum_lowering_residual",
+            codes::ENUM_LOWERING_RESIDUAL,
             format!(
                 "enum-op nodes remain after lowering at: {}",
                 leftover.join(", ")

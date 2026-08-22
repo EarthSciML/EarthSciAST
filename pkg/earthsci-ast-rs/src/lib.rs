@@ -224,7 +224,7 @@ pub use types::{
     UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{
-    SchemaError, StructuralError, StructuralErrorCode, ValidationResult, validate,
+    SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
     validate_complete,
 };
 pub use value_invention::{
@@ -273,7 +273,8 @@ pub use simulate::{
     SolutionMetadata, SolverChoice, compile_array, fold_constant_expr, interpret, simulate,
 };
 pub use units::{
-    Dimension, Rational, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,
+    Dimension, Rational, UNIT_FINDING_ANALYSIS, UNIT_FINDING_DIMENSIONAL_MISMATCH,
+    UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,
     build_unit_env, check_dimensional_consistency, check_equation_dimensions,
     check_expression_dimensions, convert_units, parse_unit, validate_equation_dimensions,
 };

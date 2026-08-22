@@ -21,7 +21,7 @@
 //! JSON layer means refs are inlined into the parsed value, and the typed
 //! model only ever sees fully resolved input.
 
-use crate::diagnostic::{DiagnosticError, err};
+use crate::diagnostic::{DiagnosticError, codes, err};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -107,7 +107,7 @@ fn merge_subsystem_index_sets(
         if let Some(existing) = registry.get(n) {
             if existing != decl {
                 return Err(err(
-                    "subsystem_index_set_conflict",
+                    codes::SUBSYSTEM_INDEX_SET_CONFLICT,
                     format!(
                         "index set '{n}' from subsystem ref \
                          '{ref_str}' collides with a non-deep-equal declaration in the importing \
@@ -148,20 +148,20 @@ const SUBSYSTEM_REF: RefNoun = RefNoun {
     remote_plural: "subsystem refs",
     cycle_singular: "subsystem reference",
     item: "ref",
-    code: "unresolved_subsystem_ref",
+    code: codes::UNRESOLVED_SUBSYSTEM_REF,
 };
 
 /// A subsystem ref that resolved to a file containing MULTIPLE (or zero)
 /// top-level systems — the ref mechanism requires exactly one, so which system
 /// to mount is ambiguous. Distinct from a ref that could not be resolved at all.
-const AMBIGUOUS_SUBSYSTEM_REF: &str = "ambiguous_subsystem_ref";
+const AMBIGUOUS_SUBSYSTEM_REF: &str = codes::AMBIGUOUS_SUBSYSTEM_REF;
 
 /// A top-level `models.<k>` mount edge (used by [`inline_toplevel_model_refs`]).
 const TOPLEVEL_MODEL_REF: RefNoun = RefNoun {
     remote_plural: "top-level model refs",
     cycle_singular: "top-level model reference",
     item: "top-level model ref",
-    code: "toplevel_model_ref_unresolved",
+    code: codes::TOPLEVEL_MODEL_REF_UNRESOLVED,
 };
 
 /// The shared "load a referenced .esm document" sequence both ref-resolvers run:
@@ -591,7 +591,7 @@ fn read_edge_bindings(
     };
     let Some(bindings_obj) = bindings.as_object() else {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             "subsystem ref `bindings` must be an object of \
              metaparameter expressions (esm-spec 9.7.6)",
         ));
@@ -643,7 +643,7 @@ fn resolve_value(
         if crate::template_imports::is_template_library_doc(&parsed) {
             visited.remove(&canonical);
             return Err(err(
-                "subsystem_ref_is_template_library",
+                codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
                 format!(
                     "Subsystem ref '{ref_str}' targets a \
                      template-library file ({}); libraries are imported via \
@@ -659,7 +659,7 @@ fn resolve_value(
         if crate::coupling_imports::is_coupling_library_doc(&parsed) {
             visited.remove(&canonical);
             return Err(err(
-                "subsystem_ref_is_coupling_library",
+                codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
                 format!(
                     "Subsystem ref '{ref_str}' targets a \
                      coupling-library file ({}); libraries are imported via a coupling_import \

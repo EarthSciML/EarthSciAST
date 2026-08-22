@@ -1605,8 +1605,11 @@ fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::
         println!("✓ Validation passed");
         if verbose && !validation_result.unit_warnings.is_empty() {
             println!("Warnings:");
-            for warning in validation_result.unit_warnings {
-                println!("  ⚠ {warning}");
+            for warning in &validation_result.unit_warnings {
+                // `message` is the exact string this line printed when
+                // `unit_warnings` was a `Vec<String>`; the record's `path` /
+                // `code` are for machine consumers.
+                println!("  ⚠ {}", warning.message);
             }
         }
     } else {
@@ -2236,7 +2239,7 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
         if !validation_result.unit_warnings.is_empty() {
             println!("Unit warnings:");
             for warning in &validation_result.unit_warnings {
-                println!("  ⚠ {warning}");
+                println!("  ⚠ {}", warning.message);
             }
         } else {
             println!("✓ All units are dimensionally consistent");

@@ -210,6 +210,27 @@ pub enum UnitSeverity {
     Analysis,
 }
 
+/// The cross-binding `code` values a dimensional finding can carry, as surfaced
+/// on [`crate::validate::UnitWarning::code`]. Mirrors Go's `UnitFinding*`
+/// constants (`pkg/earthsci-ast-go/pkg/esm/units.go`) and TypeScript's
+/// `UnitWarning['code']` union (`pkg/earthsci-ast-ts/src/units.ts`).
+///
+/// * [`UNIT_FINDING_DIMENSIONAL_MISMATCH`] — a PROVABLE inconsistency: adding
+///   metres to kilograms, an equation whose sides cannot agree. A defect in the
+///   FILE; this binding promotes it to a `unit_inconsistency` structural error.
+/// * [`UNIT_FINDING_UNPARSEABLE`] — a declared unit string that does not denote
+///   a real unit. Also a defect in the FILE; promoted to `unit_parse_error` at
+///   the declaration's own pointer.
+/// * [`UNIT_FINDING_ANALYSIS`] — the checker cannot DETERMINE a dimension. A
+///   limit of the ANALYSIS, not a defect, so it stays a non-blocking warning.
+///
+/// These strings are a cross-binding contract; they must not change.
+pub const UNIT_FINDING_DIMENSIONAL_MISMATCH: &str = "dimensional_mismatch";
+/// See [`UNIT_FINDING_DIMENSIONAL_MISMATCH`].
+pub const UNIT_FINDING_UNPARSEABLE: &str = "unparseable_unit";
+/// See [`UNIT_FINDING_DIMENSIONAL_MISMATCH`].
+pub const UNIT_FINDING_ANALYSIS: &str = "analysis";
+
 /// A single dimensional finding produced while propagating an expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnitFinding {
@@ -237,6 +258,20 @@ impl UnitFinding {
     /// True when this finding is a provable inconsistency.
     pub fn is_error(&self) -> bool {
         self.severity == UnitSeverity::Error
+    }
+
+    /// The cross-binding finding code implied by this finding's severity, taken
+    /// at the raise site rather than recovered from the message prose.
+    ///
+    /// An unparseable declared unit never reaches a [`UnitFinding`] in this
+    /// binding — it is caught at the declaration and reported directly as a
+    /// `unit_parse_error` structural error — so only the two severities map
+    /// here. See [`UNIT_FINDING_DIMENSIONAL_MISMATCH`].
+    pub fn code(&self) -> &'static str {
+        match self.severity {
+            UnitSeverity::Error => UNIT_FINDING_DIMENSIONAL_MISMATCH,
+            UnitSeverity::Analysis => UNIT_FINDING_ANALYSIS,
+        }
     }
 }
 

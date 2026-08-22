@@ -18,7 +18,7 @@
 //! Diagnostics are raised as [`crate::diagnostic::DiagnosticError`] with the
 //! stable §10.11 codes so they are machine-checkable across bindings.
 
-use crate::diagnostic::{DiagnosticError, err};
+use crate::diagnostic::{DiagnosticError, codes, err};
 use crate::types::{CouplingEntry, EsmFile};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -288,7 +288,7 @@ fn collect_role_segments(edge: &Value) -> HashSet<String> {
 fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticError> {
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return Err(err(
-            "coupling_import_unresolved",
+            codes::COUPLING_IMPORT_UNRESOLVED,
             format!(
                 "remote coupling_import ref '{ref_str}' cannot be loaded synchronously; \
                  download the file and import it by local path"
@@ -298,7 +298,7 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
     let path = std::path::Path::new(base_path).join(ref_str);
     let content = std::fs::read_to_string(&path).map_err(|e| {
         err(
-            "coupling_import_unresolved",
+            codes::COUPLING_IMPORT_UNRESOLVED,
             format!(
                 "coupling-library file not found or unreadable: {} (from ref '{ref_str}'): {e}",
                 path.display()
@@ -307,7 +307,7 @@ fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticE
     })?;
     serde_json::from_str(&content).map_err(|e| {
         err(
-            "coupling_import_unresolved",
+            codes::COUPLING_IMPORT_UNRESOLVED,
             format!(
                 "coupling-library ref '{}' is not valid JSON: {e}",
                 path.display()
@@ -331,7 +331,7 @@ fn expand_one(
 ) -> Result<Vec<CouplingEntry>, DiagnosticError> {
     if !is_coupling_library_doc(lib) {
         return Err(err(
-            "coupling_import_not_library",
+            codes::COUPLING_IMPORT_NOT_LIBRARY,
             format!(
                 "coupling_import ref '{ref_str}' lacks top-level `coupling_roles` — not a \
                  coupling-library file (esm-spec §10.9)"
@@ -344,7 +344,7 @@ fn expand_one(
     for k in LIBRARY_FORBIDDEN_KEYS {
         if doc.contains_key(k) {
             return Err(err(
-                "coupling_library_illegal_payload",
+                codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 format!(
                     "coupling-library '{ref_str}' declares `{k}` — a coupling library is nothing \
                      but roles + wiring (esm-spec §10.9)"
@@ -360,7 +360,7 @@ fn expand_one(
         .unwrap_or_default();
     if roles.is_empty() {
         return Err(err(
-            "coupling_library_illegal_payload",
+            codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
             format!(
                 "coupling-library '{ref_str}' declares no roles (esm-spec §10.9: `coupling_roles` \
                  is required, non-empty)"
@@ -374,7 +374,7 @@ fn expand_one(
         .unwrap_or_default();
     if edges.is_empty() {
         return Err(err(
-            "coupling_library_illegal_payload",
+            codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
             format!(
                 "coupling-library '{ref_str}' has an empty `coupling` array (esm-spec §10.9: \
                  required, non-empty)"
@@ -392,7 +392,7 @@ fn expand_one(
         let ty = edge.get("type").and_then(|t| t.as_str());
         if ty == Some("coupling_import") {
             return Err(err(
-                "coupling_library_nested_import",
+                codes::COUPLING_LIBRARY_NESTED_IMPORT,
                 format!(
                     "coupling-library '{ref_str}' contains a nested coupling_import (v1 forbids \
                      layering, esm-spec §10.9)"
@@ -401,7 +401,7 @@ fn expand_one(
         }
         if ty == Some("callback") || edge.get("expression_template_imports").is_some() {
             return Err(err(
-                "coupling_library_illegal_payload",
+                codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 format!(
                     "coupling-library '{ref_str}' edge of type '{}' is not role-substitutable (no \
                      callback entries or edge-level expression_template_imports, esm-spec §10.9)",
@@ -411,7 +411,7 @@ fn expand_one(
         }
         if !ty.is_some_and(|t| ROLE_BEARING_TYPES.contains(&t)) {
             return Err(err(
-                "coupling_library_illegal_payload",
+                codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 format!(
                     "coupling-library '{ref_str}' contains an unsupported edge type '{}' \
                      (esm-spec §10.9)",
@@ -422,7 +422,7 @@ fn expand_one(
         for seg in collect_role_segments(edge) {
             if !role_set.contains(seg.as_str()) {
                 return Err(err(
-                    "coupling_edge_unknown_role",
+                    codes::COUPLING_EDGE_UNKNOWN_ROLE,
                     format!(
                         "coupling-library '{ref_str}': edge references '{seg}', which is not a \
                          declared role (esm-spec §10.9)"
@@ -435,7 +435,7 @@ fn expand_one(
     for role in &roles {
         if !used_roles.contains(role) {
             return Err(err(
-                "coupling_role_unused",
+                codes::COUPLING_ROLE_UNUSED,
                 format!(
                     "coupling-library '{ref_str}': role '{role}' is declared but referenced by no \
                      edge (esm-spec §10.9)"
@@ -448,7 +448,7 @@ fn expand_one(
     for key in bind.keys() {
         if !role_set.contains(key.as_str()) {
             return Err(err(
-                "coupling_import_unknown_role",
+                codes::COUPLING_IMPORT_UNKNOWN_ROLE,
                 format!(
                     "coupling_import ref '{ref_str}': bind key '{key}' is not a declared role \
                      (esm-spec §10.10.1)"
@@ -460,7 +460,7 @@ fn expand_one(
         match bind.get(role) {
             None => {
                 return Err(err(
-                    "coupling_import_role_unbound",
+                    codes::COUPLING_IMPORT_ROLE_UNBOUND,
                     format!(
                         "coupling_import ref '{ref_str}': role '{role}' has no bind entry \
                          (binding is total, esm-spec §10.10.1)"
@@ -470,7 +470,7 @@ fn expand_one(
             Some(actual) => {
                 if !resolves_to_component(file, actual) {
                     return Err(err(
-                        "coupling_import_bind_not_a_component",
+                        codes::COUPLING_IMPORT_BIND_NOT_A_COMPONENT,
                         format!(
                             "coupling_import ref '{ref_str}': bind '{role}' -> '{actual}' does not \
                              resolve to a component (esm-spec §10.10.1)"
@@ -489,7 +489,7 @@ fn expand_one(
         rewrite_entry_in_place(&mut clone, &rw, &rw);
         let entry: CouplingEntry = serde_json::from_value(clone).map_err(|e| {
             err(
-                "coupling_import_unresolved",
+                codes::COUPLING_IMPORT_UNRESOLVED,
                 format!(
                     "coupling-library '{ref_str}': expanded edge is not a valid coupling entry: {e}"
                 ),
