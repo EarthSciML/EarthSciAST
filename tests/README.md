@@ -35,10 +35,9 @@ tests/
 │   └── model_summary.json
 ├── substitution/             # Expression substitution tests
 │   └── simple_var_replace.json
-├── graphs/                   # Graph generation tests
-│   ├── system_graph.json    # Component-level graphs
-│   ├── expression_graph.json # TODO: Variable-level graphs
-│   └── expected_dot/         # TODO: Expected DOT format outputs
+├── conformance/graph/        # Graph generation conformance corpus
+│   ├── cases.json            # GENERATED; component + expression graphs, all bindings
+│   └── README.md             # what it pins, and what it deliberately does not
 └── simulation/               # TODO: Reference trajectories
     ├── box_model_ozone.esm
     └── expected/
@@ -104,7 +103,7 @@ Each language library should implement tests that:
 2. Load all files in `invalid/` and verify they produce the expected errors from `expected_errors.json`
 3. Test pretty-printing by comparing outputs to `display/` fixtures
 4. Test substitution using `substitution/` fixtures
-5. Test graph generation using `graphs/` fixtures
+5. Test graph generation using the `conformance/graph/cases.json` corpus
 
 ## Status
 

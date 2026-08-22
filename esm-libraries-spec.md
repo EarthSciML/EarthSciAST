@@ -2089,11 +2089,10 @@ tests/
 │   ├── simple_var_replace.json        # input expr + bindings → expected output
 │   ├── nested_substitution.json
 │   └── scoped_reference.json
-├── graphs/
-│   ├── system_graph.json              # file → expected nodes + edges (component level)
-│   ├── expression_graph.json          # file → expected nodes + edges (variable level)
-│   ├── coupled_expression_graph.json  # file with coupling → merged variable graph
-│   └── expected_dot/                  # expected DOT output for each test case
+├── conformance/graph/
+│   ├── cases.json                     # GENERATED: component + expression graphs for
+│   │                                  # 9 documents and 7 sub-document targets
+│   └── README.md                      # what is pinned; why DOT/Mermaid bytes are not
 │       ├── system_graph.dot
 │       └── expression_graph.dot
 └── simulation/

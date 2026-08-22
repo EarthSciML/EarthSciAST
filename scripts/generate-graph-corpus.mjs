@@ -54,7 +54,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const TS = join(ROOT, 'pkg/earthsci-ast-ts/dist/esm/index.js')
 const OUT_DIR = join(ROOT, 'tests/conformance/graph')
 
-const { componentGraph, expressionGraph, toJsonGraph } = await import(TS)
+const { componentGraph, expressionGraph, toJsonGraph, load } = await import(TS)
 
 /**
  * Whole-document cases. Each names a fixture under tests/valid/ and the reason
@@ -270,7 +270,17 @@ function shapeExpressionGraph(graph) {
 
 // --- build -------------------------------------------------------------------
 
-const readFixture = (rel) => JSON.parse(readFileSync(join(ROOT, 'tests/valid', rel), 'utf8'))
+/**
+ * Read a fixture through the package's own `load` — the same door every
+ * binding's conformance test goes through, so the corpus cannot encode a graph
+ * that only a raw `JSON.parse` produces. (Verified: all nine fixtures yield an
+ * identical graph either way; `load` is used for definitional cleanliness, not
+ * because any of them needs reference resolution.)
+ */
+const readFixture = (rel) =>
+  load(readFileSync(join(ROOT, 'tests/valid', rel), 'utf8'), {
+    basePath: join(ROOT, 'tests/valid'),
+  })
 
 const files = []
 for (const c of FILE_CASES) {

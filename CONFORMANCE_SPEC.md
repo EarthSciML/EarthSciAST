@@ -33,10 +33,9 @@ tests/
 ├── invalid/                  # ESM files that should fail validation with specific errors
 ├── display/                  # Display formatting test cases (Unicode, LaTeX, ASCII)
 ├── substitution/             # Expression substitution test cases
-├── graphs/                   # Graph generation test cases and expected outputs
 ├── simulation/               # Simulation test cases with expected trajectories
 ├── version_compatibility/    # Version migration and compatibility tests
-├── conformance/              # Cross-language comparison results and analysis
+├── conformance/              # Cross-language corpora (incl. graph/) and comparison results
 └── [other categories]/       # Additional test categories as needed
 ```
 
@@ -162,38 +161,31 @@ These semantics are exercised by:
 - Julia: `pkg/EarthSciAST.jl/test/expression_test.jl`
   (`@testset "substitute edge cases"`)
 
-#### 2.2.4 Graph Generation Tests (`tests/graphs/`)
+#### 2.2.4 Graph Generation Tests (`tests/conformance/graph/`)
 
-**Purpose:** Verify system and expression graph generation consistency.
+**Purpose:** Verify component- and expression-graph generation agrees across
+bindings.
 
-**Structure:**
-- `*.json` files with graph generation test cases
-- `expected_dot/`, `expected_mermaid/`, `expected_graphml/` subdirectories with reference outputs
+**Structure:** one generated file, `cases.json`, emitted by
+`scripts/generate-graph-corpus.mjs` from the TypeScript oracle. It pins the
+semantic graph model — component nodes with their types and summary counts,
+coupling edges with their types and labels, variable nodes with their DERIVED
+kinds, dependency edges with their relationships and equation indices, the
+adjacency closure, and the JSON adjacency-list export — for nine documents from
+`tests/valid/` plus the seven sub-document `expression_graph` overloads
+esm-libraries-spec §4.8.2 requires.
 
-**Graph test case format:**
-```json
-{
-  "file": "path/to/test.esm",
-  "graph_type": "system|expression",
-  "options": {
-    "merge_coupled": true,
-    "include_parameters": false
-  },
-  "expected_nodes": [
-    {"id": "SimpleOzone", "type": "reaction_system", "metadata": {...}},
-    {"id": "Advection", "type": "model", "metadata": {...}}
-  ],
-  "expected_edges": [
-    {
-      "source": "SimpleOzone",
-      "target": "Advection",
-      "type": "operator_compose",
-      "label": "composition",
-      "metadata": {...}
-    }
-  ]
-}
-```
+The DOT and Mermaid byte formats are deliberately NOT pinned; see
+`tests/conformance/graph/README.md` for the measurement behind that choice.
+
+Every binding drives the corpus: `graph-conformance.test.ts`,
+`test_graph_conformance.py`, `graph_conformance_test.go`, `graph_conformance.rs`,
+`graph_conformance_test.jl`.
+
+The predecessor `tests/graphs/` directory was removed: its `expected_dot/` and
+`expected_mermaid/` goldens were hand-authored illustrations no binding emitted,
+its `*.json` fixtures used a pre-1.0.0 node model, it carried GraphML goldens for
+an exporter no binding has, and nothing asserted any of it (audit F6).
 
 #### 2.2.5 Simulation Tests (inline in `.esm` files)
 
@@ -348,7 +340,7 @@ Display formatting tests expect this output structure:
 {
   "language": "julia|typescript|python|rust",
   "timestamp": "2026-02-18T10:30:00Z",
-  "test_file": "tests/graphs/system_graph.json",
+  "test_file": "tests/conformance/graph/cases.json",
   "results": [
     {
       "input_file": "tests/valid/minimal_chemistry.esm",
@@ -496,7 +488,7 @@ The categories a divergence can be scored against, and what "agree" means in eac
 | **Display (unicode / latex / ascii)** | Byte-identical | `tests/display/RENDERING_CONTRACT.md` is normative and already said so: "All language implementations MUST produce byte-identical output, verified by the shared fixtures in this directory". Every fixture case is rendered by every binding and compared to the pinned rendering AND across bindings. Number formatting is part of the contract, not an excusable "minor difference" — it is what a reader of the model sees. |
 | **Substitution** | Byte-identical AST | Compared as the serialized expression, not as a rendering. |
 | **Expression round-trip (property corpus)** | Byte-identical canonical form | §5.5.3. A divergence here is a different *document*. |
-| **Graph Structure** | Node / edge sets identical | See the note below: this category is currently **not enforced by any binding** and the goldens in `tests/graphs/` are asserted by nobody (audit F6). |
+| **Graph Structure** | Node / edge sets identical (as multisets) | Enforced by `tests/conformance/graph/cases.json`, which every binding drives. Node and edge ORDER is not a conformance property — bindings iterate their own maps — so lists compare as sorted multisets. The DOT / Mermaid BYTES are excluded: §4.8.3 requires both formats and specifies neither, and the bindings do not split in a way any tie-break resolves (see that corpus's README). |
 | **Simulation** | Numeric tolerance (§5.9) | The ONE category where a tolerance is legitimate, because the quantity being compared is a floating-point trajectory, not a serialization. Governed by §5.9's explicit rel/abs tolerances — a stated numeric tolerance on a numeric quantity, which is a different thing from a percentage of fixtures allowed to disagree. |
 | **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitives (`distinct`, `skolem`, `rank`) and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
 | **Forward cumulative (prefix) reductions** | Bit-identical | An `aggregate` whose `filter` is a forward monotone comparison against an output index (`<=` / `<`, esm-spec §4.3.1). The admitted window is folded ascending, lowest `j` first, so the value is a fully determined left fold and not an "irreducibly floating-point" quantity — which is exactly what licenses a binding to evaluate it with an `O(N)` running accumulator instead of the `O(N²)` triangle. All three executing bindings do — Rust and Python with a running accumulator inside the array evaluator, Julia by splitting the equation into an elementwise term pass plus a post-pass fold (`tree_walk/scan.jl`) so its per-cell kernel model stays intact. All three are pinned against an independent triangular oracle at catastrophic-cancellation magnitudes (`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`, `pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py`, `pkg/EarthSciAST.jl/test/scan_prefix_test.jl`). The mirrored spellings `i >= j` / `i > j` are the same forward scan and are recognized as such. **Reverse** scans (`>=` / `>`) are explicitly NOT in this category: they fall through to each binding's general contraction machinery, whose summation order already differs (Python's dense reduce sums pairwise), so they are governed by the §5.9 simulation tolerance like any other contraction. |
@@ -530,14 +522,17 @@ The categories a divergence can be scored against, and what "agree" means in eac
 > trajectory golden, and read §5.9's tolerances as the operative gate rather than
 > exact agreement.
 
-> **Note (graph structure).** `tests/graphs/*.json` carries `expected_nodes` /
-> `expected_edges` for 14 fixtures and `tests/graphs/expected_{dot,mermaid,graphml}/`
-> carries export goldens. **No binding asserts any of them**, and the
-> `graph_results` the producers used to emit were never compared by anything. The
-> row above states the requirement; it is not yet enforced. Enforcing it needs the
-> five bindings to agree on a node-ID scheme first (they do not today) — until
-> then this is a documented hole, not a passing check. Do not read a green run as
-> evidence that the graph builders agree.
+> **Note (graph structure).** This row became enforceable in the
+> `tests/conformance/graph/` corpus. Measuring the five bindings against real
+> `tests/valid/` documents first found substantial divergence — Rust and Julia
+> emitted a `data_sources` node that §4.8.1 forbids, Julia labelled variable
+> nodes with the DECLARED type `unknown` rather than the §4.8.2 derived kind and
+> numbered `equation_index` from 1, Go spelled the kinds with the §6.3.1
+> CLASSIFIER names (`ode_state` / `sampled` / `constant`) that §4.8.2 does not
+> use, Go and Julia dropped the self-loss edges §4.8.2 lists explicitly, and only
+> TypeScript and Python recursed into `subsystems`. The corpus pins the
+> spec-and-majority answer to each; the DOT/Mermaid byte formats remain
+> deliberately unpinned and are the one open question.
 
 ### 5.3 Divergence Analysis
 

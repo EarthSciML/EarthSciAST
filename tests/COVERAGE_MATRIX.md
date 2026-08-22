@@ -41,7 +41,7 @@ This document maps ESM format specifications to test fixtures to ensure complete
 | **Analysis** | Derive ODEs | Required | Required | Required | Required | Optional | ✅ Created `expected_trajectories/ode_derivation_examples.json` |
 | **Analysis** | Stoich matrix | Required | Required | Required | Required | Optional | ✅ Created (included in ODE examples) |
 | **Analysis** | System graphs | Required | Required | Required | Required | Required | ✅ Partial (1 case) |
-| **Analysis** | Expression graphs | Required | Required | Required | Required | Required | ✅ Created `graphs/expression_graphs.json` |
+| **Analysis** | Expression graphs | Required | Required | Required | Required | Required | ✅ `conformance/graph/cases.json` (generated; driven by all five bindings) |
 | **Interactive** | Click-to-edit | SolidJS | — | — | — | — | ❌ Missing interaction fixtures |
 | **Interactive** | Structural editing | SolidJS | — | — | — | — | ❌ Missing |
 | **Interactive** | Coupling graph | SolidJS | — | — | — | — | ❌ Missing |
