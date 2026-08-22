@@ -145,19 +145,19 @@
     }
   },
   "counts": {
-    "symbols": 878,
+    "symbols": 899,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 279,
       "typescript": 203,
-      "python": 211,
+      "python": 228,
       "rust": 281,
-      "go": 275,
+      "go": 328,
       "editor": 71
     },
     "by_tier": {
-      "extension": 641,
-      "stable": 237
+      "extension": 656,
+      "stable": 243
     }
   },
   "planned": [
@@ -277,6 +277,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "AddContinuousEvent",
         "julia": "add_continuous_event",
         "typescript": "addContinuousEvent"
       }
@@ -294,6 +295,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "AddCoupling",
         "julia": "add_coupling",
         "rust": "add_coupling",
         "typescript": "addCoupling"
@@ -312,6 +314,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "AddDiscreteEvent",
         "julia": "add_discrete_event",
         "typescript": "addDiscreteEvent"
       }
@@ -329,6 +332,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "AddEquation",
         "julia": "add_equation",
         "rust": "add_equation",
         "typescript": "addEquation"
@@ -355,6 +359,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "AddReaction",
         "julia": "add_reaction",
         "rust": "add_reaction",
         "typescript": "addReaction"
@@ -381,6 +386,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "AddSpecies",
         "julia": "add_species",
         "rust": "add_species",
         "typescript": "addSpecies"
@@ -399,6 +405,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "AddVariable",
         "julia": "add_variable",
         "rust": "add_variable",
         "typescript": "addVariable"
@@ -717,9 +724,18 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "BuildReferenceGraph",
         "julia": "build_reference_graph",
         "python": "build_reference_graph",
         "rust": "build_reference_graph"
+      }
+    },
+    {
+      "name": "build_reference_graph_from_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "BuildReferenceGraphFromModel"
       }
     },
     {
@@ -883,6 +899,8 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "CanMigrate",
+        "python": "can_migrate",
         "rust": "can_migrate",
         "typescript": "canMigrate"
       }
@@ -1151,6 +1169,30 @@
       }
     },
     {
+      "name": "code_edit_entity_not_found",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeEditEntityNotFound"
+      }
+    },
+    {
+      "name": "code_edit_invalid_operation",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeEditInvalidOperation"
+      }
+    },
+    {
+      "name": "code_edit_variable_in_use",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeEditVariableInUse"
+      }
+    },
+    {
       "name": "code_invalid_broadcast_fn",
       "kind": "constant",
       "tier": "extension",
@@ -1188,6 +1230,46 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeMissingDataSourceURLTemplate"
+      }
+    },
+    {
+      "name": "code_ref_cycle",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRefCycle"
+      }
+    },
+    {
+      "name": "code_ref_duplicate_node_id",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRefDuplicateNodeID"
+      }
+    },
+    {
+      "name": "code_ref_undeclared_index_set",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRefUndeclaredIndexSet"
+      }
+    },
+    {
+      "name": "code_ref_unknown_faq_node",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRefUnknownFAQNode"
+      }
+    },
+    {
+      "name": "code_ref_unresolved_join_factor",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRefUnresolvedJoinFactor"
       }
     },
     {
@@ -1363,6 +1445,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "python": "component_exists",
         "rust": "component_exists",
         "typescript": "componentExists"
       }
@@ -1373,6 +1456,7 @@
       "tier": "stable",
       "bindings": {
         "julia": "component_graph",
+        "python": "component_graph",
         "rust": "component_graph",
         "typescript": [
           "componentGraph",
@@ -1407,8 +1491,17 @@
         "editor": "ComponentNode",
         "go": "ComponentNode",
         "julia": "ComponentNode",
+        "python": "ComponentNode",
         "rust": "ComponentNode",
         "typescript": "ComponentNode"
+      }
+    },
+    {
+      "name": "component_type",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "component_type"
       }
     },
     {
@@ -1424,6 +1517,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "Compose",
         "julia": "compose",
         "typescript": "compose"
       }
@@ -1554,6 +1648,7 @@
         "editor": "CouplingEdge",
         "go": "CouplingEdge",
         "julia": "CouplingEdge",
+        "python": "CouplingEdge",
         "rust": "CouplingEdge",
         "typescript": "CouplingEdge"
       }
@@ -1936,6 +2031,7 @@
       "bindings": {
         "go": "DependencyEdge",
         "julia": "DependencyEdge",
+        "python": "DependencyEdge",
         "rust": "DependencyEdge",
         "typescript": "DependencyEdge"
       }
@@ -2302,8 +2398,33 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "EdgeKind",
         "python": "EdgeKind",
         "rust": "EdgeKind"
+      }
+    },
+    {
+      "name": "edge_kind_from_faq",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "EdgeKindFromFAQ"
+      }
+    },
+    {
+      "name": "edge_kind_join_factor",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "EdgeKindJoinFactor"
+      }
+    },
+    {
+      "name": "edge_kind_range_from",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "EdgeKindRangeFrom"
       }
     },
     {
@@ -2311,6 +2432,7 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "EditError",
         "julia": "EditError",
         "rust": "EditError"
       }
@@ -2368,8 +2490,9 @@
     {
       "name": "entity_not_found_error",
       "kind": "error",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "EntityNotFoundError",
         "typescript": "EntityNotFoundError"
       }
     },
@@ -2996,6 +3119,7 @@
       "tier": "stable",
       "bindings": {
         "julia": "expression_graph",
+        "python": "expression_graph",
         "rust": "expression_graph",
         "typescript": "expressionGraph"
       }
@@ -3102,6 +3226,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "Extract",
         "julia": "extract",
         "typescript": "extract"
       }
@@ -3647,15 +3772,17 @@
       "bindings": {
         "editor": "Graph",
         "julia": "Graph",
+        "python": "Graph",
         "typescript": "Graph"
       }
     },
     {
       "name": "graph_edge",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "GraphEdge"
+        "go": "GraphEdge",
+        "python": "GraphEdge"
       }
     },
     {
@@ -4150,6 +4277,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "MapVariable",
         "julia": "map_variable",
         "typescript": "mapVariable"
       }
@@ -4200,8 +4328,9 @@
     {
       "name": "merge",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "Merge",
         "typescript": "merge"
       }
     },
@@ -4237,6 +4366,8 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "Migrate",
+        "python": "migrate",
         "rust": "migrate",
         "typescript": "migrate"
       }
@@ -4246,6 +4377,8 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "MigrationError",
+        "python": "MigrationError",
         "rust": "MigrationError",
         "typescript": "MigrationError"
       }
@@ -5443,6 +5576,7 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "ReferenceEdge",
         "julia": "ReferenceEdge",
         "python": "ReferenceEdge",
         "rust": "ReferenceEdge"
@@ -5461,6 +5595,7 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "ReferenceGraph",
         "julia": "ReferenceGraph",
         "python": "ReferenceGraph",
         "rust": "ReferenceGraph"
@@ -5479,6 +5614,7 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "ReferenceResolutionError",
         "julia": "ReferenceResolutionError",
         "python": "ReferenceResolutionError"
       }
@@ -5488,6 +5624,7 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "ReferenceVertex",
         "julia": "ReferenceVertex",
         "python": "ReferenceVertex",
         "rust": "ReferenceVertex"
@@ -5561,6 +5698,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "RemoveCoupling",
         "julia": "remove_coupling",
         "rust": "remove_coupling",
         "typescript": "removeCoupling"
@@ -5585,6 +5723,22 @@
       }
     },
     {
+      "name": "remove_equation_at",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "RemoveEquationAt"
+      }
+    },
+    {
+      "name": "remove_equation_by_lhs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "RemoveEquationByLHS"
+      }
+    },
+    {
       "name": "remove_equation_from_model",
       "kind": "function",
       "tier": "extension",
@@ -5597,6 +5751,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "RemoveEvent",
         "julia": "remove_event",
         "typescript": "removeEvent"
       }
@@ -5622,6 +5777,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "RemoveReaction",
         "julia": "remove_reaction",
         "rust": "remove_reaction",
         "typescript": "removeReaction"
@@ -5640,6 +5796,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "RemoveSpecies",
         "julia": "remove_species",
         "rust": "remove_species",
         "typescript": "removeSpecies"
@@ -5658,6 +5815,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "RemoveVariable",
         "julia": "remove_variable",
         "rust": "remove_variable",
         "typescript": "removeVariable"
@@ -5676,8 +5834,17 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "RenameVariable",
         "julia": "rename_variable",
         "typescript": "renameVariable"
+      }
+    },
+    {
+      "name": "rename_variable_in_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "RenameVariableInFile"
       }
     },
     {
@@ -5773,9 +5940,18 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ResolveReferences",
         "julia": "resolve_references",
         "python": "resolve_references",
         "rust": "resolve_references"
+      }
+    },
+    {
+      "name": "resolve_references_in_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ResolveReferencesInFile"
       }
     },
     {
@@ -6018,6 +6194,7 @@
       "kind": "constant",
       "tier": "stable",
       "bindings": {
+        "go": "SchemaVersion",
         "rust": "SCHEMA_VERSION",
         "typescript": "SCHEMA_VERSION"
       }
@@ -6553,6 +6730,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "SubstituteInEquations",
         "julia": "substitute_in_equations",
         "typescript": "substituteInEquations"
       }
@@ -6718,6 +6896,15 @@
       }
     },
     {
+      "name": "supported_migration_targets",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "SupportedMigrationTargets",
+        "python": "supported_migration_targets"
+      }
+    },
+    {
       "name": "sweep_dimension",
       "kind": "type",
       "tier": "extension",
@@ -6879,15 +7066,17 @@
       "tier": "stable",
       "bindings": {
         "julia": "to_dot",
+        "python": "to_dot",
         "typescript": "toDot"
       }
     },
     {
       "name": "to_json",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "julia": "to_json"
+        "julia": "to_json",
+        "python": "to_json"
       }
     },
     {
@@ -6933,6 +7122,7 @@
       "tier": "stable",
       "bindings": {
         "julia": "to_mermaid",
+        "python": "to_mermaid",
         "typescript": "toMermaid"
       }
     },
@@ -7642,8 +7832,9 @@
     {
       "name": "variable_in_use_error",
       "kind": "error",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "VariableInUseError",
         "typescript": "VariableInUseError"
       }
     },
@@ -7679,6 +7870,7 @@
       "bindings": {
         "go": "VariableNode",
         "julia": "VariableNode",
+        "python": "VariableNode",
         "rust": "VariableNode",
         "typescript": "VariableNode"
       }
@@ -7705,8 +7897,33 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "VertexKind",
         "python": "VertexKind",
         "rust": "VertexKind"
+      }
+    },
+    {
+      "name": "vertex_kind_factor",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "VertexKindFactor"
+      }
+    },
+    {
+      "name": "vertex_kind_index_set",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "VertexKindIndexSet"
+      }
+    },
+    {
+      "name": "vertex_kind_node",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "VertexKindNode"
       }
     },
     {

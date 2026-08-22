@@ -497,7 +497,10 @@ reading that as a gap.
 |---|---|---|---|---|---|---|
 | `algebraic_unknowns` | function | `algebraic_unknowns` | `algebraicUnknowns` | `algebraic_unknowns` | `algebraic_unknowns` | `AlgebraicUnknowns` |
 | `brownian_parameters` | function | `brownian_parameters` | `brownianParameters` | `brownian_parameters` | `brownian_parameters` | `BrownianParameters` |
+| `component_node` | type | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` |
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
+| `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
+| `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
 | `discrete_parameters` | function | `discrete_parameters` | `discreteParameters` | `discrete_parameters` | `discrete_parameters` | `DiscreteParameters` |
 | `expression_parse_error` | error | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` |
 | `flatten` | function | `flatten` | `flatten` | `flatten` | `flatten` | `Flatten` |
@@ -521,26 +524,32 @@ reading that as a gap.
 | `to_unicode` | function | `to_unicode` | `toUnicode` | `to_unicode` | `to_unicode` | `ToUnicode` |
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
+| `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
 
 #### Exported by four of the five
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
+| `add_coupling` | function | `add_coupling` | `addCoupling` | – | `add_coupling` | `AddCoupling` |
+| `add_equation` | function | `add_equation` | `addEquation` | – | `add_equation` | `AddEquation` |
+| `add_reaction` | function | `add_reaction` | `addReaction` | – | `add_reaction` | `AddReaction` |
+| `add_species` | function | `add_species` | `addSpecies` | – | `add_species` | `AddSpecies` |
+| `add_variable` | function | `add_variable` | `addVariable` | – | `add_variable` | `AddVariable` |
 | `affect_equation` | type | `AffectEquation` | – | `AffectEquation` | `AffectEquation` | `AffectEquation` |
+| `build_reference_graph` | function | `build_reference_graph` | – | `build_reference_graph` | `build_reference_graph` | `BuildReferenceGraph` |
+| `can_migrate` | function | – | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
 | `canonical_json` | function | `canonical_json` | `canonicalJson` | – | `canonical_json` | `CanonicalJSON` |
 | `canonicalize` | function | `canonicalize` | `canonicalize` | – | `canonicalize` | `Canonicalize` |
 | `closed_function_error` | error | `ClosedFunctionError` | `ClosedFunctionError` | – | `ClosedFunctionError` | `ClosedFunctionError` |
-| `component_node` | type | `ComponentNode` | `ComponentNode` | – | `ComponentNode` | `ComponentNode` |
+| `component_graph` | function | `component_graph` | `componentGraph` / `component_graph` | `component_graph` | `component_graph` | – |
 | `contains` | function | – | `contains` | `contains` | `contains` | `Contains` |
 | `continuous_event` | type | `ContinuousEvent` | – | `ContinuousEvent` | `ContinuousEvent` | `ContinuousEvent` |
-| `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | – | `CouplingEdge` | `CouplingEdge` |
 | `coupling_entry` | type | `CouplingEntry` | – | `CouplingEntry` | `CouplingEntry` | `CouplingEntry` |
 | `data_source` | type | `DataSource` | – | `DataSource` | `DataSource` | `DataSource` |
 | `data_source_binding` | type | `DataSourceBinding` | – | `DataSourceBinding` | `DataSourceBinding` | `DataSourceBinding` |
 | `data_source_determinism` | type | `DataSourceDeterminism` | – | `DataSourceDeterminism` | `DataSourceDeterminism` | `DataSourceDeterminism` |
 | `data_source_location` | type | `DataSourceLocation` | – | `DataSourceLocation` | `DataSourceLocation` | `DataSourceLocation` |
 | `data_source_temporal` | type | `DataSourceTemporal` | – | `DataSourceTemporal` | `DataSourceTemporal` | `DataSourceTemporal` |
-| `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | – | `DependencyEdge` | `DependencyEdge` |
 | `derive_odes` | function | `derive_odes` | `deriveODEs` | `derive_odes` | `derive_odes` | – |
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |
@@ -549,89 +558,95 @@ reading that as a gap.
 | `equation` | type | `Equation` | – | `Equation` | `Equation` | `Equation` |
 | `esm_file` | type | `EsmFile` | – | `EsmFile` | `EsmFile` | `ESMFile` |
 | `expand_coupling_imports` | function | `expand_coupling_imports` | `expandCouplingImports` | `expand_coupling_imports` | `expand_coupling_imports` | – |
+| `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
 | `lower_enums` | function | `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
 | `metadata` | type | `Metadata` | – | `Metadata` | `Metadata` | `Metadata` |
+| `migrate` | function | – | `migrate` | `migrate` | `migrate` | `Migrate` |
+| `migration_error` | error | – | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` |
 | `model` | type | `Model` | – | `Model` | `Model` | `Model` |
 | `model_variable` | type | `ModelVariable` | – | `ModelVariable` | `ModelVariable` | `ModelVariable` |
 | `observed_definitions` | function | `observed_definitions` | `observedDefinitions` | `observed_definitions` | `observed_definitions` | – |
 | `parameter_update` | type | `ParameterUpdate` | – | `ParameterUpdate` | `ParameterUpdate` | `ParameterUpdate` |
 | `reaction` | type | `Reaction` | – | `Reaction` | `Reaction` | `Reaction` |
 | `reaction_system` | type | `ReactionSystem` | – | `ReactionSystem` | `ReactionSystem` | `ReactionSystem` |
+| `reference_edge` | type | `ReferenceEdge` | – | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` |
+| `reference_graph` | type | `ReferenceGraph` | – | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
+| `reference_vertex` | type | `ReferenceVertex` | – | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
 | `reject_expression_templates_pre_v04` | function | `reject_expression_templates_pre_v04` | `rejectExpressionTemplatesPreV04` | `reject_expression_templates_pre_v04` | – | `RejectExpressionTemplatesPreV04` |
+| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | – | `remove_coupling` | `RemoveCoupling` |
+| `remove_reaction` | function | `remove_reaction` | `removeReaction` | – | `remove_reaction` | `RemoveReaction` |
+| `remove_species` | function | `remove_species` | `removeSpecies` | – | `remove_species` | `RemoveSpecies` |
+| `remove_variable` | function | `remove_variable` | `removeVariable` | – | `remove_variable` | `RemoveVariable` |
+| `resolve_references` | function | `resolve_references` | – | `resolve_references` | `resolve_references` | `ResolveReferences` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
 | `save` | function | `save` | `save` | `save` | `save` | – |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
-| `variable_node` | type | `VariableNode` | `VariableNode` | – | `VariableNode` | `VariableNode` |
 
 #### Exported by three of the five
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_coupling` | function | `add_coupling` | `addCoupling` | – | `add_coupling` | – |
-| `add_equation` | function | `add_equation` | `addEquation` | – | `add_equation` | – |
-| `add_reaction` | function | `add_reaction` | `addReaction` | – | `add_reaction` | – |
-| `add_species` | function | `add_species` | `addSpecies` | – | `add_species` | – |
-| `add_variable` | function | `add_variable` | `addVariable` | – | `add_variable` | – |
-| `build_reference_graph` | function | `build_reference_graph` | – | `build_reference_graph` | `build_reference_graph` | – |
+| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | – | – | `AddContinuousEvent` |
+| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | – | – | `AddDiscreteEvent` |
 | `cadence_error` | error | – | – | `CadenceError` | `CadenceError` | `CadenceError` |
 | `canonicalize_error` | error | `CanonicalizeError` | `CanonicalizeError` | – | `CanonicalizeError` | – |
 | `closed_function_names` | function | `closed_function_names` | – | – | `closed_function_names` | `ClosedFunctionNames` |
-| `component_graph` | function | `component_graph` | `componentGraph` / `component_graph` | – | `component_graph` | – |
+| `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
+| `compose` | function | `compose` | `compose` | – | – | `Compose` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
+| `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
+| `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
 | `evaluate_closed_function` | function | `evaluate_closed_function` | – | – | `evaluate_closed_function` | `EvaluateClosedFunction` |
-| `expression_graph` | function | `expression_graph` | `expressionGraph` | – | `expression_graph` | – |
+| `extract` | function | `extract` | `extract` | – | – | `Extract` |
 | `flattened_equation` | type | – | `FlattenedEquation` | `FlattenedEquation` | – | `FlattenedEquation` |
 | `format_canonical_float` | function | `format_canonical_float` | `formatCanonicalFloat` | – | `format_canonical_float` | – |
 | `free_parameters` | function | – | `freeParameters` | `free_parameters` | `free_parameters` | – |
 | `function_table` | type | `FunctionTable` | – | `FunctionTable` | – | `FunctionTable` |
 | `function_table_axis` | type | `FunctionTableAxis` | – | `FunctionTableAxis` | – | `FunctionTableAxis` |
+| `graph` | type | `Graph` | `Graph` | `Graph` | – | – |
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
+| `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
 | `parse_unit` | function | – | `parseUnit` | – | `parse_unit` | `ParseUnit` |
 | `prepare` | function | `prepare` | – | `prepare` | `prepare` | – |
 | `reference` | type | `Reference` | – | `Reference` | – | `Reference` |
-| `reference_edge` | type | `ReferenceEdge` | – | `ReferenceEdge` | `ReferenceEdge` | – |
-| `reference_graph` | type | `ReferenceGraph` | – | `ReferenceGraph` | `ReferenceGraph` | – |
-| `reference_vertex` | type | `ReferenceVertex` | – | `ReferenceVertex` | `ReferenceVertex` | – |
-| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | – | `remove_coupling` | – |
+| `reference_resolution_error` | error | `ReferenceResolutionError` | – | `ReferenceResolutionError` | – | `ReferenceResolutionError` |
 | `remove_equation` | function | `remove_equation` | `removeEquation` | – | `remove_equation` | – |
-| `remove_reaction` | function | `remove_reaction` | `removeReaction` | – | `remove_reaction` | – |
-| `remove_species` | function | `remove_species` | `removeSpecies` | – | `remove_species` | – |
-| `remove_variable` | function | `remove_variable` | `removeVariable` | – | `remove_variable` | – |
-| `resolve_references` | function | `resolve_references` | – | `resolve_references` | `resolve_references` | – |
+| `remove_event` | function | `remove_event` | `removeEvent` | – | – | `RemoveEvent` |
+| `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | `RenameVariable` |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
+| `schema_version` | constant | – | `SCHEMA_VERSION` | – | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simulate` | function | `simulate` | – | `simulate` | `simulate` | – |
+| `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
+| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
+| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
+| `vertex_kind` | type | – | – | `VertexKind` | `VertexKind` | `VertexKind` |
 
 #### Exported by two of the five
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | – | – | – |
-| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | – | – | – |
 | `apply_dae_contract` | function | – | – | – | `apply_dae_contract` | `ApplyDAEContract` |
 | `apply_scope_injections` | function | – | `applyScopeInjections` | – | `apply_scope_injections` | – |
 | `apply_unit_conversion` | function | `apply_unit_conversion` / `apply_unit_conversion!` | – | `apply_unit_conversion` | – | – |
 | `area_tolerance_ok` | function | – | – | `area_tolerance_ok` | `area_tolerance_ok` | – |
 | `build_unit_env` | function | – | – | – | `build_unit_env` | `BuildUnitEnv` |
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
-| `can_migrate` | function | – | `canMigrate` | – | `can_migrate` | – |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
-| `component_exists` | function | – | `componentExists` | – | `component_exists` | – |
-| `compose` | function | `compose` | `compose` | – | – | – |
 | `conflicting_derivative_error` | error | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` | – | – |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
 | `coupling_role` | type | – | – | – | `CouplingRole` | `CouplingRole` |
@@ -648,10 +663,9 @@ reading that as a gap.
 | `distinct` | function | – | – | `distinct` | `distinct` | – |
 | `domain_extent_mismatch_error` | error | `DomainExtentMismatchError` | – | `DomainExtentMismatchError` | – | – |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | – | `DomainUnitMismatchError` | – | – |
-| `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | – |
-| `edit_error` | error | `EditError` | – | – | `EditError` | – |
 | `emit_document` | function | – | `emitDocument` | `emit_document` | – | – |
 | `emit_esm_string` | function | – | `emitEsmString` | `emit_esm_string` | – | – |
+| `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
 | `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
@@ -660,7 +674,6 @@ reading that as a gap.
 | `expr` | type | – | – | `Expr` | `Expr` | – |
 | `expr_node` | type | – | – | `ExprNode` | – | `ExprNode` |
 | `expression_graph` | type | – | – | – | `ExpressionGraph` | `ExpressionGraph` |
-| `extract` | function | `extract` | `extract` | – | – | – |
 | `field_reduce` | function | `field_reduce` | – | – | `field_reduce` | – |
 | `flatten_error` | error | – | – | `FlattenError` | `FlattenError` | – |
 | `flatten_template_registries` | function | – | `flattenTemplateRegistries` | `flatten_template_registries` | – | – |
@@ -669,7 +682,7 @@ reading that as a gap.
 | `geometry_error` | error | – | – | `GeometryError` | `GeometryError` | – |
 | `get_component_type` | function | – | `getComponentType` | – | `get_component_type` | – |
 | `get_supported_migration_targets` | function | – | `getSupportedMigrationTargets` | – | `get_supported_migration_targets` | – |
-| `graph` | type | `Graph` | `Graph` | – | – | – |
+| `graph_edge` | type | – | – | `GraphEdge` | – | `GraphEdge` |
 | `grid_plan` | type | `GridPlan` | – | – | `GridPlan` | – |
 | `group_aggregate` | function | – | – | `group_aggregate` | `group_aggregate` | – |
 | `group_gridding_by_grid` | function | `group_gridding_by_grid` | – | – | `group_gridding_by_grid` | – |
@@ -677,10 +690,8 @@ reading that as a gap.
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |
-| `map_variable` | function | `map_variable` | `mapVariable` | – | – | – |
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
-| `migrate` | function | – | `migrate` | – | `migrate` | – |
-| `migration_error` | error | – | `MigrationError` | – | `MigrationError` | – |
+| `merge` | function | – | `merge` | – | – | `Merge` |
 | `observed_definition` | function | `observed_definition` | – | – | – | `ObservedDefinition` |
 | `observed_field` | function | `observed_field` | – | `observed_field` | – | – |
 | `operator` | type | – | – | `Operator` | `Operator` | – |
@@ -697,28 +708,23 @@ reading that as a gap.
 | `product_matrix` | function | – | `productMatrix` | `product_matrix` | – | – |
 | `rank` | function | – | – | `rank` | `rank` | – |
 | `ranking` | type | – | – | `Ranking` | `Ranking` | – |
-| `reference_resolution_error` | error | `ReferenceResolutionError` | – | `ReferenceResolutionError` | – | – |
-| `remove_event` | function | `remove_event` | `removeEvent` | – | – | – |
-| `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | – |
 | `run_pde_tests` | function | `run_pde_tests` | – | – | `run_pde_tests` | – |
 | `schema_error` | error | – | – | – | `SchemaError` | `SchemaError` |
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
-| `schema_version` | constant | – | `SCHEMA_VERSION` | – | `SCHEMA_VERSION` | – |
 | `simulate_error` | error | `SimulateError` | – | – | `SimulateError` | – |
 | `simulation_result` | type | `SimulationResult` | – | `SimulationResult` | – | – |
 | `skolem` | function | – | – | `skolem` | `skolem` | – |
 | `skolem_edge` | function | – | – | `skolem_edge` | `skolem_edge` | – |
 | `slice_out_of_domain_error` | error | `SliceOutOfDomainError` | – | `SliceOutOfDomainError` | – | – |
 | `structural_error` | error | – | – | – | `StructuralError` | `StructuralError` |
-| `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | – |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |
+| `supported_migration_targets` | function | – | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
-| `to_dot` | function | `to_dot` | `toDot` | – | – | – |
+| `to_json` | function | `to_json` | – | `to_json` | – | – |
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
-| `to_mermaid` | function | `to_mermaid` | `toMermaid` | – | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |
 | `unit_finding` | type | `UnitFinding` | – | – | `UnitFinding` | – |
@@ -734,9 +740,9 @@ reading that as a gap.
 | `value_invention_result` | type | – | – | `ValueInventionResult` | `ValueInventionResult` | – |
 | `var_gridding` | type | `VarGridding` | – | – | `VarGridding` | – |
 | `var_plan` | type | `VarPlan` | – | – | `VarPlan` | – |
+| `variable_in_use_error` | error | – | `VariableInUseError` | – | – | `VariableInUseError` |
 | `variable_kind` | type | – | `VariableKind` | – | `VariableKind` | – |
 | `version` | constant | – | `VERSION` | – | `VERSION` | – |
-| `vertex_kind` | type | – | – | `VertexKind` | `VertexKind` | – |
 
 #### Editor package
 
