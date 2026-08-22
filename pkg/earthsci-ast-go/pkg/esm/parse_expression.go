@@ -23,8 +23,10 @@ package esm
 //     key=k [semiring=…]` (all clause shapes), the `argmin`/`argmax`
 //     arg-witnesses `argmin[g] (expr) where {…}`, template application
 //     `name<binding = value, …>` (`apply_expression_template`),
-//     `polygon_intersection_area(a, b, manifold=…)`, and the piecewise-region
-//     array `makearray([lo:hi, …] = value, …)`.
+//     `polygon_intersection_area(a, b, manifold=…)` /
+//     `intersect_polygon(a, b, manifold=…[, id=…])`, the `table_lookup` bracket
+//     surface `visc[T=temp]` / `k_rate[T=temp, p=pres]:1`, and the
+//     piecewise-region array `makearray([lo:hi, …] = value, …)`.
 //
 // Aggregate `args` is a derived operand cache the printer doesn't emit; it is
 // reconstructed best-effort (see deriveAggregateArgs) and is reprint-neutral.
@@ -32,9 +34,9 @@ package esm
 // plain `+` reduction — the join-less `sum_product` annotation (semantically
 // identical there) is not recovered; both reprint identically.
 //
-// Still deferred (need dedicated surface syntax — a later pass): `table_lookup`,
-// `broadcast`, `enum`, and `intersect_polygon` (its `id` field is not printed,
-// so it can't round-trip). Those are refused with an *ExpressionParseError.
+// Still deferred (need dedicated surface syntax — a later pass): `broadcast` and
+// `enum`. Those are refused with an *ExpressionParseError, as is the call
+// spelling `table_lookup(…)` (its real surface is `visc[T=temp]`).
 //
 // Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
 // juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
@@ -104,11 +106,13 @@ var (
 // OUTSIDE `args` AND which have no text surface yet — refused, pending a
 // dedicated syntax pass. (`integral`, `reshape`, `transpose`, `concat`, `fn`,
 // `const`, `index`, `true`, `aggregate`, `apply_expression_template`,
-// `polygon_intersection_area` and `makearray` DO have a surface and are
-// reconstructed below; they are intentionally absent here. `intersect_polygon`
-// stays refused: its `id` field is not printed, so it can't round-trip.)
+// `polygon_intersection_area`, `intersect_polygon` and `makearray` DO have a
+// surface and are reconstructed below; they are intentionally absent here.
+// `table_lookup` IS listed: its surface is the bracket form `visc[T=temp]`,
+// parsed in parseTableLookup without going through makeParsedCall, so the CALL
+// spelling `table_lookup(a)` — which the printer never emits — stays refused.)
 var exprStructuralRefusals = map[string]bool{
-	"table_lookup": true, "broadcast": true, "enum": true, "intersect_polygon": true,
+	"table_lookup": true, "broadcast": true, "enum": true,
 }
 
 // exprAggregateSyms are the aggregate reduction symbols ToAscii emits
@@ -445,6 +449,14 @@ func (p *exprTextParser) parsePostfix() Expression {
 		if nx := p.peekAt(1); nx.k == tkName && nx.s == "semiring" {
 			break
 		}
+		// `name[axis=expr, …]` is a `table_lookup` (formatStructuralOp), not an
+		// index: `=` is never an expression operator, so a `name` `=` pair
+		// inside the brackets discriminates the two unambiguously. Only a bare
+		// variable can name a table.
+		if table, ok := node.(string); ok && p.peekAt(1).k == tkName && p.peekAt(2).k == tkEq {
+			node = p.parseTableLookup(table)
+			continue
+		}
 		p.next() // '['
 		args := []any{node, p.parseExpr(0)}
 		for p.peek().k == tkComma {
@@ -658,6 +670,9 @@ func (p *exprTextParser) parseAggregate(sym string) Expression {
 		p.next() // '='
 		key = p.parseExpr(0)
 	}
+	// `id=<name>` (RFC §6.1 node identity), emitted by formatAggregate after
+	// `key=`. A bare-name clause, so it adds no bracket ambiguity.
+	id := p.parseIDClause()
 	var semiring *string
 	if p.peek().k == tkLBracket && p.peekAt(1).k == tkName && p.peekAt(1).s == "semiring" {
 		p.next() // '['
@@ -697,6 +712,9 @@ func (p *exprTextParser) parseAggregate(sym string) Expression {
 	if key != nil {
 		node.Key = key
 	}
+	if id != nil {
+		node.ID = id
+	}
 	node.Expr = expr
 	node.Args = deriveAggregateArgs(expr, join, filter, key)
 	return node
@@ -721,14 +739,73 @@ func (p *exprTextParser) parseArgWitness(op string) Expression {
 		p.next()
 		ranges = p.parseRanges()
 	}
+	// `id=<name>` (RFC §6.1 node identity), emitted by formatArgWitness after
+	// the where-clause. Mirrors the aggregate tail.
+	id := p.parseIDClause()
 	arg := at.s
-	return ExprNode{
+	node := ExprNode{
 		Op:     op,
 		Args:   deriveAggregateArgs(expr, nil, nil, nil),
 		Arg:    &arg,
 		Ranges: ranges,
 		Expr:   expr,
 	}
+	if id != nil {
+		node.ID = id
+	}
+	return node
+}
+
+// parseIDClause consumes the optional bare-name `id=<name>` clause that
+// formatAggregate / formatArgWitness emit for the RFC §6.1 node identity, and
+// returns nil when it is absent.
+func (p *exprTextParser) parseIDClause() *string {
+	if !p.atWord("id") || p.peekAt(1).k != tkEq {
+		return nil
+	}
+	p.next() // 'id'
+	p.next() // '='
+	nm := p.next()
+	if nm.k != tkName {
+		p.failAt("Expected a name after id=", nm)
+	}
+	s := nm.s
+	return &s
+}
+
+// parseTableLookup parses a `table_lookup` from the surface formatStructuralOp
+// emits: `table '[' axis '=' expr (',' axis '=' expr)* ']' (':' <integer>)?`,
+// e.g. `visc[T=temp]` and `k_rate[T=temp, p=pres]:1`. The printer sorts the axis
+// names, so the reconstructed `axes` map reprints identically.
+func (p *exprTextParser) parseTableLookup(table string) Expression {
+	p.expect(tkLBracket, "'['")
+	axes := map[string]Expression{}
+	for {
+		nm := p.next()
+		if nm.k != tkName {
+			p.failAt("Expected an axis name in table[axis=…]", nm)
+		}
+		p.expect(tkEq, "'=' in table[axis=…]")
+		axes[nm.s] = p.parseExpr(0)
+		if p.peek().k == tkComma {
+			p.next()
+			continue
+		}
+		break
+	}
+	p.expect(tkRBracket, "']' after table[axis=…]")
+	tbl := table
+	node := ExprNode{Op: "table_lookup", Args: []any{}, Table: &tbl, TableAxes: axes}
+	// The optional `:N` output selector picks one column of a multi-output table.
+	if p.peek().k == tkColon {
+		p.next()
+		out := p.next()
+		if out.k != tkNum || out.n != float64(int64(out.n)) {
+			p.failAt("Expected an integer output index after table[…]:", out)
+		}
+		node.Output = out.n
+	}
+	return node
 }
 
 // parseRanges parses a `{ k in <rhs>, … }` where-body into a ranges object.
@@ -968,9 +1045,10 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 		}
 		return ExprNode{Op: "concat", Args: args, Axis: axis}
 	}
-	// Geometry area query `polygon_intersection_area(a, b, manifold=<name>)`.
-	// (Its sibling `intersect_polygon` stays refused: its `id` isn't printed.)
-	if name == "polygon_intersection_area" {
+	// Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
+	// `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
+	// node identity) is optional and only emitted by the printer when present.
+	if name == "polygon_intersection_area" || name == "intersect_polygon" {
 		manifold, _ := lookup("manifold")
 		m, ok := manifold.(string)
 		if !ok {
@@ -979,14 +1057,24 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 			}})
 		}
 		for _, n := range named {
-			if n.key != "manifold" {
+			if n.key != "manifold" && n.key != "id" {
 				panic(exprParseFailure{&ExpressionParseError{
 					Message: fmt.Sprintf("unexpected %s=… in %s(...)", n.key, name),
 					Pos:     pos,
 				}})
 			}
 		}
-		return ExprNode{Op: "polygon_intersection_area", Args: args, Manifold: &m}
+		node := ExprNode{Op: name, Args: args, Manifold: &m}
+		if idVal, ok := lookup("id"); ok {
+			idStr, isStr := idVal.(string)
+			if !isStr {
+				panic(exprParseFailure{&ExpressionParseError{
+					Message: name + "(...) id=… must be a name", Pos: pos,
+				}})
+			}
+			node.ID = &idStr
+		}
+		return node
 	}
 	p.noNamed(named, name, pos)
 	if exprStructuralRefusals[name] {

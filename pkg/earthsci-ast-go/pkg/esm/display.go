@@ -1647,6 +1647,11 @@ func formatAggregate(node ExprNode, format string) string {
 	if node.Key != nil {
 		out += " key=" + formatExpression(node.Key, format)
 	}
+	// `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
+	// no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+	if node.ID != nil {
+		out += " id=" + *node.ID
+	}
 	if semiring != "" && semiring != "sum_product" {
 		out += " [semiring=" + semiring + "]"
 	}
@@ -1671,6 +1676,9 @@ func formatArgWitness(node ExprNode, format string) string {
 	}
 	if len(node.Ranges) > 0 {
 		out += formatRangesClause(node.Ranges, format)
+	}
+	if node.ID != nil {
+		out += " id=" + *node.ID
 	}
 	return out
 }
@@ -1865,7 +1873,15 @@ func formatStructuralOp(node ExprNode, format string) (string, bool) {
 		if node.Manifold != nil {
 			manifold = *node.Manifold
 		}
-		return opDisplayName(op, format) + "(" + inner + ", manifold=" + manifold + ")", true
+		// `id` (RFC §6.1 node identity) is emitted as a trailing named argument
+		// when present, so a node addressable as a derived index set's
+		// `from_faq` referent survives the text round-trip. Absent `id` prints
+		// exactly as before, so every existing rendering is unchanged.
+		idPart := ""
+		if node.ID != nil {
+			idPart = ", id=" + *node.ID
+		}
+		return opDisplayName(op, format) + "(" + inner + ", manifold=" + manifold + idPart + ")", true
 
 	case "aggregate":
 		return formatAggregate(node, format), true
