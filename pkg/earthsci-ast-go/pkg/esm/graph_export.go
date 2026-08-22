@@ -224,9 +224,10 @@ func (e *MermaidExporter) ExportExpressionGraph(graph *ExpressionGraph) (string,
 	builder.WriteString("    classDef observed fill:#f1f8e9\n")
 	builder.WriteString("    classDef species fill:#fce4ec\n")
 
-	// Apply classes to nodes
+	// Apply classes to nodes. The id MUST be built the same way as the node
+	// declaration above, or the class line names a node that does not exist.
 	for _, node := range nodes {
-		nodeID := sanitizeMermaidID(fmt.Sprintf("%s_%s", node.System, node.Name))
+		nodeID := sanitizeMermaidID(variableNodeID(node, "_"))
 		fmt.Fprintf(&builder, "    class %s %s\n", nodeID, node.Kind)
 	}
 
@@ -245,21 +246,64 @@ func NewJSONExporter() *JSONExporter {
 	return &JSONExporter{}
 }
 
-// ExportComponentGraph exports a component graph to JSON format
+// jsonAdjacencyEdge is one edge of the JSON adjacency-list export. Its
+// endpoints are node KEYS (strings), not embedded node objects: a JSON
+// adjacency list is a node table plus references into it, and inlining whole
+// nodes on both ends of every edge made the export quadratic in the graph and
+// unusable as an adjacency list.
+type jsonAdjacencyEdge struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Data   any    `json:"data"`
+}
+
+// jsonAdjacencyGraph is the JSON adjacency-list export shape
+// (esm-libraries-spec §4.8.3): a node table (each entry carrying an `id`), an
+// edge list addressing nodes by that id, and an adjacency map from every node
+// id to its UNDIRECTED neighbours.
+type jsonAdjacencyGraph struct {
+	Nodes     []any               `json:"nodes"`
+	Edges     []jsonAdjacencyEdge `json:"edges"`
+	Adjacency map[string][]string `json:"adjacency"`
+}
+
+// jsonVariableNode is a VariableNode with the node table's `id` key added. A
+// component node already carries `id`; a variable node's key is its scoped
+// Name, so the id is emitted alongside.
+type jsonVariableNode struct {
+	ID string `json:"id"`
+	VariableNode
+}
+
+// ExportComponentGraph exports a component graph as a JSON adjacency list.
 func (e *JSONExporter) ExportComponentGraph(graph *ComponentGraph) (string, error) {
 	// Sort nodes and edges for consistent output
-	sortedGraph := &ComponentGraph{
-		Nodes: make([]ComponentNode, len(graph.Nodes)),
-		Edges: make([]GraphEdge[ComponentNode, CouplingEdge], len(graph.Edges)),
+	nodes := make([]ComponentNode, len(graph.Nodes))
+	edges := make([]GraphEdge[ComponentNode, CouplingEdge], len(graph.Edges))
+	copy(nodes, graph.Nodes)
+	copy(edges, graph.Edges)
+	sortComponentNodes(nodes)
+	sortComponentEdges(edges)
+
+	closure := graph.closure()
+	out := jsonAdjacencyGraph{
+		Nodes:     make([]any, 0, len(nodes)),
+		Edges:     make([]jsonAdjacencyEdge, 0, len(edges)),
+		Adjacency: make(map[string][]string, len(nodes)),
+	}
+	for _, node := range nodes {
+		out.Nodes = append(out.Nodes, node)
+		out.Adjacency[node.ID] = closure.adjacent(node.ID)
+	}
+	for _, edge := range edges {
+		out.Edges = append(out.Edges, jsonAdjacencyEdge{
+			Source: edge.Source.ID,
+			Target: edge.Target.ID,
+			Data:   edge.Data,
+		})
 	}
 
-	copy(sortedGraph.Nodes, graph.Nodes)
-	copy(sortedGraph.Edges, graph.Edges)
-
-	sortComponentNodes(sortedGraph.Nodes)
-	sortComponentEdges(sortedGraph.Edges)
-
-	data, err := json.MarshalIndent(sortedGraph, "", "  ")
+	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal component graph: %w", err)
 	}
@@ -267,21 +311,35 @@ func (e *JSONExporter) ExportComponentGraph(graph *ComponentGraph) (string, erro
 	return string(data), nil
 }
 
-// ExportExpressionGraph exports an expression graph to JSON format
+// ExportExpressionGraph exports an expression graph as a JSON adjacency list.
 func (e *JSONExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, error) {
 	// Sort nodes and edges for consistent output
-	sortedGraph := &ExpressionGraph{
-		Nodes: make([]VariableNode, len(graph.Nodes)),
-		Edges: make([]GraphEdge[VariableNode, DependencyEdge], len(graph.Edges)),
+	nodes := make([]VariableNode, len(graph.Nodes))
+	edges := make([]GraphEdge[VariableNode, DependencyEdge], len(graph.Edges))
+	copy(nodes, graph.Nodes)
+	copy(edges, graph.Edges)
+	sortVariableNodes(nodes)
+	sortVariableEdges(edges, ".")
+
+	closure := graph.closure()
+	out := jsonAdjacencyGraph{
+		Nodes:     make([]any, 0, len(nodes)),
+		Edges:     make([]jsonAdjacencyEdge, 0, len(edges)),
+		Adjacency: make(map[string][]string, len(nodes)),
+	}
+	for _, node := range nodes {
+		out.Nodes = append(out.Nodes, jsonVariableNode{ID: node.Name, VariableNode: node})
+		out.Adjacency[node.Name] = closure.adjacent(node.Name)
+	}
+	for _, edge := range edges {
+		out.Edges = append(out.Edges, jsonAdjacencyEdge{
+			Source: edge.Data.Source,
+			Target: edge.Data.Target,
+			Data:   edge.Data,
+		})
 	}
 
-	copy(sortedGraph.Nodes, graph.Nodes)
-	copy(sortedGraph.Edges, graph.Edges)
-
-	sortVariableNodes(sortedGraph.Nodes)
-	sortVariableEdges(sortedGraph.Edges, ".")
-
-	data, err := json.MarshalIndent(sortedGraph, "", "  ")
+	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal expression graph: %w", err)
 	}
@@ -308,40 +366,44 @@ func getNodeColor(nodeType string) string {
 	}
 }
 
-// getVariableNodeColor returns appropriate color for a variable node's DERIVED
-// role (esm-spec §6.3.1; see variableRoles in graph.go) in DOT format.
+// getVariableNodeColor returns appropriate color for a variable node's graph
+// kind (esm-libraries-spec §4.8.2; see the NodeKind* constants in graph.go) in
+// DOT format. The colours are unchanged; only the vocabulary the switch reads
+// moved from the finer §6.3.1 classifier names to the graph's own.
 func getVariableNodeColor(kind string) string {
 	switch kind {
-	case RoleODEState, RoleAlgebraic:
+	case NodeKindState, NodeKindAlgebraic:
 		return "lightblue"
-	case "parameter", RoleConstant, RoleSampled, RoleDiscrete:
+	case NodeKindParameter, NodeKindDiscrete:
 		return "lightyellow"
-	case RoleObserved:
+	case NodeKindObserved:
 		return "lightgreen"
-	case RoleBrownian:
+	case NodeKindBrownian:
 		return "lightsalmon"
-	case "species":
+	case NodeKindSpecies:
 		return "lightpink"
 	default:
 		return "white"
 	}
 }
 
-// formatComponentNodeLabel formats the label for a component node
+// formatComponentNodeLabel formats the label for a component node.
+//
+// The counts a label carries are the ones that MEAN something for the node's
+// type: a model shows variables and equations, a reaction system shows species
+// and reactions (its ComponentCounts.EqCount IS its reaction count — see
+// ComponentCounts). The emitted text is unchanged from when the counts were
+// four separate optional pointers.
 func formatComponentNodeLabel(node ComponentNode) string {
 	label := node.Name + "\\n(" + node.Type + ")"
 
-	if node.VariableCount != nil {
-		label += fmt.Sprintf("\\n%d vars", *node.VariableCount)
-	}
-	if node.EquationCount != nil {
-		label += fmt.Sprintf(", %d eqs", *node.EquationCount)
-	}
-	if node.SpeciesCount != nil {
-		label += fmt.Sprintf("\\n%d species", *node.SpeciesCount)
-	}
-	if node.ReactionCount != nil {
-		label += fmt.Sprintf(", %d rxns", *node.ReactionCount)
+	switch node.Type {
+	case "reaction_system":
+		label += fmt.Sprintf("\\n%d species, %d rxns",
+			node.Metadata.SpeciesCount, node.Metadata.EqCount)
+	default:
+		label += fmt.Sprintf("\\n%d vars, %d eqs",
+			node.Metadata.VarCount, node.Metadata.EqCount)
 	}
 
 	return label
@@ -402,10 +464,17 @@ func dotEscape(s string) string {
 	return strings.ReplaceAll(s, "\"", "\\\"")
 }
 
-// variableNodeID returns the composite "system<sep>name" identifier for a
-// variable node; DOT/JSON use "." and Mermaid uses "_".
+// variableNodeID returns the identifier for a variable node in an export.
+//
+// VariableNode.Name is now the node's SCOPED key ("System.name"), so the
+// composite this used to build by hand is the name itself; `sep` selects the
+// separator each format wants ("." for DOT/JSON, "_" for Mermaid), which for a
+// dotted scoped name means rewriting the dots.
 func variableNodeID(node VariableNode, sep string) string {
-	return node.System + sep + node.Name
+	if sep == "." {
+		return node.Name
+	}
+	return strings.ReplaceAll(node.Name, ".", sep)
 }
 
 // sortComponentNodes sorts component nodes by ID for deterministic output.
@@ -425,7 +494,7 @@ func sortComponentEdges(edges []GraphEdge[ComponentNode, CouplingEdge]) {
 	})
 }
 
-// sortVariableNodes sorts variable nodes by (system, name).
+// sortVariableNodes sorts variable nodes by (system, scoped name).
 func sortVariableNodes(nodes []VariableNode) {
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].System != nodes[j].System {

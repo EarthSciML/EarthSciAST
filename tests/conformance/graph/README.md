@@ -81,10 +81,13 @@ expression-graph cases as a named expected failure rather than bend either way.
 
 **2. Are an `aggregate`'s BOUND index variables graph nodes?** The corpus carries
 nodes named `a`, `o` and `v` for the same document — the bound range indices of
-its reductions. TypeScript's `freeVariables` does not subtract an aggregate's own
-indices, so they reach the graph; Julia's and Go's do subtract them. A bound
-index is not a model variable, so the oracle looks wrong here, but
-`freeVariables` is shared with other TypeScript passes.
+its reductions. TypeScript, Python, Go and Rust all reach them: the collector
+their graph uses walks every child and does not subtract an aggregate's own
+range indices. Julia's `free_variables` does subtract them, so Julia alone omits
+these three nodes. A bound index is not a model variable, so four-of-five
+agreeing does not make it obviously right — but the collector is shared with
+other passes in each of those four, so this is a decision rather than a local
+fix.
 
 **3. A reaction system's `var_count`.** The oracle writes 0; Julia and Python
 used to write `len(parameters)`; Go and Rust report no variable count for a

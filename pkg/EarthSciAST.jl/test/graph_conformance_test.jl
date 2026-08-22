@@ -228,12 +228,13 @@ end
 #
 # 2. AGGREGATE-BOUND INDEX VARIABLES. The corpus carries graph nodes named `a`,
 #    `o` and `v` — the BOUND index variables of that document's `aggregate`
-#    reductions. TypeScript's `freeVariables` does not subtract an aggregate's
-#    own range indices, so they reach the graph as variable nodes; this binding's
-#    `free_variables` does subtract them, as does Go's. A bound index is not a
-#    model variable, so the oracle looks wrong here — but `freeVariables` is
-#    shared with other TypeScript passes, so this too is a decision rather than a
-#    local fix.
+#    reductions. The variable collector the OTHER FOUR bindings' graphs use walks
+#    every child and does not subtract an aggregate's own range indices, so all
+#    four reach them; this binding's `free_variables` does subtract them, so
+#    Julia alone omits these three nodes. A bound index is not a model variable,
+#    so four-of-five agreeing does not make it obviously right — but the
+#    collector is shared with other passes in each of those four, so this too is
+#    a decision rather than a local fix.
 const _EXPRESSION_GRAPH_DIVERGENCE = Set(["wildfire_atmosphere_ocean"])
 
 if _require_fixture(_GRAPH_CORPUS_PATH)
