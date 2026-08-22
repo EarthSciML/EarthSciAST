@@ -248,7 +248,12 @@ function shapeJsonExport(json) {
     top_level_keys: Object.keys(g).sort(),
     node_ids: g.nodes.map((n) => n.id),
     edges: g.edges.map((e) => ({ source: e.source, target: e.target })),
-    adjacency: g.adjacency,
+    // Sorted: a node's neighbour ORDER is no more a conformance property than
+    // the node list's own order (each binding builds its adjacency map from its
+    // own iteration order).
+    adjacency: Object.fromEntries(
+      Object.entries(g.adjacency).map(([k, v]) => [k, [...v].sort()]),
+    ),
   }
 }
 

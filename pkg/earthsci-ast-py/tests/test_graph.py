@@ -31,6 +31,8 @@ from earthsci_ast.esm_types import (
     Species,
 )
 from earthsci_ast.graph import (
+    EXPR_RESULT,
+    NON_EQUATION_INDEX,
     ComponentNode,
     CouplingEdge,
     DependencyEdge,
@@ -305,17 +307,26 @@ class TestExpressionGraph:
         assert by_name["A"].kind == "species" and by_name["A"].units == "mol/mol"
         assert by_name["k"].kind == "parameter" and by_name["k"].units == "1/s"
 
-    def test_standalone_expression_yields_nodes_only(self):
-        """A bare expression names no dependency target (Rust, Julia)."""
+    def test_standalone_expression_feeds_a_synthetic_result_node(self):
+        """§4.8.2 requires the Expr overload to produce EDGES, not just nodes.
+
+        "every variable in the expression becomes a node, and the tree structure
+        is flattened into dependency edges" — so the expression's value gets a
+        synthetic ``expr_result`` target and every free variable feeds it. This
+        module used to return nodes only.
+        """
         graph = expression_graph(ExprNode(op="*", args=["a", ExprNode(op="+", args=["b", 2])]))
-        assert {node.name for node in graph.nodes} == {"a", "b"}
-        assert graph.edges == []
+        assert {node.name for node in graph.nodes} == {"a", "b", EXPR_RESULT}
+        assert {(e.data.source, e.data.target) for e in graph.edges} == {
+            ("a", EXPR_RESULT),
+            ("b", EXPR_RESULT),
+        }
 
     def test_merge_coupled_is_off_by_default(self, variable_map_file):
         default = expression_graph(variable_map_file)
         merged = expression_graph(variable_map_file, merge_coupled=True)
         assert len(merged.edges) > len(default.edges)
-        cross = [e for e in merged.edges if e.data.equation_index is None]
+        cross = [e for e in merged.edges if e.data.equation_index == NON_EQUATION_INDEX]
         assert ("SystemA.temperature", "SystemB.temperature") in {
             (e.data.source, e.data.target) for e in cross
         }
@@ -443,11 +454,15 @@ class TestExports:
         assert set(payload) == {"nodes", "edges", "adjacency"}
         assert {node["id"] for node in payload["nodes"]} == {"Advection", "SimpleOzone"}
         edge = payload["edges"][0]
-        # The wire spellings of `from_component` / `to_component`.
-        assert edge["from"] == "SimpleOzone" and edge["to"] == "Advection"
-        assert edge["type"] == "operator_compose"
+        assert edge["source"] == "SimpleOzone" and edge["target"] == "Advection"
+        # The wire spellings of `from_component` / `to_component`, under `data`.
+        assert edge["data"]["from"] == "SimpleOzone" and edge["data"]["to"] == "Advection"
+        assert edge["data"]["type"] == "operator_compose"
+        # UNDIRECTED adjacency, matching `Graph.adjacency` (§4.8.3). This used
+        # to be `successors`, so the export disagreed with the graph's own
+        # lookup — caught by the shared corpus.
         assert payload["adjacency"] == {
-            "Advection": [],
+            "Advection": ["SimpleOzone"],
             "SimpleOzone": ["Advection"],
         }
 

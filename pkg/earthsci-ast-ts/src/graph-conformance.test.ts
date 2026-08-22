@@ -146,7 +146,13 @@ const actualJsonExport = (g: Graph<any, any>): JsonExportCase => {
       source: e.source,
       target: e.target,
     })),
-    adjacency: parsed.adjacency,
+    // Sorted — see the generator: neighbour order is not pinned.
+    adjacency: Object.fromEntries(
+      Object.entries(parsed.adjacency as Record<string, string[]>).map(([k, v]) => [
+        k,
+        [...v].sort(),
+      ]),
+    ),
   }
 }
 
