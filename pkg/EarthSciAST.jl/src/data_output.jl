@@ -33,7 +33,7 @@ malformed snapshot, or a call to [`build_output_callback`](@ref) before the
 `DiffEqCallbacks` / `SciMLBase` extension is loaded. The output-side mirror of
 [`RefreshError`](@ref).
 """
-struct OutputError <: Exception
+struct OutputError <: EarthSciASTError
     msg::String
 end
 Base.showerror(io::IO, e::OutputError) = print(io, "OutputError: ", e.msg)

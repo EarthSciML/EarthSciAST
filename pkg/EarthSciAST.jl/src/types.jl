@@ -1820,7 +1820,7 @@ end
 Exception thrown when qualified reference resolution fails.
 Contains detailed error information.
 """
-struct QualifiedReferenceError <: Exception
+struct QualifiedReferenceError <: EarthSciASTError
     message::String
     reference::String
     path::Vector{String}

@@ -72,7 +72,7 @@ const SEGMENT_DENOM_FLOOR = 1e-300
 A polygon-clip / area evaluation failed (bad operand, degenerate input, or a
 spherical clip requested without the GeometryOps extension loaded).
 """
-struct GeometryError <: Exception
+struct GeometryError <: EarthSciASTError
     msg::String
 end
 Base.showerror(io::IO, e::GeometryError) = print(io, "GeometryError: ", e.msg)

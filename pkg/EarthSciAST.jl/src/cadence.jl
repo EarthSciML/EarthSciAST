@@ -58,7 +58,7 @@ materialised set→set graph instead of carrying its own cycle detector.
 module Cadence
 
 import JSON3
-using ..EarthSciAST: ReferenceGraph, ReferenceVertex, detect_cycle,
+using ..EarthSciAST: EarthSciASTError, ReferenceGraph, ReferenceVertex, detect_cycle,
     _ensure_vertex!, _add_edge!
 
 export CadenceError, classify,
@@ -83,7 +83,7 @@ A cadence-partition contract violation in a fixture or producer output —
 a wrong `expect_cadence`, a `continuous` relational node (§5.7 guard 2), a
 `from_faq` cycle (§5.7 guard 1), a float topology key, or an unknown fold.
 """
-struct CadenceError <: Exception
+struct CadenceError <: EarthSciASTError
     msg::String
 end
 Base.showerror(io::IO, e::CadenceError) = print(io, "CadenceError: ", e.msg)

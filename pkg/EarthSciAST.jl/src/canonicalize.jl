@@ -25,7 +25,7 @@ field carries a stable error code:
   canonical emitter reached `_emit_json` (defensively unreachable for the four
   concrete node types; internal misuse, not an authoring error).
 """
-struct CanonicalizeError <: Exception
+struct CanonicalizeError <: EarthSciASTError
     code::String
     message::String
 end

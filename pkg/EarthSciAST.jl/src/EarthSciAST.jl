@@ -41,6 +41,12 @@ using Tullio
 # kernel source through this module's RGF cache.
 RuntimeGeneratedFunctions.init(@__MODULE__)
 
+# Root of the exception hierarchy. Included FIRST and depends on nothing, so
+# every `struct … <: EarthSciASTError` below resolves its supertype.
+include("errors.jl")
+# Central diagnostic-code registry. Pure data, no dependencies; must precede
+# every raise site that names a code.
+include("error_codes.jl")
 # Core data model + validation
 include("types.jl")
 # Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it
@@ -128,6 +134,13 @@ include("run_tests.jl")
 include("pde_inline_tests.jl")
 
 export
+    # Root of the exception hierarchy (H-1): every exception this package
+    # raises subtypes `EarthSciASTError`, so one `catch e; e isa
+    # EarthSciASTError` covers the whole surface. `ERROR_CODES` is the central
+    # registry of the diagnostic code STRINGS those errors carry — a
+    # cross-binding contract, mirroring TypeScript's `ERROR_CODES` object and
+    # Python's `ErrorCode` enum.
+    EarthSciASTError, ERROR_CODES, error_code_names,
     # Reference resolution — semiring-FAQ node addressing (RFC §6.1).
     # The graph-query methods (dependencies/dependents/detect_cycle/
     # topological_order/edges_of_kind) are intentionally NOT exported: they are
@@ -201,7 +214,7 @@ export
     # Coupling serialization functions
     serialize_coupling_entry, coerce_coupling_entry,
     # Structural validation
-    StructuralError, ValidationResult, validate_structural, validate,
+    StructuralError, ValidationResult, UnitWarning, validate_structural, validate,
     validate_reaction_rate_units,
     # Expression operations. Expression containment extends `Base.contains`
     # (always in scope for consumers), so `contains` is not re-exported.

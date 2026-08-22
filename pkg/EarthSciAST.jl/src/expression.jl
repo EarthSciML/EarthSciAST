@@ -567,7 +567,7 @@ bindings. Defined here so it is in scope for callers that catch the
 "binding not yet resolved" signal during iterated observed-variable
 fixed-point passes.
 """
-struct UnboundVariableError <: Exception
+struct UnboundVariableError <: EarthSciASTError
     variable_name::String
     message::String
 end

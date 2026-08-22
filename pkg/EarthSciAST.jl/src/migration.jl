@@ -40,12 +40,12 @@ This mirrors the TypeScript reference implementation
 """
 
 """
-    MigrationError <: Exception
+    MigrationError <: EarthSciASTError
 
 Thrown when [`migrate`](@ref) is asked for a version pair it does not support —
 including every pair that crosses the 1.0.0 clean break.
 """
-struct MigrationError <: Exception
+struct MigrationError <: EarthSciASTError
     message::String
 end
 

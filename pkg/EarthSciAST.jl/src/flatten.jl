@@ -702,7 +702,7 @@ function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
         end
         hits = sort!(collect(intersect(setdiff(names, pnames), rewritten)))
         isempty(hits) || throw(ExpressionTemplateError(
-            "template_body_references_coupling_rewritten_variable",
+            ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
             "expression template '$(String(tname))' body references " *
             "'$(join(hits, "', '"))', which a coupling variable_map rewrote in " *
             "the flattened equations; the registry body would expand to a stale " *

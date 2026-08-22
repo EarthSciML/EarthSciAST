@@ -220,14 +220,14 @@ refs are rejected — download the file and import it by local path. Raises
 function _default_coupling_load_ref(ref::AbstractString, base_path::AbstractString)
     if _is_url(ref)
         throw(ExpressionTemplateError(
-            "coupling_import_unresolved",
+            ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
             "remote coupling_import ref '$(ref)' cannot be loaded synchronously; " *
             "download the file and import it by local path"))
     end
     path = _canonical_ref(String(ref), String(base_path))
     if !isfile(path)
         throw(ExpressionTemplateError(
-            "coupling_import_unresolved",
+            ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
             "coupling-library file not found or unreadable: $(path) (from ref '$(ref)')"))
     end
     local content::String
@@ -235,14 +235,14 @@ function _default_coupling_load_ref(ref::AbstractString, base_path::AbstractStri
         content = read(path, String)
     catch e
         throw(ExpressionTemplateError(
-            "coupling_import_unresolved",
+            ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
             "coupling-library file not found or unreadable: $(path) (from ref '$(ref)'): $(e)"))
     end
     try
         return JSON3.read(content)
     catch e
         throw(ExpressionTemplateError(
-            "coupling_import_unresolved",
+            ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
             "coupling-library ref '$(path)' is not valid JSON: $(e)"))
     end
 end
@@ -301,7 +301,7 @@ list. Raises the esm-spec §10.11 diagnostics.
 function _validate_library(lib, ref::AbstractString)
     if !_is_coupling_library_doc(lib)
         throw(ExpressionTemplateError(
-            "coupling_import_not_library",
+            ERROR_CODES.COUPLING_IMPORT_NOT_LIBRARY,
             "coupling_import ref '$(ref)' lacks top-level `coupling_roles` — " *
             "not a coupling-library file (esm-spec §10.9)"))
     end
@@ -310,7 +310,7 @@ function _validate_library(lib, ref::AbstractString)
     for k in _COUPLING_LIBRARY_FORBIDDEN_KEYS
         if _raw_haskey(lib, k)
             throw(ExpressionTemplateError(
-                "coupling_library_illegal_payload",
+                ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 "coupling-library '$(ref)' declares `$(k)` — a coupling library is " *
                 "nothing but roles + wiring (esm-spec §10.9)"))
         end
@@ -320,7 +320,7 @@ function _validate_library(lib, ref::AbstractString)
     roles = _is_object(rolesobj) ? String[string(k) for k in keys(rolesobj)] : String[]
     if isempty(roles)
         throw(ExpressionTemplateError(
-            "coupling_library_illegal_payload",
+            ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
             "coupling-library '$(ref)' declares no roles " *
             "(esm-spec §10.9: `coupling_roles` is required, non-empty)"))
     end
@@ -328,7 +328,7 @@ function _validate_library(lib, ref::AbstractString)
     edges = _is_array(edges_raw) ? collect(edges_raw) : Any[]
     if isempty(edges)
         throw(ExpressionTemplateError(
-            "coupling_library_illegal_payload",
+            ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
             "coupling-library '$(ref)' has an empty `coupling` array " *
             "(esm-spec §10.9: required, non-empty)"))
     end
@@ -341,27 +341,27 @@ function _validate_library(lib, ref::AbstractString)
         etype = _raw_get(edge, "type")
         if etype == "coupling_import"
             throw(ExpressionTemplateError(
-                "coupling_library_nested_import",
+                ERROR_CODES.COUPLING_LIBRARY_NESTED_IMPORT,
                 "coupling-library '$(ref)' contains a nested coupling_import " *
                 "(v1 forbids layering, esm-spec §10.9)"))
         end
         if etype == "callback" || _raw_haskey(edge, "expression_template_imports")
             throw(ExpressionTemplateError(
-                "coupling_library_illegal_payload",
+                ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 "coupling-library '$(ref)' edge of type '$(etype)' is not " *
                 "role-substitutable (no callback entries or edge-level " *
                 "expression_template_imports, esm-spec §10.9)"))
         end
         if !(etype isa AbstractString) || !(String(etype) in _ROLE_BEARING_TYPES)
             throw(ExpressionTemplateError(
-                "coupling_library_illegal_payload",
+                ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
                 "coupling-library '$(ref)' contains an unsupported edge type " *
                 "'$(etype)' (esm-spec §10.9)"))
         end
         for seg in _collect_role_segments(edge)
             if !(seg in role_set)
                 throw(ExpressionTemplateError(
-                    "coupling_edge_unknown_role",
+                    ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
                     "coupling-library '$(ref)': edge references '$(seg)', which is " *
                     "not a declared role (esm-spec §10.9)"))
             end
@@ -371,7 +371,7 @@ function _validate_library(lib, ref::AbstractString)
     for role in roles
         if !(role in used_roles)
             throw(ExpressionTemplateError(
-                "coupling_role_unused",
+                ERROR_CODES.COUPLING_ROLE_UNUSED,
                 "coupling-library '$(ref)': role '$(role)' is declared but " *
                 "referenced by no edge (esm-spec §10.9)"))
         end
@@ -392,7 +392,7 @@ function _validate_bind(bind::AbstractDict, roles::Vector{String},
     for key in keys(bind)
         if !(key in role_set)
             throw(ExpressionTemplateError(
-                "coupling_import_unknown_role",
+                ERROR_CODES.COUPLING_IMPORT_UNKNOWN_ROLE,
                 "coupling_import ref '$(ref)': bind key '$(key)' is not a declared " *
                 "role (esm-spec §10.10.1)"))
         end
@@ -400,13 +400,13 @@ function _validate_bind(bind::AbstractDict, roles::Vector{String},
     for role in roles
         if !haskey(bind, role)
             throw(ExpressionTemplateError(
-                "coupling_import_role_unbound",
+                ERROR_CODES.COUPLING_IMPORT_ROLE_UNBOUND,
                 "coupling_import ref '$(ref)': role '$(role)' has no bind entry " *
                 "(binding is total, esm-spec §10.10.1)"))
         end
         if !_resolves_to_component(file, bind[role])
             throw(ExpressionTemplateError(
-                "coupling_import_bind_not_a_component",
+                ERROR_CODES.COUPLING_IMPORT_BIND_NOT_A_COMPONENT,
                 "coupling_import ref '$(ref)': bind '$(role)' -> '$(bind[role])' " *
                 "does not resolve to a component (esm-spec §10.10.1)"))
         end
@@ -471,7 +471,7 @@ function expand_coupling_imports(file::EsmFile; base_path::AbstractString=".",
         catch e
             e isa ExpressionTemplateError && rethrow(e)
             throw(ExpressionTemplateError(
-                "coupling_import_unresolved",
+                ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
                 "coupling_import ref '$(entry.ref)' failed to load: $(e)"))
         end
         for expanded_edge in _expand_one(lib, entry.ref, entry.bind, file)

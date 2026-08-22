@@ -58,19 +58,19 @@ const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
 # every downstream consumer speaks plain string-keyed `get`.)
 
 """
-    ExpressionTemplateError <: Exception
+    ExpressionTemplateError <: EarthSciASTError
 
 Exception raised when a load-time lowering pass fails: expression-template
 expansion (esm-spec §9.6), template-library imports (§9.7), coupling-library
 imports (§10.9–§10.11), and the subsystem-reference / index-set checks in
 `parse.jl`. Carries a stable diagnostic `code` drawn from
-[`_KNOWN_DIAGNOSTIC_CODES`](@ref), the single registry of every code this
-exception is raised with. Codes (and their message texts) are
-conformance-relevant, so a new raise site MUST use a code registered there —
-and a genuinely new code MUST be added to the registry alongside its first
-raise site.
+[`ERROR_CODES`](@ref) — [`_KNOWN_DIAGNOSTIC_CODES`](@ref) names the subset of
+that registry this exception is raised with. Codes (and their message texts)
+are conformance-relevant, so a new raise site MUST use a code registered there
+— and a genuinely new code MUST be added to `ERROR_CODES` (and coordinated
+across every binding) alongside its first raise site.
 """
-struct ExpressionTemplateError <: Exception
+struct ExpressionTemplateError <: EarthSciASTError
     code::String
     message::String
 end
@@ -81,71 +81,74 @@ Base.showerror(io::IO, e::ExpressionTemplateError) =
 """
     _KNOWN_DIAGNOSTIC_CODES
 
-Registry of every stable diagnostic code raised as an
+The subset of [`ERROR_CODES`](@ref) that is raised as an
 [`ExpressionTemplateError`](@ref) anywhere in the package (this file,
 `template_imports.jl`, `coupling_imports.jl`, `parse.jl`), grouped by the
-spec section that pins it. Diagnostic codes are conformance-relevant
-(cross-binding fixtures assert them), so keep this tuple in sync with the
-raise sites: register any new code here when introducing it.
+spec section that pins it. Every entry is a REFERENCE into the central
+registry (`src/error_codes.jl`), never a literal — this tuple records which
+codes belong to this exception, and `ERROR_CODES` alone owns their values.
+Diagnostic codes are conformance-relevant (cross-binding fixtures assert
+them), so keep this tuple in sync with the raise sites: add the code to
+`ERROR_CODES` and list it here when introducing it.
 """
 const _KNOWN_DIAGNOSTIC_CODES = (
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
     # (lower_expression_templates.jl; the recursive-body composition check
     # lives in template_imports.jl).
-    "apply_expression_template_unknown_template",
-    "apply_expression_template_bindings_mismatch",
-    "apply_expression_template_recursive_body",
-    "apply_expression_template_invalid_declaration",
-    "apply_expression_template_version_too_old",
-    "rewrite_rule_nonterminating",
-    "template_constraint_unknown_index_set",
-    "geometry_manifold_invalid",
-    "makearray_region_inverted",
+    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
+    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
+    ERROR_CODES.REWRITE_RULE_NONTERMINATING,
+    ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
+    ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
+    ERROR_CODES.MAKEARRAY_REGION_INVERTED,
     # Flatten-time shadow-registry guard (flatten.jl): a surviving registry
     # body references a variable a coupling `variable_map` rewrote in the
     # flattened equations (esm-spec §9.6.4 / §10.4).
-    "template_body_references_coupling_rewritten_variable",
+    ERROR_CODES.TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
     # Projection-pushdown desugar post-condition (pushdown_rewrite.jl): a rect
     # factor the rewrite must re-point onto the generated per-support cell
     # gathers is named FREE in a template body instead of bound at the call
     # site, so the call-site-only rewrite cannot reach it (esm-spec §9.6.4
     # Option B / CONFORMANCE_SPEC §5.5.7).
-    "template_body_references_pushdown_rewritten_variable",
+    ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
     # esm-spec §9.7 template-library imports + metaparameters
     # (template_imports.jl).
-    "template_import_version_too_old",
-    "template_import_unresolved",
-    "template_import_not_library",
-    "template_import_is_coupling_library",
-    "template_import_cycle",
-    "template_import_name_conflict",
-    "template_import_unknown_name",
-    "template_import_index_set_conflict",
-    "template_import_rename_unknown_name",
-    "template_import_rebind_unknown_name",
-    "template_import_rename_collision",
-    "template_import_rename_invalid",
-    "template_inject_target_unknown",
-    "template_inject_target_not_component",
-    "template_inject_target_is_loader",
-    "template_body_expansion_too_deep",
-    "metaparameter_unbound",
-    "metaparameter_type_error",
-    "metaparameter_name_conflict",
+    ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
+    ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
+    ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
+    ERROR_CODES.TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
+    ERROR_CODES.TEMPLATE_IMPORT_CYCLE,
+    ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
+    ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
+    ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+    ERROR_CODES.TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
+    ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+    ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
+    ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+    ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
+    ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
+    ERROR_CODES.TEMPLATE_INJECT_TARGET_IS_LOADER,
+    ERROR_CODES.TEMPLATE_BODY_EXPANSION_TOO_DEEP,
+    ERROR_CODES.METAPARAMETER_UNBOUND,
+    ERROR_CODES.METAPARAMETER_TYPE_ERROR,
+    ERROR_CODES.METAPARAMETER_NAME_CONFLICT,
     # esm-spec §10.9–§10.11 coupling-library imports (coupling_imports.jl).
-    "coupling_import_unresolved",
-    "coupling_import_not_library",
-    "coupling_import_unknown_role",
-    "coupling_import_role_unbound",
-    "coupling_import_bind_not_a_component",
-    "coupling_edge_unknown_role",
-    "coupling_role_unused",
-    "coupling_library_illegal_payload",
-    "coupling_library_nested_import",
+    ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
+    ERROR_CODES.COUPLING_IMPORT_NOT_LIBRARY,
+    ERROR_CODES.COUPLING_IMPORT_UNKNOWN_ROLE,
+    ERROR_CODES.COUPLING_IMPORT_ROLE_UNBOUND,
+    ERROR_CODES.COUPLING_IMPORT_BIND_NOT_A_COMPONENT,
+    ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
+    ERROR_CODES.COUPLING_ROLE_UNUSED,
+    ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
+    ERROR_CODES.COUPLING_LIBRARY_NESTED_IMPORT,
     # Subsystem-reference / index-set checks (parse.jl).
-    "subsystem_ref_is_template_library",
-    "subsystem_ref_is_coupling_library",
-    "subsystem_index_set_conflict",
+    ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+    ERROR_CODES.SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
+    ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
 )
 
 # ---------------------------------------------------------------------------
@@ -171,7 +174,7 @@ function _assert_no_nested_apply(body, template_name::String, path::String)
         op_str = op === nothing ? "" : string(op)
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
             throw(ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $path; match patterns MUST NOT reference templates (esm-spec §9.7.3)"))
         end
         for (k, v) in pairs(body)
@@ -184,7 +187,7 @@ function _validate_templates(templates::AbstractDict{String,Any}, scope::String)
     for (name, decl) in templates
         if !_is_object(decl)
             throw(ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 "$scope.expression_templates.$name: entry must be an object with params + body"))
         end
         # `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
@@ -192,20 +195,20 @@ function _validate_templates(templates::AbstractDict{String,Any}, scope::String)
         params = _raw_get(decl, "params")
         if params === nothing || !_is_array(params)
             throw(ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 "$scope.expression_templates.$name: 'params' must be an array of strings"))
         end
         seen = Set{String}()
         for p in params
             if !(p isa AbstractString) || isempty(p)
                 throw(ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: param names must be non-empty strings"))
             end
             ps = string(p)
             if ps in seen
                 throw(ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: param '$ps' is declared twice"))
             end
             push!(seen, ps)
@@ -213,7 +216,7 @@ function _validate_templates(templates::AbstractDict{String,Any}, scope::String)
         body = _raw_get(decl, "body")
         if body === nothing
             throw(ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 "$scope.expression_templates.$name: 'body' is required"))
         end
         # A body MAY reference other match-less in-scope templates via
@@ -243,40 +246,40 @@ function _validate_templates(templates::AbstractDict{String,Any}, scope::String)
         whr = _raw_get(decl, "where")
         if whr !== nothing
             match === nothing && throw(ExpressionTemplateError(
-                "apply_expression_template_invalid_declaration",
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 "$scope.expression_templates.$name: 'where' is only admissible " *
                 "alongside 'match' — constraints scope an auto-applied rewrite " *
                 "rule, not a named fragment (esm-spec §9.6.1)"))
             (_is_object(whr) && !isempty(collect(pairs(whr)))) ||
                 throw(ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: 'where' must be a " *
                     "non-empty object mapping declared params to constraint objects"))
             for (p, cobj) in pairs(whr)
                 ps = string(p)
                 ps in seen || throw(ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: 'where' constrains '$ps', " *
                     "which is not a declared param (esm-spec §9.6.1)"))
                 _is_object(cobj) || throw(ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: where.$ps must be a " *
                     "constraint object (v1 admits exactly the 'shape' kind)"))
                 ckeys = Set{String}(string(k) for (k, _) in pairs(cobj))
                 ckeys == Set(["shape"]) || throw(ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: where.$ps carries " *
                     "constraint kind(s) $(join(sort(collect(ckeys)), ", ")); the " *
                     "v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)"))
                 shp = _raw_get(cobj, "shape")
                 (_is_array(shp) && !isempty(shp)) || throw(ExpressionTemplateError(
-                    "apply_expression_template_invalid_declaration",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: where.$ps.shape must be a " *
                     "non-empty array of index-set names"))
                 for s in shp
                     (s isa AbstractString && !isempty(string(s))) ||
                         throw(ExpressionTemplateError(
-                            "apply_expression_template_invalid_declaration",
+                            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                             "$scope.expression_templates.$name: where.$ps.shape " *
                             "entries must be non-empty strings"))
                 end
@@ -376,22 +379,22 @@ function _resolve_apply_site(node, templates::AbstractDict, scope::String;
                              reject_match_rule::Bool=false)
     name_raw = _raw_get(node, "name")
     name_raw === nothing && throw(ExpressionTemplateError(
-        "apply_expression_template_invalid_declaration",
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
         "$scope: apply_expression_template node missing 'name'"))
     name = string(name_raw)
     decl = get(templates, name, nothing)
     decl === nothing && throw(ExpressionTemplateError(
-        "apply_expression_template_unknown_template",
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
         "$scope: apply_expression_template references undeclared template '$name'"))
     if reject_match_rule && _raw_get(decl, "match") !== nothing
         throw(ExpressionTemplateError(
-            "apply_expression_template_unknown_template",
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
             "$scope: apply_expression_template references '$name', a `match` " *
             "rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)"))
     end
     bindings_raw = _raw_get(node, "bindings")
     (bindings_raw === nothing || !_is_object(bindings_raw)) && throw(ExpressionTemplateError(
-        "apply_expression_template_bindings_mismatch",
+        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
         "$scope: apply_expression_template '$name' missing 'bindings' object"))
     decl_params_raw = _raw_get(decl, "params")
     decl_params = decl_params_raw === nothing ? String[] :
@@ -400,12 +403,12 @@ function _resolve_apply_site(node, templates::AbstractDict, scope::String;
     provided = Set{String}([string(k) for (k, _) in pairs(bindings_raw)])
     for p in decl_params
         p in provided || throw(ExpressionTemplateError(
-            "apply_expression_template_bindings_mismatch",
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
             "$scope: apply_expression_template '$name' missing binding for param '$p'"))
     end
     for p in provided
         p in declared || throw(ExpressionTemplateError(
-            "apply_expression_template_bindings_mismatch",
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
             "$scope: apply_expression_template '$name' supplies unknown param '$p'"))
     end
     return (name, decl, bindings_raw)
@@ -888,7 +891,7 @@ function _registered_where(decl, iset_names::Set{String}, scope::String,
         req = String[string(s) for s in shp]
         for s in req
             s in iset_names || throw(ExpressionTemplateError(
-                "template_constraint_unknown_index_set",
+                ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
                 "$scope.expression_templates.$tname: where.$(string(p)).shape " *
                 "names index set '$s', which the consuming document's " *
                 "index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)"))
@@ -1112,7 +1115,7 @@ function _rewrite_to_fixpoint(node, named::Dict{String,Any},
         changed || return current   # fixpoint reached
     end
     throw(ExpressionTemplateError(
-        "rewrite_rule_nonterminating",
+        ERROR_CODES.REWRITE_RULE_NONTERMINATING,
         "$scope: expression-template rewriting did not converge within " *
         "MAX_REWRITE_PASSES=$MAX_REWRITE_PASSES passes (last rewritten op " *
         "'$(last[])'). A `match` rule likely re-introduces its own pattern " *
@@ -1242,7 +1245,7 @@ function _validate_geometry_manifolds(x, path::String="",
         m = _raw_get(x, "manifold")
         if m !== nothing && !(m isa AbstractString && string(m) in GEOMETRY_MANIFOLD_VALUES)
             throw(ExpressionTemplateError(
-                "geometry_manifold_invalid",
+                ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
                 "$path: `$op_str` carries manifold $(repr(m)), not a member of the " *
                 "closed set {planar, spherical, geodesic}. The manifold enum is " *
                 "enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC " *
@@ -1304,7 +1307,7 @@ function _validate_makearray_regions(x, path::String="",
                      hi isa Integer && !(hi isa Bool)) || continue
                     if hi < lo - 1
                         throw(ExpressionTemplateError(
-                            "makearray_region_inverted",
+                            ERROR_CODES.MAKEARRAY_REGION_INVERTED,
                             "$path: makearray regions[$(ri-1)] dimension $(di-1) " *
                             "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
                             "An empty bound is spelled [start, start-1] and " *
@@ -1445,8 +1448,8 @@ function _validate_manifolds_in_refs(node, named::AbstractDict,
                     _validate_geometry_manifolds(expansion)
                 catch e
                     e isa ExpressionTemplateError &&
-                        e.code == "geometry_manifold_invalid" || rethrow()
-                    throw(ExpressionTemplateError("geometry_manifold_invalid",
+                        e.code == ERROR_CODES.GEOMETRY_MANIFOLD_INVALID || rethrow()
+                    throw(ExpressionTemplateError(ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
                         "$path: instantiation of template '$name' — $(e.message) " *
                         "(esm-spec §9.6.9; per-instantiation manifold check)"))
                 end
@@ -1498,7 +1501,7 @@ function reject_expression_templates_pre_v04(raw_data)
 
     if !isempty(offences)
         throw(ExpressionTemplateError(
-            "apply_expression_template_version_too_old",
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
             "expression_templates / apply_expression_template require esm >= 0.4.0; file declares $(string(esm_raw)). Offending paths: $(join(offences, ", "))"))
     end
 end
@@ -1842,7 +1845,7 @@ function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites,
     if e.op == APPLY_EXPRESSION_TEMPLATE_OP
         name = e.name
         (name !== nothing && reg !== nothing && haskey(reg, name)) || throw(
-            ExpressionTemplateError("apply_expression_template_unknown_template",
+            ExpressionTemplateError(ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
                 "apply_expression_template references template " *
                 "'$(name === nothing ? "?" : name)' with no in-scope registry entry"))
         # Canonical bindings key: name-sorted `k=serialized(v)` pairs. The same

@@ -28,7 +28,7 @@
 # ============================================================================
 
 """A `unit_conversion` that cannot be parsed or applied."""
-struct UnitConversionError <: Exception
+struct UnitConversionError <: EarthSciASTError
     msg::String
 end
 Base.showerror(io::IO, e::UnitConversionError) = print(io, e.msg)

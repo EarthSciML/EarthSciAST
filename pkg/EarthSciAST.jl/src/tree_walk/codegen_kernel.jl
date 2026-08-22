@@ -148,7 +148,7 @@ _cg_foreign_scratch_disabled() =
 
 # Per-kernel decline: the kernel keeps the per-cell interpreter runner.
 # Never an error — the tier is a pure optimization.
-struct _CodegenDecline <: Exception
+struct _CodegenDecline <: EarthSciASTError
     reason::Symbol
 end
 

@@ -112,7 +112,7 @@ Raised by the closed function registry when the spec contract is violated.
   is not a literal `const`-op array (e.g. a variable reference). Raised by
   the AST extraction site, not by `evaluate_closed_function` directly.
 """
-struct ClosedFunctionError <: Exception
+struct ClosedFunctionError <: EarthSciASTError
     code::String
     message::String
 end
@@ -151,7 +151,7 @@ const _CLOSED_FUNCTION_NAMES = closed_function_names()
 # principle exceed that for absurd inputs.
 function _check_int32(name::String, v::Integer)::Int32
     if v < typemin(Int32) || v > typemax(Int32)
-        throw(ClosedFunctionError("closed_function_overflow",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
             "$(name): result $(v) overflows Int32"))
     end
     return Int32(v)
@@ -182,7 +182,7 @@ end
 function _cal_i32(name::String, v)::Int32
     fv = Float64(v)
     if !isfinite(fv) || fv < typemin(Int32) || fv > typemax(Int32)
-        throw(ClosedFunctionError("closed_function_overflow",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
             "$(name): result $(fv) is not a finite Int32"))
     end
     return Int32(fv)
@@ -219,7 +219,7 @@ Throws [`ClosedFunctionError`](@ref) on contract violations.
 """
 function evaluate_closed_function(name::String, args::AbstractVector)
     if !(name in _CLOSED_FUNCTION_NAMES)
-        throw(ClosedFunctionError("unknown_closed_function",
+        throw(ClosedFunctionError(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
             "`fn` name `$(name)` is not in the v0.3.0 closed function registry " *
             "(esm-spec §9.2). Adding a primitive requires a spec rev."))
     end
@@ -263,7 +263,7 @@ function evaluate_closed_function(name::String, args::AbstractVector)
                                 Float64(args[4]), Float64(args[5]))::Float64
     end
     # Should be unreachable — `name in _CLOSED_FUNCTION_NAMES` covered above.
-    throw(ClosedFunctionError("unknown_closed_function",
+    throw(ClosedFunctionError(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
         "internal: `fn` name `$(name)` is in the registry but has no dispatch arm"))
 end
 
@@ -661,7 +661,7 @@ end
 # Should be unreachable: every `id` in a `_FnTypedCoreSpec` payload was minted
 # by `_fn_typed_core_spec` from the same const table this indexes.
 @noinline _fn_typed_core_id_oob(id::Int) =
-    throw(ClosedFunctionError("unknown_closed_function",
+    throw(ClosedFunctionError(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
         "internal: typed-core id $(id) has no _FN_TYPED_SCALAR_CORES row"))
 
 # The typed unary call, shared by EVERY tier's `Float64` fast path (scalar
@@ -686,18 +686,18 @@ end
 # the build-time-constant table every lane (ess-wrh).
 function _validate_searchsorted_table(name::String, xs)::Nothing
     if !(xs isa AbstractVector)
-        throw(ClosedFunctionError("closed_function_arity",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): xs argument must be an array (got $(typeof(xs)))"))
     end
     prev = NaN
     for (i, raw) in enumerate(xs)
         v = Float64(raw)
         if isnan(v)
-            throw(ClosedFunctionError("searchsorted_nan_in_table",
+            throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE,
                 "$(name): xs[$(i)] is NaN; NaN entries in xs are forbidden"))
         end
         if i > 1 && v < prev
-            throw(ClosedFunctionError("searchsorted_non_monotonic",
+            throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NON_MONOTONIC,
                 "$(name): xs is not non-decreasing (xs[$(i)]=$(v) < xs[$(i-1)]=$(prev))"))
         end
         prev = v
@@ -750,23 +750,23 @@ end
 # the failing axis ("axis", "axis_x", "axis_y") for the diagnostic.
 function _validate_interp_axis(name::String, axis_raw, axis_label::String)::Vector{Float64}
     if !(axis_raw isa AbstractVector)
-        throw(ClosedFunctionError("closed_function_arity",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): `$(axis_label)` must be an array (got $(typeof(axis_raw)))"))
     end
     n = length(axis_raw)
     if n < 2
-        throw(ClosedFunctionError("interp_axis_too_short",
+        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_TOO_SHORT,
             "$(name): `$(axis_label)` has $(n) entries; need ≥ 2 to define a blend interval."))
     end
     out = Vector{Float64}(undef, n)
     @inbounds for i in 1:n
         v = Float64(axis_raw[i])
         if isnan(v)
-            throw(ClosedFunctionError("interp_nan_in_axis",
+            throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
                 "$(name): `$(axis_label)`[$(i)] is NaN; axis arrays must be all-finite."))
         end
         if i > 1 && !(v > out[i-1])
-            throw(ClosedFunctionError("interp_non_monotonic_axis",
+            throw(ClosedFunctionError(ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
                 "$(name): `$(axis_label)` is not strictly increasing " *
                 "(`$(axis_label)`[$(i)] = $(v) is not > `$(axis_label)`[$(i-1)] = $(out[i-1]))."))
         end
@@ -825,12 +825,12 @@ end
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_linear(name::String, table_raw, axis_raw, x::Real)
     if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError("closed_function_arity",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): `table` must be an array (got $(typeof(table_raw)))"))
     end
     axis = _validate_interp_axis(name, axis_raw, "axis")
     if length(table_raw) != length(axis)
-        throw(ClosedFunctionError("interp_axis_length_mismatch",
+        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
             "$(name): `len(table)` = $(length(table_raw)) but `len(axis)` = $(length(axis))."))
     end
     return _interp_linear_core(table_raw, axis, x)
@@ -898,7 +898,7 @@ end
 function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
                           x::Real, y::Real)
     if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError("closed_function_arity",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): `table` must be an array (got $(typeof(table_raw)))"))
     end
     axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
@@ -906,18 +906,18 @@ function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
     Nx = length(axis_x)
     Ny = length(axis_y)
     if length(table_raw) != Nx
-        throw(ClosedFunctionError("interp_axis_length_mismatch",
+        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
             "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
     end
     # Validate every inner row length matches Ny (rejects ragged tables).
     @inbounds for i in 1:Nx
         row = table_raw[i]
         if !(row isa AbstractVector)
-            throw(ClosedFunctionError("closed_function_arity",
+            throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
                 "$(name): `table[$(i)]` must be an array (got $(typeof(row)))"))
         end
         if length(row) != Ny
-            throw(ClosedFunctionError("interp_axis_length_mismatch",
+            throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
                 "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
         end
     end
@@ -959,7 +959,7 @@ end
 # `Float64(raw[i])` the scalar kernel would do.
 function _coerce_f64_vec(name::String, v, label::String)::Vector{Float64}
     if !(v isa AbstractVector)
-        throw(ClosedFunctionError("closed_function_arity",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): `$(label)` must be an array (got $(typeof(v)))"))
     end
     out = Vector{Float64}(undef, length(v))
@@ -973,7 +973,7 @@ function _build_interp_linear_spec(name::String, table_raw, axis_raw)::_InterpLi
     table = _coerce_f64_vec(name, table_raw, "table")
     axis  = _validate_interp_axis(name, axis_raw, "axis")
     if length(table) != length(axis)
-        throw(ClosedFunctionError("interp_axis_length_mismatch",
+        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
             "$(name): `len(table)` = $(length(table)) but `len(axis)` = $(length(axis))."))
     end
     return _InterpLinearSpec(table, axis)
@@ -982,7 +982,7 @@ end
 function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
                                      axis_y_raw)::_InterpBilinearSpec
     if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError("closed_function_arity",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): `table` must be an array (got $(typeof(table_raw)))"))
     end
     axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
@@ -990,18 +990,18 @@ function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
     Nx = length(axis_x)
     Ny = length(axis_y)
     if length(table_raw) != Nx
-        throw(ClosedFunctionError("interp_axis_length_mismatch",
+        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
             "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
     end
     table = Vector{Vector{Float64}}(undef, Nx)
     @inbounds for i in 1:Nx
         row = table_raw[i]
         if !(row isa AbstractVector)
-            throw(ClosedFunctionError("closed_function_arity",
+            throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
                 "$(name): `table[$(i)]` must be an array (got $(typeof(row)))"))
         end
         if length(row) != Ny
-            throw(ClosedFunctionError("interp_axis_length_mismatch",
+            throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
                 "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
         end
         col = Vector{Float64}(undef, Ny)
@@ -1114,7 +1114,7 @@ end
 
 @inline function _expect_arity(name::String, args::AbstractVector, n::Int)
     length(args) == n ||
-        throw(ClosedFunctionError("closed_function_arity",
+        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name) expects $(n) argument(s), got $(length(args))"))
     return nothing
 end
