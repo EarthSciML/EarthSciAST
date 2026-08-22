@@ -2009,7 +2009,7 @@ function _check_connector_expressions(file::EsmFile, entry::CouplingCouple,
         raw = get(eq, "expression", nothing)
         raw === nothing && continue
         expr = try
-            parse_expression(raw)
+            expression_from_json(raw)
         catch
             continue    # a malformed expression is the schema's business
         end

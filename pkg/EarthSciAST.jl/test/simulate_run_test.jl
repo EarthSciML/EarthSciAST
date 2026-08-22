@@ -140,7 +140,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))),
                     "rhs" => Dict{String,Any}("op" => "arrayop", "output_idx" => Any["i"],
                         "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => 0.0))])))
-        expr = parse_expression(Dict{String,Any}("op" => "*", "args" => Any["x", "x"]))
+        expr = expression_from_json(Dict{String,Any}("op" => "*", "args" => Any["x", "x"]))
         seed! = (u0, vm) -> seed_expression_ic!(u0, vm, "M.u", expr, ["x" => [10.0, 20.0, 30.0, 40.0]])
         r = ESM_S.simulate(esm, (0.0, 1.0); alg = Tsit5(), seed_ic! = seed!)   # D(u)=0 → IC preserved
         @test [r["M.u[$i]"][end] for i in 1:4] == [100.0, 400.0, 900.0, 1600.0]

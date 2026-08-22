@@ -47,7 +47,7 @@ mathematical value is **non-integral** (or integral but not `Int64`-
 representable): literal type is decided by *value*, not by the token's source
 spelling (CONFORMANCE_SPEC §5.5.3.1 rules 1/3). A JSON number whose value is
 integral and `Int64`-representable — however it was spelled (`1`, `1.0`,
-`2.5e1`) — parses as an `IntExpr`, so `parse_expression` never produces
+`2.5e1`) — parses as an `IntExpr`, so `expression_from_json` never produces
 `NumExpr(1.0)`; such a node can only be built directly in Julia code.
 """
 struct NumExpr <: ASTExpr

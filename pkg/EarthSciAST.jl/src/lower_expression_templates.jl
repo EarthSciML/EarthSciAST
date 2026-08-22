@@ -1512,7 +1512,7 @@ end
 
 True iff `v` is a `Float64` whose value is an integer exactly representable in
 `Int64` (CONFORMANCE_SPEC §5.5.3.1 rule 1 / rule 3). This is the SAME predicate
-`parse_expression` applies at the AST-literal boundary (`parse.jl`), so the two
+`expression_from_json` applies at the AST-literal boundary (`parse.jl`), so the two
 narrowing sites stay uniform. Booleans are excluded (`Bool <: Integer`).
 """
 _int64_narrowable(v) =
@@ -1533,7 +1533,7 @@ widens on read: a bare integer token (`1`) that JSON3 materializes as `Float64`
 because it shares a deeply-nested, float-heavy array with non-integral floats
 (the `1`/`8` of `{op:"/",args:[1,8]}` nested under a `cos(pi·…)` aggregate body).
 The AST-golden pathway (`resolve_template_machinery` → `lower_expression_templates`
-→ canonical sorted write) never runs `parse_expression`, so without this pass a
+→ canonical sorted write) never runs `expression_from_json`, so without this pass a
 widened `1.0`/`8.0` survives all the way to the emitted golden — the lone Julia
 outlier vs. Python/Rust/TS/Go, which read `[1,8]` as integers.
 
@@ -1541,7 +1541,7 @@ Narrowing is scoped to `args` array elements (the Expression operand position),
 so scalar CONFIGURATION floats an authored `1.0`/`0.0` legitimately occupies
 (`variables.*.default`, a bare `expression` scalar, …) are left byte-identical;
 only arithmetic operand literals are touched. On the typed-load path this is a
-no-op-equivalent: `coerce_esm_file` reads operands via `parse_expression`, which
+no-op-equivalent: `coerce_esm_file` reads operands via `expression_from_json`, which
 applies the identical narrowing, so pre-narrowing the tree here changes nothing
 downstream. The §5.4.6 canonical AST form (`canonical_json`/`wire_to_expr`),
 which deliberately preserves an authored `1.0`, is on a separate path and is
@@ -1769,7 +1769,7 @@ function lower_expression_templates(raw_data)
     # Canonical arithmetic-operand literal narrowing (CONFORMANCE_SPEC §5.5.3.1
     # rule 1): normalize any integral, Int64-representable `Float64` that JSON3's
     # structural number inference widened in an `args` position back to an
-    # integer, so the AST-golden pathway (which never calls `parse_expression`)
+    # integer, so the AST-golden pathway (which never calls `expression_from_json`)
     # emits `[1,8]` — byte-identical with Python/Rust/TS/Go — for an integer
     # ratio nested inside an aggregate. See `_narrow_arg_literals!`.
     _narrow_arg_literals!(root)
@@ -1869,7 +1869,7 @@ function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites,
             end
         end
         substituted = _substitute(body_raw, bindings_raw)
-        ex = _expand_expr_refs(parse_expression(substituted), reg, sites, memo)
+        ex = _expand_expr_refs(expression_from_json(substituted), reg, sites, memo)
         if sites !== nothing && ex isa OpExpr
             sites[ex] = e
         end

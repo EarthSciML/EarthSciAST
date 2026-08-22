@@ -304,7 +304,7 @@ const ESMJ = EarthSciAST
                    "expr" => Dict("op" => "index", "args" => ["w", "i", "j"]),
                    "join" => [Dict("on" => [["i", "j"]])],
                    "filter" => Dict("op" => ">", "args" => [Dict("op" => "index", "args" => ["w", "i", "j"]), 0]))
-        parsed = ESMJ.parse_expression(raw)
+        parsed = ESMJ.expression_from_json(raw)
         @test parsed.join == Any[[("i", "j")]]
         @test parsed.filter !== nothing
         @test parsed.join_gates === nothing   # resolution is a build-path artifact
@@ -312,6 +312,6 @@ const ESMJ = EarthSciAST
         @test ser["join"] == [Dict("on" => [["i", "j"]])]
         @test haskey(ser, "filter")
         # Re-parse the serialized form → structurally identical.
-        @test ESMJ.parse_expression(ser).join == parsed.join
+        @test ESMJ.expression_from_json(ser).join == parsed.join
     end
 end

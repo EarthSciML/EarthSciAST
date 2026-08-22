@@ -177,7 +177,7 @@ export
     FunctionTable, FunctionTableAxis,
     # JSON functionality
     load, save, ParseError, SchemaValidationError, SchemaError, validate_schema,
-    parse_expression, ESM_FORMAT_VERSION,
+    expression_from_json, ESM_FORMAT_VERSION,
     # Subsystem reference resolution
     resolve_subsystem_refs!, SubsystemRefError,
     # Coupling serialization functions

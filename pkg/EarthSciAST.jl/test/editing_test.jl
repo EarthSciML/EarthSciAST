@@ -496,10 +496,10 @@ end
             @test !isempty(cases)
 
             for case in cases
-                input_expr = ESS.parse_expression(case[:input])
-                expected_expr = ESS.parse_expression(case[:expected])
+                input_expr = ESS.expression_from_json(case[:input])
+                expected_expr = ESS.expression_from_json(case[:expected])
                 bindings = Dict{String, ESS.ASTExpr}(
-                    string(k) => ESS.parse_expression(v)
+                    string(k) => ESS.expression_from_json(v)
                     for (k, v) in pairs(case[:bindings])
                 )
 

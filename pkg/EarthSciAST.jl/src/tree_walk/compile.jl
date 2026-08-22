@@ -563,7 +563,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",
             "`enum` op encountered after lowering — call `lower_enums!` before compile"))
     elseif op_sym === :call
-        # Removed in v0.3.0 (esm-spec §9 closure). `parse_expression` already
+        # Removed in v0.3.0 (esm-spec §9 closure). `expression_from_json` already
         # rejects file-loaded `call` ops; reaching this arm means a caller
         # constructed a `call` OpExpr programmatically.
         throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_OP",

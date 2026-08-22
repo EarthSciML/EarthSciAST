@@ -6,21 +6,21 @@ using JSON3
 
     @testset "Expression Parsing" begin
         # Test NumExpr (number)
-        expr1 = EarthSciAST.parse_expression(3.14)
+        expr1 = EarthSciAST.expression_from_json(3.14)
         @test expr1 isa NumExpr
         @test expr1.value == 3.14
 
         # Test VarExpr (string)
-        expr2 = EarthSciAST.parse_expression("x")
+        expr2 = EarthSciAST.expression_from_json("x")
         @test expr2 isa VarExpr
         @test expr2.name == "x"
 
         # Test OpExpr (object with 'op'). Use a NON-integral float literal:
-        # `parse_expression` applies CONFORMANCE_SPEC §5.5.3.1 rule 1, so an
+        # `expression_from_json` applies CONFORMANCE_SPEC §5.5.3.1 rule 1, so an
         # integral-valued float (`1.0`) narrows to an IntExpr; a genuinely
         # fractional float stays a NumExpr.
         op_data = Dict("op" => "+", "args" => [1.5, "x"])
-        expr3 = EarthSciAST.parse_expression(op_data)
+        expr3 = EarthSciAST.expression_from_json(op_data)
         @test expr3 isa OpExpr
         @test expr3.op == "+"
         @test length(expr3.args) == 2
@@ -35,17 +35,17 @@ using JSON3
         # across bindings even when JSON3's context-dependent number inference
         # materialises a bare integer token as Float64 (aggregate int-division
         # cross-binding canonical-form fix).
-        @test EarthSciAST.parse_expression(1.0) isa IntExpr
-        @test EarthSciAST.parse_expression(8.0) == IntExpr(8)
-        int_ratio = EarthSciAST.parse_expression(
+        @test EarthSciAST.expression_from_json(1.0) isa IntExpr
+        @test EarthSciAST.expression_from_json(8.0) == IntExpr(8)
+        int_ratio = EarthSciAST.expression_from_json(
             Dict("op" => "/", "args" => [1.0, 8.0]))
         @test int_ratio.args[1] isa IntExpr
         @test int_ratio.args[2] isa IntExpr
-        @test EarthSciAST.parse_expression(2.5) isa NumExpr
+        @test EarthSciAST.expression_from_json(2.5) isa NumExpr
 
         # Test OpExpr with optional parameters
         op_data_wrt = Dict("op" => "D", "args" => ["x"], "wrt" => "t")
-        expr4 = EarthSciAST.parse_expression(op_data_wrt)
+        expr4 = EarthSciAST.expression_from_json(op_data_wrt)
         @test expr4 isa OpExpr
         @test expr4.op == "D"
         @test expr4.wrt == "t"
@@ -258,7 +258,7 @@ using JSON3
         @test !occursin("\\n", err.message)
 
         # Test invalid expression format
-        @test_throws ParseError EarthSciAST.parse_expression(Dict("invalid" => "data"))
+        @test_throws ParseError EarthSciAST.expression_from_json(Dict("invalid" => "data"))
     end
 
     @testset "Model event arrays (discrete_events / continuous_events)" begin

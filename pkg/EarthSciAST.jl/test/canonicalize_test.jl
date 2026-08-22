@@ -202,7 +202,7 @@ const ESM_Expr = EarthSciAST.ASTExpr
                     # name/value) so a positive fixture exercising an emissible
                     # sidecar (e.g. `bc` with fn/dim) round-trips. Non-emissible
                     # fields stay absent here; fail-closed fixtures use the
-                    # parse_expression path above instead.
+                    # expression_from_json path above instead.
                     haskey(node, :wrt) && (ex.wrt = String(node[:wrt]))
                     haskey(node, :dim) && (ex.dim = String(node[:dim]))
                     haskey(node, :fn) && (ex.fn = String(node[:fn]))
@@ -232,12 +232,12 @@ const ESM_Expr = EarthSciAST.ASTExpr
                 # faithful slot in the canonical JSON node encoding, so
                 # `canonical_json` must throw the pinned coded error rather than
                 # emit ambiguous bytes. Build the node via the authoritative
-                # wire→typed parser (`parse_expression`), which populates those
+                # wire→typed parser (`expression_from_json`), which populates those
                 # non-op/args fields — the byte-fixture helper `wire_to_expr`
                 # intentionally keeps only `op`/`args`, so it could not
                 # reproduce the offending field.
                 want_code = String(fixture[:expect_error])
-                expr = parse_expression(fixture[:input])
+                expr = expression_from_json(fixture[:input])
                 err = try
                     canonical_json(expr)
                     nothing

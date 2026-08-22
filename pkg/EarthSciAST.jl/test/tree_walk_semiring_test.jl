@@ -265,7 +265,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         @test j["op"] == "aggregate"
         @test j["semiring"] == "min_sum"
         @test j["ranges"]["i"]["from"] == "cells"
-        rt = ESM.parse_expression(j)
+        rt = ESM.expression_from_json(j)
         @test rt.op == "aggregate"
         @test rt.semiring == "min_sum"
         @test rt.ranges["i"] isa ESM.IndexSetRef

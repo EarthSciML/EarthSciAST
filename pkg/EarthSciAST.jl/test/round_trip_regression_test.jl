@@ -182,7 +182,7 @@ const ESM = EarthSciAST
             # Parse side: the field is recovered from the wire key — via BOTH
             # dict-like carriers (JSON3.Object and native Dict).
             for carrier in (raw, ESM._to_native_json(raw))
-                parsed = parse_expression(carrier)
+                parsed = expression_from_json(carrier)
                 got = getfield(parsed, s.field)
                 if s.expected isa ESM.ASTExpr
                     @test got isa ESM.ASTExpr && exprs_equal(got, s.expected)
@@ -207,7 +207,7 @@ const ESM = EarthSciAST
 
             # Full wire round trip: parse(json) → serialize == the original
             # JSON value (all keys, not just this field).
-            @test ESM.serialize_expression(parse_expression(raw)) == ESM._to_native_json(raw)
+            @test ESM.serialize_expression(expression_from_json(raw)) == ESM._to_native_json(raw)
         end
     end
 end
