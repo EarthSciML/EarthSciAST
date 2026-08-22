@@ -176,7 +176,10 @@ distinguishable from "drifted away".
 
 **TypeScript and Go are deliberately non-simulating.** They read, write,
 analyse, and transform documents; they do not integrate them. A `simulate`
-missing from Go is conformance, not a gap.
+missing from Go is conformance, not a gap. This matches
+`esm-libraries-spec.md` §5's own tier labels — TypeScript "Core + Analysis",
+Go "Core" — which are the one part of that section still accurate. Its label
+for Rust is not (see §11).
 
 ---
 
@@ -911,5 +914,9 @@ The §8 SciML renames are therefore major-or-aliased, not silent.
   manifest from the schema, which is the right long-term answer and out of scope
   here.
 - **`esm-libraries-spec.md` §5.** Now superseded by this document for API
-  surface. Its §2.4.4 conformance table and §5.5 Go description remain stale;
-  reconciling or retiring that section is follow-up work.
+  surface, and pointed here from its own heading. Its §2.4.4 conformance table
+  and §5.5 Go description remain stale, and its §5.4 tier label for Rust —
+  "Core + Analysis" — contradicts both the Rust binding (which exports
+  `simulate`, `simulate_array` and `prepare`) and a paragraph three lines
+  further down the same section, which says the Rust array simulator runs
+  discretized PDEs. Reconciling or retiring that section is follow-up work.
