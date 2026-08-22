@@ -28,6 +28,12 @@ const UNICODE_SUPERSCRIPTS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵',
 // Operator precedence levels (higher = tighter binding)
 const PRECEDENCE: &[(&str, i32)] = &[("+", 1), ("-", 1), ("*", 2), ("/", 2), ("^", 3)];
 
+/// Precedence of the loosest-binding operators — the boolean / comparison tier,
+/// which this table leaves at 0. Mirrors `LOOSEST_PRECEDENCE` in
+/// pretty-print.ts: inside a unary-minus operand, only a child at or below this
+/// precedence needs parentheses.
+const LOOSEST_PRECEDENCE: i32 = 0;
+
 /// Get operator precedence (higher means tighter binding)
 fn get_precedence(op: &str) -> i32 {
     for (operator, prec) in PRECEDENCE {
@@ -595,7 +601,7 @@ fn sum_as_difference(args: &[Expr], op_prec: i32, fmt: Fmt) -> Option<String> {
     Some(format!(
         "{} {minus} {}",
         render_assoc_operand(&args[0], "+", op_prec, fmt),
-        render_at(&n.args[0], fmt, op_prec + 1)
+        render_at(&n.args[0], fmt, op_prec)
     ))
 }
 
@@ -1118,14 +1124,25 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
         "-" => {
             let minus = pick(fmt, "−", "-", "-");
             if args.len() == 1 {
-                format!("{minus}{}", render_at(&args[0], fmt, op_prec))
+                // Unary minus is deliberately LOOSE (pretty-print.ts: "for unary
+                // minus, be less aggressive"): only a child at the loosest
+                // (logical-or) precedence is parenthesized, so `−(a + b)` prints
+                // `−a + b`. That is not injective, but it IS what the parser
+                // reads back (`parse_expression` gives unary `-` the additive
+                // minimum precedence), so the pair still round-trips.
+                format!("{minus}{}", render_at(&args[0], fmt, LOOSEST_PRECEDENCE))
             } else if args.len() == 2 {
-                // Left-associative: the right operand renders at op_prec + 1
-                // so `a − (b − c)` keeps its parentheses.
+                // Left-associative and NON-associative on the right: the right
+                // operand renders at `op_prec` — a child at the SAME precedence
+                // keeps its parentheses (`a − (b − c)`), while one that binds
+                // TIGHTER does not (`a − b · c`, not `a − (b · c)`). Rendering
+                // it at `op_prec + 1` over-parenthesized every product /
+                // quotient / power, diverging from the reference printer
+                // (pretty-print.ts `needsParentheses`).
                 format!(
                     "{} {minus} {}",
                     render_at(&args[0], fmt, op_prec),
-                    render_at(&args[1], fmt, op_prec + 1)
+                    render_at(&args[1], fmt, op_prec)
                 )
             } else {
                 call_form(minus, args, r0)
