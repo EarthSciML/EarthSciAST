@@ -17,11 +17,17 @@
 #
 # and then say in API_SPEC.md which tier the new symbol lands in.
 
-include("testutils.jl")
-
+# `using Test` MUST precede the testutils include: testutils.jl uses `@test_skip`
+# at top level, so `Test` has to be in scope in `Main` already. Including it
+# first only works when some earlier file in runtests.jl happened to import Test
+# — running this file standalone (the documented way to verify Julia here, since
+# the full test target hangs on the shared depot lock) then fails with
+# `UndefVarError: @test_skip not defined`.
 using Test
 using JSON3
 using EarthSciAST
+
+include("testutils.jl")
 
 @testset "public API surface" begin
     manifest_path = joinpath(TESTUTILS_REPO_ROOT, "api-surface.json")
