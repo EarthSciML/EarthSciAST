@@ -36,7 +36,7 @@ fn all_operators_fixtures_render_identically() {
     let cases: Vec<serde_json::Value> =
         serde_json::from_str(&raw).expect("shared display fixture parses");
     assert!(
-        cases.len() >= 85,
+        cases.len() >= 91,
         "fixture shrank unexpectedly: {} entries",
         cases.len()
     );
