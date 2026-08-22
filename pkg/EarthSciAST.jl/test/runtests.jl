@@ -209,6 +209,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("prepare_pushdown_record_gate_test.jl") # Phase 1 consolidation (public prepare + record-derived gating)
     include("prepare_pushdown_single_member_test.jl") # n=1 support-set pin (cross-language scalarisation footgun)
     include("pushdown_cell_geometry_test.jl")     # rank-preserving cell-axis gathers (polygon allocation)
+    include("observed_materialization_test.jl")   # build-time producer materialization (line allocation)
     include("gated_sibling_loaders_test.jl")      # hook 2: sibling loaders sharing a variable name
     include("build_inspection_test.jl")
     include("pde_inline_tests_test.jl")

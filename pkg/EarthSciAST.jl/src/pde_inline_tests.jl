@@ -569,9 +569,16 @@ and so factors nothing at all for a pure-algebraic model — no state, every res
 an observed — which is exactly the shape that suffers most here. The root for the
 build-time path is the observed the caller asked for.
 
-Values are unchanged. A buffer holds exactly what the inlined expression would have
-recomputed at that index, and the reduction order within each aggregate is
-untouched, so the consumer gathers identical numbers.
+Values are the same computation, to within float reassociation. A buffer holds
+what that observed's own published body computes at that index, and the reduction
+order WITHIN each aggregate is untouched. What can move is the order BETWEEN them:
+a consumer that used to inline `a + b + c` and now reads three buffers is summing
+the same three numbers, but the un-inlined and the fully substituted bodies are
+not always the same expression tree, and float addition does not associate. So
+materializing a producer that previously could not be materialized may move a
+downstream field in its last bits — observed at 5e-15 on the ISRM point document
+when the `observed_exprs` fallback below was added. Nothing semantic changes, and
+nothing about WHICH terms are summed.
 
 Returns `insp.const_arrays` itself when there is nothing to materialize, so models
 whose observeds are scalar or independent keep the previous behaviour and cost.
@@ -583,8 +590,31 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
     model = get(file.models, String(mname), nothing)
     model === nothing && return insp.const_arrays
 
-    lookup(n) = get(insp.observed_defs, String(mname) * "." * n,
-                    get(insp.observed_defs, n, nothing))
+    # TWO published forms of an observed's body, and this needs BOTH.
+    #
+    #   `observed_defs`  — UN-inlined: names its producers, so it is cheap to
+    #                      evaluate once every producer is a buffer, but it only
+    #                      resolves when every one of them IS.
+    #   `observed_exprs` — fully substituted: always self-contained, and the only
+    #                      form published for an observed the build inlined away.
+    #
+    # The second is not a redundant copy. An intermediate the build folded into
+    # its readers — a rank-2 projected coordinate feeding a rank-1 length, say —
+    # appears in `observed_exprs` and NOT in `observed_defs`, and it is not a
+    # const array either. Traversing only the un-inlined map therefore stops at
+    # the first such name: its readers' definitions reference it, the reference
+    # is unbound, and EVERY producer above it fails in turn. The chain is then
+    # inlined into the consumer and re-executed per output cell, which is the
+    # exact cost this function exists to remove — silently, because the failure
+    # is a caught exception and the fallback is merely slow, not wrong.
+    raw_def(n) = get(insp.observed_defs, String(mname) * "." * n,
+                     get(insp.observed_defs, n, nothing))
+    res_def(n) = get(insp.observed_exprs, String(mname) * "." * n,
+                     get(insp.observed_exprs, n, nothing))
+    function lookup(n)                      # traversal: prefer the un-inlined form
+        d = raw_def(n)
+        return d === nothing ? res_def(n) : d
+    end
     # Extents of an array observed from its declared shape. Goes through the
     # build's own resolver so a DATA-DERIVED axis works too — the ISRM emission
     # binning is shaped on `emis_src_cells`, whose size value invention
@@ -642,20 +672,28 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
     for n in order
         n == String(target) && continue        # the caller evaluates this one
         haskey(ca, n) && continue              # already supplied by the caller
-        def = lookup(n); def === nothing && continue
+        lookup(n) === nothing && continue
         ex = extents(n); ex === nothing && continue
         any(<=(0), ex) && continue
         cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
                                       for I in CartesianIndices(Tuple(ex))]))
-        vals = try
-            evaluate_cellwise(def, cells; const_arrays=ca, params=params)
-        catch
-            # A producer this build-time scope cannot evaluate (e.g. one reading
-            # STATE, which is out of scope here) simply stays un-materialized —
-            # its readers then inline it, exactly as before.
-            continue
+        # Try the un-inlined body first — it reads the buffers already filled, so
+        # it is the cheap one — and fall back to the fully substituted body when
+        # it cannot resolve. Both compute the same number: the substituted form
+        # is literally what the consumer would otherwise have recomputed inline.
+        # A producer neither form can evaluate here (one reading STATE, say) just
+        # stays un-materialized, and its readers inline it exactly as before.
+        vals = nothing
+        for cand in (raw_def(n), res_def(n))
+            cand === nothing && continue
+            vals = try
+                evaluate_cellwise(cand, cells; const_arrays=ca, params=params)
+            catch
+                nothing
+            end
+            vals === nothing || break
         end
-        length(vals) == length(cells) || continue
+        (vals !== nothing && length(vals) == length(cells)) || continue
         buf = Array{Float64}(undef, Tuple(ex)...)
         @inbounds for (i, c) in enumerate(cells)
             buf[CartesianIndex(Tuple(c))] = vals[i]
