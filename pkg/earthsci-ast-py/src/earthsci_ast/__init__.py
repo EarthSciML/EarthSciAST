@@ -302,6 +302,14 @@ from .display import (
     to_ascii,
 )
 
+# Text-form expression authoring: the INVERSE of `to_ascii` (esm-spec §4.2).
+# Unrelated to the private JSON decoder `parse._parse_expression`.
+from .parse_expression import (
+    ExpressionParseError,
+    parse_equation,
+    parse_expression,
+)
+
 # Code generation (for interoperability)
 from .codegen import (
     to_julia_code,
@@ -538,6 +546,10 @@ __all__ = [
     "to_unicode",
     "to_latex",
     "to_ascii",
+    # Text-form expression parsing (the inverse of `to_ascii`)
+    "parse_expression",
+    "parse_equation",
+    "ExpressionParseError",
     # Code generation
     "to_julia_code",
     "to_python_code",
