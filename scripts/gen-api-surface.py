@@ -516,6 +516,73 @@ def build() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# API_SPEC.md §6: the stable-surface tables, regenerated alongside the manifest
+# so the prose cannot drift away from the JSON.
+# ---------------------------------------------------------------------------
+BEGIN_MARKER = "<!-- BEGIN GENERATED: stable-surface -->"
+END_MARKER = "<!-- END GENERATED: stable-surface -->"
+
+_HEADERS = {"julia": "Julia", "typescript": "TS", "python": "Python",
+            "rust": "Rust", "go": "Go", "editor": "Editor"}
+
+
+def _cell(sym: dict, binding: str) -> str:
+    entry = sym["bindings"].get(binding)
+    if entry is None:
+        return "\u2013"
+    if isinstance(entry, list):
+        return " / ".join(f"`{x}`" for x in entry)
+    return f"`{entry}`"
+
+
+def _table(syms: list, cols: list) -> str:
+    rows = ["| Canonical | Kind | " + " | ".join(_HEADERS[b] for b in cols) + " |",
+            "|---|---|" + "---|" * len(cols)]
+    for s in sorted(syms, key=lambda s: (s["name"], s["kind"])):
+        rows.append(f"| `{s['name']}` | {s['kind']} | "
+                    + " | ".join(_cell(s, b) for b in cols) + " |")
+    return "\n".join(rows)
+
+
+def stable_surface_tables(manifest: dict) -> str:
+    stable = [s for s in manifest["symbols"] if s["tier"] == "stable"]
+    core = [b for b in BINDINGS if b != "editor"]
+    counted = {s["name"] + s["kind"]: sum(b in s["bindings"] for b in core)
+               for s in stable}
+
+    def at(n: int) -> list:
+        return [s for s in stable if counted[s["name"] + s["kind"]] == n]
+
+    parts = []
+    for n, label in ((5, "all five format bindings"), (4, "four of the five"),
+                     (3, "three of the five"), (2, "two of the five")):
+        parts.append(f"#### Exported by {label}\n\n" + _table(at(n), core))
+    editor_only = [s for s in stable
+                   if counted[s["name"] + s["kind"]] < 2 and "editor" in s["bindings"]]
+    parts.append("#### Editor package\n\n" + _table(editor_only, ["typescript", "editor"]))
+    return "\n\n".join(parts)
+
+
+def render_spec_section(manifest: dict) -> str:
+    """The API_SPEC.md text between the generated-block markers."""
+    return f"{BEGIN_MARKER}\n\n{stable_surface_tables(manifest)}\n\n{END_MARKER}"
+
+
+def update_spec(manifest: dict, path: str | None = None) -> bool:
+    """Rewrite API_SPEC.md's generated block. Returns True if it changed."""
+    path = path or os.path.join(ROOT, "API_SPEC.md")
+    text = open(path).read()
+    start, end = text.find(BEGIN_MARKER), text.find(END_MARKER)
+    if start < 0 or end < 0:
+        raise SystemExit(f"{path}: generated-block markers not found")
+    updated = text[:start] + render_spec_section(manifest) + text[end + len(END_MARKER):]
+    if updated == text:
+        return False
+    open(path, "w").write(updated)
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stdout", action="store_true")
@@ -524,13 +591,14 @@ def main() -> int:
     text = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
     if args.stdout:
         sys.stdout.write(text)
-    else:
-        path = os.path.join(ROOT, "api-surface.json")
-        open(path, "w").write(text)
-        c = manifest["counts"]
-        print(f"wrote {path}: {c['symbols']} symbols")
-        print("  by binding:", c["by_binding"])
-        print("  by tier:   ", c["by_tier"])
+        return 0
+    path = os.path.join(ROOT, "api-surface.json")
+    open(path, "w").write(text)
+    c = manifest["counts"]
+    print(f"wrote {path}: {c['symbols']} symbols")
+    print("  by binding:", c["by_binding"])
+    print("  by tier:   ", c["by_tier"])
+    print("  API_SPEC.md \u00a76:", "updated" if update_spec(manifest) else "already current")
     return 0
 
 

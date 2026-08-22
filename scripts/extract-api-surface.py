@@ -356,6 +356,22 @@ def main() -> int:
         print(f"[rust] pub mod list changed:\n"
               f"  + {sorted(set(surfaces['rust']['modules']) - set(rs_mods))}\n"
               f"  - {sorted(set(rs_mods) - set(surfaces['rust']['modules']))}")
+
+    # API_SPEC.md §6 is generated from the manifest; a stale block is a doc bug.
+    if not args.binding:
+        import importlib.util
+        gen_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "gen-api-surface.py")
+        gspec = importlib.util.spec_from_file_location("gen_api_surface", gen_path)
+        gen = importlib.util.module_from_spec(gspec)
+        gspec.loader.exec_module(gen)
+        spec_md = open(os.path.join(ROOT, "API_SPEC.md")).read()
+        if gen.render_spec_section(manifest) not in spec_md:
+            failed = True
+            print("[API_SPEC.md] \u00a76's generated block is stale; "
+                  "run `python3 scripts/gen-api-surface.py`")
+        else:
+            print("[API_SPEC.md] ok (\u00a76 matches the manifest)")
     return 1 if failed else 0
 
 
