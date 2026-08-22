@@ -17,6 +17,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reactions_test.jl")
     include("display_test.jl")
     include("display_conformance_test.jl")
+    include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
     include("graph_test.jl")
 
