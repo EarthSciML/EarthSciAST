@@ -182,9 +182,10 @@ pub use geometry::{
     polygon_area, shoelace_area, shoelace_signed_area, sliver_atol,
 };
 pub use graph::{
-    ComponentGraph, ComponentNode, ComponentType, CouplingEdge, DependencyEdge,
-    DependencyRelationship, ExpressionGraph, ExpressionGraphInput, VariableKind, VariableNode,
-    component_exists, component_graph, expression_graph, get_component_type,
+    ComponentGraph, ComponentMetadata, ComponentNode, ComponentType, CouplingEdge, DependencyEdge,
+    DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions,
+    VariableKind, VariableNode, component_exists, component_graph, expression_graph,
+    expression_graph_with_options, get_component_type,
 };
 pub use parse::{LoadOptions, load, load_path, load_path_with_options, load_with_options};
 pub use parse_expression::{ExpressionParseError, parse_equation, parse_expression};

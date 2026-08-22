@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -127,9 +128,16 @@ func TestComponentGraphFromFile(t *testing.T) {
 	}
 }
 
-// A variable node is labelled with its DERIVED role (esm-spec §6.3.1), not with
-// the declared type — which, with only `unknown` and `parameter` left, would say
-// nothing about how the node behaves.
+// A variable node is labelled with a DERIVED kind, not with the declared type —
+// which, with only `unknown` and `parameter` left, would say nothing about how
+// the node behaves.
+//
+// The kind is drawn from the GRAPH vocabulary of esm-libraries-spec §4.8.2
+// (`state | algebraic | parameter | observed | brownian | discrete | species`),
+// which is COARSER than the §6.3.1 classifier partition this package also
+// computes: a sampled parameter and a constant parameter are both plain
+// "parameter" in a graph. This test used to assert the classifier's own names
+// (`ode_state`, `sampled`, `constant`), which are in no graph vocabulary.
 func TestExpressionGraphNodeKindsAreDerivedRoles(t *testing.T) {
 	model := Model{
 		Variables: map[string]ModelVariable{
@@ -156,9 +164,13 @@ func TestExpressionGraphNodeKindsAreDerivedRoles(t *testing.T) {
 	for _, n := range graph.Nodes {
 		got[n.Name] = n.Kind
 	}
+	// Node names are SCOPED by their owning system.
 	want := map[string]string{
-		"x": RoleODEState, "obs": RoleObserved, "alg": RoleAlgebraic,
-		"k": RoleConstant, "w": RoleBrownian, "s": RoleSampled, "d": RoleDiscrete,
+		"S.x": NodeKindState, "S.obs": NodeKindObserved, "S.alg": NodeKindAlgebraic,
+		// A constant and a sampled parameter are indistinguishable in the graph
+		// vocabulary; both are "parameter".
+		"S.k": NodeKindParameter, "S.s": NodeKindParameter,
+		"S.w": NodeKindBrownian, "S.d": NodeKindDiscrete,
 	}
 	for name, kind := range want {
 		if got[name] != kind {
@@ -200,7 +212,10 @@ func TestExpressionGraphFromModel(t *testing.T) {
 		nodeNames[node.Name] = true
 	}
 
-	expectedVars := []string{"x", "y", "z"}
+	// A node's name is its SCOPED key: the owning system, a dot, the declared
+	// name. (A bare target graphed in the synthetic "default" system keeps
+	// unscoped names; this one names its system.)
+	expectedVars := []string{"TestSystem.x", "TestSystem.y", "TestSystem.z"}
 	for _, varName := range expectedVars {
 		if !nodeNames[varName] {
 			t.Errorf("Expected variable %s not found in nodes", varName)
@@ -246,10 +261,11 @@ func TestExpressionGraphEquationIndex(t *testing.T) {
 		byTarget[edge.Data.Target] = *edge.Data.EquationIndex
 	}
 
-	if got := byTarget["x"]; got != 0 {
+	// A dependency edge addresses its endpoints by SCOPED node key.
+	if got := byTarget["TestSystem.x"]; got != 0 {
 		t.Errorf("edge into x: expected equation_index 0, got %d", got)
 	}
-	if got := byTarget["z"]; got != 1 {
+	if got := byTarget["TestSystem.z"]; got != 1 {
 		t.Errorf("edge into z: expected equation_index 1, got %d", got)
 	}
 }
@@ -375,15 +391,34 @@ func TestGraphExport(t *testing.T) {
 		t.Errorf("JSON export failed: %v", err)
 	}
 
-	// Verify JSON is valid
-	var parsed ComponentGraph
-	err = json.Unmarshal([]byte(jsonOutput), &parsed)
-	if err != nil {
-		t.Errorf("JSON export produced invalid JSON: %v", err)
+	// The JSON export is an ADJACENCY LIST (esm-libraries-spec §4.8.3), not a
+	// marshalled copy of the in-memory graph: a node table, an edge list whose
+	// endpoints are node KEYS, and an adjacency map. It used to inline whole
+	// node objects on both ends of every edge and carry no adjacency at all.
+	var parsed struct {
+		Nodes []struct {
+			ID string `json:"id"`
+		} `json:"nodes"`
+		Edges []struct {
+			Source string `json:"source"`
+			Target string `json:"target"`
+		} `json:"edges"`
+		Adjacency map[string][]string `json:"adjacency"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput), &parsed); err != nil {
+		t.Fatalf("JSON export produced invalid JSON: %v", err)
 	}
 
 	if len(parsed.Nodes) != 2 {
 		t.Errorf("JSON parsed graph has wrong number of nodes: %d", len(parsed.Nodes))
+	}
+	if len(parsed.Edges) != 1 || parsed.Edges[0].Source != "A" || parsed.Edges[0].Target != "B" {
+		t.Errorf("JSON edges = %+v, want one A->B edge addressed by node key", parsed.Edges)
+	}
+	// Adjacency is UNDIRECTED: both endpoints list the other.
+	wantAdjacency := map[string][]string{"A": {"B"}, "B": {"A"}}
+	if !reflect.DeepEqual(parsed.Adjacency, wantAdjacency) {
+		t.Errorf("JSON adjacency = %v, want %v", parsed.Adjacency, wantAdjacency)
 	}
 }
 

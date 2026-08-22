@@ -72,6 +72,8 @@ from .esm_types import (
 from .expression import free_variables
 
 __all__ = [
+    "EXPR_RESULT",
+    "NON_EQUATION_INDEX",
     "ComponentNode",
     "CouplingEdge",
     "DependencyEdge",
@@ -101,6 +103,16 @@ E = TypeVar("E")
 #: ``Component.variable`` (matching TypeScript's ``'default'`` sentinel and
 #: Julia's file-level scoping).
 DEFAULT_SYSTEM = "default"
+
+#: `equation_index` for a dependency that no positionally-numbered equation or
+#: reaction produced: an expression-target definition, or a coupling variable
+#: map. Spelled -1 rather than None so "no positional equation" is a positive
+#: statement (TypeScript's `NON_EQUATION_INDEX`).
+NON_EQUATION_INDEX = -1
+
+#: Name of the synthetic node standing for a bare expression's VALUE, so the
+#: §4.8.2 expression overload has a target to draw its dependency edges to.
+EXPR_RESULT = "expr_result"
 
 
 @dataclass
@@ -304,11 +316,17 @@ def component_graph(file: EsmFile) -> Graph[ComponentNode, CouplingEdge]:
                 description=None,
                 reference=None,
                 metadata={
-                    # A reaction system's parameters are its variables. Julia
-                    # counts them here; TypeScript writes 0 and Go records no
-                    # count at all, so nothing is contradicted by reporting the
-                    # real number.
-                    "var_count": len(getattr(rxn_sys, "parameters", []) or []),
+                    # 0, matching the oracle. A reaction system declares no
+                    # `variables`; its parameters are counted by nothing and its
+                    # species and reactions by the two fields below. This is the
+                    # one corpus field the oracle carries WITHOUT a majority
+                    # behind it (TypeScript writes 0, Julia and an earlier
+                    # revision of this module wrote len(parameters), Go and Rust
+                    # report no variable count for a reaction system at all), so
+                    # it is pinned to keep consumers agreeing rather than because
+                    # the spec settles it — esm-libraries-spec §4.8.1 asks only
+                    # for "summary metadata".
+                    "var_count": 0,
                     "eq_count": len(getattr(rxn_sys, "reactions", []) or []),
                     "species_count": len(getattr(rxn_sys, "species", []) or []),
                 },
@@ -633,8 +651,14 @@ def _process_coupling(builder: _ExprGraphBuilder, coupling: Iterable[Any]) -> No
         target_key = builder.add_node(
             ".".join(target_parts[1:]), "parameter", None, target_parts[0]
         )
-        # No positional equation produced this edge, hence `equation_index=None`.
-        builder.add_dependency(source_key, target_key, "multiplicative", None, source_ref)
+        # No positional equation produced this edge. The sentinel is -1, not
+        # None: `equation_index` is `number | null` on the wire (§4.8.2), and
+        # the bindings reserve null for "this binding does not track it" while
+        # -1 positively means "no positional equation" (TypeScript's
+        # NON_EQUATION_INDEX).
+        builder.add_dependency(
+            source_key, target_key, "multiplicative", NON_EQUATION_INDEX, source_ref
+        )
 
 
 def expression_graph(
@@ -674,11 +698,18 @@ def expression_graph(
     elif isinstance(target, Reaction):
         _process_reaction(builder, target, 0, DEFAULT_SYSTEM)
     else:
-        # A bare expression names variables but no dependency target, so it
-        # contributes nodes only — as in Rust and Julia. (TypeScript invents an
-        # `expr_result` node to hang edges off; nothing else does.)
+        # A bare expression. §4.8.2 requires this overload to produce EDGES, not
+        # just nodes ("every variable in the expression becomes a node, and the
+        # tree structure is flattened into dependency edges"), so the expression's
+        # value gets a synthetic target node and every free variable feeds it.
+        result = builder.add_node(EXPR_RESULT, "observed", None, DEFAULT_SYSTEM)
         for name in _sorted_free_variables(target):
-            builder.add_node(name, "parameter", None, DEFAULT_SYSTEM)
+            source_key = builder.add_node(name, "parameter", None, DEFAULT_SYSTEM)
+            # equation_index 0, not NON_EQUATION_INDEX: a standalone target is
+            # its own equation 0, the same index the Equation and Reaction
+            # overloads use. (NON_EQUATION_INDEX stays for the coupling maps,
+            # which sit outside any target's numbering.)
+            builder.add_dependency(source_key, result, "multiplicative", 0, target)
 
     return builder.graph()
 
@@ -842,13 +873,22 @@ def to_mermaid(graph: Graph[Any, Any]) -> str:
 
 
 def to_json(graph: Graph[Any, Any]) -> str:
-    """Render ``graph`` as JSON: ``{"nodes", "edges", "adjacency"}``.
+    """Render ``graph`` as the JSON adjacency list of esm-libraries-spec §4.8.3.
 
-    The top-level shape is the one Julia and TypeScript agree on and the one
-    ``tests/graphs/README_expression_graphs.md`` documents ("JSON Adjacency
-    List"): a node list, an edge list, and an adjacency map from every node key
-    to its successors. Rust and Go instead serialize the raw graph struct with
-    no adjacency map.
+    Three top-level keys:
+
+    * ``nodes`` — each node's own fields, prefixed with the ``id`` that keys it
+      (a component node's ``id``, a variable node's ``name``);
+    * ``edges`` — ``{"source", "target", "data"}``, endpoints by node key with
+      the edge payload under ``data``;
+    * ``adjacency`` — every node key mapped to its UNDIRECTED neighbours, which
+      is what :meth:`Graph.adjacency` returns. (This used to map to
+      ``successors`` instead, so a graph's JSON export disagreed with its own
+      ``adjacency()`` — caught by the shared corpus.)
+
+    Pinned by ``tests/conformance/graph/cases.json`` at the level of the
+    top-level keys, the node ids, the edge endpoints and the adjacency map; the
+    per-node and per-edge payloads are this binding's own and are not.
     """
     if _is_component_graph(graph):
         nodes = [
@@ -863,19 +903,24 @@ def to_json(graph: Graph[Any, Any]) -> str:
         ]
         edges = [
             {
-                "id": edge.data.id,
-                # Wire spellings of `from_component` / `to_component`.
-                "from": edge.data.from_component,
-                "to": edge.data.to_component,
-                "type": edge.data.type,
-                "label": edge.data.label,
-                "description": edge.data.description,
+                "source": edge.source,
+                "target": edge.target,
+                "data": {
+                    "id": edge.data.id,
+                    # Wire spellings of `from_component` / `to_component`.
+                    "from": edge.data.from_component,
+                    "to": edge.data.to_component,
+                    "type": edge.data.type,
+                    "label": edge.data.label,
+                    "description": edge.data.description,
+                },
             }
             for edge in graph.edges
         ]
     else:
         nodes = [
             {
+                "id": node.name,
                 "name": node.name,
                 "kind": node.kind,
                 "units": node.units,
@@ -885,15 +930,19 @@ def to_json(graph: Graph[Any, Any]) -> str:
         ]
         edges = [
             {
-                "source": edge.data.source,
-                "target": edge.data.target,
-                "relationship": edge.data.relationship,
-                "equation_index": edge.data.equation_index,
+                "source": edge.source,
+                "target": edge.target,
+                "data": {
+                    "source": edge.data.source,
+                    "target": edge.data.target,
+                    "relationship": edge.data.relationship,
+                    "equation_index": edge.data.equation_index,
+                },
             }
             for edge in graph.edges
         ]
 
-    adjacency = {_node_key(node): graph.successors(_node_key(node)) for node in graph.nodes}
+    adjacency = {_node_key(node): graph.adjacency(_node_key(node)) for node in graph.nodes}
     return json.dumps(
         {"nodes": nodes, "edges": edges, "adjacency": adjacency},
         indent=2,

@@ -1,20 +1,15 @@
-"""Graph-representation tests (esm-libraries-spec §4.8).
+"""Graph-representation tests for the Python binding (esm-libraries-spec §4.8).
 
-The assertions here are deliberately about the DATA MODEL — which nodes exist,
-what kind each carries, which edges the coupling and the reactions produce —
-because that is what the four other bindings (Julia, Rust, TypeScript, Go)
-actually agree on. Their EXPORTERS do not agree byte for byte, and the shared
-``tests/graphs/`` fixtures pin no binding's rendered output: ``expected_dot/``
-and ``expected_mermaid/`` are hand-authored illustrations carrying legends,
-emoji and per-reaction nodes that no implementation emits, and Rust's
-``graph_structure.rs`` only checks that its own DOT contains ``digraph``. The
-rendered forms are therefore asserted structurally (headers, one node line, one
-edge line) rather than against a fixture that would be wrong for every binding.
+Cross-binding agreement is asserted by ``test_graph_conformance.py``, which
+drives the shared corpus at ``tests/conformance/graph/cases.json``. This file
+keeps the Python-local assertions: the DATA MODEL invariants that read clearly
+as prose (a data source is not a node, file-level names are scoped, rate edges
+reach every species) and the exporters' structure.
 
-Two shared fixtures ARE used for their semantic content, which every binding
-does implement: ``tests/graphs/expression_graph.json``'s variable entries
-(species vs parameter, with units) and ``tests/valid/minimal_chemistry.esm``,
-the document both graph fixtures name as their input.
+The exporters are asserted STRUCTURALLY — headers, one node line, one edge line
+— and not against a golden. §4.8.3 requires DOT and Mermaid but specifies
+neither, and the five bindings do not agree on either format's bytes; see
+``tests/conformance/graph/README.md``.
 """
 
 from __future__ import annotations
@@ -36,6 +31,8 @@ from earthsci_ast.esm_types import (
     Species,
 )
 from earthsci_ast.graph import (
+    EXPR_RESULT,
+    NON_EQUATION_INDEX,
     ComponentNode,
     CouplingEdge,
     DependencyEdge,
@@ -50,9 +47,7 @@ from earthsci_ast.graph import (
     to_mermaid,
 )
 
-GRAPHS_DIR = FIXTURES_ROOT / "graphs"
-
-#: The document both shared graph fixtures name as their `input_file`.
+#: The document the graph corpus uses for the reaction-system cases.
 CHEMISTRY_FIXTURE = VALID_DIR / "minimal_chemistry.esm"
 
 
@@ -87,10 +82,9 @@ class TestComponentGraph:
     def test_data_source_is_not_a_node(self, chemistry_file):
         """From esm 1.0.0 a data source is an ingest registry, not a component.
 
-        ``minimal_chemistry.esm`` declares a ``GEOSFP`` data source, and the
-        stale ``tests/graphs/system_graph.json`` still lists it as a
-        ``data_loader`` node. TypeScript and Go both dropped that node when
-        1.0.0 landed (esm-spec §5.5 / §8.5); this follows them.
+        ``minimal_chemistry.esm`` declares a ``GEOSFP`` data source.
+        esm-libraries-spec §4.8.1 is explicit: "A ``data_sources`` entry is not
+        a component and is NOT a node" (see also esm-spec §5.5 / §8.5).
         """
         assert "GEOSFP" in chemistry_file.data_sources
         graph = component_graph(chemistry_file)
@@ -162,31 +156,32 @@ class TestComponentGraph:
 
 
 class TestExpressionGraph:
-    def test_species_and_parameters_match_the_shared_fixture(self, chemistry_file):
-        """The kinds and units ``tests/graphs/expression_graph.json`` records.
+    def test_species_and_parameters_carry_declared_kind_and_units(self, chemistry_file):
+        """Every declared species and parameter reaches the graph intact.
 
-        The fixture also models each reaction as its own ``rate_R1`` node; no
-        binding does that (§4.8.2 says nodes are variables and parameters), so
-        only its variable entries are asserted here.
+        This used to compare against ``tests/graphs/expression_graph.json``,
+        which was removed: it recorded a pre-1.0.0 node model (``var_``-prefixed
+        ids and a ``rate_R1`` node per reaction) that no binding ever produced.
+        The document's own declarations are the better source for the same
+        property, and the cross-binding form of it lives in the corpus.
         """
-        fixture = json.loads((GRAPHS_DIR / "expression_graph.json").read_text())
-        assert fixture["input_file"] == CHEMISTRY_FIXTURE.name
-        system = fixture["reaction_system"]
-
+        system = "SimpleOzone"
+        rxn_sys = chemistry_file.reaction_systems[system]
         graph = expression_graph(chemistry_file)
         by_name = {node.name: node for node in graph.nodes}
 
-        expected = [
-            node
-            for node in fixture["expected_nodes"]
-            if node.get("variable_type") in ("species", "parameter")
-        ]
-        assert expected, "fixture should declare species/parameter nodes"
-        for entry in expected:
-            scoped = f"{system}.{entry['name']}"
+        for species in rxn_sys.species:
+            scoped = f"{system}.{species.name}"
             assert scoped in by_name, f"{scoped} missing from the expression graph"
-            assert by_name[scoped].kind == entry["variable_type"]
-            assert by_name[scoped].units == entry["units"]
+            assert by_name[scoped].kind == "species"
+            assert by_name[scoped].units == species.units
+            assert by_name[scoped].system == system
+
+        for parameter in rxn_sys.parameters:
+            scoped = f"{system}.{parameter.name}"
+            assert scoped in by_name, f"{scoped} missing from the expression graph"
+            assert by_name[scoped].kind == "parameter"
+            assert by_name[scoped].units == parameter.units
             assert by_name[scoped].system == system
 
     def test_file_level_names_are_scoped(self, chemistry_file):
@@ -312,17 +307,26 @@ class TestExpressionGraph:
         assert by_name["A"].kind == "species" and by_name["A"].units == "mol/mol"
         assert by_name["k"].kind == "parameter" and by_name["k"].units == "1/s"
 
-    def test_standalone_expression_yields_nodes_only(self):
-        """A bare expression names no dependency target (Rust, Julia)."""
+    def test_standalone_expression_feeds_a_synthetic_result_node(self):
+        """§4.8.2 requires the Expr overload to produce EDGES, not just nodes.
+
+        "every variable in the expression becomes a node, and the tree structure
+        is flattened into dependency edges" — so the expression's value gets a
+        synthetic ``expr_result`` target and every free variable feeds it. This
+        module used to return nodes only.
+        """
         graph = expression_graph(ExprNode(op="*", args=["a", ExprNode(op="+", args=["b", 2])]))
-        assert {node.name for node in graph.nodes} == {"a", "b"}
-        assert graph.edges == []
+        assert {node.name for node in graph.nodes} == {"a", "b", EXPR_RESULT}
+        assert {(e.data.source, e.data.target) for e in graph.edges} == {
+            ("a", EXPR_RESULT),
+            ("b", EXPR_RESULT),
+        }
 
     def test_merge_coupled_is_off_by_default(self, variable_map_file):
         default = expression_graph(variable_map_file)
         merged = expression_graph(variable_map_file, merge_coupled=True)
         assert len(merged.edges) > len(default.edges)
-        cross = [e for e in merged.edges if e.data.equation_index is None]
+        cross = [e for e in merged.edges if e.data.equation_index == NON_EQUATION_INDEX]
         assert ("SystemA.temperature", "SystemB.temperature") in {
             (e.data.source, e.data.target) for e in cross
         }
@@ -450,11 +454,15 @@ class TestExports:
         assert set(payload) == {"nodes", "edges", "adjacency"}
         assert {node["id"] for node in payload["nodes"]} == {"Advection", "SimpleOzone"}
         edge = payload["edges"][0]
-        # The wire spellings of `from_component` / `to_component`.
-        assert edge["from"] == "SimpleOzone" and edge["to"] == "Advection"
-        assert edge["type"] == "operator_compose"
+        assert edge["source"] == "SimpleOzone" and edge["target"] == "Advection"
+        # The wire spellings of `from_component` / `to_component`, under `data`.
+        assert edge["data"]["from"] == "SimpleOzone" and edge["data"]["to"] == "Advection"
+        assert edge["data"]["type"] == "operator_compose"
+        # UNDIRECTED adjacency, matching `Graph.adjacency` (§4.8.3). This used
+        # to be `successors`, so the export disagreed with the graph's own
+        # lookup — caught by the shared corpus.
         assert payload["adjacency"] == {
-            "Advection": [],
+            "Advection": ["SimpleOzone"],
             "SimpleOzone": ["Advection"],
         }
 
