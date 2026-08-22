@@ -439,6 +439,80 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "mathml": "<mrow><mi>atanh</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>",
     "unicode": "tanh⁻¹(x)",
   },
+  {
+    "ascii": "a - b * c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "a - b \\cdot c",
+    "mathml": "<mrow><mi>a</mi><mo>-</mo><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a − b·c",
+  },
+  {
+    "ascii": "a - b / c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "a - \\frac{b}{c}",
+    "mathml": "<mrow><mi>a</mi><mo>-</mo><mfrac><mi>b</mi><mi>c</mi></mfrac></mrow>",
+    "unicode": "a − b/c",
+  },
+  {
+    "ascii": "-a + b",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "-a + b",
+    "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow></mrow>",
+    "unicode": "−a + b",
+  },
+  {
+    "ascii": "-a - b",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "a",
+            "b",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "-a - b",
+    "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>-</mo><mi>b</mi></mrow></mrow>",
+    "unicode": "−a − b",
+  },
 ]
 `;
 

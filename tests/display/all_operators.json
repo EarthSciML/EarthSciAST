@@ -402,5 +402,75 @@
     "unicode": "tanh⁻¹(x)",
     "latex": "\\tanh^{-1}(x)",
     "ascii": "atanh(x)"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        "a",
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a − b·c",
+    "latex": "a - b \\cdot c",
+    "ascii": "a - b * c"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        "a",
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a − b/c",
+    "latex": "a - \\frac{b}{c}",
+    "ascii": "a - b / c"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "a",
+            "b"
+          ]
+        }
+      ]
+    },
+    "unicode": "−a + b",
+    "latex": "-a + b",
+    "ascii": "-a + b"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        {
+          "op": "-",
+          "args": [
+            "a",
+            "b"
+          ]
+        }
+      ]
+    },
+    "unicode": "−a − b",
+    "latex": "-a - b",
+    "ascii": "-a - b"
   }
 ]
