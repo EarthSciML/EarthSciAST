@@ -62,10 +62,15 @@ Fields and their JSON spellings match Go's `UnitWarning`
 
 * `path` — RFC-6901 JSON Pointer to the offending equation / expression, the
   document root being `""` (the same addressing as `StructuralError.path`).
-* `code` — the esm-spec §4.8.4 finding kind, decided AT THE POINT the finding
-  was raised and never recovered from the prose, so rewording a message can
-  never silently reclassify it. See `UNIT_DIMENSION_MISMATCH` /
-  `UNIT_PARSE_ERROR` in units.jl for the severity policy.
+* `code` — the finding kind, decided AT THE POINT the finding was raised and
+  never recovered from the prose, so rewording a message can never silently
+  reclassify it. This is the SECOND, smaller unit vocabulary — the one Go's
+  `UnitFinding*`, Rust's `UNIT_FINDING_*` and TypeScript's
+  `UnitWarning['code']` union share: `dimensional_mismatch` (a PROVABLE
+  inconsistency), `unparseable_unit` (a declared unit string denoting no real
+  unit), `analysis` (the checker could not DETERMINE a dimension). It is NOT
+  the `unit_inconsistency` / `unit_parse_error` pair, which names the
+  STRUCTURAL error each finding is promoted to.
 * `message` — human-readable description (binding-local prose).
 * `lhs_units` / `rhs_units` — the inferred units of each side, `""` when the
   raise site does not know them. Julia's units engine (`model_unit_findings`)
@@ -91,6 +96,18 @@ struct UnitWarning
                 lhs_units::AbstractString="", rhs_units::AbstractString="") =
         new(String(path), String(code), String(message),
             String(lhs_units), String(rhs_units))
+end
+
+# The promoted STRUCTURAL error code -> the `UnitWarning.code` finding kind.
+# Two vocabularies, deliberately: `unit_inconsistency` / `unit_parse_error` name
+# what the finding was promoted TO, while `dimensional_mismatch` /
+# `unparseable_unit` / `analysis` name the finding itself and are the values
+# every other binding puts on this field. Mapping here rather than at the
+# `StructuralError` raise site keeps `structural_errors` byte-identical.
+function _unit_finding_code(error_type::AbstractString)::String
+    error_type == ERROR_CODES.UNIT_INCONSISTENCY && return ERROR_CODES.DIMENSIONAL_MISMATCH
+    error_type == ERROR_CODES.UNIT_PARSE_ERROR   && return ERROR_CODES.UNPARSEABLE_UNIT
+    return ERROR_CODES.ANALYSIS
 end
 
 """
@@ -588,7 +605,7 @@ function validate(file::EsmFile)::ValidationResult
     # exactly what it has always been — only the element type gained structure
     # (finding D-8), so `[w.message for w in result.unit_warnings]` reproduces
     # the old `Vector{String}` byte for byte.
-    unit_warnings = [UnitWarning(e.path, e.error_type, e.message,
+    unit_warnings = [UnitWarning(e.path, _unit_finding_code(e.error_type), e.message,
                                  string(get(e.details, "lhs_units", "")),
                                  string(get(e.details, "rhs_units", "")))
                      for e in structural_errors

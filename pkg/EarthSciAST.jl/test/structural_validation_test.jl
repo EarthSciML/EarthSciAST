@@ -23,7 +23,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # Python/TypeScript/Go bindings and CONFORMANCE_SPEC §3.1 — not the bare
         # string it used to be, so a caller can route findings by `code`.
         unit_warnings = [EarthSciAST.UnitWarning("/models/m/equations/0",
-                                                 "unit_inconsistency", "Unit warning")]
+                                                 "dimensional_mismatch", "Unit warning")]
 
         # Test constructor
         result = EarthSciAST.ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
@@ -33,7 +33,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @test length(result.unit_warnings) == 1
         w = result.unit_warnings[1]
         @test w.path == "/models/m/equations/0"
-        @test w.code == "unit_inconsistency"
+        @test w.code == "dimensional_mismatch"
         @test w.message == "Unit warning"
         @test w.lhs_units == ""
         @test w.rhs_units == ""
@@ -346,7 +346,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 # promoted structural error's pointer and code verbatim so a
                 # caller can filter by code without parsing prose.
                 @test all(w -> w isa EarthSciAST.UnitWarning, result.unit_warnings)
-                @test all(w -> w.code == "unit_inconsistency", result.unit_warnings)
+                # The `UnitWarning.code` vocabulary is the SECOND, smaller one
+                # (Go's UnitFinding* / Rust's UNIT_FINDING_* / TS's
+                # UnitWarning['code']) — `dimensional_mismatch`, not the
+                # `unit_inconsistency` structural code it was promoted to.
+                @test all(w -> w.code == "dimensional_mismatch", result.unit_warnings)
                 promoted = [e for e in result.structural_errors
                             if e.error_type == "unit_inconsistency"]
                 @test [w.message for w in result.unit_warnings] == [e.message for e in promoted]

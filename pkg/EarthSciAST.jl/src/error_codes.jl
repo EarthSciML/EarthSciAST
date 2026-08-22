@@ -76,6 +76,19 @@ const ERROR_CODES = (
     UNIT_INCONSISTENCY = "unit_inconsistency",
     UNIT_PARSE_ERROR = "unit_parse_error",
 
+    # ── Unit-FINDING kinds: a SECOND, smaller vocabulary, carried on
+    #    `UnitWarning.code` rather than on a `StructuralError`. The two above
+    #    name the STRUCTURAL error a finding is promoted to; these three name
+    #    the finding itself, and they are what a caller filters
+    #    `ValidationResult.unit_warnings` on. Values shared verbatim with Go's
+    #    `UnitFinding*` (`pkg/earthsci-ast-go/pkg/esm/units.go`), Rust's
+    #    `UNIT_FINDING_*` and TypeScript's `UnitWarning['code']` union.
+    #    The first two state a defect in the FILE, the third a limit of the
+    #    ANALYSIS. ───────────────────────────────────────────────────────────
+    DIMENSIONAL_MISMATCH = "dimensional_mismatch",
+    UNPARSEABLE_UNIT = "unparseable_unit",
+    ANALYSIS = "analysis",
+
     # ── Document load / subsystem-reference resolution (resolve.jl, parse.jl;
     #    esm-spec §4.7). These are THROWN at load, and `validate` renders the
     #    same `(code, path)` pair as a structural finding. ──────────────────
