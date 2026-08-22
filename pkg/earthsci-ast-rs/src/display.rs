@@ -573,18 +573,6 @@ fn render_at(expr: &Expr, fmt: Fmt, prec: i32) -> String {
     }
 }
 
-/// Render one operand of an associative n-ary operator (`+`, `*`). A child that
-/// is the SAME operator is not self-parenthesized, so `(a+b)+c` prints
-/// `a + b + c` and `(a·b)·c` prints `a·b·c`; every other child uses the normal
-/// precedence threshold (so `(a+b)·c` and `a·(b/c)` keep their parentheses).
-fn render_assoc_operand(expr: &Expr, parent_op: &str, op_prec: i32, fmt: Fmt) -> String {
-    let prec = match expr {
-        Expr::Operator(n) if n.op == parent_op => 0,
-        _ => op_prec,
-    };
-    render_at(expr, fmt, prec)
-}
-
 /// A binary `+` whose right operand is a unary minus renders as a subtraction
 /// (`a + (−b)` → `a − b`); returns the rendered string when this applies.
 fn sum_as_difference(args: &[Expr], op_prec: i32, fmt: Fmt) -> Option<String> {
@@ -600,7 +588,7 @@ fn sum_as_difference(args: &[Expr], op_prec: i32, fmt: Fmt) -> Option<String> {
     let minus = if fmt == Fmt::Unicode { "−" } else { "-" };
     Some(format!(
         "{} {minus} {}",
-        render_assoc_operand(&args[0], "+", op_prec, fmt),
+        render_at(&args[0], fmt, op_prec - 1),
         render_at(&n.args[0], fmt, op_prec)
     ))
 }
@@ -1120,10 +1108,18 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
     // Renders an argument at precedence 0 (used inside delimited contexts).
     let r0 = |arg: &Expr| render_at(arg, fmt, 0);
 
-    // `\frac{...}{...}` groups visually, so the LaTeX fraction itself never
-    // needs parentheses and its numerator/denominator render at precedence 0.
+    // `\frac{...}{...}` groups its OWN operands visually, so the numerator and
+    // denominator render at precedence 0 — but the fraction still takes
+    // parentheses from its PARENT when precedence demands them, exactly as the
+    // reference printer does (`(\frac{b}{c})^{d}`). Returning early here without
+    // consulting `needs_parens` silently dropped them.
     if fmt == Fmt::Latex && op == "/" && args.len() == 2 {
-        return format!("\\frac{{{}}}{{{}}}", r0(&args[0]), r0(&args[1]));
+        let frac = format!("\\frac{{{}}}{{{}}}", r0(&args[0]), r0(&args[1]));
+        return if needs_parens {
+            format!("({frac})")
+        } else {
+            frac
+        };
     }
 
     let result = match op {
@@ -1132,7 +1128,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                 s
             } else if args.len() >= 2 {
                 args.iter()
-                    .map(|arg| render_assoc_operand(arg, "+", op_prec, fmt))
+                    .map(|arg| render_at(arg, fmt, op_prec - 1))
                     .collect::<Vec<_>>()
                     .join(" + ")
             } else {
@@ -1159,7 +1155,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                 // (pretty-print.ts `needsParentheses`).
                 format!(
                     "{} {minus} {}",
-                    render_at(&args[0], fmt, op_prec),
+                    render_at(&args[0], fmt, op_prec - 1),
                     render_at(&args[1], fmt, op_prec)
                 )
             } else {
@@ -1177,7 +1173,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     Fmt::Latex => " \\cdot ",
                 };
                 args.iter()
-                    .map(|arg| render_assoc_operand(arg, "*", op_prec, fmt))
+                    .map(|arg| render_at(arg, fmt, op_prec - 1))
                     .collect::<Vec<_>>()
                     .join(sep)
             } else {
@@ -1194,7 +1190,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     "{}{}{}",
                     render_at(&args[0], fmt, op_prec - 1),
                     pick(fmt, "/", "/", " / "),
-                    render_at(&args[1], fmt, op_prec + 1)
+                    render_at(&args[1], fmt, op_prec)
                 )
             } else {
                 call_form(pick(fmt, "÷", "\\div", "/"), args, r0)
@@ -1213,7 +1209,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                         None => format!(
                             "{}^{}",
                             render_at(&args[0], fmt, op_prec),
-                            render_at(&args[1], fmt, op_prec + 1)
+                            render_at(&args[1], fmt, op_prec)
                         ),
                     },
                     // The exponent sits inside `^{...}`, which groups visually,
@@ -1224,7 +1220,7 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
                     Fmt::Ascii => format!(
                         "{}^{}",
                         render_at(&args[0], fmt, op_prec),
-                        render_at(&args[1], fmt, op_prec + 1)
+                        render_at(&args[1], fmt, op_prec)
                     ),
                 }
             } else {
@@ -2366,12 +2362,14 @@ mod tests {
         assert_eq!(to_latex(&pow), "(a + b)^{2}");
         assert_eq!(to_ascii(&pow), "(a + b)^2");
 
-        // `\frac` groups visually, so a fraction under a product stays bare
-        // in LaTeX while the inline forms need parentheses.
+        // `*` is associative, so a same-precedence `/` operand takes NO
+        // parentheses in any backend — `a·b/c`, matching the reference printer
+        // (pretty-print.ts keeps `*` out of NON_ASSOCIATIVE_RIGHT_OPS) and the
+        // Julia / Python / Go bindings. `\frac` additionally groups visually.
         let frac_mul = op_node("*", vec![var("a"), op_node("/", vec![var("b"), var("c")])]);
-        assert_eq!(to_unicode(&frac_mul), "a·(b/c)");
+        assert_eq!(to_unicode(&frac_mul), "a·b/c");
         assert_eq!(to_latex(&frac_mul), "a \\cdot \\frac{b}{c}");
-        assert_eq!(to_ascii(&frac_mul), "a * (b / c)");
+        assert_eq!(to_ascii(&frac_mul), "a * b / c");
     }
 
     #[test]
@@ -2451,11 +2449,14 @@ mod tests {
             r"\frac{a + b}{c}",
             "(a + b) / c",
         );
+        // `*` is associative: a same-precedence `/` operand takes no parens in
+        // the inline backends (`a·b/c`), matching pretty-print.ts and the
+        // Julia / Python / Go bindings.
         chk(
             opn("*", vec![a(), opn("/", vec![b(), c()])]),
-            "a·(b/c)",
+            "a·b/c",
             r"a \cdot \frac{b}{c}",
-            "a * (b / c)",
+            "a * b / c",
         );
         // powers: LaTeX braces, Unicode integer superscripts
         chk(opn("^", vec![a(), b()]), "a^b", r"a^{b}", "a^b");

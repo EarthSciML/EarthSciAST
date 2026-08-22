@@ -472,5 +472,869 @@
     "unicode": "−a − b",
     "latex": "-a - b",
     "ascii": "-a - b"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b + c + d",
+    "latex": "b + c + d",
+    "ascii": "b + c + d"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        "a",
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a + b + c",
+    "latex": "a + b + c",
+    "ascii": "a + b + c"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b − c + d",
+    "latex": "b - c + d",
+    "ascii": "b - c + d"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        "a",
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a + b − c",
+    "latex": "a + b - c",
+    "ascii": "a + b - c"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b·c + d",
+    "latex": "b \\cdot c + d",
+    "ascii": "b * c + d"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        "a",
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a + b·c",
+    "latex": "a + b \\cdot c",
+    "ascii": "a + b * c"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b/c + d",
+    "latex": "\\frac{b}{c} + d",
+    "ascii": "b / c + d"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        "a",
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a + b/c",
+    "latex": "a + \\frac{b}{c}",
+    "ascii": "a + b / c"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b^c + d",
+    "latex": "b^{c} + d",
+    "ascii": "b^c + d"
+  },
+  {
+    "input": {
+      "op": "+",
+      "args": [
+        "a",
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a + b^c",
+    "latex": "a + b^{c}",
+    "ascii": "a + b^c"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b + c − d",
+    "latex": "b + c - d",
+    "ascii": "b + c - d"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        "a",
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a − (b + c)",
+    "latex": "a - (b + c)",
+    "ascii": "a - (b + c)"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b − c − d",
+    "latex": "b - c - d",
+    "ascii": "b - c - d"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        "a",
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a − (b − c)",
+    "latex": "a - (b - c)",
+    "ascii": "a - (b - c)"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b·c − d",
+    "latex": "b \\cdot c - d",
+    "ascii": "b * c - d"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b/c − d",
+    "latex": "\\frac{b}{c} - d",
+    "ascii": "b / c - d"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b^c − d",
+    "latex": "b^{c} - d",
+    "ascii": "b^c - d"
+  },
+  {
+    "input": {
+      "op": "-",
+      "args": [
+        "a",
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a − b^c",
+    "latex": "a - b^{c}",
+    "ascii": "a - b^c"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b + c)·d",
+    "latex": "(b + c) \\cdot d",
+    "ascii": "(b + c) * d"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        "a",
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a·(b + c)",
+    "latex": "a \\cdot (b + c)",
+    "ascii": "a * (b + c)"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b − c)·d",
+    "latex": "(b - c) \\cdot d",
+    "ascii": "(b - c) * d"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        "a",
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a·(b − c)",
+    "latex": "a \\cdot (b - c)",
+    "ascii": "a * (b - c)"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b·c·d",
+    "latex": "b \\cdot c \\cdot d",
+    "ascii": "b * c * d"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        "a",
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a·b·c",
+    "latex": "a \\cdot b \\cdot c",
+    "ascii": "a * b * c"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b/c·d",
+    "latex": "\\frac{b}{c} \\cdot d",
+    "ascii": "b / c * d"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        "a",
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a·b/c",
+    "latex": "a \\cdot \\frac{b}{c}",
+    "ascii": "a * b / c"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b^c·d",
+    "latex": "b^{c} \\cdot d",
+    "ascii": "b^c * d"
+  },
+  {
+    "input": {
+      "op": "*",
+      "args": [
+        "a",
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a·b^c",
+    "latex": "a \\cdot b^{c}",
+    "ascii": "a * b^c"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b + c)/d",
+    "latex": "\\frac{b + c}{d}",
+    "ascii": "(b + c) / d"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        "a",
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a/(b + c)",
+    "latex": "\\frac{a}{b + c}",
+    "ascii": "a / (b + c)"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b − c)/d",
+    "latex": "\\frac{b - c}{d}",
+    "ascii": "(b - c) / d"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        "a",
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a/(b − c)",
+    "latex": "\\frac{a}{b - c}",
+    "ascii": "a / (b - c)"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b·c/d",
+    "latex": "\\frac{b \\cdot c}{d}",
+    "ascii": "b * c / d"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        "a",
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a/(b·c)",
+    "latex": "\\frac{a}{b \\cdot c}",
+    "ascii": "a / (b * c)"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b/c/d",
+    "latex": "\\frac{\\frac{b}{c}}{d}",
+    "ascii": "b / c / d"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        "a",
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a/(b/c)",
+    "latex": "\\frac{a}{\\frac{b}{c}}",
+    "ascii": "a / (b / c)"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "b^c/d",
+    "latex": "\\frac{b^{c}}{d}",
+    "ascii": "b^c / d"
+  },
+  {
+    "input": {
+      "op": "/",
+      "args": [
+        "a",
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a/b^c",
+    "latex": "\\frac{a}{b^{c}}",
+    "ascii": "a / b^c"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b + c)^d",
+    "latex": "(b + c)^{d}",
+    "ascii": "(b + c)^d"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        "a",
+        {
+          "op": "+",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a^(b + c)",
+    "latex": "a^{b + c}",
+    "ascii": "a^(b + c)"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b − c)^d",
+    "latex": "(b - c)^{d}",
+    "ascii": "(b - c)^d"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        "a",
+        {
+          "op": "-",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a^(b − c)",
+    "latex": "a^{b - c}",
+    "ascii": "a^(b - c)"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b·c)^d",
+    "latex": "(b \\cdot c)^{d}",
+    "ascii": "(b * c)^d"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        "a",
+        {
+          "op": "*",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a^(b·c)",
+    "latex": "a^{b \\cdot c}",
+    "ascii": "a^(b * c)"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b/c)^d",
+    "latex": "(\\frac{b}{c})^{d}",
+    "ascii": "(b / c)^d"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        "a",
+        {
+          "op": "/",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a^(b/c)",
+    "latex": "a^{\\frac{b}{c}}",
+    "ascii": "a^(b / c)"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        },
+        "d"
+      ]
+    },
+    "unicode": "(b^c)^d",
+    "latex": "(b^{c})^{d}",
+    "ascii": "(b^c)^d"
+  },
+  {
+    "input": {
+      "op": "^",
+      "args": [
+        "a",
+        {
+          "op": "^",
+          "args": [
+            "b",
+            "c"
+          ]
+        }
+      ]
+    },
+    "unicode": "a^(b^c)",
+    "latex": "a^{b^{c}}",
+    "ascii": "a^(b^c)"
   }
 ]

@@ -513,6 +513,918 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "mathml": "<mrow><mo>-</mo><mrow><mi>a</mi><mo>-</mo><mi>b</mi></mrow></mrow>",
     "unicode": "−a − b",
   },
+  {
+    "ascii": "b + c + d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+        "d",
+      ],
+      "op": "+",
+    },
+    "latex": "b + c + d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow><mo>+</mo><mi>d</mi></mrow>",
+    "unicode": "b + c + d",
+  },
+  {
+    "ascii": "a + b + c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a + b + c",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a + b + c",
+  },
+  {
+    "ascii": "b - c + d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+        "d",
+      ],
+      "op": "+",
+    },
+    "latex": "b - c + d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow><mo>+</mo><mi>d</mi></mrow>",
+    "unicode": "b − c + d",
+  },
+  {
+    "ascii": "a + b - c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a + b - c",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a + b − c",
+  },
+  {
+    "ascii": "b * c + d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+        "d",
+      ],
+      "op": "+",
+    },
+    "latex": "b \\cdot c + d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow><mo>+</mo><mi>d</mi></mrow>",
+    "unicode": "b·c + d",
+  },
+  {
+    "ascii": "a + b * c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a + b \\cdot c",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a + b·c",
+  },
+  {
+    "ascii": "b / c + d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+        "d",
+      ],
+      "op": "+",
+    },
+    "latex": "\\frac{b}{c} + d",
+    "mathml": "<mrow><mfrac><mi>b</mi><mi>c</mi></mfrac><mo>+</mo><mi>d</mi></mrow>",
+    "unicode": "b/c + d",
+  },
+  {
+    "ascii": "a + b / c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a + \\frac{b}{c}",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><mfrac><mi>b</mi><mi>c</mi></mfrac></mrow>",
+    "unicode": "a + b/c",
+  },
+  {
+    "ascii": "b^c + d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+        "d",
+      ],
+      "op": "+",
+    },
+    "latex": "b^{c} + d",
+    "mathml": "<mrow><msup><mi>b</mi><mi>c</mi></msup><mo>+</mo><mi>d</mi></mrow>",
+    "unicode": "b^c + d",
+  },
+  {
+    "ascii": "a + b^c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "+",
+    },
+    "latex": "a + b^{c}",
+    "mathml": "<mrow><mi>a</mi><mo>+</mo><msup><mi>b</mi><mi>c</mi></msup></mrow>",
+    "unicode": "a + b^c",
+  },
+  {
+    "ascii": "b + c - d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+        "d",
+      ],
+      "op": "-",
+    },
+    "latex": "b + c - d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow><mo>-</mo><mi>d</mi></mrow>",
+    "unicode": "b + c − d",
+  },
+  {
+    "ascii": "a - (b + c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "a - (b + c)",
+    "mathml": "<mrow><mi>a</mi><mo>-</mo><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a − (b + c)",
+  },
+  {
+    "ascii": "b - c - d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+        "d",
+      ],
+      "op": "-",
+    },
+    "latex": "b - c - d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow><mo>-</mo><mi>d</mi></mrow>",
+    "unicode": "b − c − d",
+  },
+  {
+    "ascii": "a - (b - c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "a - (b - c)",
+    "mathml": "<mrow><mi>a</mi><mo>-</mo><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a − (b − c)",
+  },
+  {
+    "ascii": "b * c - d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+        "d",
+      ],
+      "op": "-",
+    },
+    "latex": "b \\cdot c - d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow><mo>-</mo><mi>d</mi></mrow>",
+    "unicode": "b·c − d",
+  },
+  {
+    "ascii": "b / c - d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+        "d",
+      ],
+      "op": "-",
+    },
+    "latex": "\\frac{b}{c} - d",
+    "mathml": "<mrow><mfrac><mi>b</mi><mi>c</mi></mfrac><mo>-</mo><mi>d</mi></mrow>",
+    "unicode": "b/c − d",
+  },
+  {
+    "ascii": "b^c - d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+        "d",
+      ],
+      "op": "-",
+    },
+    "latex": "b^{c} - d",
+    "mathml": "<mrow><msup><mi>b</mi><mi>c</mi></msup><mo>-</mo><mi>d</mi></mrow>",
+    "unicode": "b^c − d",
+  },
+  {
+    "ascii": "a - b^c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "-",
+    },
+    "latex": "a - b^{c}",
+    "mathml": "<mrow><mi>a</mi><mo>-</mo><msup><mi>b</mi><mi>c</mi></msup></mrow>",
+    "unicode": "a − b^c",
+  },
+  {
+    "ascii": "(b + c) * d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+        "d",
+      ],
+      "op": "*",
+    },
+    "latex": "(b + c) \\cdot d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow><mo>&#x22C5;</mo><mi>d</mi></mrow>",
+    "unicode": "(b + c)·d",
+  },
+  {
+    "ascii": "a * (b + c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot (b + c)",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a·(b + c)",
+  },
+  {
+    "ascii": "(b - c) * d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+        "d",
+      ],
+      "op": "*",
+    },
+    "latex": "(b - c) \\cdot d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow><mo>&#x22C5;</mo><mi>d</mi></mrow>",
+    "unicode": "(b − c)·d",
+  },
+  {
+    "ascii": "a * (b - c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot (b - c)",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a·(b − c)",
+  },
+  {
+    "ascii": "b * c * d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+        "d",
+      ],
+      "op": "*",
+    },
+    "latex": "b \\cdot c \\cdot d",
+    "mathml": "<mrow><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow><mo>&#x22C5;</mo><mi>d</mi></mrow>",
+    "unicode": "b·c·d",
+  },
+  {
+    "ascii": "a * b * c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot b \\cdot c",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow></mrow>",
+    "unicode": "a·b·c",
+  },
+  {
+    "ascii": "b / c * d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+        "d",
+      ],
+      "op": "*",
+    },
+    "latex": "\\frac{b}{c} \\cdot d",
+    "mathml": "<mrow><mfrac><mi>b</mi><mi>c</mi></mfrac><mo>&#x22C5;</mo><mi>d</mi></mrow>",
+    "unicode": "b/c·d",
+  },
+  {
+    "ascii": "a * b / c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot \\frac{b}{c}",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><mfrac><mi>b</mi><mi>c</mi></mfrac></mrow>",
+    "unicode": "a·b/c",
+  },
+  {
+    "ascii": "b^c * d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+        "d",
+      ],
+      "op": "*",
+    },
+    "latex": "b^{c} \\cdot d",
+    "mathml": "<mrow><msup><mi>b</mi><mi>c</mi></msup><mo>&#x22C5;</mo><mi>d</mi></mrow>",
+    "unicode": "b^c·d",
+  },
+  {
+    "ascii": "a * b^c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "*",
+    },
+    "latex": "a \\cdot b^{c}",
+    "mathml": "<mrow><mi>a</mi><mo>&#x22C5;</mo><msup><mi>b</mi><mi>c</mi></msup></mrow>",
+    "unicode": "a·b^c",
+  },
+  {
+    "ascii": "(b + c) / d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+        "d",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{b + c}{d}",
+    "mathml": "<mfrac><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow><mi>d</mi></mfrac>",
+    "unicode": "(b + c)/d",
+  },
+  {
+    "ascii": "a / (b + c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b + c}",
+    "mathml": "<mfrac><mi>a</mi><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></mfrac>",
+    "unicode": "a/(b + c)",
+  },
+  {
+    "ascii": "(b - c) / d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+        "d",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{b - c}{d}",
+    "mathml": "<mfrac><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow><mi>d</mi></mfrac>",
+    "unicode": "(b − c)/d",
+  },
+  {
+    "ascii": "a / (b - c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b - c}",
+    "mathml": "<mfrac><mi>a</mi><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow></mfrac>",
+    "unicode": "a/(b − c)",
+  },
+  {
+    "ascii": "b * c / d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+        "d",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{b \\cdot c}{d}",
+    "mathml": "<mfrac><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow><mi>d</mi></mfrac>",
+    "unicode": "b·c/d",
+  },
+  {
+    "ascii": "a / (b * c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b \\cdot c}",
+    "mathml": "<mfrac><mi>a</mi><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow></mfrac>",
+    "unicode": "a/(b·c)",
+  },
+  {
+    "ascii": "b / c / d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+        "d",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{\\frac{b}{c}}{d}",
+    "mathml": "<mfrac><mfrac><mi>b</mi><mi>c</mi></mfrac><mi>d</mi></mfrac>",
+    "unicode": "b/c/d",
+  },
+  {
+    "ascii": "a / (b / c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{\\frac{b}{c}}",
+    "mathml": "<mfrac><mi>a</mi><mfrac><mi>b</mi><mi>c</mi></mfrac></mfrac>",
+    "unicode": "a/(b/c)",
+  },
+  {
+    "ascii": "b^c / d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+        "d",
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{b^{c}}{d}",
+    "mathml": "<mfrac><msup><mi>b</mi><mi>c</mi></msup><mi>d</mi></mfrac>",
+    "unicode": "b^c/d",
+  },
+  {
+    "ascii": "a / b^c",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "/",
+    },
+    "latex": "\\frac{a}{b^{c}}",
+    "mathml": "<mfrac><mi>a</mi><msup><mi>b</mi><mi>c</mi></msup></mfrac>",
+    "unicode": "a/b^c",
+  },
+  {
+    "ascii": "(b + c)^d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+        "d",
+      ],
+      "op": "^",
+    },
+    "latex": "(b + c)^{d}",
+    "mathml": "<msup><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow><mi>d</mi></msup>",
+    "unicode": "(b + c)^d",
+  },
+  {
+    "ascii": "a^(b + c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "+",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "a^{b + c}",
+    "mathml": "<msup><mi>a</mi><mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow></msup>",
+    "unicode": "a^(b + c)",
+  },
+  {
+    "ascii": "(b - c)^d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+        "d",
+      ],
+      "op": "^",
+    },
+    "latex": "(b - c)^{d}",
+    "mathml": "<msup><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow><mi>d</mi></msup>",
+    "unicode": "(b − c)^d",
+  },
+  {
+    "ascii": "a^(b - c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "-",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "a^{b - c}",
+    "mathml": "<msup><mi>a</mi><mrow><mi>b</mi><mo>-</mo><mi>c</mi></mrow></msup>",
+    "unicode": "a^(b − c)",
+  },
+  {
+    "ascii": "(b * c)^d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+        "d",
+      ],
+      "op": "^",
+    },
+    "latex": "(b \\cdot c)^{d}",
+    "mathml": "<msup><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow><mi>d</mi></msup>",
+    "unicode": "(b·c)^d",
+  },
+  {
+    "ascii": "a^(b * c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "*",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "a^{b \\cdot c}",
+    "mathml": "<msup><mi>a</mi><mrow><mi>b</mi><mo>&#x22C5;</mo><mi>c</mi></mrow></msup>",
+    "unicode": "a^(b·c)",
+  },
+  {
+    "ascii": "(b / c)^d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+        "d",
+      ],
+      "op": "^",
+    },
+    "latex": "(\\frac{b}{c})^{d}",
+    "mathml": "<msup><mfrac><mi>b</mi><mi>c</mi></mfrac><mi>d</mi></msup>",
+    "unicode": "(b/c)^d",
+  },
+  {
+    "ascii": "a^(b / c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "/",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "a^{\\frac{b}{c}}",
+    "mathml": "<msup><mi>a</mi><mfrac><mi>b</mi><mi>c</mi></mfrac></msup>",
+    "unicode": "a^(b/c)",
+  },
+  {
+    "ascii": "(b^c)^d",
+    "input": {
+      "args": [
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+        "d",
+      ],
+      "op": "^",
+    },
+    "latex": "(b^{c})^{d}",
+    "mathml": "<msup><msup><mi>b</mi><mi>c</mi></msup><mi>d</mi></msup>",
+    "unicode": "(b^c)^d",
+  },
+  {
+    "ascii": "a^(b^c)",
+    "input": {
+      "args": [
+        "a",
+        {
+          "args": [
+            "b",
+            "c",
+          ],
+          "op": "^",
+        },
+      ],
+      "op": "^",
+    },
+    "latex": "a^{b^{c}}",
+    "mathml": "<msup><mi>a</mi><msup><mi>b</mi><mi>c</mi></msup></msup>",
+    "unicode": "a^(b^c)",
+  },
 ]
 `;
 
