@@ -145,18 +145,18 @@
     }
   },
   "counts": {
-    "symbols": 899,
+    "symbols": 898,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 283,
       "typescript": 203,
       "python": 228,
       "rust": 281,
-      "go": 328,
+      "go": 327,
       "editor": 71
     },
     "by_tier": {
-      "extension": 656,
+      "extension": 655,
       "stable": 243
     }
   },
@@ -6830,14 +6830,6 @@
       "tier": "extension",
       "bindings": {
         "go": "SubstituteWithScoped"
-      }
-    },
-    {
-      "name": "substitution_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "go": "SubstitutionError"
       }
     },
     {
