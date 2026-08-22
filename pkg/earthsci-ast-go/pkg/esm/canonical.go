@@ -168,7 +168,7 @@ func canonicalizeStruct(rv reflect.Value) (any, error) {
 			continue
 		}
 		fv := rv.Field(i)
-		if omitempty && isEmptyValue(fv) {
+		if omitempty && isEmptyValue(fv) && !keepsEmptyContainer(field, fv) {
 			continue
 		}
 		val, err := canonicalizeValue(fv)
@@ -199,6 +199,27 @@ func parseJSONTag(field reflect.StructField) (name string, omitempty, skip bool)
 		}
 	}
 	return name, omitempty, false
+}
+
+// keepsEmptyContainer reports whether a field tagged `esm:"keepempty"` holds an
+// ALLOCATED but empty map/slice, which the canonical emitter must still write
+// out (as `{}` / `[]`) even though `omitempty` would drop it.
+//
+// A handful of wire keys distinguish "absent" from "present but empty", and
+// eliding them is a conformance bug, not a cosmetic one: an `aggregate` node
+// with no free indices carries `"output_idx": []`, which esm-schema.json
+// REQUIRES on every aggregate, and one with no `where` clause carries
+// `"ranges": {}`, which the other language bindings emit. A nil field is still
+// omitted, so nodes that never had the key keep their compact form.
+func keepsEmptyContainer(field reflect.StructField, v reflect.Value) bool {
+	if !strings.Contains(field.Tag.Get("esm"), "keepempty") {
+		return false
+	}
+	switch v.Kind() {
+	case reflect.Map, reflect.Slice:
+		return !v.IsNil()
+	}
+	return false
 }
 
 // isEmptyValue mirrors encoding/json's isEmptyValue so omitempty behavior
