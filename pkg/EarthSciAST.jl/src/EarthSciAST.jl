@@ -78,6 +78,10 @@ include("template_imports.jl")
 # Wire I/O
 include("parse.jl")
 include("serialize.jl")
+# Version-marker migration (esm-libraries-spec §8.3). Needs only `EsmFile` and
+# `ESM_FORMAT_VERSION` from types.jl; placed beside the wire I/O it belongs
+# with. The TS twin is pkg/earthsci-ast-ts/src/migration.ts.
+include("migration.jl")
 # Document load pipeline + subsystem-ref linker (RFC-3986 URL machinery,
 # top-level {ref} inlining, cycle detection, index-set registry merge)
 include("resolve.jl")
@@ -182,6 +186,12 @@ export
     # JSON functionality
     load, save, ParseError, SchemaValidationError, SchemaError, validate_schema,
     expression_from_json, ESM_FORMAT_VERSION,
+    # Version-marker migration (esm-libraries-spec §8.3). `migrate` is a pure
+    # `esm`-field bump along the ADDITIVE line `1.0.0 … ESM_FORMAT_VERSION`;
+    # nothing crosses the 1.0.0 clean break, so every 0.x source has no
+    # supported target. `supported_migration_targets` drops the `get` prefix
+    # its TypeScript twin carries.
+    migrate, can_migrate, supported_migration_targets, MigrationError,
     # Infix-text expression parsing (src/parse_expression_text.jl) — the
     # inverse of `to_ascii`. Distinct from `expression_from_json`, which
     # decodes the JSON wire form.

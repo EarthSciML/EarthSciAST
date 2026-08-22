@@ -16,6 +16,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("types_test.jl")
     include("classification_test.jl")
     include("parse_test.jl")
+    # Version-marker migration (src/migration.jl, esm-libraries-spec §8.3) —
+    # the Julia mirror of pkg/earthsci-ast-ts/src/migration.test.ts, pinned
+    # against tests/version_compatibility/compatibility_matrix.json.
+    include("migration_test.jl")
     include("validate_test.jl")
     include("structural_validation_test.jl")
     include("expression_test.jl")
