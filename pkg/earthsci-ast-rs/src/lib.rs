@@ -71,6 +71,9 @@ pub mod lower_expression_templates;
 pub mod migration;
 pub mod op_registry;
 pub mod parse;
+/// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits
+/// (the inverse of that printer). Pure and wasm32-clean.
+pub mod parse_expression;
 pub mod provider;
 pub mod reactions;
 pub mod ref_loading;
@@ -184,6 +187,7 @@ pub use graph::{
     component_exists, component_graph, expression_graph, get_component_type,
 };
 pub use parse::{LoadOptions, load, load_path, load_path_with_options, load_with_options};
+pub use parse_expression::{ExpressionParseError, parse_equation, parse_expression};
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
