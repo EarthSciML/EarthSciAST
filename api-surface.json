@@ -145,19 +145,19 @@
     }
   },
   "counts": {
-    "symbols": 899,
+    "symbols": 934,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 283,
-      "typescript": 203,
+      "julia": 287,
+      "typescript": 206,
       "python": 228,
-      "rust": 281,
-      "go": 328,
+      "rust": 285,
+      "go": 359,
       "editor": 71
     },
     "by_tier": {
-      "extension": 656,
-      "stable": 243
+      "extension": 686,
+      "stable": 248
     }
   },
   "planned": [
@@ -1114,6 +1114,38 @@
       }
     },
     {
+      "name": "code_apply_expression_template_bindings_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeApplyExpressionTemplateBindingsMismatch"
+      }
+    },
+    {
+      "name": "code_apply_expression_template_invalid_declaration",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeApplyExpressionTemplateInvalidDeclaration"
+      }
+    },
+    {
+      "name": "code_apply_expression_template_recursive_body",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeApplyExpressionTemplateRecursiveBody"
+      }
+    },
+    {
+      "name": "code_apply_expression_template_unknown_template",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeApplyExpressionTemplateUnknownTemplate"
+      }
+    },
+    {
       "name": "code_array_shape_mismatch",
       "kind": "constant",
       "tier": "extension",
@@ -1146,11 +1178,75 @@
       }
     },
     {
+      "name": "code_coupling_edge_unknown_role",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingEdgeUnknownRole"
+      }
+    },
+    {
+      "name": "code_coupling_import_bind_not_a_component",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingImportBindNotAComponent"
+      }
+    },
+    {
+      "name": "code_coupling_import_not_library",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingImportNotLibrary"
+      }
+    },
+    {
+      "name": "code_coupling_import_role_unbound",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingImportRoleUnbound"
+      }
+    },
+    {
+      "name": "code_coupling_import_unknown_role",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingImportUnknownRole"
+      }
+    },
+    {
+      "name": "code_coupling_import_unresolved",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingImportUnresolved"
+      }
+    },
+    {
       "name": "code_coupling_library_illegal_payload",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeCouplingLibraryIllegalPayload"
+      }
+    },
+    {
+      "name": "code_coupling_library_nested_import",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingLibraryNestedImport"
+      }
+    },
+    {
+      "name": "code_coupling_role_unused",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingRoleUnused"
       }
     },
     {
@@ -1194,6 +1290,14 @@
       }
     },
     {
+      "name": "code_geometry_manifold_invalid",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeGeometryManifoldInvalid"
+      }
+    },
+    {
       "name": "code_invalid_broadcast_fn",
       "kind": "constant",
       "tier": "extension",
@@ -1210,11 +1314,35 @@
       }
     },
     {
+      "name": "code_makearray_region_inverted",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeMakearrayRegionInverted"
+      }
+    },
+    {
+      "name": "code_metaparam_name_conflict",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeMetaparamNameConflict"
+      }
+    },
+    {
       "name": "code_metaparam_type_error",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeMetaparamTypeError"
+      }
+    },
+    {
+      "name": "code_metaparam_unbound",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeMetaparamUnbound"
       }
     },
     {
@@ -1282,6 +1410,46 @@
       }
     },
     {
+      "name": "code_subsystem_index_set_conflict",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemIndexSetConflict"
+      }
+    },
+    {
+      "name": "code_subsystem_ref_is_coupling_library",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemRefIsCouplingLibrary"
+      }
+    },
+    {
+      "name": "code_subsystem_ref_is_template_library",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemRefIsTemplateLibrary"
+      }
+    },
+    {
+      "name": "code_template_body_expansion_too_deep",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateBodyExpansionTooDeep"
+      }
+    },
+    {
+      "name": "code_template_constraint_unknown_index_set",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateConstraintUnknownIndexSet"
+      }
+    },
+    {
       "name": "code_template_import_cycle",
       "kind": "constant",
       "tier": "extension",
@@ -1290,11 +1458,59 @@
       }
     },
     {
+      "name": "code_template_import_is_coupling_library",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportIsCouplingLibrary"
+      }
+    },
+    {
       "name": "code_template_import_name_conflict",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeTemplateImportNameConflict"
+      }
+    },
+    {
+      "name": "code_template_import_not_library",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportNotLibrary"
+      }
+    },
+    {
+      "name": "code_template_import_rebind_unknown_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportRebindUnknownName"
+      }
+    },
+    {
+      "name": "code_template_import_rename_collision",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportRenameCollision"
+      }
+    },
+    {
+      "name": "code_template_import_rename_invalid",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportRenameInvalid"
+      }
+    },
+    {
+      "name": "code_template_import_rename_unknown_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportRenameUnknownName"
       }
     },
     {
@@ -1314,6 +1530,22 @@
       }
     },
     {
+      "name": "code_template_inject_target_not_component",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateInjectTargetNotComponent"
+      }
+    },
+    {
+      "name": "code_template_inject_target_unknown",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateInjectTargetUnknown"
+      }
+    },
+    {
       "name": "code_undefined_index_set",
       "kind": "constant",
       "tier": "extension",
@@ -1330,11 +1562,27 @@
       }
     },
     {
+      "name": "code_unlowered_operator",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnloweredOperator"
+      }
+    },
+    {
       "name": "code_unresolved_subsystem_ref",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeUnresolvedSubsystemRef"
+      }
+    },
+    {
+      "name": "code_unsupported_operator",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnsupportedOperator"
       }
     },
     {
@@ -2389,8 +2637,9 @@
     {
       "name": "earth_sci_ast_error",
       "kind": "error",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "julia": "EarthSciASTError",
         "python": "EarthSciAstError"
       }
     },
@@ -2607,6 +2856,31 @@
       }
     },
     {
+      "name": "error_code",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ErrorCode"
+      }
+    },
+    {
+      "name": "error_code_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "error_code_names"
+      }
+    },
+    {
+      "name": "error_codes",
+      "kind": "constant",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ERROR_CODES",
+        "typescript": "ERROR_CODES"
+      }
+    },
+    {
       "name": "error_data_source_undefined",
       "kind": "constant",
       "tier": "extension",
@@ -2733,6 +3007,14 @@
       "tier": "extension",
       "bindings": {
         "editor": "EsmCouplingGraphProps"
+      }
+    },
+    {
+      "name": "esm_diagnostic_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "EsmDiagnosticError"
       }
     },
     {
@@ -7278,25 +7560,28 @@
     {
       "name": "unit_finding_analysis",
       "kind": "constant",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "UnitFindingAnalysis"
+        "go": "UnitFindingAnalysis",
+        "rust": "UNIT_FINDING_ANALYSIS"
       }
     },
     {
       "name": "unit_finding_dimensional_mismatch",
       "kind": "constant",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "UnitFindingDimensionalMismatch"
+        "go": "UnitFindingDimensionalMismatch",
+        "rust": "UNIT_FINDING_DIMENSIONAL_MISMATCH"
       }
     },
     {
       "name": "unit_finding_unparseable",
       "kind": "constant",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "UnitFindingUnparseable"
+        "go": "UnitFindingUnparseable",
+        "rust": "UNIT_FINDING_UNPARSEABLE"
       }
     },
     {
@@ -7353,6 +7638,8 @@
       "tier": "stable",
       "bindings": {
         "go": "UnitWarning",
+        "julia": "UnitWarning",
+        "rust": "UnitWarning",
         "typescript": "UnitWarning"
       }
     },

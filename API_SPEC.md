@@ -587,6 +587,7 @@ reading that as a gap.
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
+| `unit_warning` | type | `UnitWarning` | `UnitWarning` | – | `UnitWarning` | `UnitWarning` |
 
 #### Exported by three of the five
 
@@ -664,11 +665,13 @@ reading that as a gap.
 | `distinct` | function | – | – | `distinct` | `distinct` | – |
 | `domain_extent_mismatch_error` | error | `DomainExtentMismatchError` | – | `DomainExtentMismatchError` | – | – |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | – | `DomainUnitMismatchError` | – | – |
+| `earth_sci_ast_error` | error | `EarthSciASTError` | – | `EarthSciAstError` | – | – |
 | `emit_document` | function | – | `emitDocument` | `emit_document` | – | – |
 | `emit_esm_string` | function | – | `emitEsmString` | `emit_esm_string` | – | – |
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
 | `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
+| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | – | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
 | `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
@@ -728,7 +731,9 @@ reading that as a gap.
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |
 | `unit_finding` | type | `UnitFinding` | – | – | `UnitFinding` | – |
-| `unit_warning` | type | – | `UnitWarning` | – | – | `UnitWarning` |
+| `unit_finding_analysis` | constant | – | – | – | `UNIT_FINDING_ANALYSIS` | `UnitFindingAnalysis` |
+| `unit_finding_dimensional_mismatch` | constant | – | – | – | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UnitFindingDimensionalMismatch` |
+| `unit_finding_unparseable` | constant | – | – | – | `UNIT_FINDING_UNPARSEABLE` | `UnitFindingUnparseable` |
 | `unknowns` | function | – | `unknowns` | `unknowns` | – | – |
 | `unmapped_domain_error` | error | `UnmappedDomainError` | – | `UnmappedDomainError` | – | – |
 | `unsupported_mapping_error` | error | `UnsupportedMappingError` | – | `UnsupportedMappingError` | – | – |

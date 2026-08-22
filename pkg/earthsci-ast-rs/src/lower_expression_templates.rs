@@ -2297,7 +2297,7 @@ fn validate_manifolds_in_refs(
                 if let Ok(expansion) = expand_all(node, named, path, &mut expand_memo) {
                     let ev = to_value(&expansion);
                     if let Err(e) = validate_geometry_manifolds(&ev, "") {
-                        if e.code == "geometry_manifold_invalid" {
+                        if e.code == codes::GEOMETRY_MANIFOLD_INVALID {
                             return Err(err(
                                 codes::GEOMETRY_MANIFOLD_INVALID,
                                 format!(
