@@ -1,0 +1,38 @@
+[
+  {
+    "description": "Self-referential binding is inserted verbatim, not re-expanded (single-pass, CONFORMANCE_SPEC.md 2.2.3 rule 1). The inner 'x' survives; nothing loops.",
+    "input": { "op": "+", "args": ["x", "z"] },
+    "bindings": { "x": { "op": "f", "args": ["x"] } },
+    "expected": { "op": "+", "args": [{ "op": "f", "args": ["x"] }, "z"] }
+  },
+  {
+    "description": "Mutually-referential bindings {a -> b, b -> a} are a simultaneous SWAP, not a cycle: each variable of the INPUT is replaced once.",
+    "input": { "op": "-", "args": ["a", "b"] },
+    "bindings": { "a": "b", "b": "a" },
+    "expected": { "op": "-", "args": ["b", "a"] }
+  },
+  {
+    "description": "Chained bindings {a -> b, b -> c} are NOT transitive: 'a' becomes 'b', never 'c'. This is what makes a binding map usable as a rename map.",
+    "input": { "op": "+", "args": ["a", "b"] },
+    "bindings": { "a": "b", "b": "c" },
+    "expected": { "op": "+", "args": ["b", "c"] }
+  },
+  {
+    "description": "A variable appearing REPEATEDLY is not a cycle: every occurrence in the input is substituted, at every sibling position.",
+    "input": { "op": "*", "args": ["x", "x"] },
+    "bindings": { "x": { "op": "*", "args": ["a", "a"] } },
+    "expected": {
+      "op": "*",
+      "args": [
+        { "op": "*", "args": ["a", "a"] },
+        { "op": "*", "args": ["a", "a"] }
+      ]
+    }
+  },
+  {
+    "description": "A self-referential binding under an operator node carrying metadata: the replacement is inserted verbatim and 'wrt' is preserved unchanged.",
+    "input": { "op": "D", "args": ["u"], "wrt": "t" },
+    "bindings": { "u": { "op": "*", "args": ["u", "k"] } },
+    "expected": { "op": "D", "args": [{ "op": "*", "args": ["u", "k"] }], "wrt": "t" }
+  }
+]
