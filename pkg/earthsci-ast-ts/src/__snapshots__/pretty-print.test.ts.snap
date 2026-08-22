@@ -1425,6 +1425,121 @@ exports[`Rendering output lock (all display fixtures) > renders all_operators.js
     "mathml": "<msup><mi>a</mi><msup><mi>b</mi><mi>c</mi></msup></msup>",
     "unicode": "a^(b^c)",
   },
+  {
+    "ascii": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)",
+    "input": {
+      "args": [
+        "src_poly",
+        "tgt_poly",
+      ],
+      "id": "overlap_clip",
+      "manifold": "planar",
+      "op": "intersect_polygon",
+    },
+    "latex": "\\mathrm{intersect\\_polygon}(\\mathrm{src\\_poly}, \\mathrm{tgt\\_poly}, manifold=planar, id=overlap_clip)",
+    "mathml": "<mtext>intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)</mtext>",
+    "unicode": "intersect_polygon(src_poly, tgt_poly, manifold=planar, id=overlap_clip)",
+  },
+  {
+    "ascii": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)",
+    "input": {
+      "args": [
+        "a",
+        "b",
+      ],
+      "id": "area_faq",
+      "manifold": "planar",
+      "op": "polygon_intersection_area",
+    },
+    "latex": "\\mathrm{polygon\\_intersection\\_area}(a, b, manifold=planar, id=area_faq)",
+    "mathml": "<mtext>polygon_intersection_area(a, b, manifold=planar, id=area_faq)</mtext>",
+    "unicode": "polygon_intersection_area(a, b, manifold=planar, id=area_faq)",
+  },
+  {
+    "ascii": "visc[T=temp]",
+    "input": {
+      "args": [],
+      "axes": {
+        "T": "temp",
+      },
+      "op": "table_lookup",
+      "table": "visc",
+    },
+    "latex": "\\mathrm{visc}[T = \\mathrm{temp}]",
+    "mathml": "<mtext>visc[T=temp]</mtext>",
+    "unicode": "visc[T=temp]",
+  },
+  {
+    "ascii": "k_rate[T=temp, p=pres]:1",
+    "input": {
+      "args": [],
+      "axes": {
+        "T": "temp",
+        "p": "pres",
+      },
+      "op": "table_lookup",
+      "output": 1,
+      "table": "k_rate",
+    },
+    "latex": "\\mathrm{k\\_rate}[T = \\mathrm{temp}, p = \\mathrm{pres}]:1",
+    "mathml": "<mtext>k_rate[T=temp, p=pres]:1</mtext>",
+    "unicode": "k_rate[T=temp, p=pres]:1",
+  },
+  {
+    "ascii": "any[p] (u[a]) where {a in atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]",
+    "input": {
+      "args": [
+        "u",
+      ],
+      "expr": {
+        "args": [
+          "u",
+          "a",
+        ],
+        "op": "index",
+      },
+      "id": "rg_candidate_pairs",
+      "op": "aggregate",
+      "output_idx": [
+        "p",
+      ],
+      "ranges": {
+        "a": {
+          "from": "atmos_cells",
+        },
+      },
+      "semiring": "bool_and_or",
+    },
+    "latex": "\\bigvee_{p} (u[a]) \\text{ where } \\{a \\in atmos_cells\\} id=rg_candidate_pairs [semiring=bool_and_or]",
+    "mathml": "<mtext>⋁[p] (u[a]) where {a∈atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]</mtext>",
+    "unicode": "⋁[p] (u[a]) where {a∈atmos_cells} id=rg_candidate_pairs [semiring=bool_and_or]",
+  },
+  {
+    "ascii": "argmin[g] (a[g]) where {g in gens} id=cheapest",
+    "input": {
+      "arg": "g",
+      "args": [
+        "a",
+      ],
+      "expr": {
+        "args": [
+          "a",
+          "g",
+        ],
+        "op": "index",
+      },
+      "id": "cheapest",
+      "op": "argmin",
+      "ranges": {
+        "g": {
+          "from": "gens",
+        },
+      },
+    },
+    "latex": "\\mathrm{argmin}_{g} (a[g]) \\text{ where } \\{g \\in gens\\} id=cheapest",
+    "mathml": "<mtext>argmin[g] (a[g]) where {g∈gens} id=cheapest</mtext>",
+    "unicode": "argmin[g] (a[g]) where {g∈gens} id=cheapest",
+  },
 ]
 `;
 
