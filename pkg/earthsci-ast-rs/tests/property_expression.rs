@@ -17,7 +17,7 @@
 //! `output_idx` entries are always strings), so the generator here tracks the
 //! Rust type constraints rather than mirroring Python exactly.
 
-use earthsci_ast::{Expr, ExpressionNode};
+use earthsci_ast::{Expr, ExpressionNode, RegionBound};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -223,8 +223,10 @@ fn op_arrayop(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
 }
 
 fn op_makearray(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
-    let region_entry =
-        prop::collection::vec((0_i64..=8, 0_i64..=8).prop_map(|(a, b)| [a, b]), 1..=3);
+    let region_entry = prop::collection::vec(
+        (0_i64..=8, 0_i64..=8).prop_map(|(a, b)| [RegionBound::Int(a), RegionBound::Int(b)]),
+        1..=3,
+    );
     // Regions and values must have equal length, so generate pairs together.
     let pair = (region_entry, child).prop_map(|(r, v)| (r, v));
     prop::collection::vec(pair, 1..=3)

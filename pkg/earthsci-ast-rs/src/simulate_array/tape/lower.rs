@@ -1033,8 +1033,11 @@ impl<'m> TapeBuilder<'m> {
                 bail_tape!("makearray: ragged region rank");
             }
             for (d, r) in region.iter().enumerate() {
-                lo_bb[d] = lo_bb[d].min(r[0]);
-                hi_bb[d] = hi_bb[d].max(r[1]);
+                let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
+                    bail_tape!("makearray: unfolded (symbolic) region bound");
+                };
+                lo_bb[d] = lo_bb[d].min(r_lo);
+                hi_bb[d] = hi_bb[d].max(r_hi);
             }
         }
         let bb_shape: DimU = (0..ndim)
@@ -1053,8 +1056,20 @@ impl<'m> TapeBuilder<'m> {
         let mut cur_cad = sec0;
 
         for (region, value_expr) in regions.iter().zip(values.iter()) {
-            let r_lo: DimI = region.iter().map(|r| r[0]).collect();
-            let r_shape: DimU = region.iter().map(|r| (r[1] - r[0] + 1) as usize).collect();
+            if region
+                .iter()
+                .any(|r| crate::types::region_bounds(r).is_none())
+            {
+                bail_tape!("makearray: unfolded (symbolic) region bound");
+            }
+            let r_lo: DimI = region.iter().map(|r| r[0].as_i64().unwrap_or(0)).collect();
+            let r_shape: DimU = region
+                .iter()
+                .map(|r| {
+                    let [lo, hi] = crate::types::region_bounds(r).unwrap_or([0, -1]);
+                    (hi - lo + 1) as usize
+                })
+                .collect();
             if r_shape.contains(&0) {
                 bail_tape!("makearray: empty region");
             }
@@ -1582,7 +1597,8 @@ impl<'m> TapeBuilder<'m> {
     /// region writes, with the same gates production applies before routing to
     /// the overlay (`shape` non-empty, no prefix-scan region value).
     fn lower_wholesale_makearray(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
-        let regions: &[Vec<[i64; 2]>] = node.regions.as_deref().unwrap_or(&[]);
+        let regions: &[Vec<[crate::types::RegionBound; 2]>] =
+            node.regions.as_deref().unwrap_or(&[]);
         let values: &[Expr] = node.values.as_deref().unwrap_or(&[]);
         if regions.is_empty() || values.len() != regions.len() {
             return Ok(LV::Lit(f64::NAN));
@@ -1595,8 +1611,11 @@ impl<'m> TapeBuilder<'m> {
         let mut hi = DimI::from_elem(i64::MIN, ndim);
         for region in regions {
             for (d, r) in region.iter().enumerate() {
-                lo[d] = lo[d].min(r[0]);
-                hi[d] = hi[d].max(r[1]);
+                let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
+                    return Ok(LV::Lit(f64::NAN));
+                };
+                lo[d] = lo[d].min(r_lo);
+                hi[d] = hi[d].max(r_hi);
             }
         }
         let shape: DimU = (0..ndim)
@@ -1959,8 +1978,9 @@ fn fallback_observed_shape(rule: &AlgebraicRule) -> Option<DimU> {
                 let mut hi = vec![i64::MIN; ndim];
                 for region in regions {
                     for (d, r) in region.iter().enumerate() {
-                        lo[d] = lo[d].min(r[0]);
-                        hi[d] = hi[d].max(r[1]);
+                        let [r_lo, r_hi] = crate::types::region_bounds(r)?;
+                        lo[d] = lo[d].min(r_lo);
+                        hi[d] = hi[d].max(r_hi);
                     }
                 }
                 Some(

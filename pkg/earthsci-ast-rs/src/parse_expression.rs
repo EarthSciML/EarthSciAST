@@ -35,7 +35,7 @@
 //! The module is pure text→AST: no filesystem, clock or thread APIs, so it
 //! compiles for `wasm32` unchanged.
 
-use crate::types::{Equation, Expr, ExpressionNode, JoinClause, RangeSpec};
+use crate::types::{Equation, Expr, ExpressionNode, JoinClause, RangeSpec, RegionBound};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -294,21 +294,26 @@ fn tokenize(src: &str) -> PResult<Vec<Tok>> {
             i += 1;
             continue;
         }
-        if c == '.' || c.is_ascii_digit() {
-            if let Some(len) = match_number(&chars, i) {
-                let text: String = chars[i..i + len].iter().collect();
-                let num: f64 = text.parse().map_err(|_| {
-                    ExpressionParseError::new(format!("Malformed number {text:?}"), i)
-                })?;
-                toks.push(Tok {
-                    kind: Kind::Num,
-                    text,
-                    num,
-                    pos: i,
-                });
-                i += len;
-                continue;
-            }
+        // A number must START with a digit or a `.`; a lone `.` (no digits
+        // after) matches nothing and falls through to the error path below.
+        let num_len = if c == '.' || c.is_ascii_digit() {
+            match_number(&chars, i)
+        } else {
+            None
+        };
+        if let Some(len) = num_len {
+            let text: String = chars[i..i + len].iter().collect();
+            let num: f64 = text
+                .parse()
+                .map_err(|_| ExpressionParseError::new(format!("Malformed number {text:?}"), i))?;
+            toks.push(Tok {
+                kind: Kind::Num,
+                text,
+                num,
+                pos: i,
+            });
+            i += len;
+            continue;
         }
         if is_name_start(c) {
             let mut j = i + 1;
@@ -433,9 +438,7 @@ impl Parser {
             let n = self.next();
             return Ok(Expr::Number(-n.num));
         }
-        if self.peek().kind == Kind::Op
-            && (self.peek().text == "-" || self.peek().text == "not")
-        {
+        if self.peek().kind == Kind::Op && (self.peek().text == "-" || self.peek().text == "not") {
             let op = self.next().text;
             let min = if op == "not" { NOT_MIN } else { UMINUS_MIN };
             let operand = self.parse_expr(min)?;
@@ -530,8 +533,7 @@ impl Parser {
                 // never a lone `=` nor an empty `>`).
                 if self.peek().is(Kind::Op, "<")
                     && (self.peek_at(1).is(Kind::Op, ">")
-                        || (self.peek_at(1).kind == Kind::Name
-                            && self.peek_at(2).kind == Kind::Eq))
+                        || (self.peek_at(1).kind == Kind::Name && self.peek_at(2).kind == Kind::Eq))
                 {
                     return self.parse_template(&name);
                 }
@@ -609,10 +611,7 @@ impl Parser {
                 break;
             }
         }
-        self.expect(
-            Kind::RParen,
-            &format!("',' or ')' in call to {name}(...)"),
-        )?;
+        self.expect(Kind::RParen, &format!("',' or ')' in call to {name}(...)"))?;
         make_call(name, args, named, self.peek().pos)
     }
 
@@ -629,10 +628,7 @@ impl Parser {
                 Kind::RBrack => {
                     depth -= 1;
                     if depth == 0 {
-                        return self
-                            .toks
-                            .get(i + 1)
-                            .is_some_and(|t| t.kind == Kind::LParen);
+                        return self.toks.get(i + 1).is_some_and(|t| t.kind == Kind::LParen);
                     }
                 }
                 _ => {}
@@ -706,7 +702,10 @@ impl Parser {
             self.expect(Kind::Eq, "'=' in [semiring=…]")?;
             let nm = self.next();
             if nm.kind != Kind::Name {
-                return Err(ExpressionParseError::new("Expected a semiring name", nm.pos));
+                return Err(ExpressionParseError::new(
+                    "Expected a semiring name",
+                    nm.pos,
+                ));
             }
             semiring = Some(nm.text);
             self.expect(Kind::RBrack, "']' after [semiring=…]")?;
@@ -931,23 +930,18 @@ impl Parser {
     /// `+`/`*` form, like the top-level parse.
     fn parse_makearray(&mut self) -> PResult<Expr> {
         self.next(); // '('
-        let mut regions: Vec<Vec<[i64; 2]>> = Vec::new();
+        let mut regions: Vec<Vec<[RegionBound; 2]>> = Vec::new();
         let mut values: Vec<Expr> = Vec::new();
         if self.peek().kind != Kind::RParen {
             loop {
                 self.expect(Kind::LBrack, "'[' to open a makearray region")?;
-                let mut region: Vec<[i64; 2]> = Vec::new();
+                let mut region: Vec<[RegionBound; 2]> = Vec::new();
                 if self.peek().kind != Kind::RBrack {
                     loop {
-                        let lo_pos = self.peek().pos;
                         let lo = self.parse_expr(0)?;
                         self.expect(Kind::Colon, "':' between a region's lo:hi bounds")?;
-                        let hi_pos = self.peek().pos;
                         let hi = self.parse_expr(0)?;
-                        region.push([
-                            region_bound(&lo, lo_pos)?,
-                            region_bound(&hi, hi_pos)?,
-                        ]);
+                        region.push([region_bound(&lo), region_bound(&hi)]);
                         if self.peek().kind == Kind::Comma {
                             self.next();
                             continue;
@@ -1000,18 +994,15 @@ fn expr_as_i64(e: &Expr) -> Option<i64> {
     }
 }
 
-/// A `makearray` region bound. The Rust `ExpressionNode::regions` field is typed
-/// `[i64; 2]` (esm-spec §9.7.6: metaparameter bound expressions are folded to
-/// concrete integers at load), so a symbolic bound is refused here rather than
-/// silently truncated.
-fn region_bound(e: &Expr, pos: usize) -> PResult<i64> {
-    expr_as_i64(e).ok_or_else(|| {
-        ExpressionParseError::new(
-            "a makearray region bound must be an integer literal in this binding \
-             (metaparameter bound expressions are folded at load, esm-spec §9.7.6)",
-            pos,
-        )
-    })
+/// A `makearray` region bound: an integer literal, or an unfolded metaparameter
+/// bound expression (`2:NLON - 1`), which esm-spec §9.7.6 folds to an integer at
+/// load. The expression is flattened like any other, so `[1:NLON - 1 - 1]` is
+/// not left in a non-canonical nested form.
+fn region_bound(e: &Expr) -> RegionBound {
+    match expr_as_i64(e) {
+        Some(i) => RegionBound::Int(i),
+        None => RegionBound::Expr(flatten(e)),
+    }
 }
 
 /// Serialize a parsed element of an array literal to its JSON value.
@@ -1064,18 +1055,10 @@ fn no_named(named: &[(String, Expr)], name: &str, pos: usize) -> PResult<()> {
 }
 
 fn take_named(named: &[(String, Expr)], key: &str) -> Option<Expr> {
-    named
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.clone())
+    named.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
-fn make_call(
-    name: &str,
-    args: Vec<Expr>,
-    named: Vec<(String, Expr)>,
-    pos: usize,
-) -> PResult<Expr> {
+fn make_call(name: &str, args: Vec<Expr>, named: Vec<(String, Expr)>, pos: usize) -> PResult<Expr> {
     // A dotted callee is a closed function — an `fn` node carrying the name.
     if name.contains('.') {
         no_named(&named, name, pos)?;
@@ -1089,10 +1072,7 @@ fn make_call(
     }
     // Call-shaped structural ops: reconstruct their non-`args` fields from the
     // positional / named arguments `to_ascii` renders.
-    if name == "integral"
-        && args.len() == 4
-        && matches!(args[1], Expr::Variable(_))
-    {
+    if name == "integral" && args.len() == 4 && matches!(args[1], Expr::Variable(_)) {
         no_named(&named, name, pos)?;
         let mut it = args.into_iter();
         let a0 = it.next().expect("arity checked");
@@ -1264,10 +1244,11 @@ fn collect_index_bases(e: &Expr, out: &mut Vec<String>) {
     for a in &n.args {
         collect_index_bases(a, out);
     }
-    for side in [n.lower.as_deref(), n.upper.as_deref(), n.expr.as_deref()] {
-        if let Some(s) = side {
-            collect_index_bases(s, out);
-        }
+    for side in [n.lower.as_deref(), n.upper.as_deref(), n.expr.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        collect_index_bases(side, out);
     }
     if let Some(f) = n.filter.as_deref() {
         collect_index_bases(f, out);
@@ -1362,9 +1343,11 @@ pub fn parse_expression(src: &str) -> Result<Expr, ExpressionParseError> {
 ///
 /// ```
 /// use earthsci_ast::parse_expression::parse_equation;
+/// use earthsci_ast::display::to_ascii;
 ///
 /// let eq = parse_equation("D(x)/Dt = k * A - x")?;
-/// assert_eq!(eq.lhs.to_string(), "D(x)/Dt");
+/// assert_eq!(to_ascii(&eq.lhs), "D(x)/Dt");
+/// assert_eq!(to_ascii(&eq.rhs), "k * A - x");
 /// # Ok::<(), earthsci_ast::parse_expression::ExpressionParseError>(())
 /// ```
 pub fn parse_equation(src: &str) -> Result<Equation, ExpressionParseError> {
@@ -1380,12 +1363,12 @@ pub fn parse_equation(src: &str) -> Result<Equation, ExpressionParseError> {
         match t.kind {
             Kind::LParen | Kind::LBrack | Kind::LBrace => depth += 1,
             Kind::RParen | Kind::RBrack | Kind::RBrace => depth -= 1,
-            Kind::Op if t.text == "<" => {
-                if toks.get(i + 1).is_some_and(|n| n.kind == Kind::Name)
-                    && toks.get(i + 2).is_some_and(|n| n.kind == Kind::Eq)
-                {
-                    angle += 1;
-                }
+            Kind::Op
+                if t.text == "<"
+                    && toks.get(i + 1).is_some_and(|n| n.kind == Kind::Name)
+                    && toks.get(i + 2).is_some_and(|n| n.kind == Kind::Eq) =>
+            {
+                angle += 1;
             }
             Kind::Op if t.text == ">" && angle > 0 => angle -= 1,
             // The FIRST top-level lone `=` splits lhs/rhs; a later binding /

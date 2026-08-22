@@ -614,6 +614,18 @@ fn latex_mul_juxtapose(args: &[Expr]) -> bool {
         .any(|a| matches!(a, Expr::Variable(v) if v.contains('\\')))
 }
 
+/// Render one `makearray` region bound. An integer prints PLAIN (`10000`, never
+/// `1.0e4`) — it is an index, not a measured quantity — while an unfolded bound
+/// expression renders like any other sub-expression. Mirrors `formatBound` in
+/// pretty-print.ts.
+fn format_region_bound(bound: &crate::types::RegionBound, fmt: Fmt) -> String {
+    match bound {
+        crate::types::RegionBound::Int(i) => i.to_string(),
+        crate::types::RegionBound::Expr(Expr::Integer(i)) => i.to_string(),
+        crate::types::RegionBound::Expr(e) => render_fmt(e, fmt),
+    }
+}
+
 /// Render a `const` node's literal JSON value (scalar number or nested array).
 /// Integer JSON tokens print as plain integers (so `const 0` is `0`, not
 /// `0.0`); float tokens use the backend's number formatting.
@@ -967,7 +979,13 @@ fn format_structural_op(node: &ExpressionNode, fmt: Fmt) -> Option<String> {
                         .map(|(i, region)| {
                             let reg_str = region
                                 .iter()
-                                .map(|dim| format!("{}:{}", dim[0], dim[1]))
+                                .map(|dim| {
+                                    format!(
+                                        "{}:{}",
+                                        format_region_bound(&dim[0], fmt),
+                                        format_region_bound(&dim[1], fmt)
+                                    )
+                                })
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             let val = values

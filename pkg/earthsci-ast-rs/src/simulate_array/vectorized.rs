@@ -1717,8 +1717,11 @@ pub(super) fn eval_vec_makearray<'a>(
             return None;
         }
         for (d, r) in region.iter().enumerate() {
-            lo_bb[d] = lo_bb[d].min(r[0]);
-            hi_bb[d] = hi_bb[d].max(r[1]);
+            let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
+                bail_vec!("makearray: unfolded (symbolic) region bound");
+            };
+            lo_bb[d] = lo_bb[d].min(r_lo);
+            hi_bb[d] = hi_bb[d].max(r_hi);
         }
     }
     let bb_shape: DimU = (0..ndim)
@@ -1726,8 +1729,24 @@ pub(super) fn eval_vec_makearray<'a>(
         .collect();
     let mut result = pool.take_array(&bb_shape);
     for (region, value_expr) in regions.iter().zip(values.iter()) {
-        let r_lo: DimI = region.iter().map(|r| r[0]).collect();
-        let r_shape: DimU = region.iter().map(|r| (r[1] - r[0] + 1) as usize).collect();
+        // Checked, then read unchecked below: collecting through an
+        // intermediate `Vec` here would allocate on the steady-state RHS, which
+        // `tests/pde_zero_alloc.rs` pins at zero.
+        if region
+            .iter()
+            .any(|r| crate::types::region_bounds(r).is_none())
+        {
+            pool.give_array(result);
+            bail_vec!("makearray: unfolded (symbolic) region bound");
+        }
+        let r_lo: DimI = region.iter().map(|r| r[0].as_i64().unwrap_or(0)).collect();
+        let r_shape: DimU = region
+            .iter()
+            .map(|r| {
+                let [lo, hi] = crate::types::region_bounds(r).unwrap_or([0, -1]);
+                (hi - lo + 1) as usize
+            })
+            .collect();
         if r_shape.contains(&0) {
             pool.give_array(result);
             return None;

@@ -220,7 +220,7 @@ pub use types::{
     DiscreteEventTrigger, Distribution, DistributionParam, Domain, Equation, EsmFile, Expr,
     ExpressionNode, FunctionalAffect, FunctionalUpdate, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
-    ReactionSystem, RecordsPerFile, Species, StoichiometricEntry, TimeSpan, Tolerance,
+    ReactionSystem, RecordsPerFile, RegionBound, Species, StoichiometricEntry, TimeSpan, Tolerance,
     UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{

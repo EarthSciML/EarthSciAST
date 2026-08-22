@@ -184,7 +184,12 @@ pub fn check_makearray_regions(node: &ExpressionNode) -> Result<(), OpError> {
             ));
         }
         for (d, pair) in region.iter().enumerate() {
-            let [start, stop] = *pair;
+            // A still-symbolic (unfolded) bound has no orderable value yet, so
+            // there is nothing to check: §9.7.6 folding runs before evaluation
+            // and this same check re-runs on the folded node.
+            let Some([start, stop]) = crate::types::region_bounds(pair) else {
+                continue;
+            };
             // `stop == start - 1` is the legal empty spelling; only a further
             // inversion is an error.
             if stop < start - 1 {

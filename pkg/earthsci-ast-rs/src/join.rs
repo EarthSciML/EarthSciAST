@@ -64,7 +64,7 @@ use serde_json::Value;
 
 use crate::aggregate::is_aggregate_op;
 use crate::compile_error::CompileError;
-use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec};
+use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec, RegionBound};
 
 /// One component of a join / group-by key. Exact-equality types only (§5.3):
 /// an integer ID or a categorical member. **Floats are forbidden in keys**
@@ -622,10 +622,10 @@ fn code_lookup(positions: &[i64], codes: &[i64], sym: &str) -> Expr {
         .copied()
         .zip(codes.iter().copied())
         .collect();
-    let mut regions: Vec<Vec<[i64; 2]>> = Vec::with_capacity(hi.max(0) as usize);
+    let mut regions: Vec<Vec<[RegionBound; 2]>> = Vec::with_capacity(hi.max(0) as usize);
     let mut values: Vec<Expr> = Vec::with_capacity(hi.max(0) as usize);
     for p in 1..=hi {
-        regions.push(vec![[p, p]]);
+        regions.push(vec![[RegionBound::Int(p), RegionBound::Int(p)]]);
         values.push(Expr::Integer(code_at.get(&p).copied().unwrap_or(0)));
     }
     let table = Expr::operator(ExpressionNode {

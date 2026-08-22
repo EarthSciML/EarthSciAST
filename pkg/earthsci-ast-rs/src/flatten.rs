@@ -1990,7 +1990,11 @@ fn makearray_extents(ma: &ExpressionNode) -> Vec<i64> {
             continue;
         }
         for (d, r) in region.iter().enumerate() {
-            ext[d] = ext[d].max(r[1]);
+            // An unfolded bound contributes no extent (it cannot: §9.7.6 folds
+            // every bound to an integer before this pass runs).
+            if let Some(hi) = r[1].as_i64() {
+                ext[d] = ext[d].max(hi);
+            }
         }
     }
     ext
@@ -2453,7 +2457,10 @@ mod tests {
     fn test_pointwise_lift_failure_yields_dimension_promotion() {
         let makearray = Expr::operator(ExpressionNode {
             op: "makearray".to_string(),
-            regions: Some(vec![vec![[1, 3]]]),
+            regions: Some(vec![vec![[
+                crate::types::RegionBound::Int(1),
+                crate::types::RegionBound::Int(3),
+            ]]]),
             // Constant body — no `index(C, i)` interior stencil to read loops from.
             args: vec![Expr::Number(0.0)],
             ..Default::default()

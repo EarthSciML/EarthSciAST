@@ -394,7 +394,33 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
     reduce.hash(h);
     semiring.hash(h);
     opt_child_hash(filter, h);
-    regions.hash(h);
+    // `RegionBound` cannot derive `Hash` (its `Expr` variant carries an
+    // `f64`), so hash it explicitly: the discriminant plus either the integer
+    // or the child expression's structural hash.
+    match regions {
+        None => 0u8.hash(h),
+        Some(rs) => {
+            1u8.hash(h);
+            rs.len().hash(h);
+            for region in rs {
+                region.len().hash(h);
+                for pair in region {
+                    for b in pair {
+                        match b {
+                            crate::types::RegionBound::Int(i) => {
+                                0u8.hash(h);
+                                i.hash(h);
+                            }
+                            crate::types::RegionBound::Expr(e) => {
+                                1u8.hash(h);
+                                child_hash(e, h);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     match values {
         None => 0u8.hash(h),
         Some(vs) => {

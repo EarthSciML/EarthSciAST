@@ -2451,8 +2451,9 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
                     return value.clone();
                 }
                 for (d, sym) in idx.iter().enumerate() {
-                    match ranges.get(sym).and_then(|r| r.bounds()) {
-                        Some(b) if b == region[d] => {}
+                    let want = crate::types::region_bounds(&region[d]);
+                    match (ranges.get(sym).and_then(|r| r.bounds()), want) {
+                        (Some(b), Some(w)) if b == w => {}
                         _ => return value.clone(),
                     }
                 }
