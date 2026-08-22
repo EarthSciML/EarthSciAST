@@ -21,6 +21,8 @@ surface the corpus pins, so a binding cannot "pass" by matching its own internal
 representation.
 """
 
+from __future__ import annotations
+
 import json
 
 import pytest

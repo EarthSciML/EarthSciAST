@@ -65,7 +65,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from typing import Any, NoReturn, Optional, Union
+from typing import Any, NoReturn, Union
 
 from .display import _get_operator_precedence as _op_precedence
 from .errors import EarthSciAstError
@@ -129,7 +129,7 @@ _STRUCTURAL_OPS: frozenset[str] = frozenset(
 _AGG_SYMS: frozenset[str] = frozenset({"sum", "prod", "max", "min", "any"})
 # Arg-witness reductions: `argmin[g] (expr) where {…}`.
 _ARGWITNESS_SYMS: frozenset[str] = frozenset({"argmin", "argmax"})
-_REDUCE_BY_SYM: dict[str, Optional[str]] = {
+_REDUCE_BY_SYM: dict[str, str | None] = {
     "sum": None,
     "prod": "*",
     "max": "max",
@@ -139,6 +139,7 @@ _REDUCE_BY_SYM: dict[str, Optional[str]] = {
 
 
 # --- tokenizer ---------------------------------------------------------------
+
 
 #: One token: ``k`` is the kind, ``v`` the payload (number / name / op spelling),
 #: ``pos`` the 0-based source offset.
@@ -292,7 +293,7 @@ class _Parser:
             self._fail(f"Expected {what}")
         self._next()
 
-    def _fail(self, msg: str, tok: Optional[_Tok] = None) -> NoReturn:
+    def _fail(self, msg: str, tok: _Tok | None = None) -> NoReturn:
         raise ExpressionParseError(msg, (tok if tok is not None else self._peek()).pos)
 
     def _at_word(self, v: str) -> bool:
@@ -519,7 +520,7 @@ class _Parser:
             self._next()  # 'key'
             self._next()  # '='
             key = self._parse_expr(0)
-        semiring: Optional[str] = None
+        semiring: str | None = None
         if self._peek().k == "[" and self._peek(1).k == "name" and self._peek(1).v == "semiring":
             self._next()  # '['
             self._next()  # 'semiring'
@@ -612,11 +613,7 @@ class _Parser:
         if isinstance(bound, str):
             return {"from": bound}
         # `k in set(of1, of2)` prints as a generic call -> {from, of}.
-        if (
-            _is_expr_node(bound)
-            and _is_set_name(bound["op"])
-            and isinstance(bound["args"], list)
-        ):
+        if _is_expr_node(bound) and _is_set_name(bound["op"]) and isinstance(bound["args"], list):
             of: list[str] = []
             for a in bound["args"]:
                 if not isinstance(a, str):
