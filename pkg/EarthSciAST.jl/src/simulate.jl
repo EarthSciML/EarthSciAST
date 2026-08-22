@@ -718,9 +718,57 @@ function observed_field(prep::PreparedModel, insp::BuildInspection,
             fld === nothing || break
         end
     end
-    fld === nothing && throw(SimulateError(
-        "observed_field: '$name' is not a build-time-evaluable observed of the " *
-        "prepared document"))
+    if fld === nothing
+        # MATERIALIZED observeds. A body carrying a geometry leaf
+        # (`polygon_intersection_area`, `intersect_polygon`) is materialized at
+        # SETUP into `insp.setup_arrays` rather than left as a build-time
+        # observed — and so, transitively, is everything downstream of it, since
+        # a setup array is a build constant and its readers fold against it.
+        # `_observed_field` looks only at the observed graph, so on a document
+        # whose emissions come from an area overlap rather than a point
+        # containment that is the WHOLE reported chain: the per-cell emissions,
+        # the source-receptor contraction, the concentrations and the deaths all
+        # became unreadable BY NAME, even though the build computed every one of
+        # them. `const_arrays` is the same story one step earlier: a projected
+        # coordinate (`X`, `Y`) is materialized ahead of value invention and
+        # seeded there as a build constant, so it too is computed and unreadable.
+        # The array the build itself used is the value; return it rather than
+        # re-deriving it. Flattened in the same ROW-MAJOR cell order
+        # `_observed_field` returns (`_state_cells`, the Python `np.ndindex` and
+        # the Rust row-major enumeration all agree on it), so the two paths are
+        # interchangeable at any rank.
+        # The setup arrays are keyed by the name as the SETUP pass saw it — the
+        # AUTHORED model's flattened name (`ISRM.E_PM25`) — while `mname` here
+        # is the RUN document's single model, which flattening renamed
+        # (`Flattened`). So resolve by tail as well, and only when it is
+        # unambiguous: two models may carry the same local name, and answering
+        # a bare `E_PM25` with an arbitrary one of them would be worse than
+        # refusing.
+        # GUARD: only an OBSERVED may be answered this way. `const_arrays` also
+        # holds every array-valued PARAMETER, and quietly returning one of those
+        # from `observed_field` would turn a wrong name into a plausible answer.
+        obs = Set{String}(observed_unknowns(file.models[mname]))
+        is_obs = any(k -> (String(k) == v || String(split(String(k), '.')[end]) == v)
+                          && String(k) in obs, keys(file.models[mname].variables))
+        is_obs || throw(SimulateError(
+            "observed_field: '$name' is not a build-time-evaluable observed of the " *
+            "prepared document"))
+        arr = nothing
+        for reg in (insp.setup_arrays, insp.const_arrays)
+            arr = get(reg, mname * "." * v, get(reg, v, nothing))
+            if arr === nothing
+                hits = [k for k in keys(reg)
+                        if occursin('.', k) && String(split(k, '.')[end]) == v]
+                length(hits) == 1 && (arr = reg[first(hits)])
+            end
+            arr isa AbstractArray || (arr = nothing)
+            arr === nothing || break
+        end
+        arr === nothing && throw(SimulateError(
+            "observed_field: '$name' is not a build-time-evaluable observed of the " *
+            "prepared document"))
+        return ndims(arr) > 1 ? vec(permutedims(arr, reverse(1:ndims(arr)))) : vec(arr)
+    end
     return fld[1]
 end
 

@@ -110,12 +110,13 @@ end
 # A binning body carrying `polygon_intersection_area` is SETUP-TIME geometry, so
 # its result is materialized into `insp.setup_arrays` rather than left as a
 # build-time observed. Read whichever the engine chose.
-function _field(prep, insp, name::AbstractString)
-    for k in (name, "Binned." * name)      # setup arrays are keyed FLATTENED
-        haskey(insp.setup_arrays, k) && return insp.setup_arrays[k]
-    end
-    return EA.observed_field(prep, insp, name)
-end
+# The plain public read. It used to be unusable on this document: a body
+# carrying a geometry leaf is materialized into `insp.setup_arrays` at setup,
+# and so, transitively, is everything downstream of it, so `observed_field`
+# refused every observed here with "not a build-time-evaluable observed" while
+# the build had computed all of them. `observed_field` now falls back to the
+# build's own materialized arrays; this alias is what pins that it does.
+_field(prep, insp, name::AbstractString) = EA.observed_field(prep, insp, name)
 
 _defs(out) = Dict(String(e["lhs"]) => e["rhs"]
                   for e in out["models"]["Binned"]["equations"]
@@ -294,6 +295,17 @@ end
     @test isempty([c for c in g.calls if c[1] == :wholesale])
     sel = [c for c in g.calls if c[1] == :selection]
     @test length(sel) == 1 && sel[1][2][1] == [1, 2, 4]
+
+    # The reported chain here is ENTIRELY setup-materialized — the geometry
+    # weight makes `E_PM25` a setup array, and `conc_PM25` folds against it —
+    # so these reads exercise `observed_field`'s materialized-array fallback and
+    # nothing else. Both spellings must agree with the array the build used, and
+    # a name that is not an observed must still be refused rather than answered
+    # out of the const-array registry (`SR_PM25` is a PARAMETER).
+    @test EA.observed_field(prep, insp, "E_PM25") ≈ insp.setup_arrays["Binned.E_PM25"]
+    @test EA.observed_field(prep, insp, "conc_PM25") ≈ insp.setup_arrays["Binned.conc_PM25"]
+    @test_throws EA.SimulateError EA.observed_field(prep, insp, "SR_PM25")
+    @test_throws EA.SimulateError EA.observed_field(prep, insp, "no_such_thing")
 end
 
 end # module PushdownCellGeometryTests
