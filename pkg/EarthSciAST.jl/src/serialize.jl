@@ -62,6 +62,14 @@ _serialize_join_clause(clause) =
     Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
 
 function _serialize_opexpr_field(field::Symbol, v)
+    # `regions` is a `:scalar` field whose bounds are USUALLY plain integers but
+    # MAY be metaparameter Expressions (esm-spec §9.7.6 / the schema's
+    # `MetaparameterExpression` items) — an `ASTExpr` bound has to go back out as
+    # its wire form, not as a struct, so it gets a bespoke encoding here.
+    if field === :regions
+        return [[[b isa ASTExpr ? serialize_expression(b) : b for b in dim]
+                 for dim in region] for region in v]
+    end
     kind = getproperty(OPEXPR_FIELD_TABLE, field).kind
     if kind === :expr
         return serialize_expression(v)

@@ -890,7 +890,7 @@ function format_structural_op(node::OpExpr, format::Symbol)
             return "$name<$inner>"
         end
     elseif op == "makearray"
-        regions = node.regions === nothing ? Vector{Vector{Vector{Int}}}() : node.regions
+        regions = node.regions === nothing ? Vector{Vector{Vector{Any}}}() : node.regions
         values = node.values === nothing ? ASTExpr[] : node.values
         parts = String[]
         for (i, region) in enumerate(regions)

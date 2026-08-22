@@ -75,7 +75,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
 
     @testset "intersect_polygon requires a manifold (parse)" begin
         bad = Dict("op" => "intersect_polygon", "args" => ["a", "b"])
-        @test_throws EarthSciAST.ParseError parse_expression(bad)
+        @test_throws EarthSciAST.ParseError expression_from_json(bad)
     end
 
     @testset "unknown manifold is rejected" begin

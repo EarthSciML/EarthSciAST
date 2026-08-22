@@ -78,7 +78,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "aggregate_int_ratio_golden: §5.5.3.1 rule 1 on the AST-golden path" begin
         # Guards the AST-GOLDEN pathway (resolve_template_machinery →
         # lower_expression_templates → canonical write), which never calls
-        # `parse_expression`. A `coord` template body cos(pi·aggregate((i−1/2)·(1/8)))
+        # `expression_from_json`. A `coord` template body cos(pi·aggregate((i−1/2)·(1/8)))
         # is expanded so an integer ratio {op:/,args:[1,8]} lands inside a nested,
         # float-heavy aggregate `expr`. JSON3's structural number inference widens
         # those bare integer tokens to Float64; `lower_expression_templates` now

@@ -434,7 +434,7 @@ end
 
     @testset "8b. additive connector: raw-JSON expression is parsed" begin
         # Same edge, but `expression` arrives as raw JSON (the load path) rather
-        # than a pre-parsed ASTExpr — exercises the parse_expression branch.
+        # than a pre-parsed ASTExpr — exercises the expression_from_json branch.
         rsys = EarthSciAST.ReactionSystem(
             [EarthSciAST.Species("A", default=1.0)], EarthSciAST.Reaction[])
         sink = Model(

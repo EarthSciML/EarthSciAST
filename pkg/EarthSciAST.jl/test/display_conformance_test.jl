@@ -20,7 +20,7 @@ if !isdefined(Main, :ESM_TESTUTILS_LOADED)
 end
 
 # Build the typed AST from a fixture `input` object. `apply_expression_template`
-# is normally lowered before typed parsing; `parse_expression` also builds it
+# is normally lowered before typed parsing; `expression_from_json` also builds it
 # directly (for the display path), but this constructs the node explicitly from
 # its `name` + `bindings` so the test is independent of that entry point.
 function _build_display_expr(input)
@@ -30,13 +30,13 @@ function _build_display_expr(input)
         raw = get(input, :bindings, nothing)
         if raw !== nothing
             for (k, v) in pairs(raw)
-                bindings[string(k)] = ESM.parse_expression(v)
+                bindings[string(k)] = ESM.expression_from_json(v)
             end
         end
         return ESM.OpExpr("apply_expression_template", ESM.ASTExpr[];
             name=string(input.name), bindings=bindings)
     end
-    return ESM.parse_expression(input)
+    return ESM.expression_from_json(input)
 end
 
 const _DISPLAY_FMTS = (

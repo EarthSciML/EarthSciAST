@@ -457,7 +457,7 @@ function _apply_connector_transform!(equations::Vector{Equation},
     end
     transform = String(transform_raw)
     to = String(to_raw)
-    expression = expr_raw isa ASTExpr ? expr_raw : parse_expression(expr_raw)
+    expression = expr_raw isa ASTExpr ? expr_raw : expression_from_json(expr_raw)
 
     if transform == "additive"
         _combine_tendency_term!(equations, to, expression, "+")

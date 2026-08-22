@@ -41,12 +41,12 @@ using JSON3
                 for (i, case) in enumerate(cases)
                     label = haskey(case, :description) ? String(case[:description]) : "case $i"
                     @testset "$label" begin
-                        input_expr = EarthSciAST.parse_expression(case[:input])
+                        input_expr = EarthSciAST.expression_from_json(case[:input])
                         bindings = Dict{String,EarthSciAST.ASTExpr}(
-                            string(k) => EarthSciAST.parse_expression(v)
+                            string(k) => EarthSciAST.expression_from_json(v)
                             for (k, v) in pairs(case[:bindings])
                         )
-                        expected = EarthSciAST.parse_expression(case[:expected])
+                        expected = EarthSciAST.expression_from_json(case[:expected])
                         result = substitute(input_expr, bindings)
                         # ASTExpr structs have no `==` method, so compare via the
                         # canonical JSON-serialized form.

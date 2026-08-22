@@ -1275,7 +1275,7 @@ function _lower_expr_enums_uncached(e::OpExpr,
                                     memo::IdDict{OpExpr,ASTExpr})::ASTExpr
     if e.op == "enum"
         # esm-spec §4.5: args are exactly two strings — the enum name and the
-        # symbolic key. Strings come through `parse_expression` as `VarExpr`,
+        # symbolic key. Strings come through `expression_from_json` as `VarExpr`,
         # so we read `.name` to recover them.
         if length(e.args) != 2
             throw(ParseError("`enum` op expects 2 args (enum_name, symbol_name), got $(length(e.args))"))

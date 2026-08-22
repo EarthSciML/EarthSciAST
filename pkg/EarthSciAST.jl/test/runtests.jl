@@ -17,6 +17,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reactions_test.jl")
     include("display_test.jl")
     include("display_conformance_test.jl")
+    include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
     include("units_test.jl")
     include("graph_test.jl")
 
@@ -321,7 +322,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                         for case in cases
                             if case isa JSON3.Object && haskey(case, :input) &&
                                case[:input] isa JSON3.Object
-                                expr = EarthSciAST.parse_expression(case[:input])
+                                expr = EarthSciAST.expression_from_json(case[:input])
                                 @test expr isa EarthSciAST.ASTExpr
                             elseif case isa JSON3.Object && haskey(case, :tests)
                                 @test case[:tests] isa JSON3.Array

@@ -453,7 +453,7 @@ function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{AS
                                       memo::_MaybeMemo=nothing,
                                       bound_syms::Set{String}=_EMPTY_BOUND_SYMS)
     regions = makearray_expr.regions === nothing ?
-              Vector{Vector{Vector{Int}}}() : makearray_expr.regions
+              Vector{Vector{Vector{Any}}}() : makearray_expr.regions
     values  = makearray_expr.values  === nothing ? ASTExpr[] : makearray_expr.values
     length(regions) == length(values) ||
         throw(TreeWalkError("E_TREEWALK_MAKEARRAY_MISMATCH",

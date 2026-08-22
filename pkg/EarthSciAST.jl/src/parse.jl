@@ -58,12 +58,12 @@ function _to_native_json(x)
 end
 
 """
-    parse_expression(data::Any) -> ASTExpr
+    expression_from_json(data::Any) -> ASTExpr
 
 Parse JSON data into an Expression (NumExpr, VarExpr, or OpExpr).
 Handles the oneOf discriminated union based on JSON structure.
 """
-function parse_expression(data::Any)::ASTExpr
+function expression_from_json(data::Any)::ASTExpr
     # Bool <: Integer in Julia, so screen it first (JSON booleans should not
     # become integer literals — they do not appear in valid ESM expressions).
     if isa(data, Bool)
@@ -117,7 +117,7 @@ keeping coercion linear in unique nodes instead of exponential in paths. The
 key is the raw dict itself (`coerce_esm_file`'s entry normalization is
 sharing-preserving, so the DAG's identity structure survives into the memo).
 Outside an active memo scope, parsing is unmemoized — a caller that
-hand-mutates raw dicts between `parse_expression` calls sees unchanged
+hand-mutates raw dicts between `expression_from_json` calls sees unchanged
 behavior.
 """
 const _PARSE_EXPR_MEMO_KEY = :_earthsci_ast_parse_expression_memo
@@ -155,16 +155,16 @@ function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr,Nothing}
             _coerce_table_lookup_axes(table, _get_field(data, $w, nothing), args) :
             nothing)
     elseif spec.kind === :expr
-        :(_maybe(parse_expression, _get_field(data, $w, nothing)))
+        :(_maybe(expression_from_json, _get_field(data, $w, nothing)))
     elseif spec.kind === :expr_vec
         :(let raw = _get_field(data, $w, nothing)
             raw === nothing ? nothing :
-                Vector{ASTExpr}([parse_expression(v) for v in raw])
+                Vector{ASTExpr}([expression_from_json(v) for v in raw])
         end)
     elseif spec.kind === :expr_map
         :(let raw = _get_field(data, $w, nothing)
             raw === nothing ? nothing :
-                Dict{String,ASTExpr}(string(k) => parse_expression(v)
+                Dict{String,ASTExpr}(string(k) => expression_from_json(v)
                                      for (k, v) in pairs(raw))
         end)
     elseif spec.kind === :ranges
@@ -233,7 +233,7 @@ function _parse_op_dict(data)
                          "Migrate to AST ops or `fn` invocations of the closed function registry."))
     end
     # `apply_expression_template` is normally expanded by
-    # `lower_expression_templates` before any tree reaches `parse_expression`
+    # `lower_expression_templates` before any tree reaches `expression_from_json`
     # (esm-spec §9.6). When a caller feeds an unexpanded node directly — as the
     # cross-language display conformance producer does — it is built into an
     # `OpExpr` carrying `name` + `bindings` so the pretty-printer can render it
@@ -241,7 +241,7 @@ function _parse_op_dict(data)
     # throwing. The load pipeline still lowers templates ahead of typed parsing,
     # so a loaded document never carries an `apply_expression_template` node.
     args_data = _get_field(data, :args, ())
-    args = Vector{ASTExpr}([parse_expression(arg) for arg in args_data])
+    args = Vector{ASTExpr}([expression_from_json(arg) for arg in args_data])
     flds = _parse_op_optional_fields(data, op, args)
     return OpExpr(op, args; flds...)
 end
@@ -280,7 +280,7 @@ function _coerce_table_lookup_axes(table, axes_raw, args::Vector{ASTExpr})::Dict
     end
     axes = Dict{String,ASTExpr}()
     for (k, v) in pairs(axes_raw)
-        axes[string(k)] = parse_expression(v)
+        axes[string(k)] = expression_from_json(v)
     end
     if !isempty(args)
         throw(ParseError("`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5)"))
@@ -348,7 +348,7 @@ function _coerce_ranges(data)
             if all(x -> x isa Number, v)
                 result[sv] = Any[Int(x) for x in v]
             else
-                result[sv] = Any[x isa Number ? Int(x) : parse_expression(x) for x in v]
+                result[sv] = Any[x isa Number ? Int(x) : expression_from_json(x) for x in v]
             end
         else
             # Index-set reference (RFC semiring-faq-unified-ir §5.2):
@@ -427,10 +427,22 @@ function _coerce_join(data)
     return clauses
 end
 
+# One `regions[*][*][*]` bound. Concrete integers stay `Int` (the overwhelmingly
+# common case — metaparameters are folded on the RAW tree before typed coercion,
+# esm-spec §9.7.6). Anything else is a `MetaparameterExpression` the schema
+# admits (a symbolic dimension name, or an arithmetic node over one) and is kept
+# as an `ASTExpr`, so a still-open bound survives the typed round-trip instead of
+# crashing in `Int(x)`. `format_bound` (display.jl) already renders both shapes.
+_coerce_region_bound(x) =
+    (x isa Integer && !(x isa Bool)) ? Int(x) :
+    (x isa Real && isinteger(x)) ? Int(x) :
+    expression_from_json(x)
+
 function _coerce_regions(data)
     data === nothing && return nothing
-    return Vector{Vector{Vector{Int}}}([
-        Vector{Vector{Int}}([Vector{Int}([Int(x) for x in ax]) for ax in region])
+    return Vector{Vector{Vector{Any}}}([
+        Vector{Vector{Any}}([Vector{Any}([_coerce_region_bound(x) for x in ax])
+                             for ax in region])
         for region in data
     ])
 end
@@ -478,7 +490,7 @@ function coerce_trigger(data)::DiscreteEventTrigger
         if expression === nothing
             throw(ParseError("Condition trigger requires 'expression' field"))
         end
-        return ConditionTrigger(parse_expression(expression))
+        return ConditionTrigger(expression_from_json(expression))
     elseif trigger_type_str == "periodic" || (trigger_type_str === nothing && (_has_field(data, :interval) || _has_field(data, :period)))
         interval_val = _get_field(data, :interval, nothing)
         if interval_val === nothing
@@ -517,7 +529,7 @@ the load pipeline's already-native tree, or a `Dict` assembled in Julia code
 the single post-wire carrier (`_to_ordered`: string-keyed `OrderedDict` tree),
 so every nested coercer speaks plain string-keyed `get`. The normalization is
 sharing-preserving, so the structural sharing template expansion builds
-carries through into the `parse_expression` identity memo. Callers never need
+carries through into the `expression_from_json` identity memo. Callers never need
 a `JSON3.read(JSON3.write(doc))` type-launder.
 """
 function coerce_esm_file(data::Any)::EsmFile
@@ -869,7 +881,7 @@ function coerce_reaction(data::Any)::Reaction
     substrates = stoich_entries("substrates")
     products = stoich_entries("products")
 
-    rate = parse_expression(data["rate"])
+    rate = expression_from_json(data["rate"])
 
     reference = _maybe(coerce_reference, get(data, "reference", nothing))
 
@@ -939,7 +951,7 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
     transform = if raw_transform isa AbstractString
         String(raw_transform)
     elseif raw_transform isa AbstractDict
-        parse_expression(raw_transform)
+        expression_from_json(raw_transform)
     else
         throw(ParseError("variable_map 'transform' must be a named transform string or an expression operator node"))
     end
@@ -984,7 +996,7 @@ end
 function _coerce_model_guesses(v)
     guesses = Dict{String,Union{Float64,ASTExpr}}()
     for (k, x) in pairs(v)
-        guesses[string(k)] = x isa Number ? Float64(x) : parse_expression(x)
+        guesses[string(k)] = x isa Number ? Float64(x) : expression_from_json(x)
     end
     return guesses
 end
@@ -1098,7 +1110,7 @@ function _coerce_assertion_reference(ref)
         end
         return reference
     end
-    return parse_expression(ref)
+    return expression_from_json(ref)
 end
 
 
@@ -1141,11 +1153,11 @@ function _record_parse_expr(row, v)
     elseif kind === :number_or_string
         :(let x = $v; x isa Number ? Int(x) : string(x) end)
     elseif kind === :number_or_expr
-        :(let x = $v; x isa Number ? Float64(x) : parse_expression(x) end)
+        :(let x = $v; x isa Number ? Float64(x) : expression_from_json(x) end)
     elseif kind === :expr
-        :(parse_expression($v))
+        :(expression_from_json($v))
     elseif kind === :expr_vec
-        :(ASTExpr[parse_expression(x) for x in $v])
+        :(ASTExpr[expression_from_json(x) for x in $v])
     elseif kind === :string_vec
         :([string(x) for x in $v])
     elseif kind === :float_vec

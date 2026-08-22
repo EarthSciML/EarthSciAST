@@ -707,7 +707,7 @@ function _setup_wholearray_extents(rhs::OpExpr, shape_sets::Vector{String},
     isempty(shape_sets) ||
         return Int[_geo_index_extent(s, index_sets, derived_extents) for s in shape_sets]
     if rhs.op == "makearray"
-        regions = rhs.regions === nothing ? Vector{Vector{Vector{Int}}}() : rhs.regions
+        regions = rhs.regions === nothing ? Vector{Vector{Vector{Any}}}() : rhs.regions
         isempty(regions) && throw(TreeWalkError("E_TREEWALK_GEOMETRY_SETUP",
             "cannot determine makearray output shape at setup (no declared shape, no regions)"))
         nd = length(regions[1])

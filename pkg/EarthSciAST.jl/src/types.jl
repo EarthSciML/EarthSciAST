@@ -47,7 +47,7 @@ mathematical value is **non-integral** (or integral but not `Int64`-
 representable): literal type is decided by *value*, not by the token's source
 spelling (CONFORMANCE_SPEC §5.5.3.1 rules 1/3). A JSON number whose value is
 integral and `Int64`-representable — however it was spelled (`1`, `1.0`,
-`2.5e1`) — parses as an `IntExpr`, so `parse_expression` never produces
+`2.5e1`) — parses as an `IntExpr`, so `expression_from_json` never produces
 `NumExpr(1.0)`; such a node can only be built directly in Julia code.
 """
 struct NumExpr <: ASTExpr
@@ -184,7 +184,12 @@ Operator expression node containing:
 - `ranges`: for `arrayop`, map from index symbol name to iteration range
   (vector of 2 or 3 ints `[start, stop]` / `[start, step, stop]`).
 - `regions`: for `makearray`, list of sub-region boxes, each a list of
-  `[start, stop]` pairs per output dimension.
+  `[start, stop]` pairs per output dimension. A bound is normally an `Int`
+  (metaparameters are folded on the raw tree before typed coercion,
+  esm-spec §9.7.6), but the schema admits any `MetaparameterExpression`, so a
+  bound MAY also be an `ASTExpr` — that is how a still-open bound such as
+  `NLON - 1` survives `parse_expression` of the text form
+  `makearray([2:NLON - 1, …] = …)`.
 - `values`: for `makearray`, one sub-expression per entry in `regions`.
 - `shape`: for `reshape`, target shape; entries are `Int` (concrete length)
   or `String` (symbolic dimension).
@@ -233,7 +238,7 @@ mutable struct OpExpr <: ASTExpr
     reduce::Union{String,Nothing}
     semiring::Union{String,Nothing}
     ranges::Union{Dict{String,Any},Nothing}
-    regions::Union{Vector{Vector{Vector{Int}}},Nothing}
+    regions::Union{Vector{Vector{Vector{Any}}},Nothing}
     values::Union{Vector{ASTExpr},Nothing}
     shape::Union{Vector{Any},Nothing}
     perm::Union{Vector{Int},Nothing}

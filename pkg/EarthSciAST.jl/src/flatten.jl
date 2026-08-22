@@ -655,7 +655,7 @@ function _scope_component_templates(file::EsmFile)
                     p isa AbstractString && push!(pnames, String(p))
                 end
             end
-            scoped = namespace_expr(parse_expression(body_raw), cname,
+            scoped = namespace_expr(expression_from_json(body_raw), cname,
                                     setdiff(local_names, pnames))
             nd = Dict{String,Any}(string(k) => v for (k, v) in pairs(decl))
             nd["body"] = serialize_expression(scoped)
@@ -696,7 +696,7 @@ function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
             end
         end
         names = Set{String}()
-        foreach_subexpr(parse_expression(body_raw)) do x
+        foreach_subexpr(expression_from_json(body_raw)) do x
             x isa VarExpr && push!(names, x.name)
             nothing
         end

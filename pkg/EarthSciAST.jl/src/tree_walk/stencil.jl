@@ -255,7 +255,7 @@ end
 # Select the `makearray` region covering `kvals` — LAST covering region wins,
 # matching `_resolve_index_of_makearray`. Returns `(region_index_or_0, region)`.
 function _select_region(m::OpExpr, kvals::Vector{Int})
-    regions = m.regions === nothing ? Vector{Vector{Vector{Int}}}() : m.regions
+    regions = m.regions === nothing ? Vector{Vector{Vector{Any}}}() : m.regions
     ndim = length(kvals)
     r = 0
     reg = nothing

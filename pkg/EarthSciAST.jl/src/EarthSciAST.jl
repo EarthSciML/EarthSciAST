@@ -88,6 +88,10 @@ include("expression.jl")
 # Structural interning (hash-consing) of the expression AST — perf plan A1.
 include("intern.jl")
 include("display.jl")
+# The INFIX-TEXT expression parser — the inverse of `to_ascii`, so it must
+# follow display.jl (it sources operator precedence from the same registry
+# lookup the printer uses).
+include("parse_expression_text.jl")
 include("graph.jl")
 include("units.jl")
 include("edit.jl")
@@ -177,7 +181,11 @@ export
     FunctionTable, FunctionTableAxis,
     # JSON functionality
     load, save, ParseError, SchemaValidationError, SchemaError, validate_schema,
-    parse_expression, ESM_FORMAT_VERSION,
+    expression_from_json, ESM_FORMAT_VERSION,
+    # Infix-text expression parsing (src/parse_expression_text.jl) — the
+    # inverse of `to_ascii`. Distinct from `expression_from_json`, which
+    # decodes the JSON wire form.
+    parse_expression, parse_equation, ExpressionParseError,
     # Subsystem reference resolution
     resolve_subsystem_refs!, SubsystemRefError,
     # Coupling serialization functions

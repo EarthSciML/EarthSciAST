@@ -49,7 +49,7 @@ function parse_unit_conversion(raw; variable_name::AbstractString)
         "Expression object, got a boolean"))
     raw isa Real && return Float64(raw)
     raw isa ASTExpr && return raw
-    raw isa AbstractDict && return parse_expression(raw)
+    raw isa AbstractDict && return expression_from_json(raw)
     throw(UnitConversionError(
         "variable '$(variable_name)' unit_conversion must be a number or an " *
         "Expression object, got $(typeof(raw))"))
