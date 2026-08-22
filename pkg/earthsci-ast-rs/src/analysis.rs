@@ -371,13 +371,16 @@ pub fn dfs_longest_path(
 mod tests {
     use super::*;
     use crate::graph::CouplingEdgeKind;
-    use crate::graph::{ComponentGraph, ComponentNode, ComponentType, CouplingEdge};
+    use crate::graph::{
+        ComponentGraph, ComponentMetadata, ComponentNode, ComponentType, CouplingEdge,
+    };
 
     fn node(id: &str) -> ComponentNode {
         ComponentNode {
             id: id.to_string(),
             component_type: ComponentType::Model,
             name: None,
+            metadata: ComponentMetadata::default(),
         }
     }
 
@@ -386,6 +389,7 @@ mod tests {
             from: from.to_string(),
             to: to.to_string(),
             coupling_type: CouplingEdgeKind::VariableMap,
+            label: String::new(),
             data: serde_json::Value::Null,
         }
     }

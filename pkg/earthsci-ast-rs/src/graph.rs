@@ -13,13 +13,134 @@ fn sorted_keys<V>(map: &std::collections::HashMap<String, V>) -> Vec<&String> {
     keys
 }
 
+/// The scope a target with no owning component reports (esm-libraries-spec
+/// §4.8.2). A bare `Model`/`ReactionSystem`/`Equation`/`Reaction`/`Expr` handed
+/// straight to [`expression_graph`] has no document position, so its variables
+/// are unscoped and belong to the pseudo-system `default`.
+const DEFAULT_SYSTEM: &str = "default";
+
+/// `equation_index` for a dependency that no positionally-numbered equation or
+/// reaction produced — currently only a `variable_map` folded in by
+/// [`ExpressionGraphOptions::merge_coupled`].
+const NON_EQUATION_INDEX: i64 = -1;
+
+/// Which incident edges a closure query follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    /// Both directions — the undirected neighbourhood.
+    Both,
+    /// Edges pointing AT the node.
+    Incoming,
+    /// Edges pointing AWAY from the node.
+    Outgoing,
+}
+
+/// The neighbours of `node` reachable over `edges` in `direction`, sorted and
+/// deduplicated.
+///
+/// `known` reports whether `node` is a registered graph node: an unknown key
+/// resolves to `[]` rather than scanning. A neighbour is NOT required to be a
+/// registered node — the guard is on the node being asked about, matching the
+/// reference implementation.
+fn neighbours<'a, I>(known: bool, edges: I, node: &str, direction: Direction) -> Vec<String>
+where
+    I: Iterator<Item = (&'a str, &'a str)>,
+{
+    if !known {
+        return Vec::new();
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for (source, target) in edges {
+        if direction != Direction::Incoming && source == node {
+            out.insert(target.to_string());
+        }
+        if direction != Direction::Outgoing && target == node {
+            out.insert(source.to_string());
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Render a graph as the JSON adjacency-list export of esm-libraries-spec
+/// §4.8.3: `{"nodes": [...], "edges": [...], "adjacency": {...}}`.
+///
+/// Every node object carries an `id` (a component node's `id`, a variable
+/// node's `name`) alongside its own serialized fields; every edge is
+/// `{source, target, data}`; `adjacency` maps each node key to its UNDIRECTED
+/// neighbourhood.
+fn render_json_graph<N, E>(
+    nodes: &[N],
+    node_key: impl Fn(&N) -> String,
+    edges: &[E],
+    edge_endpoints: impl Fn(&E) -> (String, String),
+    adjacency: impl Fn(&str) -> Vec<String>,
+) -> String
+where
+    N: serde::Serialize,
+    E: serde::Serialize,
+{
+    let json_nodes: Vec<serde_json::Value> = nodes
+        .iter()
+        .map(|node| {
+            let key = node_key(node);
+            let mut value = serde_json::to_value(node).unwrap_or(serde_json::Value::Null);
+            if let Some(object) = value.as_object_mut() {
+                object.insert("id".to_string(), serde_json::Value::String(key));
+            }
+            value
+        })
+        .collect();
+
+    let json_edges: Vec<serde_json::Value> = edges
+        .iter()
+        .map(|edge| {
+            let (source, target) = edge_endpoints(edge);
+            serde_json::json!({
+                "source": source,
+                "target": target,
+                "data": serde_json::to_value(edge).unwrap_or(serde_json::Value::Null),
+            })
+        })
+        .collect();
+
+    let mut json_adjacency = serde_json::Map::new();
+    for node in nodes {
+        let key = node_key(node);
+        let neighbours = adjacency(&key);
+        json_adjacency.insert(key, serde_json::to_value(neighbours).unwrap_or_default());
+    }
+
+    let graph = serde_json::json!({
+        "nodes": json_nodes,
+        "edges": json_edges,
+        "adjacency": serde_json::Value::Object(json_adjacency),
+    });
+    serde_json::to_string_pretty(&graph).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// Component graph representing model structure
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ComponentGraph {
-    /// Nodes in the graph (models, reaction systems, etc.)
+    /// Nodes in the graph (models, reaction systems)
     pub nodes: Vec<ComponentNode>,
     /// Edges representing coupling relationships
     pub edges: Vec<CouplingEdge>,
+}
+
+/// Summary counts a component node carries (esm-libraries-spec §4.8.1).
+///
+/// A model reports its declared variables and its equations; a reaction system
+/// reports its reactions as `eq_count` and its species as `species_count` and
+/// declares no `var_count`. Subsystems contribute NOTHING — the counts describe
+/// the component's own body, matching the reference implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct ComponentMetadata {
+    /// Declared variables (models only)
+    pub var_count: usize,
+    /// Equations (models) or reactions (reaction systems)
+    pub eq_count: usize,
+    /// Declared species (reaction systems only)
+    pub species_count: usize,
 }
 
 /// Node in the component graph
@@ -31,17 +152,23 @@ pub struct ComponentNode {
     pub component_type: ComponentType,
     /// Human-readable name
     pub name: Option<String>,
+    /// Summary counts (§4.8.1)
+    pub metadata: ComponentMetadata,
 }
 
-/// Type of component in the graph
+/// Type of component in the graph.
+///
+/// There is no data-source arm. esm-libraries-spec §4.8.1 is explicit that "a
+/// `data_sources` entry is not a component and is NOT a node": from 1.0.0
+/// external data reaches a model as a PARAMETER whose `update` names the
+/// source, so the dependency is already carried by that parameter's node.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ComponentType {
     /// ODE model
     Model,
     /// Reaction system
     ReactionSystem,
-    /// Data loader
-    DataSource,
 }
 
 /// Kind of coupling relationship represented by an edge
@@ -75,6 +202,10 @@ pub struct CouplingEdge {
     pub to: String,
     /// Type of coupling
     pub coupling_type: CouplingEdgeKind,
+    /// Human-readable edge label (§4.8.1): `compose` / `couple`, or, for a
+    /// `variable_map`, the mapped variable — everything after the FIRST dot of
+    /// the `from` reference.
+    pub label: String,
     /// Additional coupling data
     pub data: serde_json::Value,
 }
@@ -95,10 +226,16 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
     // Add model nodes
     if let Some(ref models) = esm_file.models {
         for id in sorted_keys(models) {
+            let model = &models[id];
             nodes.push(ComponentNode {
                 id: id.clone(),
                 component_type: ComponentType::Model,
-                name: models[id].name.clone(),
+                name: model.name.clone(),
+                metadata: ComponentMetadata {
+                    var_count: model.variables.len(),
+                    eq_count: model.equations.len(),
+                    species_count: 0,
+                },
             });
         }
     }
@@ -106,70 +243,83 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
     // Add reaction system nodes
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         for id in sorted_keys(reaction_systems) {
+            let rs = &reaction_systems[id];
             nodes.push(ComponentNode {
                 id: id.clone(),
                 component_type: ComponentType::ReactionSystem,
                 name: None,
+                metadata: ComponentMetadata {
+                    var_count: 0,
+                    eq_count: rs.reactions.len(),
+                    species_count: rs.species.len(),
+                },
             });
         }
     }
 
-    // Add data loader nodes
-    if let Some(ref data_sources) = esm_file.data_sources {
-        for id in sorted_keys(data_sources) {
-            nodes.push(ComponentNode {
-                id: id.clone(),
-                component_type: ComponentType::DataSource,
-                name: None, // Data loaders typically don't have human names
-            });
-        }
-    }
+    // NOTE: `data_sources` contributes NO nodes (esm-libraries-spec §4.8.1). A
+    // data source is a document-scoped ingest registry exposing no variables of
+    // its own; a model reaches it through a parameter whose `update` names it,
+    // so the dependency it creates is already carried by that parameter.
 
     // Add coupling edges.
     //
     // Coupling edges only connect endpoints that are real component nodes
-    // (models, reaction systems, data loaders). Coupling kinds that do not name
-    // two concrete components (operator_apply, callback, event, coupling_import)
-    // contribute no edge to the source-level component graph.
+    // (models, reaction systems). Coupling kinds that do not name two concrete
+    // components (operator_apply, callback, event, coupling_import) contribute
+    // no edge to the source-level component graph.
     let node_ids: std::collections::HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
 
     if let Some(ref coupling_entries) = esm_file.coupling {
         for entry in coupling_entries {
-            // Resolve each coupling entry to a (from, to, kind) triple.
+            // Resolve each coupling entry to a (from, to, kind, label) tuple.
             //
-            // `operator_compose`/`couple` name two concrete systems (arity-2);
+            // `operator_compose`/`couple` name two concrete systems;
             // `variable_map` resolves each endpoint to its owning system via the
-            // scope prefix. Kinds that do not name two concrete components
-            // (operator_apply, callback, event, coupling_import) contribute no
-            // edge to the source-level component graph.
-            let (from, to, kind) = match entry {
+            // scope prefix and labels the edge with the mapped variable. Kinds
+            // that do not name two concrete components (operator_apply,
+            // callback, event, coupling_import) contribute no edge.
+            let (from, to, kind, label) = match entry {
                 CouplingEntry::OperatorCompose { systems, .. } => {
                     if systems.len() >= 2 {
                         (
                             systems[0].clone(),
                             systems[1].clone(),
                             CouplingEdgeKind::OperatorCompose,
+                            "compose".to_string(),
                         )
                     } else {
                         continue; // Skip invalid coupling
                     }
                 }
                 CouplingEntry::Couple { systems, .. } => {
-                    if systems.len() >= 2 {
+                    if systems.len() == 2 {
                         (
                             systems[0].clone(),
                             systems[1].clone(),
                             CouplingEdgeKind::Couple,
+                            "couple".to_string(),
                         )
                     } else {
                         continue; // Skip invalid coupling
                     }
                 }
                 CouplingEntry::VariableMap { from, to, .. } => {
-                    // Parse scoped references to extract system names
-                    let from_system = from.split('.').next().unwrap_or(from).to_string();
-                    let to_system = to.split('.').next().unwrap_or(to).to_string();
-                    (from_system, to_system, CouplingEdgeKind::VariableMap)
+                    // BOTH endpoints must be SCOPED (`System.variable...`): an
+                    // unscoped reference names no component, so it can neither
+                    // anchor an edge nor label one. The label is everything
+                    // after the FIRST dot of `from`.
+                    let (Some((from_system, from_var)), Some((to_system, _))) =
+                        (from.split_once('.'), to.split_once('.'))
+                    else {
+                        continue;
+                    };
+                    (
+                        from_system.to_string(),
+                        to_system.to_string(),
+                        CouplingEdgeKind::VariableMap,
+                        from_var.to_string(),
+                    )
                 }
                 // These coupling kinds do not name two concrete component nodes,
                 // so they contribute no edge to the component graph.
@@ -185,6 +335,7 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
                     from,
                     to,
                     coupling_type: kind,
+                    label,
                     data: serde_json::Value::Null,
                 });
             }
@@ -210,6 +361,9 @@ pub fn component_exists(esm_file: &EsmFile, component_id: &str) -> bool {
 
 /// Get the type of a component
 ///
+/// A `data_sources` id is NOT a component (esm-libraries-spec §4.8.1) and
+/// resolves to `None`.
+///
 /// # Arguments
 ///
 /// * `esm_file` - The ESM file to check
@@ -228,8 +382,6 @@ pub fn get_component_type(esm_file: &EsmFile, component_id: &str) -> Option<Comp
         Some(ComponentType::Model)
     } else if contains(&esm_file.reaction_systems, component_id) {
         Some(ComponentType::ReactionSystem)
-    } else if contains(&esm_file.data_sources, component_id) {
-        Some(ComponentType::DataSource)
     } else {
         None
     }
@@ -247,7 +399,9 @@ pub struct ExpressionGraph {
 /// Node representing a variable in an expression graph
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VariableNode {
-    /// Variable name
+    /// Variable name, SCOPED by its owning system (`Transport.temperature`).
+    /// A variable of the pseudo-system `default` — a bare target handed
+    /// straight to [`expression_graph`] — is unscoped.
     pub name: String,
     /// Variable kind/type
     pub kind: VariableKind,
@@ -266,9 +420,11 @@ pub struct VariableNode {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VariableKind {
-    /// An unknown the solver solves for: an ODE state, or an unknown pinned
-    /// only by an implicit algebraic constraint.
+    /// An ODE state — an unknown carrying a time derivative.
     State,
+    /// An unknown pinned only by an implicit algebraic constraint. Solved for
+    /// like a state, but not differentiated.
+    Algebraic,
     /// A constant or sampled parameter.
     Parameter,
     /// An unknown defined by a bare-variable equation — eliminable.
@@ -285,11 +441,6 @@ pub enum VariableKind {
 
 /// The graph kind of one variable, derived through [`crate::classification`]
 /// (esm-spec §6.3.1) rather than read off a declared type.
-///
-/// `algebraic_unknowns` render as [`VariableKind::State`]: the graph's `state`
-/// has always meant "a quantity the solver solves for", which is exactly what
-/// an implicitly-constrained unknown is, and the distinction from an ODE state
-/// is a solver concern rather than a dependency-graph one.
 fn variable_kind(class: &crate::classification::Classification, name: &str) -> VariableKind {
     if class.is_observed(name) {
         VariableKind::Observed
@@ -297,10 +448,10 @@ fn variable_kind(class: &crate::classification::Classification, name: &str) -> V
         VariableKind::Brownian
     } else if class.is_discrete_parameter(name) {
         VariableKind::Discrete
-    } else if class.ode_states.iter().any(|s| s == name)
-        || class.algebraic_unknowns.iter().any(|s| s == name)
-    {
+    } else if class.ode_states.iter().any(|s| s == name) {
         VariableKind::State
+    } else if class.algebraic_unknowns.iter().any(|s| s == name) {
+        VariableKind::Algebraic
     } else {
         VariableKind::Parameter
     }
@@ -315,26 +466,40 @@ pub struct DependencyEdge {
     pub target: String,
     /// How the dependency arises
     pub relationship: DependencyRelationship,
-    /// Which equation/reaction index produced this edge
+    /// Which equation/reaction index produced this edge, or `-1` when no
+    /// positionally-numbered equation did (a folded `variable_map`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub equation_index: Option<usize>,
+    pub equation_index: Option<i64>,
     /// The relevant subexpression (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expression: Option<crate::Expr>,
 }
 
-/// Type of dependency relationship
+/// PROVENANCE of a dependency — which structural site produced it, NOT a
+/// classification of the operators involved. An equation edge is always
+/// `Additive` (even for `w ~ u * v`) and a definition edge always
+/// `Multiplicative` (even for `w ~ u + v`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DependencyRelationship {
-    /// Additive relationship (e.g., in D(x)/dt = ... + f(y) + ...)
+    /// An RHS variable of an equation → the variable that equation defines.
     Additive,
-    /// Multiplicative relationship
+    /// A free variable of an expression definition or a coupling variable map
+    /// → the value it defines.
     Multiplicative,
-    /// Rate relationship (in reactions)
+    /// A reaction-rate variable → a species the reaction consumes or produces.
     Rate,
-    /// Stoichiometric relationship (in reactions)
+    /// A substrate species → a product species, via stoichiometry.
     Stoichiometric,
+}
+
+/// Settings for [`expression_graph_with_options`].
+#[derive(Debug, Clone, Default)]
+pub struct ExpressionGraphOptions {
+    /// Fold `variable_map` coupling entries into cross-system dependency edges
+    /// (esm-libraries-spec §4.8.2, "coupled file-level graph"). Applies to
+    /// [`EsmFile`] targets only; every other target carries no coupling list.
+    pub merge_coupled: bool,
 }
 
 /// Build an expression graph from various ESM components
@@ -353,296 +518,498 @@ where
     input.build_expression_graph()
 }
 
+/// Build an expression graph with explicit [`ExpressionGraphOptions`].
+///
+/// # Arguments
+///
+/// * `input` - Can be an ESM file, model, reaction system, equation, reaction, or expression
+/// * `options` - Settings; options that do not apply to `input` are ignored
+///
+/// # Returns
+///
+/// * `ExpressionGraph` - Graph showing variable dependencies
+pub fn expression_graph_with_options<T>(
+    input: &T,
+    options: &ExpressionGraphOptions,
+) -> ExpressionGraph
+where
+    T: ExpressionGraphInput,
+{
+    input.build_expression_graph_with_options(options)
+}
+
 /// Trait for types that can build expression graphs
 pub trait ExpressionGraphInput {
+    /// Build the graph with default options.
     fn build_expression_graph(&self) -> ExpressionGraph;
+
+    /// Build the graph honouring `options`. The default implementation ignores
+    /// them: only [`EsmFile`] carries a coupling list for `merge_coupled` to
+    /// fold in.
+    fn build_expression_graph_with_options(
+        &self,
+        _options: &ExpressionGraphOptions,
+    ) -> ExpressionGraph {
+        self.build_expression_graph()
+    }
+}
+
+/// The growing node/edge lists of one expression-graph build, plus the dedup
+/// index that keys nodes by their SCOPED name.
+struct ExprGraphBuilder {
+    nodes: Vec<VariableNode>,
+    edges: Vec<DependencyEdge>,
+    seen: std::collections::HashSet<String>,
+}
+
+impl ExprGraphBuilder {
+    fn new() -> Self {
+        ExprGraphBuilder {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            seen: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Add a node, deduplicated by its scoped name, and return that name. A
+    /// name already present keeps the kind and units it was first added with —
+    /// declared variables are added before the equations that mention them, so
+    /// a declaration always wins over the `parameter`/`state` fallback an
+    /// equation would supply.
+    fn add_node(
+        &mut self,
+        name: &str,
+        kind: VariableKind,
+        units: Option<String>,
+        system: &str,
+    ) -> String {
+        let scoped = if system == DEFAULT_SYSTEM {
+            name.to_string()
+        } else {
+            format!("{system}.{name}")
+        };
+        if self.seen.insert(scoped.clone()) {
+            self.nodes.push(VariableNode {
+                name: scoped.clone(),
+                kind,
+                units,
+                system: system.to_string(),
+            });
+        }
+        scoped
+    }
+
+    fn add_dependency(
+        &mut self,
+        source: String,
+        target: String,
+        relationship: DependencyRelationship,
+        equation_index: i64,
+        expression: Option<crate::Expr>,
+    ) {
+        self.edges.push(DependencyEdge {
+            source,
+            target,
+            relationship,
+            equation_index: Some(equation_index),
+            expression,
+        });
+    }
+
+    fn finish(self) -> ExpressionGraph {
+        ExpressionGraph {
+            nodes: self.nodes,
+            edges: self.edges,
+        }
+    }
 }
 
 impl ExpressionGraphInput for crate::EsmFile {
     fn build_expression_graph(&self) -> ExpressionGraph {
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
+        self.build_expression_graph_with_options(&ExpressionGraphOptions::default())
+    }
+
+    fn build_expression_graph_with_options(
+        &self,
+        options: &ExpressionGraphOptions,
+    ) -> ExpressionGraph {
+        let mut b = ExprGraphBuilder::new();
 
         // Sorted-key iteration: node/edge order feeds rendered output and
         // must not depend on HashMap ordering.
-        // Process all models
         if let Some(ref models) = self.models {
             for model_id in sorted_keys(models) {
-                let (model_nodes, model_edges) = extract_from_model(&models[model_id], model_id);
-                merge_variable_nodes(&mut nodes, model_nodes);
-                edges.extend(model_edges);
+                process_model_tree(&mut b, &models[model_id], model_id);
             }
         }
 
-        // Process all reaction systems
         if let Some(ref reaction_systems) = self.reaction_systems {
             for rs_id in sorted_keys(reaction_systems) {
-                let (rs_nodes, rs_edges) =
-                    extract_from_reaction_system(&reaction_systems[rs_id], rs_id);
-                merge_variable_nodes(&mut nodes, rs_nodes);
-                edges.extend(rs_edges);
+                process_reaction_system_tree(&mut b, &reaction_systems[rs_id], rs_id);
             }
         }
 
-        ExpressionGraph { nodes, edges }
+        if options.merge_coupled
+            && let Some(ref coupling) = self.coupling
+        {
+            process_coupling(&mut b, coupling);
+        }
+
+        b.finish()
     }
 }
 
 impl ExpressionGraphInput for crate::Model {
     fn build_expression_graph(&self) -> ExpressionGraph {
-        let (nodes, edges) = extract_from_model(self, "unknown");
-        ExpressionGraph { nodes, edges }
+        let mut b = ExprGraphBuilder::new();
+        process_model_tree(&mut b, self, DEFAULT_SYSTEM);
+        b.finish()
     }
 }
 
 impl ExpressionGraphInput for crate::ReactionSystem {
     fn build_expression_graph(&self) -> ExpressionGraph {
-        let (nodes, edges) = extract_from_reaction_system(self, "unknown");
-        ExpressionGraph { nodes, edges }
+        let mut b = ExprGraphBuilder::new();
+        process_reaction_system_tree(&mut b, self, DEFAULT_SYSTEM);
+        b.finish()
     }
 }
 
 impl ExpressionGraphInput for crate::Equation {
     fn build_expression_graph(&self) -> ExpressionGraph {
-        // Delegate to the same per-equation extractor used by `extract_from_model`
-        // so a standalone equation and a model equation share one variable
-        // classification and one `equation_index` policy. A standalone equation
-        // has no equation list, hence index 0.
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-        extract_from_equation(&mut nodes, &mut edges, self, "unknown", 0);
-        ExpressionGraph { nodes, edges }
+        // Delegate to the same per-equation extractor used by `process_model`
+        // so a standalone equation and a model equation share one
+        // `equation_index` policy. A standalone equation has no equation list,
+        // hence index 0.
+        let mut b = ExprGraphBuilder::new();
+        process_equation(&mut b, self, 0, DEFAULT_SYSTEM);
+        b.finish()
     }
 }
 
 impl ExpressionGraphInput for crate::Reaction {
     fn build_expression_graph(&self) -> ExpressionGraph {
         // Delegate to the same per-reaction extractor used by
-        // `extract_from_reaction_system` so a standalone reaction and a reaction
-        // in a system share one variable classification (rate variables →
-        // parameters) and one `equation_index` policy. A standalone reaction has
-        // no reaction list, hence index 0.
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-        extract_from_reaction(&mut nodes, &mut edges, self, "unknown", 0);
-        ExpressionGraph { nodes, edges }
+        // `process_reaction_system` so a standalone reaction and a reaction in
+        // a system share one variable classification (rate variables →
+        // parameters) and one `equation_index` policy.
+        let mut b = ExprGraphBuilder::new();
+        process_reaction(&mut b, self, 0, DEFAULT_SYSTEM);
+        b.finish()
     }
 }
 
 impl ExpressionGraphInput for crate::Expr {
     fn build_expression_graph(&self) -> ExpressionGraph {
-        let mut nodes = Vec::new();
+        // esm-libraries-spec §4.8.2: for a bare expression "every variable in
+        // the expression becomes a node, and the tree structure is flattened
+        // into dependency edges" — so the expression's VALUE is a synthetic
+        // observed node every free variable feeds.
+        let mut b = ExprGraphBuilder::new();
+        process_expression(&mut b, self, "expr_result", 0, DEFAULT_SYSTEM);
+        b.finish()
+    }
+}
 
-        // For a standalone expression, just extract variables
-        let vars = extract_variables_from_expr(self);
+/// Is this `subsystems` entry an unresolved include stub (`{"ref": …}`) rather
+/// than an inline component? A stub's contents are resolved elsewhere, so the
+/// graph treats it as an opaque leaf and contributes nothing for it.
+fn is_reference_stub(entry: &serde_json::Value) -> bool {
+    entry.get("ref").is_some()
+}
 
-        for var in vars {
-            if !nodes.iter().any(|n: &VariableNode| n.name == var) {
-                nodes.push(VariableNode {
-                    name: var,
-                    kind: VariableKind::Parameter, // Default to parameter for standalone expressions
-                    units: None,
-                    system: "unknown".to_string(),
-                });
-            }
+/// Deserialize a `subsystems` entry as a [`crate::Model`], supplying the
+/// defaults a partial component omits (`variables` / `equations`) so a
+/// subsystem that declares only one of them still contributes its half.
+fn as_model(entry: &serde_json::Value) -> Option<crate::Model> {
+    let mut value = entry.clone();
+    let object = value.as_object_mut()?;
+    object
+        .entry("variables")
+        .or_insert_with(|| serde_json::json!({}));
+    object
+        .entry("equations")
+        .or_insert_with(|| serde_json::json!([]));
+    serde_json::from_value(value).ok()
+}
+
+/// Deserialize a `subsystems` entry as a [`crate::ReactionSystem`], supplying
+/// the defaults a partial component omits.
+fn as_reaction_system(entry: &serde_json::Value) -> Option<crate::ReactionSystem> {
+    let mut value = entry.clone();
+    let object = value.as_object_mut()?;
+    object
+        .entry("species")
+        .or_insert_with(|| serde_json::json!({}));
+    object
+        .entry("parameters")
+        .or_insert_with(|| serde_json::json!({}));
+    object
+        .entry("reactions")
+        .or_insert_with(|| serde_json::json!([]));
+    serde_json::from_value(value).ok()
+}
+
+/// The scoped name of a child component of `system_id`. A `default` parent —
+/// only reachable when a bare `Model`/`ReactionSystem` is handed straight to
+/// [`expression_graph`] — yields a bare child name.
+fn child_scope(system_id: &str, child_name: &str) -> String {
+    if system_id == DEFAULT_SYSTEM {
+        child_name.to_string()
+    } else {
+        format!("{system_id}.{child_name}")
+    }
+}
+
+/// Add a model's own variables and equations, then recurse into its inline
+/// `subsystems` (esm-libraries-spec §4.8.2). Reference stubs are skipped.
+fn process_model_tree(b: &mut ExprGraphBuilder, model: &crate::Model, system_id: &str) {
+    process_model(b, model, system_id);
+
+    let Some(ref subsystems) = model.subsystems else {
+        return;
+    };
+    for child_name in sorted_keys(subsystems) {
+        let entry = &subsystems[child_name];
+        if is_reference_stub(entry) {
+            continue;
         }
-
-        // For a standalone expression, there are no variable-to-variable dependencies
-        ExpressionGraph {
-            nodes,
-            edges: Vec::new(),
+        if let Some(child) = as_model(entry) {
+            process_model_tree(b, &child, &child_scope(system_id, child_name));
         }
     }
 }
 
-/// Helper function to extract nodes and edges from a model
-fn extract_from_model(
-    model: &crate::Model,
-    system_id: &str,
-) -> (Vec<VariableNode>, Vec<DependencyEdge>) {
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
-
-    // Add variable declarations as nodes with proper types (sorted so node
-    // order is deterministic). The kind is DERIVED (esm-spec §6.3.1), once per
-    // model, never read off the declared type.
-    let class = crate::classification::Classification::of(model);
-    for var_name in sorted_keys(&model.variables) {
-        let var_def = &model.variables[var_name];
-        let kind = variable_kind(&class, var_name);
-
-        nodes.push(VariableNode {
-            name: var_name.clone(),
-            kind,
-            units: var_def.units.clone(),
-            system: system_id.to_string(),
-        });
-    }
-
-    // Process equations to create dependency edges. Any equation variable not
-    // already declared above is fabricated as a state node by the helper.
-    for (eq_idx, equation) in model.equations.iter().enumerate() {
-        extract_from_equation(&mut nodes, &mut edges, equation, system_id, eq_idx);
-    }
-
-    (nodes, edges)
-}
-
-/// Append the nodes and edges contributed by a single equation.
-///
-/// This is the single per-equation extractor shared by [`extract_from_model`]
-/// and the `ExpressionGraphInput for crate::Equation` impl. Any LHS/RHS variable
-/// not already present in `nodes` is added as a state variable (the default for
-/// undeclared equation variables); declared variables added by the caller keep
-/// their real kind. A RHS→LHS additive edge (including self-references such as
-/// `D(x)/dt = -x`) is created for every `(lhs, rhs)` pair and tagged with
-/// `eq_idx`. Nodes are deduplicated by name.
-fn extract_from_equation(
-    nodes: &mut Vec<VariableNode>,
-    edges: &mut Vec<DependencyEdge>,
-    equation: &crate::Equation,
-    system_id: &str,
-    eq_idx: usize,
-) {
-    let lhs_vars = extract_variables_from_expr(&equation.lhs);
-    let rhs_vars = extract_variables_from_expr(&equation.rhs);
-
-    // Ensure all variables in the equation exist as nodes.
-    for var in lhs_vars.iter().chain(rhs_vars.iter()) {
-        if !nodes.iter().any(|n: &VariableNode| n.name == *var) {
-            nodes.push(VariableNode {
-                name: var.clone(),
-                kind: VariableKind::State, // Default for undeclared variables
-                units: None,
-                system: system_id.to_string(),
-            });
-        }
-    }
-
-    // Create edges from RHS variables to LHS variables.
-    for lhs_var in &lhs_vars {
-        for rhs_var in &rhs_vars {
-            edges.push(DependencyEdge {
-                source: rhs_var.clone(),
-                target: lhs_var.clone(),
-                relationship: DependencyRelationship::Additive,
-                equation_index: Some(eq_idx),
-                expression: Some(equation.rhs.clone()),
-            });
-        }
-    }
-}
-
-/// Helper function to extract nodes and edges from a reaction system
-fn extract_from_reaction_system(
+/// Add a reaction system's own body, then recurse into its inline
+/// `subsystems`. Reference stubs are skipped.
+fn process_reaction_system_tree(
+    b: &mut ExprGraphBuilder,
     rs: &crate::ReactionSystem,
     system_id: &str,
-) -> (Vec<VariableNode>, Vec<DependencyEdge>) {
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
+) {
+    process_reaction_system(b, rs, system_id);
 
-    // Add declared species as nodes (sorted so node order is deterministic).
-    // These carry their declared units; species referenced only by a reaction
-    // are fabricated (without units) by the helper below.
-    for species_name in sorted_keys(&rs.species) {
-        nodes.push(VariableNode {
-            name: species_name.clone(),
-            kind: VariableKind::Species,
-            units: rs.species[species_name].units.clone(),
-            system: system_id.to_string(),
-        });
+    let Some(ref subsystems) = rs.subsystems else {
+        return;
+    };
+    for child_name in sorted_keys(subsystems) {
+        let entry = &subsystems[child_name];
+        if is_reference_stub(entry) {
+            continue;
+        }
+        if let Some(child) = as_reaction_system(entry) {
+            process_reaction_system_tree(b, &child, &child_scope(system_id, child_name));
+        }
     }
-
-    // Process reactions to create dependency edges.
-    for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {
-        extract_from_reaction(&mut nodes, &mut edges, reaction, system_id, rxn_idx);
-    }
-
-    (nodes, edges)
 }
 
-/// Append the nodes and edges contributed by a single reaction.
+/// Add a model's declared variables (with their DERIVED kinds) and the
+/// dependency edges of its equations.
+fn process_model(b: &mut ExprGraphBuilder, model: &crate::Model, system_id: &str) {
+    // The node kind is DERIVED (esm-spec §6.3.1), never read off
+    // `variable.type`: the format declares only `unknown` and `parameter`, so
+    // classifying here is the only way the graph can distinguish a state from
+    // an observed, or a Brownian parameter from a constant.
+    let class = crate::classification::Classification::of(model);
+    for var_name in sorted_keys(&model.variables) {
+        let kind = variable_kind(&class, var_name);
+        b.add_node(
+            var_name,
+            kind,
+            model.variables[var_name].units.clone(),
+            system_id,
+        );
+    }
+
+    for (eq_idx, equation) in model.equations.iter().enumerate() {
+        process_equation(b, equation, eq_idx as i64, system_id);
+    }
+}
+
+/// Add a reaction system's species, declared parameters, reactions, and
+/// constraint equations.
+fn process_reaction_system(b: &mut ExprGraphBuilder, rs: &crate::ReactionSystem, system_id: &str) {
+    for species_name in sorted_keys(&rs.species) {
+        b.add_node(
+            species_name,
+            VariableKind::Species,
+            rs.species[species_name].units.clone(),
+            system_id,
+        );
+    }
+
+    // Declared parameters are nodes in their own right, so a rate constant
+    // keeps the units it was declared with instead of being fabricated
+    // unit-less by the reaction that mentions it.
+    for param_name in sorted_keys(&rs.parameters) {
+        b.add_node(
+            param_name,
+            VariableKind::Parameter,
+            rs.parameters[param_name].units.clone(),
+            system_id,
+        );
+    }
+
+    for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {
+        process_reaction(b, reaction, rxn_idx as i64, system_id);
+    }
+
+    // Constraint equations are numbered AFTER the reactions.
+    if let Some(ref constraints) = rs.constraint_equations {
+        for (idx, equation) in constraints.iter().enumerate() {
+            process_equation(b, equation, (idx + rs.reactions.len()) as i64, system_id);
+        }
+    }
+}
+
+/// The single variable an equation LHS defines: a bare name, or the name under
+/// the derivative / element-index / aggregate-output wrappers (`D(x)`,
+/// `index(v, i)`, `aggregate(…, expr: D(index(v, i)))`).
 ///
-/// This is the single per-reaction extractor shared by
-/// [`extract_from_reaction_system`] and the `ExpressionGraphInput for
-/// crate::Reaction` impl. Rate-expression variables not already present are
-/// classified as parameters (rate constants); substrate and product species not
-/// already present are classified as species. Rate edges (rate variable →
-/// substrate/product) and stoichiometric edges (substrate → product) are tagged
-/// with `rxn_idx`. Nodes are deduplicated by name, so declared species added by
-/// the caller keep their declared units.
-fn extract_from_reaction(
-    nodes: &mut Vec<VariableNode>,
-    edges: &mut Vec<DependencyEdge>,
-    reaction: &crate::Reaction,
+/// Deliberately NOT [`crate::classification::lhs_form`]: that helper answers a
+/// different question (which §6.3.1 CATEGORY the LHS puts the unknown in) and
+/// so refuses a SPATIAL derivative and accepts `arrayop`/`broadcast` shells.
+/// The graph only wants to know WHICH quantity is written, whatever kind of
+/// derivative writes it.
+fn lhs_target_name(lhs: &crate::Expr) -> Option<String> {
+    match lhs {
+        crate::Expr::Variable(name) => Some(name.clone()),
+        crate::Expr::Operator(node) => match node.op.as_str() {
+            "D" | "index" => node.args.first().and_then(lhs_target_name),
+            "aggregate" => node.expr.as_deref().and_then(lhs_target_name),
+            _ => None,
+        },
+        crate::Expr::Number(_) | crate::Expr::Integer(_) => None,
+    }
+}
+
+/// Add the nodes and edges contributed by a single equation: one edge from
+/// every free variable of the RHS to the variable the LHS defines (including
+/// self-references such as `D(x)/dt = -x`).
+///
+/// An LHS that names no single variable — an implicit constraint like
+/// `f(x, y) ~ 0` — defines nothing and contributes no edge.
+fn process_equation(
+    b: &mut ExprGraphBuilder,
+    equation: &crate::Equation,
+    eq_idx: i64,
     system_id: &str,
-    rxn_idx: usize,
+) {
+    let Some(target_name) = lhs_target_name(&equation.lhs) else {
+        return;
+    };
+    let lhs_var = b.add_node(&target_name, VariableKind::State, None, system_id);
+
+    for rhs_var in extract_variables_from_expr(&equation.rhs) {
+        let source = b.add_node(&rhs_var, VariableKind::Parameter, None, system_id);
+        b.add_dependency(
+            source,
+            lhs_var.clone(),
+            DependencyRelationship::Additive,
+            eq_idx,
+            Some(equation.rhs.clone()),
+        );
+    }
+}
+
+/// Add the nodes and edges contributed by a single reaction: a `rate` edge
+/// from every rate variable to every substrate and product, and a
+/// `stoichiometric` edge from every substrate to every product.
+fn process_reaction(
+    b: &mut ExprGraphBuilder,
+    reaction: &crate::Reaction,
+    rxn_idx: i64,
+    system_id: &str,
 ) {
     let rate_vars = extract_variables_from_expr(&reaction.rate);
 
-    // Rate-expression variables (rate constants) → parameters.
-    for var in &rate_vars {
-        if !nodes.iter().any(|n: &VariableNode| n.name == *var) {
-            nodes.push(VariableNode {
-                name: var.clone(),
-                kind: VariableKind::Parameter,
-                units: None,
-                system: system_id.to_string(),
-            });
+    // Substrates are consumed.
+    for substrate in reaction.substrates.iter().flatten() {
+        let substrate_var = b.add_node(&substrate.species, VariableKind::Species, None, system_id);
+        for rate_var in &rate_vars {
+            let param = b.add_node(rate_var, VariableKind::Parameter, None, system_id);
+            b.add_dependency(
+                param,
+                substrate_var.clone(),
+                DependencyRelationship::Rate,
+                rxn_idx,
+                Some(reaction.rate.clone()),
+            );
         }
     }
 
-    // Substrate and product species → species nodes (endpoints of the edges
-    // below must exist as nodes).
-    for species in reaction
-        .substrates
-        .iter()
-        .flatten()
-        .chain(reaction.products.iter().flatten())
-    {
-        if !nodes.iter().any(|n| n.name == species.species) {
-            nodes.push(VariableNode {
-                name: species.species.clone(),
-                kind: VariableKind::Species,
-                units: None,
-                system: system_id.to_string(),
-            });
-        }
-    }
-
-    // Rate dependencies: rate variables influence product and substrate species.
-    for rate_var in &rate_vars {
-        for product in reaction.products.iter().flatten() {
-            edges.push(DependencyEdge {
-                source: rate_var.clone(),
-                target: product.species.clone(),
-                relationship: DependencyRelationship::Rate,
-                equation_index: Some(rxn_idx),
-                expression: Some(reaction.rate.clone()),
-            });
+    // Products are produced.
+    for product in reaction.products.iter().flatten() {
+        let product_var = b.add_node(&product.species, VariableKind::Species, None, system_id);
+        for rate_var in &rate_vars {
+            let param = b.add_node(rate_var, VariableKind::Parameter, None, system_id);
+            b.add_dependency(
+                param,
+                product_var.clone(),
+                DependencyRelationship::Rate,
+                rxn_idx,
+                Some(reaction.rate.clone()),
+            );
         }
         for substrate in reaction.substrates.iter().flatten() {
-            edges.push(DependencyEdge {
-                source: rate_var.clone(),
-                target: substrate.species.clone(),
-                relationship: DependencyRelationship::Rate,
-                equation_index: Some(rxn_idx),
-                expression: Some(reaction.rate.clone()),
-            });
+            let substrate_var =
+                b.add_node(&substrate.species, VariableKind::Species, None, system_id);
+            b.add_dependency(
+                substrate_var,
+                product_var.clone(),
+                DependencyRelationship::Stoichiometric,
+                rxn_idx,
+                Some(reaction.rate.clone()),
+            );
         }
     }
+}
 
-    // Stoichiometric dependencies: substrates -> products.
-    for substrate in reaction.substrates.iter().flatten() {
-        for product in reaction.products.iter().flatten() {
-            edges.push(DependencyEdge {
-                source: substrate.species.clone(),
-                target: product.species.clone(),
-                relationship: DependencyRelationship::Stoichiometric,
-                equation_index: Some(rxn_idx),
-                expression: None,
-            });
-        }
+/// Add one expression's free-variable → result dependency edges.
+fn process_expression(
+    b: &mut ExprGraphBuilder,
+    expr: &crate::Expr,
+    target_var: &str,
+    eq_idx: i64,
+    system_id: &str,
+) {
+    let target = b.add_node(target_var, VariableKind::Observed, None, system_id);
+    for free_var in extract_variables_from_expr(expr) {
+        let source = b.add_node(&free_var, VariableKind::Parameter, None, system_id);
+        b.add_dependency(
+            source,
+            target.clone(),
+            DependencyRelationship::Multiplicative,
+            eq_idx,
+            Some(expr.clone()),
+        );
+    }
+}
+
+/// Fold `variable_map` coupling entries into cross-system dependency edges
+/// (esm-libraries-spec §4.8.2). Both endpoints must be scoped; either is added
+/// as a `parameter` node if the components' own bodies did not already declare
+/// it.
+fn process_coupling(b: &mut ExprGraphBuilder, coupling: &[CouplingEntry]) {
+    for entry in coupling {
+        let CouplingEntry::VariableMap { from, to, .. } = entry else {
+            continue;
+        };
+        let (Some((from_system, from_var)), Some((to_system, to_var))) =
+            (from.split_once('.'), to.split_once('.'))
+        else {
+            continue;
+        };
+
+        let source = b.add_node(from_var, VariableKind::Parameter, None, from_system);
+        let target = b.add_node(to_var, VariableKind::Parameter, None, to_system);
+        b.add_dependency(
+            source,
+            target,
+            DependencyRelationship::Multiplicative,
+            NON_EQUATION_INDEX,
+            Some(crate::Expr::Variable(from.clone())),
+        );
     }
 }
 
@@ -660,18 +1027,6 @@ fn extract_variables_from_expr(expr: &crate::Expr) -> Vec<String> {
     let mut vars: Vec<String> = set.into_iter().collect();
     vars.sort();
     vars
-}
-
-/// Merge variable nodes, avoiding duplicates
-fn merge_variable_nodes(existing: &mut Vec<VariableNode>, new_nodes: Vec<VariableNode>) {
-    for new_node in new_nodes {
-        if !existing
-            .iter()
-            .any(|n: &VariableNode| n.name == new_node.name && n.system == new_node.system)
-        {
-            existing.push(new_node);
-        }
-    }
 }
 
 /// Escape a string for use inside a DOT double-quoted id/label.
@@ -702,6 +1057,33 @@ fn mermaid_label(s: &str) -> String {
 }
 
 impl ComponentGraph {
+    /// Is `id` a registered node of this graph?
+    fn has_node(&self, id: &str) -> bool {
+        self.nodes.iter().any(|n| n.id == id)
+    }
+
+    /// Iterate this graph's edges as `(source, target)` id pairs.
+    fn endpoints(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.edges.iter().map(|e| (e.from.as_str(), e.to.as_str()))
+    }
+
+    /// The UNDIRECTED neighbourhood of `id` — its predecessors together with
+    /// its successors (esm-libraries-spec §4.8.3), sorted. An unknown id
+    /// resolves to `[]`.
+    pub fn adjacency(&self, id: &str) -> Vec<String> {
+        neighbours(self.has_node(id), self.endpoints(), id, Direction::Both)
+    }
+
+    /// The nodes with an edge pointing AT `id`, sorted.
+    pub fn predecessors(&self, id: &str) -> Vec<String> {
+        neighbours(self.has_node(id), self.endpoints(), id, Direction::Incoming)
+    }
+
+    /// The nodes `id` points at, sorted.
+    pub fn successors(&self, id: &str) -> Vec<String> {
+        neighbours(self.has_node(id), self.endpoints(), id, Direction::Outgoing)
+    }
+
     /// Export graph to DOT format for Graphviz
     ///
     /// # Returns
@@ -717,7 +1099,6 @@ impl ComponentGraph {
             let shape = match node.component_type {
                 ComponentType::Model => "ellipse",
                 ComponentType::ReactionSystem => "box",
-                ComponentType::DataSource => "diamond",
             };
 
             let label = node.name.as_ref().unwrap_or(&node.id);
@@ -758,7 +1139,6 @@ impl ComponentGraph {
             let shape = match node.component_type {
                 ComponentType::Model => ("(", ")"),
                 ComponentType::ReactionSystem => ("[", "]"),
-                ComponentType::DataSource => ("{", "}"),
             };
 
             let label = node.name.as_ref().unwrap_or(&node.id);
@@ -784,17 +1164,62 @@ impl ComponentGraph {
         mermaid
     }
 
-    /// Export graph to JSON format
+    /// Export graph as the JSON adjacency list of esm-libraries-spec §4.8.3.
     ///
     /// # Returns
     ///
-    /// * `String` - JSON representation of the graph
+    /// * `String` - `{"nodes": […], "edges": […], "adjacency": {…}}`
     pub fn to_json_graph(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+        render_json_graph(
+            &self.nodes,
+            |node| node.id.clone(),
+            &self.edges,
+            |edge| (edge.from.clone(), edge.to.clone()),
+            |id| self.adjacency(id),
+        )
     }
 }
 
 impl ExpressionGraph {
+    /// Is `name` a registered node of this graph?
+    fn has_node(&self, name: &str) -> bool {
+        self.nodes.iter().any(|n| n.name == name)
+    }
+
+    /// Iterate this graph's edges as `(source, target)` name pairs.
+    fn endpoints(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.edges
+            .iter()
+            .map(|e| (e.source.as_str(), e.target.as_str()))
+    }
+
+    /// The UNDIRECTED neighbourhood of `name` — its predecessors together with
+    /// its successors (esm-libraries-spec §4.8.3), sorted. An unknown name
+    /// resolves to `[]`.
+    pub fn adjacency(&self, name: &str) -> Vec<String> {
+        neighbours(self.has_node(name), self.endpoints(), name, Direction::Both)
+    }
+
+    /// The variables an edge points FROM into `name`, sorted.
+    pub fn predecessors(&self, name: &str) -> Vec<String> {
+        neighbours(
+            self.has_node(name),
+            self.endpoints(),
+            name,
+            Direction::Incoming,
+        )
+    }
+
+    /// The variables `name` points at, sorted.
+    pub fn successors(&self, name: &str) -> Vec<String> {
+        neighbours(
+            self.has_node(name),
+            self.endpoints(),
+            name,
+            Direction::Outgoing,
+        )
+    }
+
     /// Export graph to DOT format for Graphviz
     ///
     /// # Returns
@@ -805,10 +1230,12 @@ impl ExpressionGraph {
         dot.push_str("  rankdir=TB;\n");
         dot.push_str("  node [shape=ellipse];\n\n");
 
-        // Add nodes (all variables)
+        // Add nodes (all variables). An `algebraic` unknown renders like a
+        // state: it is solved for, and it was classified `state` before the
+        // kind vocabulary gained its own arm.
         for node in &self.nodes {
             let shape = match node.kind {
-                VariableKind::State => "ellipse",
+                VariableKind::State | VariableKind::Algebraic => "ellipse",
                 VariableKind::Parameter => "box",
                 VariableKind::Observed => "diamond",
                 VariableKind::Brownian => "doubleoctagon",
@@ -857,7 +1284,7 @@ impl ExpressionGraph {
         // Add nodes with appropriate shapes
         for node in &self.nodes {
             let (shape_start, shape_end) = match node.kind {
-                VariableKind::State => ("(", ")"),
+                VariableKind::State | VariableKind::Algebraic => ("(", ")"),
                 VariableKind::Parameter => ("[", "]"),
                 VariableKind::Observed => ("{", "}"),
                 VariableKind::Brownian => ("{{", "}}"),
@@ -882,13 +1309,19 @@ impl ExpressionGraph {
         mermaid
     }
 
-    /// Export graph to JSON format
+    /// Export graph as the JSON adjacency list of esm-libraries-spec §4.8.3.
     ///
     /// # Returns
     ///
-    /// * `String` - JSON representation of the graph
+    /// * `String` - `{"nodes": […], "edges": […], "adjacency": {…}}`
     pub fn to_json_graph(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+        render_json_graph(
+            &self.nodes,
+            |node| node.name.clone(),
+            &self.edges,
+            |edge| (edge.source.clone(), edge.target.clone()),
+            |name| self.adjacency(name),
+        )
     }
 }
 
@@ -898,6 +1331,59 @@ mod tests {
     use crate::types::Metadata;
     use crate::{Expr, ExpressionNode as ExprNode, Model, ReactionSystem};
     use std::collections::HashMap;
+
+    /// An `EsmFile` with every optional container empty, to be spread with
+    /// `..empty_file()` so a test names only the fields it cares about.
+    fn empty_file() -> EsmFile {
+        EsmFile {
+            coordinates: None,
+            expression_templates: None,
+            metaparameters: None,
+            coupling_roles: None,
+            domain: None,
+            index_sets: None,
+            esm: "1.0.0".to_string(),
+            metadata: Metadata {
+                name: Some("test".to_string()),
+                description: None,
+                authors: None,
+                created: None,
+                modified: None,
+                license: None,
+                tags: None,
+                references: None,
+                system_class: None,
+                dae_info: None,
+                discretized_from: None,
+            },
+            models: None,
+            reaction_systems: None,
+            data_sources: None,
+            operators: None,
+            enums: None,
+            coupling: None,
+            function_tables: None,
+        }
+    }
+
+    /// An empty model carrying only a display name.
+    fn test_model(name: &str) -> Model {
+        Model {
+            reference: None,
+            subsystems: None,
+            name: Some(name.to_string()),
+            variables: HashMap::new(),
+            equations: vec![],
+            discrete_events: None,
+            continuous_events: None,
+            description: None,
+            tolerance: None,
+            tests: None,
+            initialization_equations: None,
+            guesses: None,
+            system_kind: None,
+        }
+    }
 
     #[test]
     fn test_component_graph_empty() {
@@ -1167,13 +1653,34 @@ mod tests {
         });
 
         let graph = expression_graph(&expr);
-        // Variable dependency graph: only variables as nodes, no operators/constants
-        assert_eq!(graph.nodes.len(), 1); // Only 'x' variable
-        assert_eq!(graph.edges.len(), 0); // No variable-to-variable dependencies for standalone expression
+        // Variable dependency graph: only variables as nodes, no operators or
+        // constants — plus the synthetic node standing for the expression's own
+        // value (esm-libraries-spec §4.8.2), which every free variable feeds.
+        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.edges.len(), 1);
 
-        // Check the variable node
-        assert_eq!(graph.nodes[0].name, "x");
-        assert_eq!(graph.nodes[0].kind, VariableKind::Parameter);
+        let result = graph
+            .nodes
+            .iter()
+            .find(|n| n.name == "expr_result")
+            .expect("synthetic result node");
+        assert_eq!(result.kind, VariableKind::Observed);
+        assert_eq!(result.system, "default");
+
+        let x = graph
+            .nodes
+            .iter()
+            .find(|n| n.name == "x")
+            .expect("free variable node");
+        assert_eq!(x.kind, VariableKind::Parameter);
+
+        assert_eq!(graph.edges[0].source, "x");
+        assert_eq!(graph.edges[0].target, "expr_result");
+        assert_eq!(
+            graph.edges[0].relationship,
+            DependencyRelationship::Multiplicative
+        );
+        assert_eq!(graph.edges[0].equation_index, Some(0));
     }
 
     #[test]
@@ -1183,6 +1690,7 @@ mod tests {
                 id: "model1".to_string(),
                 component_type: ComponentType::Model,
                 name: Some("Test Model".to_string()),
+                metadata: ComponentMetadata::default(),
             }],
             edges: vec![],
         };
@@ -1200,6 +1708,7 @@ mod tests {
                 id: "model1".to_string(),
                 component_type: ComponentType::Model,
                 name: Some("Test Model".to_string()),
+                metadata: ComponentMetadata::default(),
             }],
             edges: vec![],
         };
@@ -1227,8 +1736,9 @@ mod tests {
         // No constants or operators in variable dependency graph
         assert!(!mermaid.contains("const_")); // No constant nodes
         assert!(!mermaid.contains("{+}")); // No operator nodes
-        // No edges for standalone expression
-        assert!(!mermaid.contains("-->")); // No edges
+        // The free variable feeds the expression's synthetic result node.
+        assert!(mermaid.contains("expr_result{expr_result}"));
+        assert!(mermaid.contains("x --> expr_result"));
     }
 
     #[test]
@@ -1324,5 +1834,125 @@ mod tests {
         assert_eq!(edge.from, "source"); // Not "source.var"
         assert_eq!(edge.to, "target"); // Not "target.param"
         assert_eq!(edge.coupling_type, CouplingEdgeKind::VariableMap);
+        // The label is everything after the FIRST dot of `from`.
+        assert_eq!(edge.label, "var");
+    }
+
+    /// A `variable_map` whose endpoints are not SCOPED names the no component,
+    /// so it anchors no edge (esm-libraries-spec §4.8.1).
+    #[test]
+    fn test_component_graph_variable_map_requires_scoped_endpoints() {
+        let mut models = HashMap::new();
+        for id in ["source", "target"] {
+            models.insert(id.to_string(), test_model(id));
+        }
+
+        let esm_file = EsmFile {
+            coupling: Some(vec![crate::CouplingEntry::VariableMap {
+                from: "source".to_string(),
+                to: "target".to_string(),
+                transform: crate::types::VariableMapTransform::Named("identity".to_string()),
+                factor: None,
+                description: None,
+            }]),
+            models: Some(models),
+            ..empty_file()
+        };
+
+        let graph = component_graph(&esm_file);
+        assert_eq!(graph.nodes.len(), 2);
+        assert!(graph.edges.is_empty());
+    }
+
+    /// esm-libraries-spec §4.8.1: "A `data_sources` entry is not a component
+    /// and is NOT a node."
+    #[test]
+    fn test_data_sources_contribute_no_nodes() {
+        let json = r#"{
+            "esm": "1.0.0",
+            "metadata": { "name": "ds" },
+            "data_sources": {
+                "GEOSFP": {
+                    "kind": "grid",
+                    "source": { "url_template": "file:///data/GEOSFP/{date:%Y%m%d_%H%M}.nc" }
+                }
+            }
+        }"#;
+        let esm_file: EsmFile = serde_json::from_str(json).expect("parses");
+
+        let graph = component_graph(&esm_file);
+        assert!(graph.nodes.is_empty());
+        assert!(graph.edges.is_empty());
+        assert_eq!(get_component_type(&esm_file, "GEOSFP"), None);
+        assert!(!component_exists(&esm_file, "GEOSFP"));
+    }
+
+    /// The §4.8.3 closure lookups, on a two-node one-edge graph.
+    #[test]
+    fn test_component_graph_closure() {
+        let mut models = HashMap::new();
+        for id in ["source", "target"] {
+            models.insert(id.to_string(), test_model(id));
+        }
+
+        let esm_file = EsmFile {
+            coupling: Some(vec![crate::CouplingEntry::VariableMap {
+                from: "source.var".to_string(),
+                to: "target.param".to_string(),
+                transform: crate::types::VariableMapTransform::Named("identity".to_string()),
+                factor: None,
+                description: None,
+            }]),
+            models: Some(models),
+            ..empty_file()
+        };
+
+        let graph = component_graph(&esm_file);
+        assert_eq!(graph.adjacency("source"), vec!["target".to_string()]);
+        assert_eq!(graph.successors("source"), vec!["target".to_string()]);
+        assert!(graph.predecessors("source").is_empty());
+        assert_eq!(graph.adjacency("target"), vec!["source".to_string()]);
+        assert_eq!(graph.predecessors("target"), vec!["source".to_string()]);
+        assert!(graph.successors("target").is_empty());
+        // An unknown key resolves to [] rather than panicking.
+        assert!(graph.adjacency("nonexistent").is_empty());
+    }
+
+    /// The §4.8.3 JSON adjacency-list export: three top-level keys, an `id` on
+    /// every node, `{source, target, data}` edges, and an adjacency map.
+    #[test]
+    fn test_to_json_graph_is_an_adjacency_list() {
+        let mut models = HashMap::new();
+        for id in ["source", "target"] {
+            models.insert(id.to_string(), test_model(id));
+        }
+
+        let esm_file = EsmFile {
+            coupling: Some(vec![crate::CouplingEntry::VariableMap {
+                from: "source.var".to_string(),
+                to: "target.param".to_string(),
+                transform: crate::types::VariableMapTransform::Named("identity".to_string()),
+                factor: None,
+                description: None,
+            }]),
+            models: Some(models),
+            ..empty_file()
+        };
+
+        let json: serde_json::Value =
+            serde_json::from_str(&component_graph(&esm_file).to_json_graph()).expect("valid JSON");
+
+        let mut keys: Vec<&String> = json.as_object().expect("object").keys().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["adjacency", "edges", "nodes"]);
+
+        let nodes = json["nodes"].as_array().expect("nodes array");
+        assert_eq!(nodes[0]["id"], "source");
+        let edges = json["edges"].as_array().expect("edges array");
+        assert_eq!(edges[0]["source"], "source");
+        assert_eq!(edges[0]["target"], "target");
+        assert_eq!(edges[0]["data"]["coupling_type"], "variable_map");
+        assert_eq!(json["adjacency"]["source"][0], "target");
+        assert_eq!(json["adjacency"]["target"][0], "source");
     }
 }

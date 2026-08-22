@@ -675,6 +675,7 @@ reading that as a gap.
 | `expr` | type | – | – | `Expr` | `Expr` | – |
 | `expr_node` | type | – | – | `ExprNode` | – | `ExprNode` |
 | `expression_graph` | type | – | – | – | `ExpressionGraph` | `ExpressionGraph` |
+| `expression_graph_options` | type | – | – | – | `ExpressionGraphOptions` | `ExpressionGraphOptions` |
 | `field_reduce` | function | `field_reduce` | – | – | `field_reduce` | – |
 | `flatten_error` | error | – | – | `FlattenError` | `FlattenError` | – |
 | `flatten_template_registries` | function | – | `flattenTemplateRegistries` | `flatten_template_registries` | – | – |

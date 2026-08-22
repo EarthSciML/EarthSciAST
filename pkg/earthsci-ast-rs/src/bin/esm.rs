@@ -1870,7 +1870,6 @@ fn run_graph(
                         let shape = match node.component_type {
                             earthsci_ast::graph::ComponentType::Model => "ellipse",
                             earthsci_ast::graph::ComponentType::ReactionSystem => "box",
-                            earthsci_ast::graph::ComponentType::DataSource => "diamond",
                         };
                         println!("  \"{}\" [label=\"{}\", shape={}];", node.id, label, shape);
                     }
@@ -1895,12 +1894,10 @@ fn run_graph(
                         let shape_open = match node.component_type {
                             earthsci_ast::graph::ComponentType::Model => "(",
                             earthsci_ast::graph::ComponentType::ReactionSystem => "[",
-                            earthsci_ast::graph::ComponentType::DataSource => "{",
                         };
                         let shape_close = match node.component_type {
                             earthsci_ast::graph::ComponentType::Model => ")",
                             earthsci_ast::graph::ComponentType::ReactionSystem => "]",
-                            earthsci_ast::graph::ComponentType::DataSource => "}",
                         };
                         println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
                     }
@@ -1916,7 +1913,6 @@ fn run_graph(
                             "type": match n.component_type {
                                 earthsci_ast::graph::ComponentType::Model => "model",
                                 earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
-                                earthsci_ast::graph::ComponentType::DataSource => "data_loader",
                             },
                             "name": n.name
                         })).collect::<Vec<_>>(),

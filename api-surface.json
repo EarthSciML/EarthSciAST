@@ -145,19 +145,19 @@
     }
   },
   "counts": {
-    "symbols": 899,
+    "symbols": 915,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 283,
       "typescript": 203,
       "python": 228,
-      "rust": 281,
-      "go": 328,
+      "rust": 284,
+      "go": 342,
       "editor": 71
     },
     "by_tier": {
-      "extension": 656,
-      "stable": 243
+      "extension": 671,
+      "stable": 244
     }
   },
   "planned": [
@@ -1442,6 +1442,14 @@
       }
     },
     {
+      "name": "component_counts",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "ComponentCounts"
+      }
+    },
+    {
       "name": "component_exists",
       "kind": "function",
       "tier": "stable",
@@ -1482,6 +1490,14 @@
       "tier": "extension",
       "bindings": {
         "go": "ComponentGraphFromFile"
+      }
+    },
+    {
+      "name": "component_metadata",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ComponentMetadata"
       }
     },
     {
@@ -3135,6 +3151,22 @@
       }
     },
     {
+      "name": "expression_graph_from_equation",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExpressionGraphFromEquation"
+      }
+    },
+    {
+      "name": "expression_graph_from_expression",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExpressionGraphFromExpression"
+      }
+    },
+    {
       "name": "expression_graph_from_file",
       "kind": "function",
       "tier": "extension",
@@ -3143,11 +3175,27 @@
       }
     },
     {
+      "name": "expression_graph_from_file_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExpressionGraphFromFileWithOptions"
+      }
+    },
+    {
       "name": "expression_graph_from_model",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "go": "ExpressionGraphFromModel"
+      }
+    },
+    {
+      "name": "expression_graph_from_reaction",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExpressionGraphFromReaction"
       }
     },
     {
@@ -3164,6 +3212,23 @@
       "tier": "extension",
       "bindings": {
         "rust": "ExpressionGraphInput"
+      }
+    },
+    {
+      "name": "expression_graph_options",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ExpressionGraphOptions",
+        "rust": "ExpressionGraphOptions"
+      }
+    },
+    {
+      "name": "expression_graph_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "expression_graph_with_options"
       }
     },
     {
@@ -4546,11 +4611,75 @@
       }
     },
     {
+      "name": "node_kind_algebraic",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NodeKindAlgebraic"
+      }
+    },
+    {
+      "name": "node_kind_brownian",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NodeKindBrownian"
+      }
+    },
+    {
+      "name": "node_kind_discrete",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NodeKindDiscrete"
+      }
+    },
+    {
+      "name": "node_kind_observed",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NodeKindObserved"
+      }
+    },
+    {
+      "name": "node_kind_parameter",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NodeKindParameter"
+      }
+    },
+    {
+      "name": "node_kind_species",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NodeKindSpecies"
+      }
+    },
+    {
+      "name": "node_kind_state",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NodeKindState"
+      }
+    },
+    {
       "name": "non_differentiable_expression_error",
       "kind": "error",
       "tier": "extension",
       "bindings": {
         "typescript": "NonDifferentiableExpressionError"
+      }
+    },
+    {
+      "name": "non_equation_index",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "NonEquationIndex"
       }
     },
     {
