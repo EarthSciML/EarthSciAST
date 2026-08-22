@@ -595,15 +595,22 @@ def _process_component_tree(
     component: Model | ReactionSystem,
     system_id: str,
 ) -> None:
-    """Process a component and, recursively, its inline subsystems."""
+    """Process a component and, recursively, its inline subsystems.
+
+    A component carried as an unresolved ``{"ref": ...}`` stub (a top-level
+    model included by reference, or a ref subsystem `resolve_subsystem_refs`
+    has not spliced yet) contributes nothing: it declares no variables here.
+    TypeScript skips reference stubs the same way — they stay COMPONENT-graph
+    nodes, with no counts, but have no expression-graph content.
+    """
+    if not isinstance(component, (Model, ReactionSystem)):
+        return
     if isinstance(component, ReactionSystem):
         _process_reaction_system(builder, component, system_id)
     else:
         _process_model(builder, component, system_id)
 
     for child_name, child in (getattr(component, "subsystems", None) or {}).items():
-        if not isinstance(child, (Model, ReactionSystem)):
-            continue  # an unresolved {"ref": ...} stub has nothing to walk
         child_scoped = child_name if system_id == DEFAULT_SYSTEM else f"{system_id}.{child_name}"
         _process_component_tree(builder, child, child_scoped)
 
@@ -660,9 +667,7 @@ def expression_graph(
             _process_component_tree(builder, rxn_sys, rs_id)
         if merge_coupled:
             _process_coupling(builder, target.coupling or [])
-    elif isinstance(target, Model):
-        _process_component_tree(builder, target, DEFAULT_SYSTEM)
-    elif isinstance(target, ReactionSystem):
+    elif isinstance(target, (Model, ReactionSystem)):
         _process_component_tree(builder, target, DEFAULT_SYSTEM)
     elif isinstance(target, Equation):
         _process_equation(builder, target, 0, DEFAULT_SYSTEM)

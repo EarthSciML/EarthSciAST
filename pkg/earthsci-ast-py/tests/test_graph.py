@@ -342,6 +342,20 @@ class TestExpressionGraph:
         }
         assert "unknown" not in kinds
 
+    def test_unresolved_ref_component_contributes_no_variables(self, chemistry_file):
+        """A `{"ref": ...}` stub is a component NODE but has no variables.
+
+        `resolve_model_refs` / `resolve_subsystem_refs` splice these in later;
+        until then there is nothing to walk. TypeScript skips reference stubs
+        the same way.
+        """
+        chemistry_file.models["Included"] = {"ref": "other.esm"}
+        component = component_graph(chemistry_file)
+        included = next(n for n in component.nodes if n.id == "Included")
+        assert included.metadata == {"var_count": 0, "eq_count": 0, "species_count": 0}
+        graph = expression_graph(chemistry_file)
+        assert all(node.system != "Included" for node in graph.nodes)
+
     def test_inline_subsystem_variables_are_scoped(self):
         child = Model(name="Child", variables={"c": ModelVariable(type="parameter")})
         parent = Model(
