@@ -11,6 +11,13 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # that is the failure you want to read before 200 other tests scroll past.
     include("api_surface_test.jl")
 
+    # ---- Exception hierarchy + diagnostic-code registry (src/errors.jl,
+    #      src/error_codes.jl) ----
+    # Also early: these guard the two package-wide invariants a new file can
+    # break without any local test noticing — an exception outside the
+    # `EarthSciASTError` root, or a diagnostic code spelled as an inline literal.
+    include("error_hierarchy_test.jl")
+
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
     #      validate.jl, display.jl, graph.jl) ----
     include("types_test.jl")
