@@ -883,6 +883,15 @@ Libraries should also support serializing graphs to common interchange formats (
 
 ## 5. Language-Specific Libraries
 
+> **Superseded for API surface.** [`API_SPEC.md`](API_SPEC.md) is now the
+> authority on what each binding exports: it names every public operation once
+> in canonical `snake_case`, gives the rule for deriving each binding's
+> spelling, assigns every symbol to a tier, and is enforced by a per-binding
+> surface test against [`api-surface.json`](api-surface.json). The prose below
+> stays as narrative introduction to each binding's character and integration
+> story; where it disagrees with `API_SPEC.md` about a name, a signature, or a
+> capability, `API_SPEC.md` wins.
+
 ### 5.1 Julia — `EarthSciAST.jl`
 
 **Tier: Full**

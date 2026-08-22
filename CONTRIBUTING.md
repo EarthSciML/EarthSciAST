@@ -132,6 +132,11 @@ EarthSciAST/
 3. **Test-Driven Development**: Write tests before implementation
 4. **Documentation**: All public APIs must be documented
 5. **Error Handling**: Provide clear, actionable error messages
+6. **Surface Discipline**: The public API of every binding is pinned by
+   [`API_SPEC.md`](API_SPEC.md) and [`api-surface.json`](api-surface.json).
+   Naming a new export follows the transliteration rule in `API_SPEC.md` §2,
+   and the manifest must be regenerated in the same commit:
+   `python3 scripts/gen-api-surface.py`
 
 ### Language-Specific Standards
 
@@ -163,6 +168,10 @@ See [CONFORMANCE_SPEC.md](CONFORMANCE_SPEC.md) for the fixture format, execution
 - **New features** require corresponding conformance tests
 - **Bug fixes** must include regression tests
 - **Breaking changes** require migration guides and deprecation notices
+- **Public API changes** must regenerate `api-surface.json`. Each binding has a
+  surface test that fails when its exports and the manifest disagree in either
+  direction; `python3 scripts/extract-api-surface.py --check` runs the same
+  comparison for all six at once. See [`API_SPEC.md`](API_SPEC.md) §9.
 
 ## Contribution Workflow
 

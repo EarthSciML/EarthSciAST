@@ -1,0 +1,7745 @@
+{
+  "$schema_note": "Companion manifest to API_SPEC.md. Regenerate with `python3 scripts/gen-api-surface.py`; verify with `python3 scripts/extract-api-surface.py --check` or each binding's own api-surface test.",
+  "version": 1,
+  "spec": "API_SPEC.md",
+  "tiers": {
+    "stable": "Harmonized across bindings, surface-tested, breaks only at a major.",
+    "extension": "Named and documented extension seam. May differ between bindings and may break at a minor.",
+    "private": "Everything else. Not listed here; a symbol absent from this manifest MUST NOT be exported."
+  },
+  "capability_profiles": {
+    "core": {
+      "summary": "parse / serialize / validate / display / canonicalize / graph / edit / flatten",
+      "bindings": [
+        "julia",
+        "typescript",
+        "python",
+        "rust",
+        "go"
+      ]
+    },
+    "classification": {
+      "summary": "esm-spec §6.3.1 derived variable classification",
+      "bindings": [
+        "julia",
+        "typescript",
+        "python",
+        "rust",
+        "go"
+      ]
+    },
+    "simulation": {
+      "summary": "build an RHS and integrate it; TypeScript and Go are deliberately non-simulating",
+      "bindings": [
+        "julia",
+        "python",
+        "rust"
+      ]
+    },
+    "runtime_io": {
+      "summary": "data-source providers, refresh cadence, output sinks, checkpoints",
+      "bindings": [
+        "julia",
+        "python",
+        "rust"
+      ]
+    },
+    "ui": {
+      "summary": "interactive SolidJS editing components",
+      "bindings": [
+        "editor"
+      ]
+    }
+  },
+  "binding_profiles": {
+    "julia": {
+      "package": "EarthSciAST.jl",
+      "surface_declaration": "pkg/EarthSciAST.jl/src/EarthSciAST.jl `export` block",
+      "surface_test": "pkg/EarthSciAST.jl/test/api_surface_test.jl"
+    },
+    "typescript": {
+      "package": "@earthsciml/ast",
+      "surface_declaration": "pkg/earthsci-ast-ts/src/index.ts named re-exports",
+      "surface_test": "pkg/earthsci-ast-ts/src/api-surface.test.ts",
+      "star_reexports": [
+        "./types.js"
+      ],
+      "star_reexport_note": "`export * from './types.js'` re-exports the generated schema type barrel wholesale. Its members are schema-derived and churn with esm-schema.json, so the manifest pins the barrel LIST, not its members."
+    },
+    "python": {
+      "package": "earthsci-ast",
+      "surface_declaration": "pkg/earthsci-ast-py/src/earthsci_ast/__init__.py `__all__`",
+      "surface_test": "pkg/earthsci-ast-py/tests/test_api_surface.py"
+    },
+    "rust": {
+      "package": "earthsci-ast",
+      "surface_declaration": "pkg/earthsci-ast-rs/src/lib.rs root `pub use` / `pub const`",
+      "surface_test": "pkg/earthsci-ast-rs/tests/api_surface.rs",
+      "public_modules": [
+        "adapter_support",
+        "aggregate",
+        "analysis",
+        "area_faq",
+        "broad_phase",
+        "cadence",
+        "canonicalize",
+        "classification",
+        "compile_error",
+        "coupling",
+        "coupling_imports",
+        "dae",
+        "data_output",
+        "diagnostic",
+        "display",
+        "edit",
+        "error",
+        "esio_provider",
+        "expression",
+        "flatten",
+        "geometry",
+        "graph",
+        "intern",
+        "join",
+        "lower_enums",
+        "lower_expression_templates",
+        "migration",
+        "op_registry",
+        "parse",
+        "parse_expression",
+        "pde_inline_tests",
+        "performance",
+        "prepare",
+        "provider",
+        "pushdown_rewrite",
+        "reactions",
+        "ref_loading",
+        "reference_resolution",
+        "registered_functions",
+        "relational",
+        "serialize",
+        "simulate",
+        "simulate_array",
+        "structural",
+        "substitute",
+        "template_imports",
+        "types",
+        "unit_conversion",
+        "units",
+        "validate",
+        "value_invention",
+        "wasm"
+      ],
+      "public_module_note": "`cargo public-api` needs a nightly toolchain and is not installed here, so the test is the vendored equivalent: it parses the crate root, which is the only source of `earthsci_ast::<name>` paths. Module interiors are extension seams reachable as `earthsci_ast::<module>::<name>`."
+    },
+    "go": {
+      "package": "github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm",
+      "surface_declaration": "package-level exported identifiers of pkg/esm",
+      "surface_test": "pkg/earthsci-ast-go/pkg/esm/api_surface_test.go",
+      "scope_note": "Package-level func / type / const / var only. Methods on an exported type are covered by that type's entry, not listed separately."
+    },
+    "editor": {
+      "package": "@earthsciml/ast-editor",
+      "surface_declaration": "pkg/earthsci-ast-editor/src/index.ts named re-exports",
+      "surface_test": "pkg/earthsci-ast-editor/src/api-surface.test.ts",
+      "star_reexports": []
+    }
+  },
+  "counts": {
+    "symbols": 878,
+    "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
+    "by_binding": {
+      "julia": 279,
+      "typescript": 203,
+      "python": 211,
+      "rust": 281,
+      "go": 275,
+      "editor": 71
+    },
+    "by_tier": {
+      "extension": 641,
+      "stable": 237
+    }
+  },
+  "planned": [
+    {
+      "canonical": "load",
+      "issue": "`load` has two incompatible contracts. Julia `load(path)` and Go `Load(path)` take a FILE PATH; TypeScript `load(text)` and Rust `load(text)` take JSON TEXT; Python `load(path_or_string_or_dict)` sniffs. A string argument therefore means opposite things in different bindings, with no type error to catch it.",
+      "resolution": "Split into `load_path(path)` and `load_text(json)`; keep `load` only where a binding can dispatch unambiguously (Julia on `::String` vs `::IO`, Python on type).",
+      "affects": [
+        "julia",
+        "typescript",
+        "python",
+        "rust",
+        "go"
+      ]
+    },
+    {
+      "canonical": "save",
+      "issue": "`save` is pure serialization in TypeScript and Rust (returns a string, never touches disk), a write in Julia (`save(file, path)`), and both in Python (`save(file, path=None) -> str`). Go spells the pure half `Serialize` and the writing half `SaveToFile`.",
+      "resolution": "Canonicalise `save(file) -> str` as the pure form everywhere and `save_path(file, path)` as the writing form; Go's `Serialize`/`SaveToFile` become `Save`/`SavePath`.",
+      "affects": [
+        "julia",
+        "typescript",
+        "python",
+        "rust",
+        "go"
+      ]
+    },
+    {
+      "canonical": "abstol / reltol / saveat / alg",
+      "issue": "Python's `simulate` takes scipy's `rtol=` / `atol=` / `method=`; Julia and Rust take SciML's `reltol` / `abstol` and Julia takes `alg` / `saveat`. Rust's `SimulateOptions` spells them `solver` and `output_times`.",
+      "resolution": "SciML spelling is canonical (API_SPEC.md §4): Python gains `reltol` / `abstol` / `alg` (old names deprecated aliases for one minor), Rust renames `SimulateOptions::solver` -> `alg` and `output_times` -> `saveat`.",
+      "affects": [
+        "python",
+        "rust"
+      ]
+    },
+    {
+      "canonical": "closed_function_names",
+      "issue": "Julia, Rust and Go export a FUNCTION; TypeScript exports a CONSTANT array `CLOSED_FUNCTION_NAMES`.",
+      "resolution": "TypeScript adds `closedFunctionNames()`; the constant stays one minor as a deprecated alias.",
+      "affects": [
+        "typescript"
+      ]
+    },
+    {
+      "canonical": "derive_odes",
+      "issue": "TypeScript spells it `deriveODEs`, violating the §2 rule that TypeScript is lowerCamelCase of the canonical name (`deriveOdes`). TypeScript already spells the sibling `odeStates` / `isOdeState` correctly.",
+      "resolution": "Rename to `deriveOdes`; `deriveODEs` stays one minor as an alias.",
+      "affects": [
+        "typescript"
+      ]
+    },
+    {
+      "canonical": "unknowns / parameters",
+      "issue": "TypeScript and Python export `unknowns` / `parameters`; Julia exports `unknown_names` / `parameter_names` for the same query.",
+      "resolution": "Canonical is `unknowns` / `parameters`; Julia keeps `unknown_names` / `parameter_names` as deprecated aliases because the bare names collide with common downstream bindings.",
+      "affects": [
+        "julia"
+      ]
+    },
+    {
+      "canonical": "add_variable / remove_variable / ...",
+      "issue": "Python suffixes every edit operation with its container (`add_variable_to_model`, `remove_coupling_from_file`, `extract_component_from_file`, `merge_esm_files`); Julia, TypeScript and Rust use the bare verb (`add_variable`).",
+      "resolution": "Python gains the bare names; the suffixed ones become deprecated aliases.",
+      "affects": [
+        "python"
+      ]
+    },
+    {
+      "canonical": "to_dot / to_mermaid / to_json",
+      "issue": "Julia exports `to_dot` / `to_mermaid` / `to_json` and TypeScript `toDot` / `toMermaid` / `toJsonGraph`; Go spells the same six renderings `ExportComponentGraphDOT` / `ExportExpressionGraphDOT` and friends, plus exporter objects.",
+      "resolution": "Canonical `to_dot(graph)` / `to_mermaid(graph)` / `to_json(graph)` dispatching on graph kind; Go's `Export*` family becomes `ToDOT` / `ToMermaid` / `ToJSON`.",
+      "affects": [
+        "typescript",
+        "go"
+      ]
+    },
+    {
+      "canonical": "substitute_with_context",
+      "issue": "Rust names the scoped substitution family `*_with_context` (`ScopedContext`); Go names it `*WithScoped`.",
+      "resolution": "Canonical is `substitute_with_context`; Go renames to `SubstituteWithContext` and friends.",
+      "affects": [
+        "go"
+      ]
+    },
+    {
+      "canonical": "reference_resolution_error",
+      "issue": "Julia and Python raise `ReferenceResolutionError`; Rust's is `ReferenceError`.",
+      "resolution": "Canonical is `reference_resolution_error`; Rust renames, keeping `ReferenceError` as a type alias for one minor.",
+      "affects": [
+        "rust"
+      ]
+    },
+    {
+      "canonical": "system_kind",
+      "issue": "Julia / Python / Rust / Go export a FUNCTION `system_kind`; TypeScript exports both the function `systemKind` and the type `SystemKind`, and Go additionally has `EffectiveSystemKind` with no counterpart elsewhere.",
+      "resolution": "Keep the function/type pair (they are distinct symbols under the (name, kind) identity rule). Decide whether `EffectiveSystemKind` is `declared_system_kind`'s peer or a Go-only convenience, and harmonise the trio `system_kind` / `declared_system_kind` / `declared_system_kind_mismatch`, which currently exists in three different two-binding subsets.",
+      "affects": [
+        "julia",
+        "typescript",
+        "python",
+        "go"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "name": "abstract_sink",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "AbstractSink"
+      }
+    },
+    {
+      "name": "add_continuous_event",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "add_continuous_event",
+        "typescript": "addContinuousEvent"
+      }
+    },
+    {
+      "name": "add_continuous_event_to_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "add_continuous_event_to_model"
+      }
+    },
+    {
+      "name": "add_coupling",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "add_coupling",
+        "rust": "add_coupling",
+        "typescript": "addCoupling"
+      }
+    },
+    {
+      "name": "add_coupling_to_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "add_coupling_to_file"
+      }
+    },
+    {
+      "name": "add_discrete_event",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "add_discrete_event",
+        "typescript": "addDiscreteEvent"
+      }
+    },
+    {
+      "name": "add_discrete_event_to_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "add_discrete_event_to_model"
+      }
+    },
+    {
+      "name": "add_equation",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "add_equation",
+        "rust": "add_equation",
+        "typescript": "addEquation"
+      }
+    },
+    {
+      "name": "add_equation_to_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "add_equation_to_model"
+      }
+    },
+    {
+      "name": "add_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "add_model"
+      }
+    },
+    {
+      "name": "add_reaction",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "add_reaction",
+        "rust": "add_reaction",
+        "typescript": "addReaction"
+      }
+    },
+    {
+      "name": "add_reaction_system",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "add_reaction_system"
+      }
+    },
+    {
+      "name": "add_reaction_to_system",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "add_reaction_to_system"
+      }
+    },
+    {
+      "name": "add_species",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "add_species",
+        "rust": "add_species",
+        "typescript": "addSpecies"
+      }
+    },
+    {
+      "name": "add_species_to_system",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "add_species_to_system"
+      }
+    },
+    {
+      "name": "add_variable",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "add_variable",
+        "rust": "add_variable",
+        "typescript": "addVariable"
+      }
+    },
+    {
+      "name": "add_variable_to_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "add_variable_to_model"
+      }
+    },
+    {
+      "name": "adjacency",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "adjacency"
+      }
+    },
+    {
+      "name": "affect_equation",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "AffectEquation",
+        "julia": "AffectEquation",
+        "python": "AffectEquation",
+        "rust": "AffectEquation"
+      }
+    },
+    {
+      "name": "algebraic_unknowns",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "AlgebraicUnknowns",
+        "julia": "algebraic_unknowns",
+        "python": "algebraic_unknowns",
+        "rust": "algebraic_unknowns",
+        "typescript": "algebraicUnknowns"
+      }
+    },
+    {
+      "name": "analysis",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "Analysis"
+      }
+    },
+    {
+      "name": "analysis_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "AnalysisOptions"
+      }
+    },
+    {
+      "name": "analysis_results",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "AnalysisResults"
+      }
+    },
+    {
+      "name": "analyze_complexity",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "analyzeComplexity"
+      }
+    },
+    {
+      "name": "analyze_expression",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "analyzeExpression"
+      }
+    },
+    {
+      "name": "any_of",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "any_of"
+      }
+    },
+    {
+      "name": "apply_dae_contract",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ApplyDAEContract",
+        "rust": "apply_dae_contract"
+      }
+    },
+    {
+      "name": "apply_scope_injections",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "apply_scope_injections",
+        "typescript": "applyScopeInjections"
+      }
+    },
+    {
+      "name": "apply_unit_conversion",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": [
+          "apply_unit_conversion",
+          "apply_unit_conversion!"
+        ],
+        "python": "apply_unit_conversion"
+      },
+      "notes": "multiple spellings exported by: julia"
+    },
+    {
+      "name": "apply_value_invention",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "apply_value_invention"
+      }
+    },
+    {
+      "name": "apply_variable_mapping",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "apply_variable_mapping"
+      }
+    },
+    {
+      "name": "area_tolerance_ok",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "area_tolerance_ok",
+        "rust": "area_tolerance_ok"
+      }
+    },
+    {
+      "name": "assert_classification_partitions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "assert_classification_partitions"
+      }
+    },
+    {
+      "name": "assert_partitions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "assert_partitions"
+      }
+    },
+    {
+      "name": "assertion",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "Assertion"
+      }
+    },
+    {
+      "name": "assertion_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "AssertionResult"
+      }
+    },
+    {
+      "name": "assertion_status",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "AssertionStatus"
+      }
+    },
+    {
+      "name": "ast_expr",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ASTExpr"
+      }
+    },
+    {
+      "name": "ast_store",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "AstStore"
+      }
+    },
+    {
+      "name": "ast_store_config",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "AstStoreConfig"
+      }
+    },
+    {
+      "name": "authored_template_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "authoredTemplateNames"
+      }
+    },
+    {
+      "name": "auto_records",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "AutoRecords"
+      }
+    },
+    {
+      "name": "axis_sel",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "AxisSel"
+      }
+    },
+    {
+      "name": "boundary_kind",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "BoundaryKind"
+      }
+    },
+    {
+      "name": "broad_phase_candidates",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "broad_phase_candidates"
+      }
+    },
+    {
+      "name": "brownian_parameters",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "BrownianParameters",
+        "julia": "brownian_parameters",
+        "python": "brownian_parameters",
+        "rust": "brownian_parameters",
+        "typescript": "brownianParameters"
+      }
+    },
+    {
+      "name": "build_checkpoint_callback",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "build_checkpoint_callback"
+      }
+    },
+    {
+      "name": "build_dependency_graph",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "buildDependencyGraph"
+      }
+    },
+    {
+      "name": "build_emitted_document",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "buildEmittedDocument"
+      }
+    },
+    {
+      "name": "build_evaluator",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "build_evaluator"
+      }
+    },
+    {
+      "name": "build_inspection",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "BuildInspection",
+        "python": "BuildInspection"
+      }
+    },
+    {
+      "name": "build_output_callback",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "build_output_callback"
+      }
+    },
+    {
+      "name": "build_reference_graph",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "build_reference_graph",
+        "python": "build_reference_graph",
+        "rust": "build_reference_graph"
+      }
+    },
+    {
+      "name": "build_refresh_callback",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "build_refresh_callback"
+      }
+    },
+    {
+      "name": "build_spatial_index",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "build_spatial_index"
+      }
+    },
+    {
+      "name": "build_unit_env",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "BuildUnitEnv",
+        "rust": "build_unit_env"
+      }
+    },
+    {
+      "name": "build_var_equivalences",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "buildVarEquivalences"
+      }
+    },
+    {
+      "name": "build_zarr_sink",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "build_zarr_sink"
+      }
+    },
+    {
+      "name": "cache_miss",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "CacheMiss"
+      }
+    },
+    {
+      "name": "cache_path_for_url",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "cache_path_for_url"
+      }
+    },
+    {
+      "name": "cached_fetcher",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "cached_fetcher"
+      }
+    },
+    {
+      "name": "cached_opener",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "cached_opener"
+      }
+    },
+    {
+      "name": "cadence",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Cadence",
+        "rust": "Cadence"
+      }
+    },
+    {
+      "name": "cadence_class",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "CadenceClass"
+      }
+    },
+    {
+      "name": "cadence_classifier",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "CadenceClassifier"
+      }
+    },
+    {
+      "name": "cadence_const",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CadenceConst"
+      }
+    },
+    {
+      "name": "cadence_continuous",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CadenceContinuous"
+      }
+    },
+    {
+      "name": "cadence_cycle_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "CadenceCycleError"
+      }
+    },
+    {
+      "name": "cadence_discrete",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CadenceDiscrete"
+      }
+    },
+    {
+      "name": "cadence_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "CadenceError",
+        "python": "CadenceError",
+        "rust": "CadenceError"
+      }
+    },
+    {
+      "name": "cadence_seeder",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "CadenceSeeder"
+      }
+    },
+    {
+      "name": "callback_coupling",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "CallbackCoupling"
+      }
+    },
+    {
+      "name": "can_migrate",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "can_migrate",
+        "typescript": "canMigrate"
+      }
+    },
+    {
+      "name": "canonical_dims",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "CanonicalDims"
+      }
+    },
+    {
+      "name": "canonical_index_set_json",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "canonical_index_set_json",
+        "rust": "canonical_index_set_json"
+      }
+    },
+    {
+      "name": "canonical_json",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "CanonicalJSON",
+        "julia": "canonical_json",
+        "rust": "canonical_json",
+        "typescript": "canonicalJson"
+      }
+    },
+    {
+      "name": "canonicalize",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Canonicalize",
+        "julia": "canonicalize",
+        "rust": "canonicalize",
+        "typescript": "canonicalize"
+      }
+    },
+    {
+      "name": "canonicalize_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "CanonicalizeError",
+        "rust": "CanonicalizeError",
+        "typescript": "CanonicalizeError"
+      }
+    },
+    {
+      "name": "check_dimensional_consistency",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "check_dimensional_consistency"
+      }
+    },
+    {
+      "name": "check_dimensions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "checkDimensions"
+      }
+    },
+    {
+      "name": "check_equation_dimensions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "check_equation_dimensions"
+      }
+    },
+    {
+      "name": "check_expression_dimensions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "check_expression_dimensions"
+      }
+    },
+    {
+      "name": "circular_reference_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "python": "CircularReferenceError",
+        "typescript": "CircularReferenceError"
+      }
+    },
+    {
+      "name": "class_summary",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ClassSummary"
+      }
+    },
+    {
+      "name": "classification",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Classification"
+      }
+    },
+    {
+      "name": "classification_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "ClassificationError"
+      }
+    },
+    {
+      "name": "classify",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "classify"
+      }
+    },
+    {
+      "name": "classify_complexity",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "classifyComplexity"
+      }
+    },
+    {
+      "name": "classify_document",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "classifyDocument"
+      }
+    },
+    {
+      "name": "classify_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "classifyModel"
+      }
+    },
+    {
+      "name": "closed_arg",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ClosedArg"
+      }
+    },
+    {
+      "name": "closed_function_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "ClosedFunctionError",
+        "julia": "ClosedFunctionError",
+        "rust": "ClosedFunctionError",
+        "typescript": "ClosedFunctionError"
+      }
+    },
+    {
+      "name": "closed_function_error_code",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ClosedFunctionErrorCode"
+      }
+    },
+    {
+      "name": "closed_function_names",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "CLOSED_FUNCTION_NAMES"
+      }
+    },
+    {
+      "name": "closed_function_names",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ClosedFunctionNames",
+        "julia": "closed_function_names",
+        "rust": "closed_function_names"
+      }
+    },
+    {
+      "name": "closed_value",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ClosedValue"
+      }
+    },
+    {
+      "name": "code_ambiguous_subsystem_ref",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeAmbiguousSubsystemRef"
+      }
+    },
+    {
+      "name": "code_array_shape_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeArrayShapeMismatch"
+      }
+    },
+    {
+      "name": "code_cadence_continuous_relational",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCadenceContinuousRelational"
+      }
+    },
+    {
+      "name": "code_cadence_expect_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCadenceExpectMismatch"
+      }
+    },
+    {
+      "name": "code_cadence_observed_cycle",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCadenceObservedCycle"
+      }
+    },
+    {
+      "name": "code_coupling_library_illegal_payload",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCouplingLibraryIllegalPayload"
+      }
+    },
+    {
+      "name": "code_domain_unit_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeDomainUnitMismatch"
+      }
+    },
+    {
+      "name": "code_duplicate_reaction_species",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeDuplicateReactionSpecies"
+      }
+    },
+    {
+      "name": "code_invalid_broadcast_fn",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInvalidBroadcastFn"
+      }
+    },
+    {
+      "name": "code_join_key_invalid_type",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeJoinKeyInvalidType"
+      }
+    },
+    {
+      "name": "code_metaparam_type_error",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeMetaparamTypeError"
+      }
+    },
+    {
+      "name": "code_missing_data_source_kind",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeMissingDataSourceKind"
+      }
+    },
+    {
+      "name": "code_missing_data_source_url_template",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeMissingDataSourceURLTemplate"
+      }
+    },
+    {
+      "name": "code_relational_node_in_continuous",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRelationalNodeInContinuous"
+      }
+    },
+    {
+      "name": "code_template_import_cycle",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportCycle"
+      }
+    },
+    {
+      "name": "code_template_import_name_conflict",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportNameConflict"
+      }
+    },
+    {
+      "name": "code_template_import_unknown_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportUnknownName"
+      }
+    },
+    {
+      "name": "code_template_import_unresolved",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTemplateImportUnresolved"
+      }
+    },
+    {
+      "name": "code_undefined_index_set",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUndefinedIndexSet"
+      }
+    },
+    {
+      "name": "code_unknown_expression_type",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnknownExpressionType"
+      }
+    },
+    {
+      "name": "code_unresolved_subsystem_ref",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeUnresolvedSubsystemRef"
+      }
+    },
+    {
+      "name": "code_validation_failed",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeValidationFailed"
+      }
+    },
+    {
+      "name": "coerce_coupling_entry",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "coerce_coupling_entry"
+      }
+    },
+    {
+      "name": "common_paths",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "CommonPaths"
+      }
+    },
+    {
+      "name": "common_subexpression",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "CommonSubexpression"
+      }
+    },
+    {
+      "name": "compact_expr",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "CompactExpr"
+      }
+    },
+    {
+      "name": "compare_complexity",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "compareComplexity"
+      }
+    },
+    {
+      "name": "compile_array",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "compile_array"
+      }
+    },
+    {
+      "name": "compile_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "CompileError"
+      }
+    },
+    {
+      "name": "compile_expression",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "compileExpression"
+      }
+    },
+    {
+      "name": "compiled",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Compiled"
+      }
+    },
+    {
+      "name": "compiled_expression",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "CompiledExpression"
+      }
+    },
+    {
+      "name": "complexity_metrics",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ComplexityMetrics"
+      }
+    },
+    {
+      "name": "component_adjacency",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "ComponentAdjacency"
+      }
+    },
+    {
+      "name": "component_exists",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "component_exists",
+        "typescript": "componentExists"
+      }
+    },
+    {
+      "name": "component_graph",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "component_graph",
+        "rust": "component_graph",
+        "typescript": [
+          "componentGraph",
+          "component_graph"
+        ]
+      },
+      "notes": "spelling differs from the §2 rule: typescript=component_graph (expected componentGraph); multiple spellings exported by: typescript"
+    },
+    {
+      "name": "component_graph",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ComponentGraph",
+        "rust": "ComponentGraph",
+        "typescript": "ComponentGraph"
+      }
+    },
+    {
+      "name": "component_graph_from_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ComponentGraphFromFile"
+      }
+    },
+    {
+      "name": "component_node",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "ComponentNode",
+        "go": "ComponentNode",
+        "julia": "ComponentNode",
+        "rust": "ComponentNode",
+        "typescript": "ComponentNode"
+      }
+    },
+    {
+      "name": "component_type",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ComponentType"
+      }
+    },
+    {
+      "name": "compose",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "compose",
+        "typescript": "compose"
+      }
+    },
+    {
+      "name": "compute_fold",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "compute_fold"
+      }
+    },
+    {
+      "name": "condition_trigger",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ConditionTrigger"
+      }
+    },
+    {
+      "name": "conflicting_derivative_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ConflictingDerivativeError",
+        "python": "ConflictingDerivativeError"
+      }
+    },
+    {
+      "name": "connector",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "Connector"
+      }
+    },
+    {
+      "name": "connector_equation",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "ConnectorEquation"
+      }
+    },
+    {
+      "name": "constant_parameters",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ConstantParameters",
+        "julia": "constant_parameters",
+        "python": "constant_parameters",
+        "rust": "constant_parameters",
+        "typescript": "constantParameters"
+      }
+    },
+    {
+      "name": "contains",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Contains",
+        "python": "contains",
+        "rust": "contains",
+        "typescript": "contains"
+      }
+    },
+    {
+      "name": "continuous_event",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ContinuousEvent",
+        "julia": "ContinuousEvent",
+        "python": "ContinuousEvent",
+        "rust": "ContinuousEvent"
+      }
+    },
+    {
+      "name": "convert_units",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "convert_units",
+        "rust": "convert_units",
+        "typescript": "convertUnits"
+      }
+    },
+    {
+      "name": "coord_plan",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "CoordPlan"
+      }
+    },
+    {
+      "name": "coordinate",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Coordinate"
+      }
+    },
+    {
+      "name": "coupling_callback",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "CouplingCallback"
+      }
+    },
+    {
+      "name": "coupling_couple",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "CouplingCouple",
+        "julia": "CouplingCouple"
+      }
+    },
+    {
+      "name": "coupling_edge",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "CouplingEdge",
+        "go": "CouplingEdge",
+        "julia": "CouplingEdge",
+        "rust": "CouplingEdge",
+        "typescript": "CouplingEdge"
+      }
+    },
+    {
+      "name": "coupling_entry",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "CouplingEntry",
+        "julia": "CouplingEntry",
+        "python": "CouplingEntry",
+        "rust": "CouplingEntry"
+      }
+    },
+    {
+      "name": "coupling_event",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "CouplingEvent"
+      }
+    },
+    {
+      "name": "coupling_graph",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "CouplingGraph"
+      }
+    },
+    {
+      "name": "coupling_graph_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "CouplingGraphProps"
+      }
+    },
+    {
+      "name": "coupling_import",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "CouplingImport",
+        "julia": "CouplingImport",
+        "python": "CouplingImport"
+      }
+    },
+    {
+      "name": "coupling_import_options",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "CouplingImportOptions",
+        "rust": "CouplingImportOptions",
+        "typescript": "CouplingImportOptions"
+      }
+    },
+    {
+      "name": "coupling_kind",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "CouplingKind"
+      }
+    },
+    {
+      "name": "coupling_kind_couple",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CouplingKindCouple"
+      }
+    },
+    {
+      "name": "coupling_kind_operator_compose",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CouplingKindOperatorCompose"
+      }
+    },
+    {
+      "name": "coupling_kind_variable_map",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CouplingKindVariableMap"
+      }
+    },
+    {
+      "name": "coupling_operator_apply",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "CouplingOperatorApply"
+      }
+    },
+    {
+      "name": "coupling_operator_compose",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "CouplingOperatorCompose"
+      }
+    },
+    {
+      "name": "coupling_role",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "CouplingRole",
+        "rust": "CouplingRole"
+      }
+    },
+    {
+      "name": "coupling_variable_map",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "CouplingVariableMap"
+      }
+    },
+    {
+      "name": "covariance_matrix",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "CovarianceMatrix"
+      }
+    },
+    {
+      "name": "create_ast_store",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "editor": "createAstStore"
+      }
+    },
+    {
+      "name": "create_debounced_validation",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "createDebouncedValidation"
+      }
+    },
+    {
+      "name": "create_highlight_context",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "createHighlightContext"
+      }
+    },
+    {
+      "name": "create_undo_history",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "createUndoHistory"
+      }
+    },
+    {
+      "name": "create_undo_keyboard_handler",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "createUndoKeyboardHandler"
+      }
+    },
+    {
+      "name": "create_validation_context",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "createValidationContext"
+      }
+    },
+    {
+      "name": "create_validation_signals",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "createValidationSignals"
+      }
+    },
+    {
+      "name": "cyclic_promotion_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "CyclicPromotionError",
+        "python": "CyclicPromotionError"
+      }
+    },
+    {
+      "name": "dae_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DaeError"
+      }
+    },
+    {
+      "name": "dae_info",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DAEInfo",
+        "rust": "DaeInfo"
+      }
+    },
+    {
+      "name": "data_source",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DataSource",
+        "julia": "DataSource",
+        "python": "DataSource",
+        "rust": "DataSource"
+      }
+    },
+    {
+      "name": "data_source_binding",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DataSourceBinding",
+        "julia": "DataSourceBinding",
+        "python": "DataSourceBinding",
+        "rust": "DataSourceBinding"
+      }
+    },
+    {
+      "name": "data_source_determinism",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DataSourceDeterminism",
+        "julia": "DataSourceDeterminism",
+        "python": "DataSourceDeterminism",
+        "rust": "DataSourceDeterminism"
+      }
+    },
+    {
+      "name": "data_source_dispatch_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "DataSourceDispatchError"
+      }
+    },
+    {
+      "name": "data_source_extent",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "DataSourceExtent"
+      }
+    },
+    {
+      "name": "data_source_kind",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "DataSourceKind",
+        "rust": "DataSourceKind"
+      }
+    },
+    {
+      "name": "data_source_location",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DataSourceLocation",
+        "julia": "DataSourceLocation",
+        "python": "DataSourceLocation",
+        "rust": "DataSourceLocation"
+      }
+    },
+    {
+      "name": "data_source_metadata",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DataSourceMetadata"
+      }
+    },
+    {
+      "name": "data_source_record_filter",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "DataSourceRecordFilter"
+      }
+    },
+    {
+      "name": "data_source_temporal",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DataSourceTemporal",
+        "julia": "DataSourceTemporal",
+        "python": "DataSourceTemporal",
+        "rust": "DataSourceTemporal"
+      }
+    },
+    {
+      "name": "declared_system_kind",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "declared_system_kind",
+        "typescript": "declaredSystemKind"
+      }
+    },
+    {
+      "name": "declared_system_kind_mismatch",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "declared_system_kind_mismatch"
+      }
+    },
+    {
+      "name": "default_dae_support",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "default_dae_support"
+      }
+    },
+    {
+      "name": "default_indep_var",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "DefaultIndepVar"
+      }
+    },
+    {
+      "name": "default_min_complexity",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "DEFAULT_MIN_COMPLEXITY"
+      }
+    },
+    {
+      "name": "delimiters",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "Delimiters"
+      }
+    },
+    {
+      "name": "delimiters_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "DelimitersProps"
+      }
+    },
+    {
+      "name": "densify_parallel_edges",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "densify_parallel_edges"
+      }
+    },
+    {
+      "name": "dependency_edge",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DependencyEdge",
+        "julia": "DependencyEdge",
+        "rust": "DependencyEdge",
+        "typescript": "DependencyEdge"
+      }
+    },
+    {
+      "name": "dependency_graph",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "DependencyGraph"
+      }
+    },
+    {
+      "name": "dependency_node",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "DependencyNode"
+      }
+    },
+    {
+      "name": "dependency_relation",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "DependencyRelation"
+      }
+    },
+    {
+      "name": "dependency_relationship",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DependencyRelationship"
+      }
+    },
+    {
+      "name": "derivative_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "DerivativeResult"
+      }
+    },
+    {
+      "name": "derive_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DeriveError"
+      }
+    },
+    {
+      "name": "derive_odes",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "derive_odes",
+        "python": "derive_odes",
+        "rust": "derive_odes",
+        "typescript": "deriveODEs"
+      },
+      "notes": "spelling differs from the §2 rule: typescript=deriveODEs (expected deriveOdes)"
+    },
+    {
+      "name": "derive_output_gridding",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "derive_output_gridding",
+        "rust": "derive_output_gridding"
+      }
+    },
+    {
+      "name": "derive_output_meta",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "derive_output_meta",
+        "rust": "derive_output_meta"
+      }
+    },
+    {
+      "name": "derive_output_plan",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "derive_output_plan",
+        "rust": "derive_output_plan"
+      }
+    },
+    {
+      "name": "desugar_pushdown",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "desugar_pushdown",
+        "rust": "desugar_pushdown"
+      }
+    },
+    {
+      "name": "detailed_validation_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "DetailedValidationResult"
+      }
+    },
+    {
+      "name": "detect_stability_issues",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "detectStabilityIssues"
+      }
+    },
+    {
+      "name": "diagnostic_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "DiagnosticError"
+      }
+    },
+    {
+      "name": "differentiate",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "differentiate"
+      }
+    },
+    {
+      "name": "dim_coord",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "DimCoord"
+      }
+    },
+    {
+      "name": "dimension",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Dimension",
+        "rust": "Dimension"
+      }
+    },
+    {
+      "name": "dimension_promotion_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "DimensionPromotionError",
+        "python": "DimensionPromotionError"
+      }
+    },
+    {
+      "name": "dimension_promotion_record",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DimensionPromotionRecord"
+      }
+    },
+    {
+      "name": "dimensionless",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "Dimensionless"
+      }
+    },
+    {
+      "name": "discover_esm_files",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "discover_esm_files"
+      }
+    },
+    {
+      "name": "discrete_event",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DiscreteEvent",
+        "julia": "DiscreteEvent",
+        "python": "DiscreteEvent",
+        "rust": "DiscreteEvent"
+      }
+    },
+    {
+      "name": "discrete_event_trigger",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "DiscreteEventTrigger",
+        "julia": "DiscreteEventTrigger",
+        "python": "DiscreteEventTrigger",
+        "rust": "DiscreteEventTrigger"
+      }
+    },
+    {
+      "name": "discrete_materializer",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "DiscreteMaterializer"
+      }
+    },
+    {
+      "name": "discrete_parameters",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "DiscreteParameters",
+        "julia": "discrete_parameters",
+        "python": "discrete_parameters",
+        "rust": "discrete_parameters",
+        "typescript": "discreteParameters"
+      }
+    },
+    {
+      "name": "discretize",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "discretize"
+      }
+    },
+    {
+      "name": "discretize_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DiscretizeOptions"
+      }
+    },
+    {
+      "name": "dispatch_closed_function",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "dispatchClosedFunction"
+      }
+    },
+    {
+      "name": "distinct",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "distinct",
+        "rust": "distinct"
+      }
+    },
+    {
+      "name": "distribution",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Distribution",
+        "julia": "Distribution",
+        "python": "Distribution",
+        "rust": "Distribution"
+      }
+    },
+    {
+      "name": "distribution_lognormal",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "DistributionLognormal"
+      }
+    },
+    {
+      "name": "distribution_normal",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "DistributionNormal"
+      }
+    },
+    {
+      "name": "distribution_param",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DistributionParam"
+      }
+    },
+    {
+      "name": "distribution_uniform",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "DistributionUniform"
+      }
+    },
+    {
+      "name": "domain",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Domain",
+        "julia": "Domain",
+        "python": "Domain",
+        "rust": "Domain"
+      }
+    },
+    {
+      "name": "domain_extent_mismatch_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "DomainExtentMismatchError",
+        "python": "DomainExtentMismatchError"
+      }
+    },
+    {
+      "name": "domain_unit_mismatch_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "DomainUnitMismatchError",
+        "python": "DomainUnitMismatchError"
+      }
+    },
+    {
+      "name": "dot_exporter",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "DOTExporter"
+      }
+    },
+    {
+      "name": "e_canonical_divby_zero",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "E_CANONICAL_DIVBY_ZERO"
+      }
+    },
+    {
+      "name": "e_canonical_nonfinite",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "E_CANONICAL_NONFINITE"
+      }
+    },
+    {
+      "name": "earth_sci_ast_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "EarthSciAstError"
+      }
+    },
+    {
+      "name": "edge_kind",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "EdgeKind",
+        "rust": "EdgeKind"
+      }
+    },
+    {
+      "name": "edit_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "EditError",
+        "rust": "EditError"
+      }
+    },
+    {
+      "name": "edit_operation",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "EditOperation"
+      }
+    },
+    {
+      "name": "edit_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "EditResult"
+      }
+    },
+    {
+      "name": "effective_system_kind",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "EffectiveSystemKind"
+      }
+    },
+    {
+      "name": "emit_document",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "emit_document",
+        "typescript": "emitDocument"
+      }
+    },
+    {
+      "name": "emit_esm_string",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "emit_esm_string",
+        "typescript": "emitEsmString"
+      }
+    },
+    {
+      "name": "emit_reference_preserving",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "EmitReferencePreserving"
+      }
+    },
+    {
+      "name": "entity_not_found_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "EntityNotFoundError"
+      }
+    },
+    {
+      "name": "enum_lowering_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "rust": "EnumLoweringError",
+        "typescript": "EnumLoweringError"
+      }
+    },
+    {
+      "name": "ephemeral_injected_file",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "ephemeral_injected_file",
+        "typescript": "ephemeralInjectedFile"
+      }
+    },
+    {
+      "name": "equation",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Equation",
+        "julia": "Equation",
+        "python": "Equation",
+        "rust": "Equation"
+      }
+    },
+    {
+      "name": "equation_balance",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "EquationBalance"
+      }
+    },
+    {
+      "name": "equation_editor",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "EquationEditor"
+      }
+    },
+    {
+      "name": "equation_editor_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "EquationEditorProps"
+      }
+    },
+    {
+      "name": "equation_unit_findings",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "equation_unit_findings"
+      }
+    },
+    {
+      "name": "equijoin",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "equijoin"
+      }
+    },
+    {
+      "name": "err_canonical_div_by_zero",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrCanonicalDivByZero"
+      }
+    },
+    {
+      "name": "err_canonical_non_finite",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrCanonicalNonFinite"
+      }
+    },
+    {
+      "name": "err_canonical_unsupported_field",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrCanonicalUnsupportedField"
+      }
+    },
+    {
+      "name": "error",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ERROR"
+      }
+    },
+    {
+      "name": "error_circular_dependency",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorCircularDependency"
+      }
+    },
+    {
+      "name": "error_data_source_undefined",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorDataSourceUndefined"
+      }
+    },
+    {
+      "name": "error_equation_count_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorEquationCountMismatch"
+      }
+    },
+    {
+      "name": "error_event_affects_parameter",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorEventAffectsParameter"
+      }
+    },
+    {
+      "name": "error_event_var_undeclared",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorEventVarUndeclared"
+      }
+    },
+    {
+      "name": "error_ic_in_reaction_system",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorIcInReactionSystem"
+      },
+      "notes": "spelling differs from the §2 rule: go=ErrorIcInReactionSystem (expected ErrorICInReactionSystem)"
+    },
+    {
+      "name": "error_null_reaction",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorNullReaction"
+      }
+    },
+    {
+      "name": "error_system_kind_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorSystemKindMismatch"
+      }
+    },
+    {
+      "name": "error_undefined_operator",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUndefinedOperator"
+      }
+    },
+    {
+      "name": "error_undefined_parameter",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUndefinedParameter"
+      }
+    },
+    {
+      "name": "error_undefined_species",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUndefinedSpecies"
+      }
+    },
+    {
+      "name": "error_undefined_system",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUndefinedSystem"
+      }
+    },
+    {
+      "name": "error_undefined_variable",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUndefinedVariable"
+      }
+    },
+    {
+      "name": "error_unit_inconsistency",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUnitInconsistency"
+      }
+    },
+    {
+      "name": "error_unit_parse_error",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUnitParseError"
+      }
+    },
+    {
+      "name": "error_unresolved_scoped_ref",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorUnresolvedScopedRef"
+      }
+    },
+    {
+      "name": "esm_coupling_graph_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "EsmCouplingGraphProps"
+      }
+    },
+    {
+      "name": "esm_editor",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "ESMEditor"
+      }
+    },
+    {
+      "name": "esm_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "EsmError"
+      }
+    },
+    {
+      "name": "esm_expression_editor_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "EsmExpressionEditorProps"
+      }
+    },
+    {
+      "name": "esm_file",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "EsmFile",
+        "go": "ESMFile",
+        "julia": "EsmFile",
+        "python": "EsmFile",
+        "rust": "EsmFile"
+      }
+    },
+    {
+      "name": "esm_file_editor_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "EsmFileEditorProps"
+      }
+    },
+    {
+      "name": "esm_format_version",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ESM_FORMAT_VERSION"
+      }
+    },
+    {
+      "name": "esm_machinery_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "EsmMachineryError"
+      }
+    },
+    {
+      "name": "esm_model_editor_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "EsmModelEditorProps"
+      }
+    },
+    {
+      "name": "esm_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "esm_path"
+      }
+    },
+    {
+      "name": "esm_reaction_editor_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "EsmReactionEditorProps"
+      }
+    },
+    {
+      "name": "esm_root",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "esm_root"
+      }
+    },
+    {
+      "name": "estimate_parallel_potential",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "estimateParallelPotential"
+      }
+    },
+    {
+      "name": "estimate_savings",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "estimateSavings"
+      }
+    },
+    {
+      "name": "evaluate",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Evaluate",
+        "python": "evaluate",
+        "rust": "evaluate"
+      }
+    },
+    {
+      "name": "evaluate_cellwise",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "evaluate_cellwise",
+        "rust": "evaluate_cellwise"
+      }
+    },
+    {
+      "name": "evaluate_closed_function",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "EvaluateClosedFunction",
+        "julia": "evaluate_closed_function",
+        "rust": "evaluate_closed_function"
+      }
+    },
+    {
+      "name": "evaluate_closed_function_ad",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "evaluate_closed_function_ad"
+      }
+    },
+    {
+      "name": "evaluate_expr",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "evaluate_expr"
+      }
+    },
+    {
+      "name": "evaluate_expression",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "evaluateExpression"
+      }
+    },
+    {
+      "name": "evaluate_rhs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "evaluate_rhs"
+      }
+    },
+    {
+      "name": "evaluation_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "EvaluationError"
+      }
+    },
+    {
+      "name": "evaluator_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "EvaluatorError"
+      }
+    },
+    {
+      "name": "event_coupling",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "EventCoupling"
+      }
+    },
+    {
+      "name": "event_type",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "EventType"
+      }
+    },
+    {
+      "name": "expand",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Expand",
+        "python": "Expand"
+      },
+      "notes": "spelling differs from the §2 rule: python=Expand (expected expand)"
+    },
+    {
+      "name": "expand",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "Expand"
+      }
+    },
+    {
+      "name": "expand_coupling_imports",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "expand_coupling_imports",
+        "python": "expand_coupling_imports",
+        "rust": "expand_coupling_imports",
+        "typescript": "expandCouplingImports"
+      }
+    },
+    {
+      "name": "expand_document",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "expand_document",
+        "typescript": "expandDocument"
+      }
+    },
+    {
+      "name": "expand_equation_placeholders",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "expand_equation_placeholders"
+      }
+    },
+    {
+      "name": "expand_flattened_refs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "expand_flattened_refs"
+      }
+    },
+    {
+      "name": "expand_url_template",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "expand_url_template"
+      }
+    },
+    {
+      "name": "expand_with_mirrors",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "expand_with_mirrors"
+      }
+    },
+    {
+      "name": "expanded_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "expanded_model"
+      }
+    },
+    {
+      "name": "export_component_graph_dot",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExportComponentGraphDOT"
+      }
+    },
+    {
+      "name": "export_component_graph_json",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExportComponentGraphJSON"
+      }
+    },
+    {
+      "name": "export_component_graph_mermaid",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExportComponentGraphMermaid"
+      }
+    },
+    {
+      "name": "export_expression_graph_dot",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExportExpressionGraphDOT"
+      }
+    },
+    {
+      "name": "export_expression_graph_json",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExportExpressionGraphJSON"
+      }
+    },
+    {
+      "name": "export_expression_graph_mermaid",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExportExpressionGraphMermaid"
+      }
+    },
+    {
+      "name": "expr",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "Expr",
+        "rust": "Expr"
+      }
+    },
+    {
+      "name": "expr_node",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "ExprNode",
+        "go": "ExprNode",
+        "python": "ExprNode"
+      }
+    },
+    {
+      "name": "expression",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "Expression",
+        "go": "Expression"
+      }
+    },
+    {
+      "name": "expression_analyzer",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ExpressionAnalyzer"
+      }
+    },
+    {
+      "name": "expression_cadence",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "expressionCadence"
+      }
+    },
+    {
+      "name": "expression_from_json",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "expression_from_json"
+      }
+    },
+    {
+      "name": "expression_graph",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "expression_graph",
+        "rust": "expression_graph",
+        "typescript": "expressionGraph"
+      }
+    },
+    {
+      "name": "expression_graph",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ExpressionGraph",
+        "rust": "ExpressionGraph"
+      }
+    },
+    {
+      "name": "expression_graph_from_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExpressionGraphFromFile"
+      }
+    },
+    {
+      "name": "expression_graph_from_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExpressionGraphFromModel"
+      }
+    },
+    {
+      "name": "expression_graph_from_reaction_system",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ExpressionGraphFromReactionSystem"
+      }
+    },
+    {
+      "name": "expression_graph_input",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ExpressionGraphInput"
+      }
+    },
+    {
+      "name": "expression_location",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ExpressionLocation"
+      }
+    },
+    {
+      "name": "expression_node",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "ExpressionNode",
+        "rust": "ExpressionNode"
+      }
+    },
+    {
+      "name": "expression_node_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ExpressionNodeProps"
+      }
+    },
+    {
+      "name": "expression_parse_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "ExpressionParseError",
+        "julia": "ExpressionParseError",
+        "python": "ExpressionParseError",
+        "rust": "ExpressionParseError",
+        "typescript": "ExpressionParseError"
+      }
+    },
+    {
+      "name": "expression_template_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "ExpressionTemplateError",
+        "julia": "ExpressionTemplateError",
+        "python": "ExpressionTemplateError",
+        "typescript": "ExpressionTemplateError"
+      }
+    },
+    {
+      "name": "expression_unit_findings",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "expression_unit_findings"
+      }
+    },
+    {
+      "name": "extract",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "extract",
+        "typescript": "extract"
+      }
+    },
+    {
+      "name": "extract_component_from_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "extract_component_from_file"
+      }
+    },
+    {
+      "name": "fail",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "FAIL"
+      }
+    },
+    {
+      "name": "field_reduce",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "field_reduce",
+        "rust": "field_reduce"
+      }
+    },
+    {
+      "name": "file_anchor_for_time",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "file_anchor_for_time"
+      }
+    },
+    {
+      "name": "file_anchors_in_range",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "file_anchors_in_range"
+      }
+    },
+    {
+      "name": "file_summary",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "FileSummary"
+      }
+    },
+    {
+      "name": "file_summary_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "FileSummaryProps"
+      }
+    },
+    {
+      "name": "final_state",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "final_state"
+      }
+    },
+    {
+      "name": "find_common_subexpressions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findCommonSubexpressions"
+      }
+    },
+    {
+      "name": "find_common_subexpressions_across_expressions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findCommonSubexpressionsAcrossExpressions"
+      }
+    },
+    {
+      "name": "find_common_subexpressions_in_esm_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findCommonSubexpressionsInEsmFile"
+      }
+    },
+    {
+      "name": "find_common_subexpressions_in_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findCommonSubexpressionsInModel"
+      }
+    },
+    {
+      "name": "find_critical_points",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findCriticalPoints"
+      }
+    },
+    {
+      "name": "find_dead_variables",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findDeadVariables"
+      }
+    },
+    {
+      "name": "find_dependency_chains",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findDependencyChains"
+      }
+    },
+    {
+      "name": "find_expensive_subexpressions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "findExpensiveSubexpressions"
+      }
+    },
+    {
+      "name": "flatten",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Flatten",
+        "julia": "flatten",
+        "python": "flatten",
+        "rust": "flatten",
+        "typescript": "flatten"
+      }
+    },
+    {
+      "name": "flatten_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "python": "FlattenError",
+        "rust": "FlattenError"
+      }
+    },
+    {
+      "name": "flatten_metadata",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "FlattenMetadata",
+        "julia": "FlattenMetadata",
+        "python": "FlattenMetadata",
+        "rust": "FlattenMetadata",
+        "typescript": "FlattenMetadata"
+      }
+    },
+    {
+      "name": "flatten_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "flatten_model"
+      }
+    },
+    {
+      "name": "flatten_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "FlattenOptions"
+      }
+    },
+    {
+      "name": "flatten_template_registries",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "flatten_template_registries",
+        "typescript": "flattenTemplateRegistries"
+      }
+    },
+    {
+      "name": "flatten_with_options",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "FlattenWithOptions",
+        "rust": "flatten_with_options"
+      }
+    },
+    {
+      "name": "flattened_equation",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "FlattenedEquation",
+        "python": "FlattenedEquation",
+        "typescript": "FlattenedEquation"
+      }
+    },
+    {
+      "name": "flattened_system",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "FlattenedSystem",
+        "julia": "FlattenedSystem",
+        "python": "FlattenedSystem",
+        "rust": "FlattenedSystem",
+        "typescript": "FlattenedSystem"
+      }
+    },
+    {
+      "name": "flattened_template_registries",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "FlattenedTemplateRegistries"
+      }
+    },
+    {
+      "name": "flattened_variable",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "FlattenedVariable"
+      }
+    },
+    {
+      "name": "float_key_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "python": "FloatKeyError",
+        "rust": "FloatKeyError"
+      }
+    },
+    {
+      "name": "flow",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Flow"
+      }
+    },
+    {
+      "name": "fmt_ascii",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "FmtAscii"
+      },
+      "notes": "spelling differs from the §2 rule: go=FmtAscii (expected FmtASCII)"
+    },
+    {
+      "name": "fmt_latex",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "FmtLatex"
+      }
+    },
+    {
+      "name": "fmt_unicode",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "FmtUnicode"
+      }
+    },
+    {
+      "name": "fmt_unicode_spaced",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "FmtUnicodeSpaced"
+      }
+    },
+    {
+      "name": "fold_constant_expr",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "fold_constant_expr"
+      }
+    },
+    {
+      "name": "forcing_buffer_index",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "forcing_buffer_index"
+      }
+    },
+    {
+      "name": "forcing_buffers",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "forcing_buffers"
+      }
+    },
+    {
+      "name": "format_canonical_float",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "format_canonical_float",
+        "rust": "format_canonical_float",
+        "typescript": "formatCanonicalFloat"
+      }
+    },
+    {
+      "name": "format_chemical_name",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "formatChemicalName"
+      }
+    },
+    {
+      "name": "format_expression_ascii",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "format_expression_ascii"
+      }
+    },
+    {
+      "name": "format_node_label",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "format_node_label"
+      }
+    },
+    {
+      "name": "fraction",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "Fraction"
+      }
+    },
+    {
+      "name": "fraction_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "FractionProps"
+      }
+    },
+    {
+      "name": "free_parameters",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "free_parameters",
+        "rust": "free_parameters",
+        "typescript": "freeParameters"
+      }
+    },
+    {
+      "name": "free_variables",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "FreeVariables",
+        "julia": "free_variables",
+        "python": "free_variables",
+        "rust": "free_variables",
+        "typescript": "freeVariables"
+      }
+    },
+    {
+      "name": "from_json",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "FromJSON"
+      }
+    },
+    {
+      "name": "from_sympy",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "from_sympy"
+      }
+    },
+    {
+      "name": "function_table",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "FunctionTable",
+        "julia": "FunctionTable",
+        "python": "FunctionTable"
+      }
+    },
+    {
+      "name": "function_table_axis",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "FunctionTableAxis",
+        "julia": "FunctionTableAxis",
+        "python": "FunctionTableAxis"
+      }
+    },
+    {
+      "name": "functional_affect",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "FunctionalAffect"
+      }
+    },
+    {
+      "name": "functional_update",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "FunctionalUpdate",
+        "julia": "FunctionalUpdate",
+        "python": "FunctionalUpdate",
+        "rust": "FunctionalUpdate"
+      }
+    },
+    {
+      "name": "gap_report",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "GapReport"
+      }
+    },
+    {
+      "name": "gate_axis",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "GateAxis"
+      }
+    },
+    {
+      "name": "gather_flat",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "gather_flat!"
+      }
+    },
+    {
+      "name": "generate_factored_variable_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "generateFactoredVariableNames"
+      }
+    },
+    {
+      "name": "geometry_backend_unavailable",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "GeometryBackendUnavailable"
+      }
+    },
+    {
+      "name": "geometry_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "python": "GeometryError",
+        "rust": "GeometryError"
+      }
+    },
+    {
+      "name": "get_component_type",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "get_component_type",
+        "typescript": "getComponentType"
+      }
+    },
+    {
+      "name": "get_expression_at_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "getExpressionAtPath"
+      }
+    },
+    {
+      "name": "get_expression_dimensions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "get_expression_dimensions"
+      }
+    },
+    {
+      "name": "get_supported_migration_targets",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "get_supported_migration_targets",
+        "typescript": "getSupportedMigrationTargets"
+      }
+    },
+    {
+      "name": "get_value_at_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "getValueAtPath"
+      }
+    },
+    {
+      "name": "gradient",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "gradient"
+      }
+    },
+    {
+      "name": "graph",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "Graph",
+        "julia": "Graph",
+        "typescript": "Graph"
+      }
+    },
+    {
+      "name": "graph_edge",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "GraphEdge"
+      }
+    },
+    {
+      "name": "grid_loader",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "GridLoader"
+      }
+    },
+    {
+      "name": "grid_loader_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "GridLoaderError"
+      }
+    },
+    {
+      "name": "grid_plan",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "GridPlan",
+        "rust": "GridPlan"
+      }
+    },
+    {
+      "name": "group_aggregate",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "group_aggregate",
+        "rust": "group_aggregate"
+      }
+    },
+    {
+      "name": "group_gridding_by_grid",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "group_gridding_by_grid",
+        "rust": "group_gridding_by_grid"
+      }
+    },
+    {
+      "name": "group_subexpressions_by_type",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "groupSubexpressionsByType"
+      }
+    },
+    {
+      "name": "has_coupling_import",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "has_coupling_import"
+      }
+    },
+    {
+      "name": "has_spatial_derivative",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "has_spatial_derivative"
+      }
+    },
+    {
+      "name": "has_time_derivative",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "has_time_derivative"
+      }
+    },
+    {
+      "name": "has_var_placeholder",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "has_var_placeholder"
+      }
+    },
+    {
+      "name": "higher_order_derivative",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "higherOrderDerivative"
+      }
+    },
+    {
+      "name": "highlight_context_value",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "HighlightContextValue"
+      }
+    },
+    {
+      "name": "highlight_provider",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "HighlightProvider"
+      }
+    },
+    {
+      "name": "highlight_provider_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "HighlightProviderProps"
+      }
+    },
+    {
+      "name": "history_entry",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "HistoryEntry"
+      }
+    },
+    {
+      "name": "index_set",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "IndexSet"
+      }
+    },
+    {
+      "name": "infer_array_shapes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "infer_array_shapes"
+      }
+    },
+    {
+      "name": "infer_variable_units",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "infer_variable_units"
+      }
+    },
+    {
+      "name": "int_expr",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "IntExpr"
+      }
+    },
+    {
+      "name": "interp_bilinear",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "interpBilinear"
+      }
+    },
+    {
+      "name": "interp_linear",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "interpLinear"
+      }
+    },
+    {
+      "name": "interpret",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "interpret"
+      }
+    },
+    {
+      "name": "intersect_polygon",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "intersect_polygon",
+        "rust": "intersect_polygon"
+      }
+    },
+    {
+      "name": "invalid_derivative_order_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "InvalidDerivativeOrderError"
+      }
+    },
+    {
+      "name": "is_closed_function",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "IsClosedFunction"
+      }
+    },
+    {
+      "name": "is_coupling_library_doc",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "is_coupling_library_doc",
+        "rust": "is_coupling_library_doc",
+        "typescript": "isCouplingLibraryDoc"
+      }
+    },
+    {
+      "name": "is_differentiable",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "isDifferentiable"
+      }
+    },
+    {
+      "name": "is_highlighted",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "isHighlighted"
+      }
+    },
+    {
+      "name": "is_literal",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "is_literal"
+      }
+    },
+    {
+      "name": "is_ode_state",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "IsODEState",
+        "julia": "is_ode_state",
+        "python": "is_ode_state",
+        "rust": "is_ode_state",
+        "typescript": "isOdeState"
+      }
+    },
+    {
+      "name": "is_template_library_doc",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "is_template_library_doc",
+        "typescript": "isTemplateLibraryDoc"
+      }
+    },
+    {
+      "name": "is_valid_identifier",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "is_valid_identifier"
+      }
+    },
+    {
+      "name": "jacobian",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "jacobian"
+      }
+    },
+    {
+      "name": "join_all",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "joinAll"
+      }
+    },
+    {
+      "name": "join_cadence",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "joinCadence"
+      }
+    },
+    {
+      "name": "json_exporter",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "JSONExporter"
+      }
+    },
+    {
+      "name": "key",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Key"
+      }
+    },
+    {
+      "name": "leaf_cadence",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "leafCadence"
+      }
+    },
+    {
+      "name": "lhs_form",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "LhsForm"
+      }
+    },
+    {
+      "name": "literal_value",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "literal_value"
+      }
+    },
+    {
+      "name": "load",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Load",
+        "julia": "load",
+        "python": "load",
+        "rust": "load",
+        "typescript": "load"
+      }
+    },
+    {
+      "name": "load_data",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "load_data"
+      }
+    },
+    {
+      "name": "load_grid",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "load_grid"
+      }
+    },
+    {
+      "name": "load_option",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "LoadOption"
+      }
+    },
+    {
+      "name": "load_options",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "rust": "LoadOptions",
+        "typescript": "LoadOptions"
+      }
+    },
+    {
+      "name": "load_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "load_path"
+      }
+    },
+    {
+      "name": "load_path_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "load_path_with_options"
+      }
+    },
+    {
+      "name": "load_points",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "load_points"
+      }
+    },
+    {
+      "name": "load_static",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "load_static"
+      }
+    },
+    {
+      "name": "load_string",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "LoadString"
+      }
+    },
+    {
+      "name": "load_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "load_with_options"
+      }
+    },
+    {
+      "name": "loader_field",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "LoaderField"
+      }
+    },
+    {
+      "name": "lower_enums",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "LowerEnums",
+        "julia": "lower_enums!",
+        "rust": "lower_enums",
+        "typescript": "lowerEnums"
+      }
+    },
+    {
+      "name": "lower_enums_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "LowerEnumsError"
+      }
+    },
+    {
+      "name": "lower_expression_templates",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "LowerExpressionTemplates",
+        "julia": "lower_expression_templates",
+        "python": "lower_expression_templates",
+        "typescript": "lowerExpressionTemplates"
+      }
+    },
+    {
+      "name": "lower_reactions_to_equations",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "lower_reactions_to_equations",
+        "rust": "lower_reactions_to_equations"
+      }
+    },
+    {
+      "name": "manifold",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Manifold"
+      }
+    },
+    {
+      "name": "manifolds",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "python": "MANIFOLDS"
+      }
+    },
+    {
+      "name": "map_variable",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "map_variable",
+        "typescript": "mapVariable"
+      }
+    },
+    {
+      "name": "mass_action_rate",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "mass_action_rate"
+      }
+    },
+    {
+      "name": "materialization_point",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "MaterializationPoint"
+      }
+    },
+    {
+      "name": "materialize_value_invention",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "materialize_value_invention",
+        "rust": "materialize_value_invention"
+      }
+    },
+    {
+      "name": "max_rewrite_passes",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "MaxRewritePasses"
+      }
+    },
+    {
+      "name": "max_template_expansion_depth",
+      "kind": "constant",
+      "tier": "stable",
+      "bindings": {
+        "go": "MaxTemplateExpansionDepth",
+        "python": "MAX_TEMPLATE_EXPANSION_DEPTH",
+        "typescript": "MAX_TEMPLATE_EXPANSION_DEPTH"
+      }
+    },
+    {
+      "name": "merge",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "merge"
+      }
+    },
+    {
+      "name": "merge_esm_files",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "merge_esm_files"
+      }
+    },
+    {
+      "name": "mermaid_exporter",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "MermaidExporter"
+      }
+    },
+    {
+      "name": "metadata",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Metadata",
+        "julia": "Metadata",
+        "python": "Metadata",
+        "rust": "Metadata"
+      }
+    },
+    {
+      "name": "migrate",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "rust": "migrate",
+        "typescript": "migrate"
+      }
+    },
+    {
+      "name": "migration_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "rust": "MigrationError",
+        "typescript": "MigrationError"
+      }
+    },
+    {
+      "name": "mirror_fallback_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "MirrorFallbackError"
+      }
+    },
+    {
+      "name": "model",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "Model",
+        "go": "Model",
+        "julia": "Model",
+        "python": "Model",
+        "rust": "Model"
+      }
+    },
+    {
+      "name": "model_allocator",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ModelAllocator"
+      }
+    },
+    {
+      "name": "model_classification",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ModelClassification"
+      }
+    },
+    {
+      "name": "model_editor",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "ModelEditor"
+      }
+    },
+    {
+      "name": "model_editor_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ModelEditorProps"
+      }
+    },
+    {
+      "name": "model_nodes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "model_nodes"
+      }
+    },
+    {
+      "name": "model_summary",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ModelSummary"
+      }
+    },
+    {
+      "name": "model_test",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ModelTest"
+      }
+    },
+    {
+      "name": "model_test_assertion",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ModelTestAssertion"
+      }
+    },
+    {
+      "name": "model_unit_findings",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "model_unit_findings"
+      }
+    },
+    {
+      "name": "model_variable",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ModelVariable",
+        "julia": "ModelVariable",
+        "python": "ModelVariable",
+        "rust": "ModelVariable"
+      }
+    },
+    {
+      "name": "model_variable_type",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ModelVariableType"
+      }
+    },
+    {
+      "name": "mtk2esm",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "mtk2esm"
+      }
+    },
+    {
+      "name": "mtk2esm_gaps",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "mtk2esm_gaps"
+      }
+    },
+    {
+      "name": "new_cadence_classifier",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "NewCadenceClassifier"
+      }
+    },
+    {
+      "name": "new_dot_exporter",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "NewDOTExporter"
+      }
+    },
+    {
+      "name": "new_json_exporter",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "NewJSONExporter"
+      }
+    },
+    {
+      "name": "new_mermaid_exporter",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "NewMermaidExporter"
+      }
+    },
+    {
+      "name": "non_differentiable_expression_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "NonDifferentiableExpressionError"
+      }
+    },
+    {
+      "name": "normalize_scoped_reference",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "normalizeScopedReference"
+      }
+    },
+    {
+      "name": "num",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Num"
+      }
+    },
+    {
+      "name": "num_expr",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "NumExpr"
+      }
+    },
+    {
+      "name": "observed_definition",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ObservedDefinition",
+        "julia": "observed_definition"
+      }
+    },
+    {
+      "name": "observed_definition_json",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "observed_definition_json"
+      }
+    },
+    {
+      "name": "observed_definitions",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "observed_definitions",
+        "python": "observed_definitions",
+        "rust": "observed_definitions",
+        "typescript": "observedDefinitions"
+      }
+    },
+    {
+      "name": "observed_field",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "observed_field",
+        "python": "observed_field"
+      }
+    },
+    {
+      "name": "observed_unknowns",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ObservedUnknowns",
+        "julia": "observed_unknowns",
+        "python": "observed_unknowns",
+        "rust": "observed_unknowns",
+        "typescript": "observedUnknowns"
+      }
+    },
+    {
+      "name": "ode_states",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ODEStates",
+        "julia": "ode_states",
+        "python": "ode_states",
+        "rust": "ode_states",
+        "typescript": "odeStates"
+      }
+    },
+    {
+      "name": "oop_intern_stats",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "oop_intern_stats"
+      }
+    },
+    {
+      "name": "oop_intern_stats_reset",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "oop_intern_stats_reset!"
+      }
+    },
+    {
+      "name": "op_const",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "OpConst"
+      }
+    },
+    {
+      "name": "op_derivative",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "OpDerivative"
+      }
+    },
+    {
+      "name": "op_enum",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "OpEnum"
+      }
+    },
+    {
+      "name": "op_expr",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "OpExpr"
+      }
+    },
+    {
+      "name": "op_fn",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "OpFn"
+      }
+    },
+    {
+      "name": "op_ic",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "OpIC"
+      }
+    },
+    {
+      "name": "op_makearray",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "OpMakearray"
+      }
+    },
+    {
+      "name": "op_table_lookup",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "OpTableLookup"
+      }
+    },
+    {
+      "name": "open_with_fallback",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "open_with_fallback"
+      }
+    },
+    {
+      "name": "operator",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "Operator",
+        "rust": "Operator"
+      }
+    },
+    {
+      "name": "operator_apply_coupling",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "OperatorApplyCoupling"
+      }
+    },
+    {
+      "name": "operator_compose_coupling",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "OperatorComposeCoupling"
+      }
+    },
+    {
+      "name": "output_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "OutputError",
+        "rust": "OutputError"
+      }
+    },
+    {
+      "name": "output_meta",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "OutputMeta",
+        "rust": "OutputMeta"
+      }
+    },
+    {
+      "name": "output_plan",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "OutputPlan",
+        "rust": "OutputPlan"
+      }
+    },
+    {
+      "name": "output_var_dims",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "output_var_dims"
+      }
+    },
+    {
+      "name": "parallel_evaluator",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ParallelEvaluator"
+      }
+    },
+    {
+      "name": "param_map",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "param_map"
+      }
+    },
+    {
+      "name": "parameter",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Parameter",
+        "julia": "Parameter",
+        "python": "Parameter"
+      }
+    },
+    {
+      "name": "parameter_class",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "parameterClass"
+      }
+    },
+    {
+      "name": "parameter_class",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ParameterClass"
+      }
+    },
+    {
+      "name": "parameter_classes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "parameter_classes"
+      }
+    },
+    {
+      "name": "parameter_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "parameter_names"
+      }
+    },
+    {
+      "name": "parameter_sweep",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "ParameterSweep"
+      }
+    },
+    {
+      "name": "parameter_update",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ParameterUpdate",
+        "julia": "ParameterUpdate",
+        "python": "ParameterUpdate",
+        "rust": "ParameterUpdate"
+      }
+    },
+    {
+      "name": "parameter_update_kinds",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "PARAMETER_UPDATE_KINDS"
+      }
+    },
+    {
+      "name": "parameter_update_spec",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ParameterUpdateSpec"
+      }
+    },
+    {
+      "name": "parameter_variable",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ParameterVariable"
+      }
+    },
+    {
+      "name": "parameters",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "parameters"
+      }
+    },
+    {
+      "name": "parse_cadence",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ParseCadence"
+      }
+    },
+    {
+      "name": "parse_cell_key",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "parse_cell_key"
+      }
+    },
+    {
+      "name": "parse_equation",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ParseEquation",
+        "julia": "parse_equation",
+        "python": "parse_equation",
+        "rust": "parse_equation",
+        "typescript": "parseEquation"
+      }
+    },
+    {
+      "name": "parse_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ParseError",
+        "typescript": "ParseError"
+      }
+    },
+    {
+      "name": "parse_expression",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ParseExpression",
+        "julia": "parse_expression",
+        "python": "parse_expression",
+        "rust": "parse_expression",
+        "typescript": "parseExpression"
+      }
+    },
+    {
+      "name": "parse_iso_duration",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "parse_iso_duration"
+      }
+    },
+    {
+      "name": "parse_reaction",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "parseReaction"
+      }
+    },
+    {
+      "name": "parse_unit",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ParseUnit",
+        "rust": "parse_unit",
+        "typescript": "parseUnit"
+      }
+    },
+    {
+      "name": "parse_unit_conversion",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "parse_unit_conversion",
+        "python": "parse_unit_conversion"
+      }
+    },
+    {
+      "name": "parse_unit_for_conversion",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "parseUnitForConversion"
+      }
+    },
+    {
+      "name": "parse_units",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "parse_units"
+      }
+    },
+    {
+      "name": "parse_units_reason",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "parse_units_reason"
+      }
+    },
+    {
+      "name": "parsed_unit",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "ParsedUnit"
+      }
+    },
+    {
+      "name": "partial_derivatives",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "partialDerivatives"
+      }
+    },
+    {
+      "name": "partial_substitute",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "PartialSubstitute"
+      }
+    },
+    {
+      "name": "partition",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "partition"
+      }
+    },
+    {
+      "name": "partition",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "Partition",
+        "rust": "Partition"
+      }
+    },
+    {
+      "name": "partition_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "partition_model"
+      }
+    },
+    {
+      "name": "pass",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "PASS"
+      }
+    },
+    {
+      "name": "path",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "Path"
+      }
+    },
+    {
+      "name": "path_segment",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "PathSegment"
+      }
+    },
+    {
+      "name": "path_to_string",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "pathToString"
+      }
+    },
+    {
+      "name": "path_utils",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "PathUtils"
+      }
+    },
+    {
+      "name": "paths_equal",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "pathsEqual"
+      }
+    },
+    {
+      "name": "pde_assertion_result",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "PdeAssertionResult",
+        "rust": "PdeAssertionResult"
+      }
+    },
+    {
+      "name": "performance_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PerformanceError"
+      }
+    },
+    {
+      "name": "periodic_trigger",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "PeriodicTrigger"
+      }
+    },
+    {
+      "name": "plan_dimension_coordinates",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "plan_dimension_coordinates",
+        "rust": "plan_dimension_coordinates"
+      }
+    },
+    {
+      "name": "plot",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "Plot"
+      }
+    },
+    {
+      "name": "plot_axis",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "PlotAxis"
+      }
+    },
+    {
+      "name": "plot_series",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "PlotSeries"
+      }
+    },
+    {
+      "name": "plot_value",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "PlotValue"
+      }
+    },
+    {
+      "name": "points_loader",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "PointsLoader"
+      }
+    },
+    {
+      "name": "points_loader_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "PointsLoaderError"
+      }
+    },
+    {
+      "name": "polygon_area",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "polygon_area",
+        "rust": "polygon_area"
+      }
+    },
+    {
+      "name": "polygon_area_via_faq",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "polygon_area_via_faq"
+      }
+    },
+    {
+      "name": "predecessors",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "predecessors"
+      }
+    },
+    {
+      "name": "prepare",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "prepare",
+        "python": "prepare",
+        "rust": "prepare"
+      }
+    },
+    {
+      "name": "prepare_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrepareError"
+      }
+    },
+    {
+      "name": "prepare_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrepareOptions"
+      }
+    },
+    {
+      "name": "prepare_phase",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PreparePhase"
+      }
+    },
+    {
+      "name": "prepare_progress",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrepareProgress"
+      }
+    },
+    {
+      "name": "prepare_progress_fn",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrepareProgressFn"
+      }
+    },
+    {
+      "name": "prepare_provider",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PrepareProvider"
+      }
+    },
+    {
+      "name": "prepared",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Prepared"
+      }
+    },
+    {
+      "name": "prepared_model",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "PreparedModel",
+        "python": "PreparedModel"
+      }
+    },
+    {
+      "name": "preset_times_trigger",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "PresetTimesTrigger"
+      }
+    },
+    {
+      "name": "product_matrix",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "product_matrix",
+        "typescript": "productMatrix"
+      }
+    },
+    {
+      "name": "progress",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Progress"
+      }
+    },
+    {
+      "name": "progress_fn",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProgressFn"
+      }
+    },
+    {
+      "name": "propagate_dimension",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "PropagateDimension"
+      }
+    },
+    {
+      "name": "provider_extent_metaparameter",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "provider_extent_metaparameter"
+      }
+    },
+    {
+      "name": "provider_gate",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProviderGate"
+      }
+    },
+    {
+      "name": "provider_gate_spec",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "provider_gate_spec"
+      }
+    },
+    {
+      "name": "provider_is_const",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "provider_is_const"
+      }
+    },
+    {
+      "name": "provider_is_gated",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "provider_is_gated"
+      }
+    },
+    {
+      "name": "provider_refresh_times",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "provider_refresh_times"
+      }
+    },
+    {
+      "name": "provider_sample",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "provider_sample"
+      }
+    },
+    {
+      "name": "provider_supports_selection",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "provider_supports_selection"
+      }
+    },
+    {
+      "name": "providers_from_document",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "providers_from_document"
+      }
+    },
+    {
+      "name": "pushdown_coupling_pairs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "pushdown_coupling_pairs"
+      }
+    },
+    {
+      "name": "pushdown_diagnostics",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "pushdown_diagnostics"
+      }
+    },
+    {
+      "name": "pushdown_provider_gates",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "pushdown_provider_gates"
+      }
+    },
+    {
+      "name": "pushdown_record",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "pushdown_record"
+      }
+    },
+    {
+      "name": "pushdown_rewrite_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "PushdownRewriteError"
+      }
+    },
+    {
+      "name": "qualified_reference_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "julia": "QualifiedReferenceError"
+      }
+    },
+    {
+      "name": "radical",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "Radical"
+      }
+    },
+    {
+      "name": "radical_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "RadicalProps"
+      }
+    },
+    {
+      "name": "rank",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "rank",
+        "rust": "rank"
+      }
+    },
+    {
+      "name": "rank_with_base",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "rank_with_base"
+      }
+    },
+    {
+      "name": "ranking",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "Ranking",
+        "rust": "Ranking"
+      }
+    },
+    {
+      "name": "rat",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "Rat"
+      }
+    },
+    {
+      "name": "rational",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Rational"
+      }
+    },
+    {
+      "name": "reaction",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Reaction",
+        "julia": "Reaction",
+        "python": "Reaction",
+        "rust": "Reaction"
+      }
+    },
+    {
+      "name": "reaction_editor",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "ReactionEditor"
+      }
+    },
+    {
+      "name": "reaction_editor_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ReactionEditorProps"
+      }
+    },
+    {
+      "name": "reaction_system",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "ReactionSystem",
+        "go": "ReactionSystem",
+        "julia": "ReactionSystem",
+        "python": "ReactionSystem",
+        "rust": "ReactionSystem"
+      }
+    },
+    {
+      "name": "records_for_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "records_for_file"
+      }
+    },
+    {
+      "name": "records_per_file",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RecordsPerFile"
+      }
+    },
+    {
+      "name": "ref_load_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "RefLoadError"
+      }
+    },
+    {
+      "name": "reference",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Reference",
+        "julia": "Reference",
+        "python": "Reference"
+      }
+    },
+    {
+      "name": "reference_edge",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ReferenceEdge",
+        "python": "ReferenceEdge",
+        "rust": "ReferenceEdge"
+      }
+    },
+    {
+      "name": "reference_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ReferenceError"
+      }
+    },
+    {
+      "name": "reference_graph",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ReferenceGraph",
+        "python": "ReferenceGraph",
+        "rust": "ReferenceGraph"
+      }
+    },
+    {
+      "name": "reference_resolution",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "ReferenceResolution"
+      }
+    },
+    {
+      "name": "reference_resolution_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ReferenceResolutionError",
+        "python": "ReferenceResolutionError"
+      }
+    },
+    {
+      "name": "reference_vertex",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ReferenceVertex",
+        "python": "ReferenceVertex",
+        "rust": "ReferenceVertex"
+      }
+    },
+    {
+      "name": "refresh_buffers",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "RefreshBuffers"
+      }
+    },
+    {
+      "name": "refresh_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "julia": "RefreshError"
+      }
+    },
+    {
+      "name": "region_bound",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RegionBound"
+      }
+    },
+    {
+      "name": "register_web_components",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "editor": "registerWebComponents"
+      }
+    },
+    {
+      "name": "reject_expression_templates_pre_v04",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "RejectExpressionTemplatesPreV04",
+        "julia": "reject_expression_templates_pre_v04",
+        "python": "reject_expression_templates_pre_v04",
+        "typescript": "rejectExpressionTemplatesPreV04"
+      }
+    },
+    {
+      "name": "reject_template_imports_pre_v08",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "RejectTemplateImportsPreV08",
+        "julia": "reject_template_imports_pre_v08",
+        "python": "reject_template_imports_pre_v08",
+        "rust": "reject_template_imports_pre_v08",
+        "typescript": "rejectTemplateImportsPreV08"
+      }
+    },
+    {
+      "name": "remake_parameters",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "remake_parameters"
+      }
+    },
+    {
+      "name": "remove_coupling",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "remove_coupling",
+        "rust": "remove_coupling",
+        "typescript": "removeCoupling"
+      }
+    },
+    {
+      "name": "remove_coupling_from_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "remove_coupling_from_file"
+      }
+    },
+    {
+      "name": "remove_equation",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "remove_equation",
+        "rust": "remove_equation",
+        "typescript": "removeEquation"
+      }
+    },
+    {
+      "name": "remove_equation_from_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "remove_equation_from_model"
+      }
+    },
+    {
+      "name": "remove_event",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "remove_event",
+        "typescript": "removeEvent"
+      }
+    },
+    {
+      "name": "remove_event_from_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "remove_event_from_model"
+      }
+    },
+    {
+      "name": "remove_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "remove_model"
+      }
+    },
+    {
+      "name": "remove_reaction",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "remove_reaction",
+        "rust": "remove_reaction",
+        "typescript": "removeReaction"
+      }
+    },
+    {
+      "name": "remove_reaction_from_system",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "remove_reaction_from_system"
+      }
+    },
+    {
+      "name": "remove_species",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "remove_species",
+        "rust": "remove_species",
+        "typescript": "removeSpecies"
+      }
+    },
+    {
+      "name": "remove_species_from_system",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "remove_species_from_system"
+      }
+    },
+    {
+      "name": "remove_variable",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "remove_variable",
+        "rust": "remove_variable",
+        "typescript": "removeVariable"
+      }
+    },
+    {
+      "name": "remove_variable_from_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "remove_variable_from_model"
+      }
+    },
+    {
+      "name": "rename_variable",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "rename_variable",
+        "typescript": "renameVariable"
+      }
+    },
+    {
+      "name": "rename_variable_in_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "rename_variable_in_model"
+      }
+    },
+    {
+      "name": "render_chemical_formula",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "render_chemical_formula"
+      }
+    },
+    {
+      "name": "replace_coupling",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "replace_coupling"
+      }
+    },
+    {
+      "name": "replace_equation",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "replace_equation"
+      }
+    },
+    {
+      "name": "replace_expression_at_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "replaceExpressionAtPath"
+      }
+    },
+    {
+      "name": "resolve_and_lower",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ResolveAndLower"
+      }
+    },
+    {
+      "name": "resolve_and_lower_reference_preserving",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ResolveAndLowerReferencePreserving"
+      }
+    },
+    {
+      "name": "resolve_data_dir",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "resolve_data_dir"
+      }
+    },
+    {
+      "name": "resolve_files",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "resolve_files"
+      }
+    },
+    {
+      "name": "resolve_model_refs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "resolve_model_refs"
+      }
+    },
+    {
+      "name": "resolve_qualified_reference",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "resolve_qualified_reference"
+      }
+    },
+    {
+      "name": "resolve_references",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "resolve_references",
+        "python": "resolve_references",
+        "rust": "resolve_references"
+      }
+    },
+    {
+      "name": "resolve_subsystem_refs",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ResolveSubsystemRefs",
+        "julia": "resolve_subsystem_refs!",
+        "python": "resolve_subsystem_refs",
+        "rust": "resolve_subsystem_refs",
+        "typescript": "resolveSubsystemRefs"
+      }
+    },
+    {
+      "name": "resolve_subsystem_refs_with_metaparameters",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "resolve_subsystem_refs_with_metaparameters"
+      }
+    },
+    {
+      "name": "resolve_template_machinery",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "resolve_template_machinery",
+        "python": "resolve_template_machinery",
+        "rust": "resolve_template_machinery",
+        "typescript": "resolveTemplateMachinery"
+      }
+    },
+    {
+      "name": "resolved_expr",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ResolvedExpr"
+      }
+    },
+    {
+      "name": "rhs_with_buffers",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "rhs_with_buffers"
+      }
+    },
+    {
+      "name": "role_algebraic",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "RoleAlgebraic"
+      }
+    },
+    {
+      "name": "role_brownian",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "RoleBrownian"
+      }
+    },
+    {
+      "name": "role_constant",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "RoleConstant"
+      }
+    },
+    {
+      "name": "role_discrete",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "RoleDiscrete"
+      }
+    },
+    {
+      "name": "role_observed",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "RoleObserved"
+      }
+    },
+    {
+      "name": "role_ode_state",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "RoleODEState"
+      }
+    },
+    {
+      "name": "role_sampled",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "RoleSampled"
+      }
+    },
+    {
+      "name": "row_major_flat_indices",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "row_major_flat_indices"
+      }
+    },
+    {
+      "name": "rule_engine_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "RuleEngineError"
+      }
+    },
+    {
+      "name": "run_esm_tests",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "run_esm_tests"
+      }
+    },
+    {
+      "name": "run_pde_tests",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "run_pde_tests",
+        "rust": "run_pde_tests"
+      }
+    },
+    {
+      "name": "run_pde_tests_with_base_dir",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_pde_tests_with_base_dir"
+      }
+    },
+    {
+      "name": "sampled_parameters",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "SampledParameters",
+        "julia": "sampled_parameters",
+        "python": "sampled_parameters",
+        "rust": "sampled_parameters",
+        "typescript": "sampledParameters"
+      }
+    },
+    {
+      "name": "save",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "save",
+        "python": "save",
+        "rust": "save",
+        "typescript": "save"
+      }
+    },
+    {
+      "name": "save_compact",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "save_compact"
+      }
+    },
+    {
+      "name": "save_compact_to_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SaveCompactToFile"
+      }
+    },
+    {
+      "name": "save_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "SaveOptions"
+      }
+    },
+    {
+      "name": "save_to_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SaveToFile"
+      }
+    },
+    {
+      "name": "scatter_grid",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "scatter_grid!"
+      }
+    },
+    {
+      "name": "schema_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "SchemaError",
+        "rust": "SchemaError"
+      }
+    },
+    {
+      "name": "schema_error",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "SchemaError",
+        "typescript": "SchemaError"
+      }
+    },
+    {
+      "name": "schema_validation_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "SchemaValidationError",
+        "python": "SchemaValidationError",
+        "typescript": "SchemaValidationError"
+      }
+    },
+    {
+      "name": "schema_version",
+      "kind": "constant",
+      "tier": "stable",
+      "bindings": {
+        "rust": "SCHEMA_VERSION",
+        "typescript": "SCHEMA_VERSION"
+      }
+    },
+    {
+      "name": "scoped_context",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ScopedContext"
+      }
+    },
+    {
+      "name": "scoping_mode",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ScopingMode"
+      }
+    },
+    {
+      "name": "searchsorted_first",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "searchsortedFirst"
+      }
+    },
+    {
+      "name": "seed_expression_ic",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "seed_expression_ic!"
+      }
+    },
+    {
+      "name": "semiring_op",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "SemiringOp"
+      }
+    },
+    {
+      "name": "serialize",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "Serialize"
+      }
+    },
+    {
+      "name": "serialize_canonical",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "serialize_canonical"
+      }
+    },
+    {
+      "name": "serialize_compact",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SerializeCompact"
+      }
+    },
+    {
+      "name": "serialize_coupling_entry",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "serialize_coupling_entry"
+      }
+    },
+    {
+      "name": "serialize_expression",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SerializeExpression"
+      }
+    },
+    {
+      "name": "serialize_expression_compact",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SerializeExpressionCompact"
+      }
+    },
+    {
+      "name": "serialize_keys",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "serialize_keys"
+      }
+    },
+    {
+      "name": "serialize_model",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SerializeModel"
+      }
+    },
+    {
+      "name": "serialize_pairs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "serialize_pairs"
+      }
+    },
+    {
+      "name": "serialize_reaction_system",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SerializeReactionSystem"
+      }
+    },
+    {
+      "name": "shape_requiring_update_kinds",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "SHAPE_REQUIRING_UPDATE_KINDS"
+      }
+    },
+    {
+      "name": "shoelace_area",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "shoelace_area"
+      }
+    },
+    {
+      "name": "shoelace_signed_area",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "shoelace_signed_area"
+      }
+    },
+    {
+      "name": "simplify",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Simplify",
+        "julia": "simplify",
+        "python": "simplify",
+        "rust": "simplify",
+        "typescript": "simplify"
+      }
+    },
+    {
+      "name": "simulate",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "simulate",
+        "python": "simulate",
+        "rust": "simulate"
+      }
+    },
+    {
+      "name": "simulate_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "SimulateError",
+        "rust": "SimulateError"
+      }
+    },
+    {
+      "name": "simulate_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "SimulateOptions"
+      }
+    },
+    {
+      "name": "simulation_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "SimulationError"
+      }
+    },
+    {
+      "name": "simulation_result",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "SimulationResult",
+        "python": "SimulationResult"
+      }
+    },
+    {
+      "name": "sink_close",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sink_close!"
+      }
+    },
+    {
+      "name": "sink_flush",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sink_flush!"
+      }
+    },
+    {
+      "name": "sink_observed_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sink_observed_names"
+      }
+    },
+    {
+      "name": "sink_open",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sink_open!"
+      }
+    },
+    {
+      "name": "sink_output_times",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sink_output_times"
+      }
+    },
+    {
+      "name": "sink_supports_partial",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sink_supports_partial"
+      }
+    },
+    {
+      "name": "sink_write",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sink_write!"
+      }
+    },
+    {
+      "name": "skip",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "SKIP"
+      }
+    },
+    {
+      "name": "skolem",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "skolem",
+        "rust": "skolem"
+      }
+    },
+    {
+      "name": "skolem_edge",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "skolem_edge",
+        "rust": "skolem_edge"
+      }
+    },
+    {
+      "name": "slice_out_of_domain_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "SliceOutOfDomainError",
+        "python": "SliceOutOfDomainError"
+      }
+    },
+    {
+      "name": "sliver_atol",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "sliver_atol"
+      }
+    },
+    {
+      "name": "sliver_atol_factor",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "rust": "SLIVER_ATOL_FACTOR"
+      }
+    },
+    {
+      "name": "slurm_walltime_predicate",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "slurm_walltime_predicate"
+      }
+    },
+    {
+      "name": "solution",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Solution"
+      }
+    },
+    {
+      "name": "solution_metadata",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "SolutionMetadata"
+      }
+    },
+    {
+      "name": "solver_choice",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "SolverChoice"
+      }
+    },
+    {
+      "name": "solver_unknowns",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "solver_unknowns"
+      }
+    },
+    {
+      "name": "species",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Species",
+        "julia": "Species",
+        "python": "Species",
+        "rust": "Species"
+      }
+    },
+    {
+      "name": "spot_preemption_predicate",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "spot_preemption_predicate"
+      }
+    },
+    {
+      "name": "stability_issue",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "StabilityIssue"
+      }
+    },
+    {
+      "name": "state_cells",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "state_cells"
+      }
+    },
+    {
+      "name": "state_snapshot",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "state_snapshot"
+      }
+    },
+    {
+      "name": "state_snapshot",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "StateSnapshot"
+      }
+    },
+    {
+      "name": "static_loader",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "StaticLoader"
+      }
+    },
+    {
+      "name": "static_loader_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "StaticLoaderError"
+      }
+    },
+    {
+      "name": "stoichiometric_entry",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StoichiometricEntry"
+      }
+    },
+    {
+      "name": "stoichiometric_matrix",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "stoichiometric_matrix",
+        "python": "stoichiometric_matrix",
+        "rust": "stoichiometric_matrix",
+        "typescript": "stoichiometricMatrix"
+      }
+    },
+    {
+      "name": "stoichiometric_matrix_parallel",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "stoichiometric_matrix_parallel"
+      }
+    },
+    {
+      "name": "string_to_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "stringToPath"
+      }
+    },
+    {
+      "name": "structural_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "StructuralError",
+        "rust": "StructuralError"
+      }
+    },
+    {
+      "name": "structural_error",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "StructuralError"
+      }
+    },
+    {
+      "name": "structural_error_code",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StructuralErrorCode"
+      }
+    },
+    {
+      "name": "structural_validation_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "StructuralValidationResult"
+      }
+    },
+    {
+      "name": "subscript",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "Subscript"
+      }
+    },
+    {
+      "name": "subscript_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "SubscriptProps"
+      }
+    },
+    {
+      "name": "substitute",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Substitute",
+        "julia": "substitute",
+        "python": "substitute",
+        "rust": "substitute",
+        "typescript": "substitute"
+      }
+    },
+    {
+      "name": "substitute_in_affect_equation",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstituteInAffectEquation"
+      }
+    },
+    {
+      "name": "substitute_in_equation",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstituteInEquation"
+      }
+    },
+    {
+      "name": "substitute_in_equations",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "substitute_in_equations",
+        "typescript": "substituteInEquations"
+      }
+    },
+    {
+      "name": "substitute_in_expression",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "substitute_in_expression"
+      }
+    },
+    {
+      "name": "substitute_in_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstituteInFile"
+      }
+    },
+    {
+      "name": "substitute_in_file_with_scoped",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstituteInFileWithScoped"
+      }
+    },
+    {
+      "name": "substitute_in_model",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "SubstituteInModel",
+        "python": "substitute_in_model",
+        "rust": "substitute_in_model",
+        "typescript": "substituteInModel"
+      }
+    },
+    {
+      "name": "substitute_in_model_with_context",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "substitute_in_model_with_context"
+      }
+    },
+    {
+      "name": "substitute_in_model_with_scoped",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstituteInModelWithScoped"
+      }
+    },
+    {
+      "name": "substitute_in_reaction_system",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "SubstituteInReactionSystem",
+        "python": "substitute_in_reaction_system",
+        "rust": "substitute_in_reaction_system",
+        "typescript": "substituteInReactionSystem"
+      }
+    },
+    {
+      "name": "substitute_in_reaction_system_with_context",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "substitute_in_reaction_system_with_context"
+      }
+    },
+    {
+      "name": "substitute_in_reaction_system_with_scoped",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstituteInReactionSystemWithScoped"
+      }
+    },
+    {
+      "name": "substitute_with_context",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "substitute_with_context"
+      }
+    },
+    {
+      "name": "substitute_with_scoped",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstituteWithScoped"
+      }
+    },
+    {
+      "name": "substitution_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstitutionError"
+      }
+    },
+    {
+      "name": "substrate_matrix",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "substrate_matrix",
+        "typescript": "substrateMatrix"
+      }
+    },
+    {
+      "name": "substrate_product",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "SubstrateProduct"
+      }
+    },
+    {
+      "name": "subsystem_ref",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "SubsystemRef"
+      }
+    },
+    {
+      "name": "subsystem_ref_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "SubsystemRefError",
+        "python": "SubsystemRefError"
+      }
+    },
+    {
+      "name": "successors",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "successors"
+      }
+    },
+    {
+      "name": "superscript",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "Superscript"
+      }
+    },
+    {
+      "name": "superscript_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "SuperscriptProps"
+      }
+    },
+    {
+      "name": "sweep_dimension",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "SweepDimension"
+      }
+    },
+    {
+      "name": "sweep_range",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "SweepRange"
+      }
+    },
+    {
+      "name": "sync_forcing",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "sync_forcing!"
+      }
+    },
+    {
+      "name": "system_kind",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "SystemKind",
+        "julia": "system_kind",
+        "python": "system_kind",
+        "rust": "system_kind",
+        "typescript": "systemKind"
+      }
+    },
+    {
+      "name": "system_kind",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "rust": "SystemKind",
+        "typescript": "SystemKind"
+      }
+    },
+    {
+      "name": "system_kind_dae",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "SystemKindDAE"
+      }
+    },
+    {
+      "name": "system_kind_nonlinear",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "SystemKindNonlinear"
+      }
+    },
+    {
+      "name": "system_kind_ode",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "SystemKindODE"
+      }
+    },
+    {
+      "name": "system_kind_pde",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "SystemKindPDE"
+      }
+    },
+    {
+      "name": "system_kind_sde",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "SystemKindSDE"
+      }
+    },
+    {
+      "name": "template_placeholders",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "template_placeholders"
+      }
+    },
+    {
+      "name": "template_resolve_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "TemplateResolveOptions"
+      }
+    },
+    {
+      "name": "template_schema_error",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "TemplateSchemaError"
+      }
+    },
+    {
+      "name": "temporal_domain",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "TemporalDomain",
+        "python": "TemporalDomain"
+      }
+    },
+    {
+      "name": "test",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "Test"
+      }
+    },
+    {
+      "name": "time_resolution_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "TimeResolutionError"
+      }
+    },
+    {
+      "name": "time_span",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "TimeSpan",
+        "rust": "TimeSpan"
+      }
+    },
+    {
+      "name": "to_ascii",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ToAscii",
+        "julia": "to_ascii",
+        "python": "to_ascii",
+        "rust": "to_ascii",
+        "typescript": "toAscii"
+      },
+      "notes": "spelling differs from the §2 rule: go=ToAscii (expected ToASCII)"
+    },
+    {
+      "name": "to_dot",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "to_dot",
+        "typescript": "toDot"
+      }
+    },
+    {
+      "name": "to_json",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "to_json"
+      }
+    },
+    {
+      "name": "to_json_graph",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "toJsonGraph"
+      }
+    },
+    {
+      "name": "to_julia_code",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "to_julia_code",
+        "python": "to_julia_code"
+      }
+    },
+    {
+      "name": "to_latex",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ToLatex",
+        "julia": "to_latex",
+        "python": "to_latex",
+        "rust": "to_latex",
+        "typescript": "toLatex"
+      }
+    },
+    {
+      "name": "to_math_ml",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "toMathML"
+      }
+    },
+    {
+      "name": "to_mermaid",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "to_mermaid",
+        "typescript": "toMermaid"
+      }
+    },
+    {
+      "name": "to_python_code",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "to_python_code"
+      }
+    },
+    {
+      "name": "to_sympy",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "to_sympy"
+      }
+    },
+    {
+      "name": "to_unicode",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ToUnicode",
+        "julia": "to_unicode",
+        "python": "to_unicode",
+        "rust": "to_unicode",
+        "typescript": "toUnicode"
+      }
+    },
+    {
+      "name": "to_unicode_spaced",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ToUnicodeSpaced"
+      }
+    },
+    {
+      "name": "tolerance",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Tolerance",
+        "rust": "Tolerance"
+      }
+    },
+    {
+      "name": "tree_walk_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "julia": "TreeWalkError"
+      }
+    },
+    {
+      "name": "try_parse_unit",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "tryParseUnit"
+      }
+    },
+    {
+      "name": "unbound_variable_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "julia": "UnboundVariableError"
+      }
+    },
+    {
+      "name": "undo_history",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "UndoHistory"
+      }
+    },
+    {
+      "name": "undo_history_config",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "UndoHistoryConfig"
+      }
+    },
+    {
+      "name": "unit",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Unit",
+        "rust": "Unit"
+      }
+    },
+    {
+      "name": "unit_conversion",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "UnitConversion"
+      }
+    },
+    {
+      "name": "unit_conversion_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "UnitConversionError",
+        "python": "UnitConversionError",
+        "typescript": "UnitConversionError"
+      }
+    },
+    {
+      "name": "unit_conversion_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "UnitConversionResult"
+      }
+    },
+    {
+      "name": "unit_dimension_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "UNIT_DIMENSION_MISMATCH"
+      }
+    },
+    {
+      "name": "unit_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "UnitError"
+      }
+    },
+    {
+      "name": "unit_finding",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "UnitFinding",
+        "rust": "UnitFinding"
+      }
+    },
+    {
+      "name": "unit_finding_analysis",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UnitFindingAnalysis"
+      }
+    },
+    {
+      "name": "unit_finding_dimensional_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UnitFindingDimensionalMismatch"
+      }
+    },
+    {
+      "name": "unit_finding_unparseable",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UnitFindingUnparseable"
+      }
+    },
+    {
+      "name": "unit_parse_error",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "julia": "UNIT_PARSE_ERROR"
+      }
+    },
+    {
+      "name": "unit_parse_failure",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "UnitParseFailure"
+      }
+    },
+    {
+      "name": "unit_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "UnitResult"
+      }
+    },
+    {
+      "name": "unit_severity",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "UnitSeverity"
+      }
+    },
+    {
+      "name": "unit_validation_result",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "UnitValidationResult"
+      }
+    },
+    {
+      "name": "unit_validator",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "python": "UnitValidator"
+      }
+    },
+    {
+      "name": "unit_warning",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "UnitWarning",
+        "typescript": "UnitWarning"
+      }
+    },
+    {
+      "name": "units_compatible",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "unitsCompatible"
+      }
+    },
+    {
+      "name": "unknown_class",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "UnknownClass"
+      }
+    },
+    {
+      "name": "unknown_names",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "unknown_names"
+      }
+    },
+    {
+      "name": "unknown_variable",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "UnknownVariable"
+      }
+    },
+    {
+      "name": "unknowns",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "unknowns",
+        "typescript": "unknowns"
+      }
+    },
+    {
+      "name": "unlowered_operator_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "UnloweredOperatorError"
+      }
+    },
+    {
+      "name": "unmapped_domain_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "UnmappedDomainError",
+        "python": "UnmappedDomainError"
+      }
+    },
+    {
+      "name": "unmarshal_coupling_array",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "UnmarshalCouplingArray"
+      }
+    },
+    {
+      "name": "unmarshal_coupling_entry",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "UnmarshalCouplingEntry"
+      }
+    },
+    {
+      "name": "unmarshal_expression",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "UnmarshalExpression"
+      }
+    },
+    {
+      "name": "unsupported_dimensionality_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "UnsupportedDimensionalityError"
+      }
+    },
+    {
+      "name": "unsupported_mapping_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "julia": "UnsupportedMappingError",
+        "python": "UnsupportedMappingError"
+      }
+    },
+    {
+      "name": "unsupported_version_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "UnsupportedVersionError"
+      }
+    },
+    {
+      "name": "update_kind_condition",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UpdateKindCondition"
+      }
+    },
+    {
+      "name": "update_kind_crossing",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UpdateKindCrossing"
+      }
+    },
+    {
+      "name": "update_kind_data",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UpdateKindData"
+      }
+    },
+    {
+      "name": "update_kind_remesh",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UpdateKindRemesh"
+      }
+    },
+    {
+      "name": "update_kind_schedule",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UpdateKindSchedule"
+      }
+    },
+    {
+      "name": "update_kind_wiener",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "UpdateKindWiener"
+      }
+    },
+    {
+      "name": "update_model_metadata",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "update_model_metadata"
+      }
+    },
+    {
+      "name": "update_rules",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "updateRules"
+      }
+    },
+    {
+      "name": "update_value",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "UpdateValue"
+      }
+    },
+    {
+      "name": "url_template_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "UrlTemplateError"
+      }
+    },
+    {
+      "name": "use_highlight_context",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "editor": "useHighlightContext"
+      }
+    },
+    {
+      "name": "validate",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "Validate",
+        "julia": "validate",
+        "python": "validate",
+        "rust": "validate",
+        "typescript": "validate"
+      }
+    },
+    {
+      "name": "validate_complete",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "validate_complete"
+      }
+    },
+    {
+      "name": "validate_equation_dimensions",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ValidateEquationDimensions",
+        "julia": "validate_equation_dimensions",
+        "rust": "validate_equation_dimensions"
+      }
+    },
+    {
+      "name": "validate_file",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ValidateFile"
+      }
+    },
+    {
+      "name": "validate_file_dimensions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "validate_file_dimensions"
+      }
+    },
+    {
+      "name": "validate_interp_axis",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "validateInterpAxis"
+      }
+    },
+    {
+      "name": "validate_model_dimensions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "validate_model_dimensions"
+      }
+    },
+    {
+      "name": "validate_reaction_rate_units",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "validate_reaction_rate_units"
+      }
+    },
+    {
+      "name": "validate_reaction_system_dimensions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "validate_reaction_system_dimensions"
+      }
+    },
+    {
+      "name": "validate_reference_syntax",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "validate_reference_syntax"
+      }
+    },
+    {
+      "name": "validate_schema",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "validate_schema",
+        "typescript": "validateSchema"
+      }
+    },
+    {
+      "name": "validate_searchsorted_table",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "validateSearchsortedTable"
+      }
+    },
+    {
+      "name": "validate_structural",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ValidateStructural",
+        "julia": "validate_structural"
+      }
+    },
+    {
+      "name": "validate_structural_with_codes",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ValidateStructuralWithCodes"
+      }
+    },
+    {
+      "name": "validate_units",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "validate_units",
+        "typescript": "validateUnits"
+      }
+    },
+    {
+      "name": "validation_config",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ValidationConfig"
+      }
+    },
+    {
+      "name": "validation_error",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "ValidationError",
+        "typescript": "ValidationError"
+      }
+    },
+    {
+      "name": "validation_error_with_metadata",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ValidationErrorWithMetadata"
+      }
+    },
+    {
+      "name": "validation_message",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "ValidationMessage"
+      }
+    },
+    {
+      "name": "validation_panel",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "editor": "ValidationPanel"
+      }
+    },
+    {
+      "name": "validation_panel_props",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ValidationPanelProps"
+      }
+    },
+    {
+      "name": "validation_result",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "ValidationResult",
+        "julia": "ValidationResult",
+        "python": "ValidationResult",
+        "rust": "ValidationResult",
+        "typescript": "ValidationResult"
+      }
+    },
+    {
+      "name": "validation_signals",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "editor": "ValidationSignals"
+      }
+    },
+    {
+      "name": "value_invention_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "python": "ValueInventionError",
+        "rust": "ValueInventionError"
+      }
+    },
+    {
+      "name": "value_invention_result",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "ValueInventionResult",
+        "rust": "ValueInventionResult"
+      }
+    },
+    {
+      "name": "var_expr",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "julia": "VarExpr"
+      }
+    },
+    {
+      "name": "var_gridding",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "VarGridding",
+        "rust": "VarGridding"
+      }
+    },
+    {
+      "name": "var_plan",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "VarPlan",
+        "rust": "VarPlan"
+      }
+    },
+    {
+      "name": "var_type_parameter",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "VarTypeParameter"
+      }
+    },
+    {
+      "name": "var_type_unknown",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "VarTypeUnknown"
+      }
+    },
+    {
+      "name": "variable_adjacency",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "VariableAdjacency"
+      }
+    },
+    {
+      "name": "variable_expr_site",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "VariableExprSite"
+      }
+    },
+    {
+      "name": "variable_expr_sites",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "VariableExprSites"
+      }
+    },
+    {
+      "name": "variable_in_use_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "VariableInUseError"
+      }
+    },
+    {
+      "name": "variable_kind",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "rust": "VariableKind",
+        "typescript": "VariableKind"
+      }
+    },
+    {
+      "name": "variable_map_coupling",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "VariableMapCoupling"
+      }
+    },
+    {
+      "name": "variable_map_transform",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "VariableMapTransform"
+      }
+    },
+    {
+      "name": "variable_node",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "VariableNode",
+        "julia": "VariableNode",
+        "rust": "VariableNode",
+        "typescript": "VariableNode"
+      }
+    },
+    {
+      "name": "variable_type",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "VariableType"
+      }
+    },
+    {
+      "name": "version",
+      "kind": "constant",
+      "tier": "stable",
+      "bindings": {
+        "rust": "VERSION",
+        "typescript": "VERSION"
+      }
+    },
+    {
+      "name": "vertex_kind",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "VertexKind",
+        "rust": "VertexKind"
+      }
+    },
+    {
+      "name": "with_base_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "WithBasePath"
+      }
+    },
+    {
+      "name": "with_metaparameters",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "WithMetaparameters"
+      }
+    },
+    {
+      "name": "write_junit_xml",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "write_junit_xml"
+      }
+    },
+    {
+      "name": "zarr_restart_state",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "zarr_restart_state"
+      }
+    }
+  ]
+}
