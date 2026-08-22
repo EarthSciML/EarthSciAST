@@ -935,6 +935,11 @@ def _format_aggregate(node, format_type: str) -> str:
     key = _node_field(node, "key")
     if key is not None:
         out += f" key={r(key)}"
+    # `id` is a bare-name clause rather than part of the `[…]` suffix so it adds
+    # no new bracket ambiguity with `table_lookup`'s `name[axis=…]` surface.
+    node_id = _node_field(node, "id")
+    if node_id is not None:
+        out += f" id={node_id}"
     if semiring and semiring != "sum_product":
         out += f" [semiring={semiring}]"
     return out
@@ -956,6 +961,9 @@ def _format_arg_witness(node, format_type: str) -> str:
     ranges = _node_field(node, "ranges")
     if ranges:
         out += _format_ranges_clause(ranges, format_type)
+    node_id = _node_field(node, "id")
+    if node_id is not None:
+        out += f" id={node_id}"
     return out
 
 
@@ -1092,7 +1100,12 @@ def _format_structural_op(node, format_type: str):
         inner = ", ".join(r(a) for a in args)
         manifold = _node_field(node, "manifold")
         name = f"\\mathrm{{{_latex_name(op)}}}" if format_type == "latex" else op
-        return f"{name}({inner}, manifold={manifold if manifold is not None else ''})"
+        # `id` (RFC §6.1 node identity) is emitted as a trailing named argument
+        # when present, so a node addressable as a derived index set's referent
+        # survives the text round-trip. Absent `id` prints exactly as before.
+        node_id = _node_field(node, "id")
+        id_part = f", id={node_id}" if node_id is not None else ""
+        return f"{name}({inner}, manifold={manifold if manifold is not None else ''}{id_part})"
 
     if op == "aggregate":
         return _format_aggregate(node, format_type)
