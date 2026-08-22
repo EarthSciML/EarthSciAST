@@ -813,6 +813,18 @@ function _tp_no_named(named::Dict{String,ASTExpr}, order::Vector{String},
     throw(ExpressionParseError("unexpected $(order[1])=… in $name(...)", pos))
 end
 
+# One `reshape(a, […])` shape entry. The `shape` field is documented as `Int`
+# (concrete length) or `String` (symbolic dimension), so anything else — e.g.
+# an arithmetic node such as `N + 1`, which `_tp_parse_array_rest` demotes to
+# its wire object — is a clean parse refusal, not a stringified Dict.
+function _tp_shape_entry(x, pos::Int)
+    (x isa Integer && !(x isa Bool)) && return Int(x)
+    (x isa Real && !(x isa Bool) && isfinite(x) && isinteger(x)) && return Int(x)
+    x isa AbstractString && return String(x)
+    throw(ExpressionParseError(
+        "reshape(...) shape entries must be integers or dimension names", pos))
+end
+
 # An integer-valued literal argument (`concat(..., axis=0)`, a `transpose` perm
 # entry). The corresponding `OpExpr` field is typed `Int`, so a non-integer is a
 # parse refusal rather than a downstream type error.
@@ -839,7 +851,8 @@ function _tp_make_call(name::String, args::Vector{ASTExpr},
     if name == "reshape" && length(args) == 2
         _tp_no_named(named, order, name, pos)
         return OpExpr("reshape", ASTExpr[args[1]];
-            shape=_coerce_shape(_tp_array_literal(args[2], pos)))
+            shape=Any[_tp_shape_entry(x, pos)
+                      for x in _tp_array_literal(args[2], pos)])
     end
     if name == "transpose" && (length(args) == 1 || length(args) == 2)
         _tp_no_named(named, order, name, pos)
