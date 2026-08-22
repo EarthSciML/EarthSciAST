@@ -804,6 +804,12 @@ function format_aggregate(node::OpExpr, format::Symbol)
     if node.key !== nothing
         out *= " key=$(r(node.key))"
     end
+    # `id` (RFC §6.1 node identity) is a bare-name clause rather than part of
+    # the `[…]` suffix so it adds no new bracket ambiguity with
+    # `table_lookup`'s `name[axis=…]` surface.
+    if node.id !== nothing
+        out *= " id=$(node.id)"
+    end
     if semiring !== nothing && semiring != "sum_product"
         out *= " [semiring=$semiring]"
     end
@@ -820,6 +826,9 @@ function format_arg_witness(node::OpExpr, format::Symbol)
     out = "$name$idx_part ($expr_str)"
     if node.ranges !== nothing && !isempty(node.ranges)
         out *= format_ranges_clause(node.ranges, format)
+    end
+    if node.id !== nothing
+        out *= " id=$(node.id)"
     end
     return out
 end
@@ -932,7 +941,12 @@ function format_structural_op(node::OpExpr, format::Symbol)
         inner = join([r(a) for a in args], ", ")
         manifold = node.manifold === nothing ? "" : node.manifold
         name = format == :latex ? "\\mathrm{$(latex_name(op))}" : op
-        return "$name($inner, manifold=$manifold)"
+        # `id` (RFC §6.1 node identity) is emitted as a trailing named argument
+        # when present, so a node addressable as a derived index set's `from_faq`
+        # referent survives the text round-trip. Absent `id` prints exactly as
+        # before, so every existing rendering is unchanged.
+        id_part = node.id === nothing ? "" : ", id=$(node.id)"
+        return "$name($inner, manifold=$manifold$id_part)"
     elseif op == "aggregate"
         return format_aggregate(node, format)
     elseif op == "argmin" || op == "argmax"
