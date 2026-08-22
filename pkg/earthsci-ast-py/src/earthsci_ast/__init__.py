@@ -295,6 +295,31 @@ try:
 except ImportError:
     pass
 
+# Graph representations (esm-libraries-spec §4.8)
+from .graph import (
+    ComponentNode,
+    CouplingEdge,
+    DependencyEdge,
+    Graph,
+    GraphEdge,
+    VariableNode,
+    component_exists,
+    component_graph,
+    component_type,
+    expression_graph,
+    to_dot,
+    to_json,
+    to_mermaid,
+)
+
+# Version migration (esm-libraries-spec §8.3)
+from .migration import (
+    MigrationError,
+    can_migrate,
+    migrate,
+    supported_migration_targets,
+)
+
 # Display and pretty-printing (Core tier requirement)
 from .display import (
     to_unicode,
@@ -542,6 +567,25 @@ __all__ = [
     "remove_coupling_from_file",
     "merge_esm_files",
     "extract_component_from_file",
+    # Graph representations (esm-libraries-spec §4.8)
+    "Graph",
+    "GraphEdge",
+    "ComponentNode",
+    "CouplingEdge",
+    "VariableNode",
+    "DependencyEdge",
+    "component_graph",
+    "expression_graph",
+    "component_exists",
+    "component_type",
+    "to_dot",
+    "to_mermaid",
+    "to_json",
+    # Version migration (esm-libraries-spec §8.3)
+    "migrate",
+    "can_migrate",
+    "supported_migration_targets",
+    "MigrationError",
     # Display and pretty-printing
     "to_unicode",
     "to_latex",
