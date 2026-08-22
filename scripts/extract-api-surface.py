@@ -25,7 +25,6 @@ Extraction points, one per binding, each the binding's single declaration of
 from __future__ import annotations
 
 import argparse
-import collections
 import json
 import os
 import re

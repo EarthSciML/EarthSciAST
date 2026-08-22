@@ -235,18 +235,43 @@ fn public_module_list_matches_the_manifest() {
 #[allow(unused_imports, deprecated)]
 fn manifest_names_resolve() {
     use earthsci_ast::{
-        // Core format surface.
-        EsmFile, Expr, Metadata, Model, ModelVariable, ReactionSystem, load, save,
-        // Classification (esm-spec §6.3.1).
-        algebraic_unknowns, is_ode_state, observed_unknowns, ode_states, system_kind,
-        // Flatten / validate / display / canonicalize.
-        FlattenedSystem, ValidationResult, canonical_json, canonicalize, flatten, to_ascii,
-        to_latex, to_unicode, validate,
-        // Expression operations.
-        free_variables, parse_expression, simplify, substitute,
         // Errors.
-        EsmError, ExpressionParseError, SchemaError, StructuralError,
+        EsmError,
+        // Core format surface.
+        EsmFile,
+        Expr,
+        ExpressionParseError,
+        // Flatten / validate / display / canonicalize.
+        FlattenedSystem,
+        Metadata,
+        Model,
+        ModelVariable,
+        ReactionSystem,
         // Versions.
-        SCHEMA_VERSION, VERSION,
+        SCHEMA_VERSION,
+        SchemaError,
+        StructuralError,
+        VERSION,
+        ValidationResult,
+        // Classification (esm-spec §6.3.1).
+        algebraic_unknowns,
+        canonical_json,
+        canonicalize,
+        flatten,
+        // Expression operations.
+        free_variables,
+        is_ode_state,
+        load,
+        observed_unknowns,
+        ode_states,
+        parse_expression,
+        save,
+        simplify,
+        substitute,
+        system_kind,
+        to_ascii,
+        to_latex,
+        to_unicode,
+        validate,
     };
 }
