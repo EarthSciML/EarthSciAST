@@ -465,6 +465,67 @@ pub(crate) fn serialize_canonical_f64<S: serde::Serializer>(
     }
 }
 
+/// One bound of a `makearray` region box (esm-spec §4.3.2).
+///
+/// Almost always a concrete integer: esm-spec §9.7.6 folds metaparameter bound
+/// expressions to integers at LOAD time, so every `regions` entry that reaches
+/// an evaluator is an [`RegionBound::Int`], and every consumer here treats a
+/// still-symbolic bound the way it treats a malformed region — it refuses the
+/// node rather than guessing an extent.
+///
+/// The [`RegionBound::Expr`] variant exists for the PRE-load form the schema
+/// admits (`"regions": [[[2, {"op": "-", "args": ["NLON", 1]}]]]`, whose bound
+/// pairs are `MetaparameterExpression`s) and which
+/// [`crate::parse_expression`] reconstructs from the text surface
+/// `makearray([2:NLON - 1, …] = …)`. Without it the Rust AST could not hold —
+/// and the printer could not reproduce — a document the other bindings load
+/// unchanged.
+///
+/// [`RegionBound::Int`] is listed FIRST in this untagged enum so a JSON integer
+/// still binds to it (and round-trips as an integer), exactly as before.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RegionBound {
+    /// A concrete inclusive bound.
+    Int(i64),
+    /// An unfolded bound expression (a metaparameter reference or arithmetic
+    /// over one). Never reaches an evaluator: §9.7.6 folding replaces it with
+    /// [`RegionBound::Int`] at load.
+    Expr(Expr),
+}
+
+impl RegionBound {
+    /// The concrete integer value of this bound, or `None` when it is still a
+    /// symbolic (unfolded) expression.
+    #[must_use]
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            RegionBound::Int(i) => Some(*i),
+            RegionBound::Expr(Expr::Integer(i)) => Some(*i),
+            RegionBound::Expr(Expr::Number(n))
+                if n.fract() == 0.0 && n.abs() < 9_223_372_036_854_775_808.0 =>
+            {
+                Some(*n as i64)
+            }
+            RegionBound::Expr(_) => None,
+        }
+    }
+}
+
+impl From<i64> for RegionBound {
+    fn from(i: i64) -> Self {
+        RegionBound::Int(i)
+    }
+}
+
+/// The concrete `[lo, hi]` pair of a region dimension, or `None` when either
+/// bound is still a symbolic expression. Every extent / bounding-box computation
+/// goes through this, so an unfolded bound can never be silently read as `0`.
+#[must_use]
+pub fn region_bounds(pair: &[RegionBound; 2]) -> Option<[i64; 2]> {
+    Some([pair[0].as_i64()?, pair[1].as_i64()?])
+}
+
 /// A single `arrayop`/`aggregate` index range (RFC semiring-faq-unified-ir
 /// §5.2). Either a dense inclusive integer interval `[lo, hi]` (the original,
 /// and still the most common form) or a reference to a declared index set.
@@ -773,8 +834,12 @@ pub struct ExpressionNode {
     pub filter: Option<Box<Expr>>,
 
     /// Per-region per-dimension inclusive range lists for `makearray`.
+    ///
+    /// A bound is normally a concrete integer; the schema also admits an
+    /// unfolded metaparameter bound EXPRESSION, which is why the element type
+    /// is [`RegionBound`] rather than `i64` — see that type's docs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regions: Option<Vec<Vec<[i64; 2]>>>,
+    pub regions: Option<Vec<Vec<[RegionBound; 2]>>>,
 
     /// Per-region value expressions for `makearray`. Later regions overwrite
     /// earlier regions at overlapping positions.

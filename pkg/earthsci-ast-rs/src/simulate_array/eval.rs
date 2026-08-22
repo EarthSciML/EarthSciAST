@@ -2753,7 +2753,7 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     // Borrow (don't clone) the region boxes and their value exprs — a boundary
     // `makearray` is rebuilt on every observed materialization, and its `values`
     // are full stencil subtrees; cloning them per call was pure allocation.
-    let regions: &[Vec<[i64; 2]>] = node.regions.as_deref().unwrap_or(&[]);
+    let regions: &[Vec<[crate::types::RegionBound; 2]>] = node.regions.as_deref().unwrap_or(&[]);
     let values: &[Expr] = node.values.as_deref().unwrap_or(&[]);
     if regions.is_empty() || values.len() != regions.len() {
         return Value::Scalar(f64::NAN);
@@ -2774,8 +2774,13 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     let mut hi = vec![i64::MIN; ndim];
     for region in regions {
         for (d, r) in region.iter().enumerate() {
-            lo[d] = lo[d].min(r[0]);
-            hi[d] = hi[d].max(r[1]);
+            // Every bound is folded to an integer at load (§9.7.6); an unfolded
+            // one is refused the same way a malformed region is.
+            let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
+                return Value::Scalar(f64::NAN);
+            };
+            lo[d] = lo[d].min(r_lo);
+            hi[d] = hi[d].max(r_hi);
         }
     }
     // `max(0)` before the cast: an all-empty `regions` list legitimately yields a
@@ -2875,7 +2880,15 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
     for (region, value_expr) in regions.iter().zip(values.iter()) {
         let v = eval(value_expr, ctx);
         // Iterate the region's index tuples.
-        let ranges: Vec<(i64, i64)> = region.iter().map(|r| (r[0], r[1])).collect();
+        let mut ranges: Vec<(i64, i64)> = Vec::with_capacity(region.len());
+        for r in region {
+            // Unreachable with a folded document (the bounding-box loop above
+            // already refused a symbolic bound), but keeps this loop total.
+            let Some([r_lo, r_hi]) = crate::types::region_bounds(r) else {
+                return Value::Scalar(f64::NAN);
+            };
+            ranges.push((r_lo, r_hi));
+        }
         // A region-aligned ARRAY value (e.g. a lowered stencil's interior
         // aggregate) must span the region box exactly; each region cell then
         // reads its aligned element (mirrors the vectorized
