@@ -126,7 +126,7 @@ fn units_fixtures_dimensional_propagation() {
         let dimensional_warnings = result
             .unit_warnings
             .iter()
-            .filter(|w| !w.contains("unparseable unit"))
+            .filter(|w| !w.message.contains("unparseable unit"))
             .count();
         assert_eq!(
             dimensional_warnings, expected,

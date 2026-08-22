@@ -167,7 +167,7 @@ func applyCouplingInjections(view map[string]any) error {
 		}
 		inj, ok := injRaw.(map[string]any)
 		if !ok {
-			return newETErr("template_inject_target_not_component",
+			return newETErr(CodeTemplateInjectTargetNotComponent,
 				"coupling entry `expression_template_imports` must be a map from a target system name to a list of imports (esm-spec §9.7.10 / §10.8)")
 		}
 		referenced := couplingReferencedSystems(entry)
@@ -182,7 +182,7 @@ func applyCouplingInjections(view map[string]any) error {
 					sort.Strings(names)
 					refList = strings.Join(names, ", ")
 				}
-				return newETErr("template_inject_target_unknown",
+				return newETErr(CodeTemplateInjectTargetUnknown,
 					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' names no system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry references: %s.", tname, refList))
 			}
 			var comp map[string]any
@@ -191,12 +191,12 @@ func applyCouplingInjections(view map[string]any) error {
 			} else if c, ok := topComp(rsystems, tname); ok {
 				comp = c
 			} else {
-				return newETErr("template_inject_target_not_component",
+				return newETErr(CodeTemplateInjectTargetNotComponent,
 					fmt.Sprintf("coupling entry `expression_template_imports` key '%s' resolves to neither a top-level model nor a reaction system (esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope.", tname))
 			}
 			importsList, ok := inj[tname].([]any)
 			if !ok {
-				return newETErr("template_import_not_library",
+				return newETErr(CodeTemplateImportNotLibrary,
 					fmt.Sprintf("coupling entry `expression_template_imports` value for '%s' must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8).", tname))
 			}
 			appendComponentImports(comp, importsList)

@@ -26,8 +26,9 @@ pub struct ValidationResult {
     pub schema_errors: Vec<SchemaError>,
     /// Structural validation errors
     pub structural_errors: Vec<StructuralError>,
-    /// Unit validation warnings (non-fatal issues)
-    pub unit_warnings: Vec<String>,
+    /// Dimensional-analysis findings that did not invalidate the document
+    /// (see [`UnitWarning`]).
+    pub unit_warnings: Vec<UnitWarning>,
     /// Whether validation passed (no schema or structural errors)
     pub is_valid: bool,
 }
@@ -45,6 +46,48 @@ impl ValidationResult {
     pub fn errors(&self) -> Vec<StructuralError> {
         self.structural_errors.clone()
     }
+}
+
+/// A dimensional-analysis finding surfaced by validation.
+///
+/// Despite the name — kept for wire compatibility, it is the `unit_warnings`
+/// field of the spec's `ValidationResult` (CONFORMANCE_SPEC §3.1) — a
+/// `UnitWarning` is not necessarily advisory. [`code`](Self::code) says whether
+/// the finding states a defect in the FILE or a limit of the ANALYSIS:
+///
+/// * `dimensional_mismatch` — a PROVABLE inconsistency (metres plus kilograms,
+///   an equation whose sides cannot agree).
+/// * `unparseable_unit` — a declared unit string that denotes no real unit.
+/// * `analysis` — the checker could not DETERMINE a dimension (an unknown
+///   variable, a symbolic exponent, an op with no dimensional rule). This
+///   reports what the checker could not conclude, not a defect in the file.
+///
+/// The classification is decided AT THE POINT the finding is raised (never
+/// recovered later from the prose, so rewording a message can never silently
+/// change its severity) — see [`crate::units::UnitSeverity`]. In this binding
+/// the defect-bearing kinds are promoted at that same decision point:
+/// `dimensional_mismatch` becomes a `unit_inconsistency`
+/// [`StructuralError`] and `unparseable_unit` a `unit_parse_error` one, so what
+/// remains here is the non-blocking `analysis` residue. Mirrors Go's
+/// `UnitWarning` (`pkg/earthsci-ast-go/pkg/esm/validate.go`) field for field, so
+/// the two serialize identically.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnitWarning {
+    /// RFC 6901 JSON Pointer to the equation/expression (see
+    /// [`StructuralError::path`]). `""` when the raise site has no pointer.
+    pub path: String,
+    /// Finding kind, and the whole of the severity policy:
+    /// `dimensional_mismatch` | `unparseable_unit` | `analysis`. See the
+    /// `UNIT_FINDING_*` constants in [`crate::units`].
+    pub code: String,
+    /// Human-readable description of the finding.
+    pub message: String,
+    /// Inferred units of the LHS; `""` when the checker did not determine them
+    /// (which is the norm for an `analysis` finding — not determining a
+    /// dimension is what makes it one).
+    pub lhs_units: String,
+    /// Inferred units of the RHS; `""` when not determined.
+    pub rhs_units: String,
 }
 
 /// A schema validation error

@@ -803,11 +803,12 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# Diagnostic-code registry coverage (src/lower_expression_templates.jl).
-# `_KNOWN_DIAGNOSTIC_CODES` documents itself as "the single registry of every
-# code this exception is raised with" — hold src/ to that: scan every source
-# file for `ExpressionTemplateError("<code>", …)` raise sites and assert the
-# raised codes are a subset of the registry.
+# Diagnostic-code registry coverage (src/error_codes.jl,
+# src/lower_expression_templates.jl). Every raise site now names its code as a
+# field of the central `ERROR_CODES` registry rather than as an inline literal,
+# so this scan reads the FIELD NAMES out of src/ and resolves each through the
+# registry: a raise site naming an unregistered field would not even compile,
+# and one naming a field outside `_KNOWN_DIAGNOSTIC_CODES` is caught here.
 # ---------------------------------------------------------------------------
 @testset "every raised ExpressionTemplateError code is registered" begin
     src_dir = normpath(joinpath(@__DIR__, "..", "src"))
@@ -815,13 +816,12 @@ end
     for (root, _, files) in walkdir(src_dir), file in files
         endswith(file, ".jl") || continue
         text = read(joinpath(root, file), String)
-        # First string-literal argument of each raise site (the code). The two
-        # sites in template_imports.jl `_merge_named!` pass the code through a
-        # variable (template_import_name_conflict /
-        # template_import_index_set_conflict — asserted registered below) and
-        # are deliberately not matched by this literal-only pattern.
-        for m in eachmatch(r"ExpressionTemplateError\(\s*\"([^\"]+)\"", text)
-            push!(raised, m.captures[1])
+        # First argument of each raise site: `ERROR_CODES.<FIELD>`. The sites in
+        # template_imports.jl `_merge_named!` pass the code through a variable
+        # (TEMPLATE_IMPORT_NAME_CONFLICT / TEMPLATE_IMPORT_INDEX_SET_CONFLICT —
+        # asserted registered below) and are deliberately not matched here.
+        for m in eachmatch(r"ExpressionTemplateError\(\s*ERROR_CODES\.([A-Z][A-Z0-9_]*)", text)
+            push!(raised, getproperty(EarthSciAST.ERROR_CODES, Symbol(m.captures[1])))
         end
     end
     # Guard the scan itself: a pattern/layout drift that matched nothing would
@@ -832,4 +832,13 @@ end
     # The variable-code sites' codes are registered too.
     @test "template_import_name_conflict" in registry
     @test "template_import_index_set_conflict" in registry
+    # And no ExpressionTemplateError code is spelled as a raw literal any more —
+    # the whole point of the central registry.
+    literal_sites = 0
+    for (root, _, files) in walkdir(src_dir), file in files
+        endswith(file, ".jl") || continue
+        text = read(joinpath(root, file), String)
+        literal_sites += length(collect(eachmatch(r"ExpressionTemplateError\(\s*\"", text)))
+    end
+    @test literal_sites == 0
 end

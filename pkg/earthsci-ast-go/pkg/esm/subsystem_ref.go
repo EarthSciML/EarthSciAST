@@ -107,7 +107,7 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, 
 		}
 		if existing, has := registry[n]; has {
 			if !indexSetDeepEqual(existing, decl) {
-				return newETErr("subsystem_index_set_conflict",
+				return newETErr(CodeSubsystemIndexSetConflict,
 					fmt.Sprintf("index set '%s' from subsystem ref '%s' collides with a non-deep-equal declaration in the importing document (subsystem index_sets merge into the importing registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error — esm-spec §4.7)", n, ref))
 			}
 			continue
@@ -216,14 +216,14 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// A §4.7 subsystem ref MUST NOT target a template-library file — the
 		// two reference mechanisms are disjoint (esm-spec §9.7.1).
 		if isTemplateLibraryDoc(view) {
-			return newETErr("subsystem_ref_is_template_library",
+			return newETErr(CodeSubsystemRefIsTemplateLibrary,
 				fmt.Sprintf("subsystem %q: ref %q targets a template-library file (%s); libraries are imported via expression_template_imports (esm-spec §9.7.1)", key, ref, refKey))
 		}
 
 		// Nor a coupling-library file — those are imported via a coupling_import
 		// coupling entry, not a subsystem ref (esm-spec §10.9).
 		if isCouplingLibraryDoc(view) {
-			return newETErr("subsystem_ref_is_coupling_library",
+			return newETErr(CodeSubsystemRefIsCouplingLibrary,
 				fmt.Sprintf("subsystem %q: ref %q targets a coupling-library file (%s); libraries are imported via a coupling_import coupling entry (esm-spec §10.9)", key, ref, refKey))
 		}
 

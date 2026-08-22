@@ -255,7 +255,7 @@ end
 # the linear one.
 const _LOWER_BCAST_BUDGET = 1 << 21     # ~2.1M node visits, ~0.1 s un-memoized
 
-struct _BroadcastBudgetExceeded <: Exception end
+struct _BroadcastBudgetExceeded <: EarthSciASTError end
 
 function _lower_broadcast(expr::ASTExpr)::ASTExpr
     expr isa OpExpr || return expr

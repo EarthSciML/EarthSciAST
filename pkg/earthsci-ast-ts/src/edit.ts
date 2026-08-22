@@ -23,16 +23,20 @@ import { substituteInModel } from './substitute.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepEqualExpr, forEachChild, isExprNode } from './expression.js'
 import { forEachEquation, isReferenceStub } from './traverse.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
  * Error thrown when attempting to remove a variable that is still referenced
  */
-export class VariableInUseError extends Error {
+export class VariableInUseError extends EsmDiagnosticError {
   constructor(
     public variableName: string,
     public references: string[],
   ) {
-    super(`Cannot remove variable "${variableName}": still referenced in ${references.join(', ')}`)
+    super(
+      ERROR_CODES.UNEXPECTED_ERROR,
+      `Cannot remove variable "${variableName}": still referenced in ${references.join(', ')}`,
+    )
     this.name = 'VariableInUseError'
   }
 }
@@ -40,12 +44,12 @@ export class VariableInUseError extends Error {
 /**
  * Error thrown when attempting an operation on a non-existent entity
  */
-export class EntityNotFoundError extends Error {
+export class EntityNotFoundError extends EsmDiagnosticError {
   constructor(
     public entityType: string,
     public entityName: string,
   ) {
-    super(`${entityType} "${entityName}" not found`)
+    super(ERROR_CODES.UNEXPECTED_ERROR, `${entityType} "${entityName}" not found`)
     this.name = 'EntityNotFoundError'
   }
 }

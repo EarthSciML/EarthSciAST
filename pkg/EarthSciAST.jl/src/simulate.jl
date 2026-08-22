@@ -61,7 +61,7 @@ The final state vector (empty if the solve produced no points).
 """
 final_state(r::SimulationResult) = isempty(r.u) ? Float64[] : r.u[end]
 
-struct SimulateError <: Exception
+struct SimulateError <: EarthSciASTError
     msg::String
 end
 Base.showerror(io::IO, e::SimulateError) = print(io, "SimulateError: ", e.msg)

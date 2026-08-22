@@ -116,7 +116,7 @@ fn is_rename_protected(k: &str) -> bool {
     META_SUBST_SKIP_KEYS.contains(&k) || RENAME_EXTRA_PROTECTED_KEYS.contains(&k)
 }
 
-use crate::diagnostic::err;
+use crate::diagnostic::{codes, err};
 
 // ---------------------------------------------------------------------------
 // Spec-version gate (esm-spec §9.6.5)
@@ -166,7 +166,7 @@ pub fn reject_template_imports_pre_v08(view: &Value) -> Result<(), ExpressionTem
         return Ok(());
     }
     Err(err(
-        "template_import_version_too_old",
+        codes::TEMPLATE_IMPORT_VERSION_TOO_OLD,
         format!(
             "expression_template_imports / top-level expression_templates / metaparameters \
              require esm >= 0.8.0; file declares {esm}. Offending paths: {}",
@@ -198,7 +198,7 @@ fn as_int(v: &Value) -> Option<i64> {
 fn require_int(v: &Value, ctx: &str) -> Result<i64, ExpressionTemplateError> {
     as_int(v).ok_or_else(|| {
         err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!("{ctx}: value {v} is not an integer (esm-spec §9.7.6)"),
         )
     })
@@ -217,14 +217,14 @@ fn collect_metaparam_decls(
     }
     let Some(mp_obj) = mp.as_object() else {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!("{origin}: `metaparameters` must be an object"),
         ));
     };
     for (name, v) in mp_obj {
         let Some(decl) = v.as_object() else {
             return Err(err(
-                "metaparameter_type_error",
+                codes::METAPARAMETER_TYPE_ERROR,
                 format!(
                     "{origin}: metaparameters.{name} must be an object with `type: \"integer\"`"
                 ),
@@ -232,7 +232,7 @@ fn collect_metaparam_decls(
         };
         if decl.get("type").and_then(|t| t.as_str()) != Some("integer") {
             return Err(err(
-                "metaparameter_type_error",
+                codes::METAPARAMETER_TYPE_ERROR,
                 format!(
                     "{origin}: metaparameters.{name}: `type` must be \"integer\" (the only kind)"
                 ),
@@ -324,7 +324,7 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
     }
     if x.is_number() {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!(
                 "{ctx}: non-integer literal {x} in a structural integer site (esm-spec §9.7.6)"
             ),
@@ -332,7 +332,7 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
     }
     let Some(obj) = x.as_object() else {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!(
                 "{ctx}: invalid metaparameter expression (expected integer, name, or {{op, args}})"
             ),
@@ -341,7 +341,7 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
     let (Some(op_raw), Some(args)) = (obj.get("op"), obj.get("args").and_then(|a| a.as_array()))
     else {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!(
                 "{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"
             ),
@@ -349,7 +349,7 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
     };
     if args.is_empty() {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!(
                 "{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"
             ),
@@ -365,13 +365,13 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
     let op = op_raw.as_str().unwrap_or_default().to_string();
     if !["+", "-", "*", "/"].contains(&op.as_str()) {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!("{ctx}: op '{op}' is not allowed in a metaparameter expression (only + - * /)"),
         ));
     }
     let overflow = || {
         err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!("{ctx}: 64-bit integer overflow while folding a metaparameter expression"),
         )
     };
@@ -387,13 +387,13 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
             _ => {
                 if *v == 0 {
                     return Err(err(
-                        "metaparameter_type_error",
+                        codes::METAPARAMETER_TYPE_ERROR,
                         format!("{ctx}: division by zero"),
                     ));
                 }
                 if acc % *v != 0 {
                     return Err(err(
-                        "metaparameter_type_error",
+                        codes::METAPARAMETER_TYPE_ERROR,
                         format!("{ctx}: {acc} / {v} does not divide exactly (esm-spec §9.7.6)"),
                     ));
                 }
@@ -437,7 +437,7 @@ fn validate_meta_expr(x: &Value, ctx: &str) -> Result<(), ExpressionTemplateErro
     }
     if x.is_boolean() || x.is_number() {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!(
                 "{ctx}: non-integer literal {x} in a metaparameter expression (esm-spec §9.7.6)"
             ),
@@ -445,7 +445,7 @@ fn validate_meta_expr(x: &Value, ctx: &str) -> Result<(), ExpressionTemplateErro
     }
     let Some(obj) = x.as_object() else {
         return Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!(
                 "{ctx}: invalid metaparameter expression (expected integer, name, or {{op, args}})"
             ),
@@ -462,7 +462,7 @@ fn validate_meta_expr(x: &Value, ctx: &str) -> Result<(), ExpressionTemplateErro
             Ok(())
         }
         _ => Err(err(
-            "metaparameter_type_error",
+            codes::METAPARAMETER_TYPE_ERROR,
             format!(
                 "{ctx}: invalid metaparameter expression (expected {{op: +|-|*|/, args: [...]}})"
             ),
@@ -515,7 +515,7 @@ pub(crate) fn eval_meta_expr(
                 free.into_iter().collect::<Vec<_>>().join(", ")
             };
             Err(err(
-                "template_import_unknown_name",
+                codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
                 format!(
                     "{ctx}: metaparameter expression references {free_list} not in the importing \
                      document's metaparameter scope (esm-spec §9.7.6)"
@@ -629,7 +629,7 @@ fn fold_index_set_sizes(
                     collect_names(sz, &mut names);
                     names.dedup();
                     return Err(err(
-                        "metaparameter_unbound",
+                        codes::METAPARAMETER_UNBOUND,
                         format!(
                             "{ctx}: index_sets.{name}.size references unbound name(s) {} \
                              (esm-spec §9.7.6)",
@@ -680,7 +680,7 @@ fn name_map(
     };
     let Some(obj) = raw.as_object() else {
         return Err(err(
-            "template_import_rename_invalid",
+            codes::TEMPLATE_IMPORT_RENAME_INVALID,
             format!(
                 "{where_}: `{field}` must be an object mapping names to names (esm-spec §9.7.7)"
             ),
@@ -689,14 +689,14 @@ fn name_map(
     for (k, v) in obj {
         if k.is_empty() {
             return Err(err(
-                "template_import_rename_invalid",
+                codes::TEMPLATE_IMPORT_RENAME_INVALID,
                 format!("{where_}: `{field}` has an empty key (esm-spec §9.7.7)"),
             ));
         }
         let valid_target = v.as_str().is_some_and(is_valid_dotted_name);
         if !valid_target {
             return Err(err(
-                "template_import_rename_invalid",
+                codes::TEMPLATE_IMPORT_RENAME_INVALID,
                 format!(
                     "{where_}: `{field}`.{k} target {v} is not a valid dotted identifier \
                      (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
@@ -958,7 +958,7 @@ fn apply_edge_renames(
         Some(v) => {
             if !v.as_str().is_some_and(is_valid_dotted_name) {
                 return Err(err(
-                    "template_import_rename_invalid",
+                    codes::TEMPLATE_IMPORT_RENAME_INVALID,
                     format!(
                         "{where_}: `prefix` {v} is not a valid dotted identifier (segments \
                          [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
@@ -1017,7 +1017,7 @@ fn check_rename_keys_exported(
     for k in rename.keys() {
         if !exported.contains(k) {
             return Err(err(
-                "template_import_rename_unknown_name",
+                codes::TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
                 format!(
                     "{where_}: `rename` names '{k}', which the target does not export at this \
                      edge (the surviving exports are templates after `only`, index sets, and \
@@ -1080,7 +1080,7 @@ fn check_final_name_uniqueness(
         for (o, n) in m {
             if let Some(prev) = seen.get(n) {
                 return Err(err(
-                    "template_import_rename_collision",
+                    codes::TEMPLATE_IMPORT_RENAME_COLLISION,
                     format!(
                         "{where_}: {what} names '{prev}' and '{o}' both map to '{n}' after \
                          renaming (esm-spec §9.7.7)"
@@ -1157,7 +1157,7 @@ fn check_rebind_keys(
     for k in rebind.keys() {
         if exported.contains(k) {
             return Err(err(
-                "template_import_rebind_unknown_name",
+                codes::TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
                 format!(
                     "{where_}: `rebind` names '{k}', a declared name of the target (template / \
                      index set / metaparameter) — `rebind` addresses only free names; use \
@@ -1167,7 +1167,7 @@ fn check_rebind_keys(
         }
         if inventory.bound.contains(k) {
             return Err(err(
-                "template_import_rename_invalid",
+                codes::TEMPLATE_IMPORT_RENAME_INVALID,
                 format!(
                     "{where_}: `rebind` key '{k}' is a bound index symbol (`output_idx` / \
                      `ranges`) of an imported template, not a free name (esm-spec §9.7.7)"
@@ -1176,7 +1176,7 @@ fn check_rebind_keys(
         }
         if !inventory.free.contains(k) {
             return Err(err(
-                "template_import_rebind_unknown_name",
+                codes::TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
                 format!(
                     "{where_}: `rebind` names '{k}', which does not occur free in the imported \
                      declarations (esm-spec §9.7.7)"
@@ -1220,7 +1220,7 @@ fn check_new_name_freshness(
     for t in &newnames {
         if taken.contains(t) {
             return Err(err(
-                "template_import_rename_collision",
+                codes::TEMPLATE_IMPORT_RENAME_COLLISION,
                 format!(
                     "{where_}: renamed/rebound name '{t}' collides with a name still in use \
                      inside the imported declarations (a remaining free name, a bound index \
@@ -1474,7 +1474,7 @@ fn load_import_raw(
 ) -> Result<(Value, PathBuf), ExpressionTemplateError> {
     if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
         return Err(err(
-            "template_import_unresolved",
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: failed to load template-library ref '{ref_str}': remote refs are not \
                  fetched by the Rust loader; download the file and import it by local path"
@@ -1484,7 +1484,7 @@ fn load_import_raw(
     let path = lexical_normalize(&base_dir.join(ref_str));
     let content = std::fs::read_to_string(&path).map_err(|e| {
         err(
-            "template_import_unresolved",
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: template-library file not found or unreadable: {} (from ref \
                  '{ref_str}'): {e}",
@@ -1494,7 +1494,7 @@ fn load_import_raw(
     })?;
     let raw: Value = serde_json::from_str(&content).map_err(|e| {
         err(
-            "template_import_unresolved",
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: template-library ref '{}' is not valid JSON: {e}",
                 path.display()
@@ -1521,7 +1521,7 @@ fn resolve_import_entry(
 ) -> Result<TemplateScope, ExpressionTemplateError> {
     let Some(entry_obj) = entry.as_object() else {
         return Err(err(
-            "template_import_unresolved",
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: expression_template_imports entries must be objects with a `ref` field"
             ),
@@ -1531,7 +1531,7 @@ fn resolve_import_entry(
         Some(s) if !s.is_empty() => s,
         _ => {
             return Err(err(
-                "template_import_unresolved",
+                codes::TEMPLATE_IMPORT_UNRESOLVED,
                 format!(
                     "{origin}: expression_template_imports entry requires a non-empty string `ref`"
                 ),
@@ -1543,7 +1543,7 @@ fn resolve_import_entry(
         let mut cyc: Vec<String> = stack[pos..].to_vec();
         cyc.push(canonical);
         return Err(err(
-            "template_import_cycle",
+            codes::TEMPLATE_IMPORT_CYCLE,
             format!(
                 "{origin}: import-graph cycle detected: {} (esm-spec §9.7.2)",
                 cyc.join(" -> ")
@@ -1561,7 +1561,7 @@ fn resolve_import_entry(
     // `coupling_import` coupling entry, not as a template library (esm-spec §10.9).
     if crate::coupling_imports::is_coupling_library_doc(&raw) {
         return Err(err(
-            "template_import_is_coupling_library",
+            codes::TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
             format!(
                 "{origin}: import target '{ref_str}' is a coupling-library file (has \
                  `coupling_roles`), not a template library (esm-spec §10.9)"
@@ -1572,7 +1572,7 @@ fn resolve_import_entry(
     // disjoint — a component/subsystem file is not importable as a library.
     if !is_template_library_doc(&raw) {
         return Err(err(
-            "template_import_not_library",
+            codes::TEMPLATE_IMPORT_NOT_LIBRARY,
             format!(
                 "{origin}: import target '{ref_str}' lacks top-level `expression_templates` — \
                  not a template-library file (esm-spec §9.7.1)"
@@ -1582,7 +1582,7 @@ fn resolve_import_entry(
     for k in LIBRARY_FORBIDDEN_KEYS {
         if raw.get(k).is_some() {
             return Err(err(
-                "template_import_not_library",
+                codes::TEMPLATE_IMPORT_NOT_LIBRARY,
                 format!(
                     "{origin}: import target '{ref_str}' declares `{k}` — not a pure \
                      template-library file (esm-spec §9.7.1)"
@@ -1592,7 +1592,7 @@ fn resolve_import_entry(
     }
     if let Err(e) = crate::parse::validate_schema(&raw) {
         return Err(err(
-            "template_import_unresolved",
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!("{origin}: import target '{ref_str}' failed schema validation: {e}"),
         ));
     }
@@ -1612,7 +1612,7 @@ fn resolve_import_entry(
         for (name, v) in bindings {
             if !scope.metaparams.contains_key(name) {
                 return Err(err(
-                    "template_import_unknown_name",
+                    codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
                     format!(
                         "{origin}: import of '{ref_str}' binds metaparameter '{name}', which \
                          the target neither declares nor re-exports (esm-spec §9.7.6)"
@@ -1645,7 +1645,7 @@ fn resolve_import_entry(
         for n in &keep {
             if !scope.templates.contains_key(n) {
                 return Err(err(
-                    "template_import_unknown_name",
+                    codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
                     format!(
                         "{origin}: `only` names template '{n}', which '{ref_str}' does not \
                          declare (esm-spec §9.7.2)"
@@ -1830,7 +1830,7 @@ pub fn resolve_template_machinery(
         if !metaparameters.is_empty() {
             let names: Vec<&str> = metaparameters.keys().map(String::as_str).collect();
             return Err(err(
-                "template_import_unknown_name",
+                codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
                 format!(
                     "loader API binds metaparameter(s) {} but the document declares none \
                      (esm-spec §9.7.6)",
@@ -2108,7 +2108,7 @@ fn close_document_metaparams(
     for k in metaparameters.keys() {
         if !doc_meta.contains_key(k) {
             return Err(err(
-                "template_import_unknown_name",
+                codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
                 format!(
                     "loader API binds metaparameter '{k}', which the document does not declare \
                      (esm-spec §9.7.6)"
@@ -2132,7 +2132,7 @@ fn close_document_metaparams(
     }
     if !open_names.is_empty() {
         return Err(err(
-            "metaparameter_unbound",
+            codes::METAPARAMETER_UNBOUND,
             format!(
                 "metaparameter(s) {} still open after edge bindings, loader-API bindings, and \
                  defaults (esm-spec §9.7.6)",
@@ -2172,7 +2172,7 @@ fn check_metaparam_collisions(
     for name in doc_meta.keys() {
         if visible.contains(name) {
             return Err(err(
-                "metaparameter_name_conflict",
+                codes::METAPARAMETER_NAME_CONFLICT,
                 format!(
                     "metaparameter '{name}' collides with a visible \
                      variable/parameter/species/index-set name (esm-spec §9.7.6)"
@@ -2453,7 +2453,7 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
             };
             let Some(inj_map) = inj_val.as_object() else {
                 return Err(err(
-                    "template_inject_target_not_component",
+                    codes::TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
                     "coupling entry `expression_template_imports` must be a map from a target \
                      system name to a list of imports (esm-spec §9.7.10 / §10.8)",
                 ));
@@ -2469,7 +2469,7 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
                         refs.join(", ")
                     };
                     return Err(err(
-                        "template_inject_target_unknown",
+                        codes::TEMPLATE_INJECT_TARGET_UNKNOWN,
                         format!(
                             "coupling entry `expression_template_imports` key '{target}' names no \
                              system referenced by that entry (esm-spec §9.7.10 / §10.8). The entry \
@@ -2483,7 +2483,7 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
                     "reaction_systems"
                 } else if loader_keys.contains(target) {
                     return Err(err(
-                        "template_inject_target_is_loader",
+                        codes::TEMPLATE_INJECT_TARGET_IS_LOADER,
                         format!(
                             "coupling entry `expression_template_imports` key '{target}' resolves \
                              to a data loader, which is pure I/O with no expression positions to \
@@ -2492,7 +2492,7 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
                     ));
                 } else {
                     return Err(err(
-                        "template_inject_target_not_component",
+                        codes::TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
                         format!(
                             "coupling entry `expression_template_imports` key '{target}' resolves \
                              to neither a top-level model, reaction system, nor data loader \
@@ -2502,7 +2502,7 @@ fn apply_coupling_injections(root: &mut Value) -> Result<bool, ExpressionTemplat
                 };
                 let Some(imports_arr) = imports_val.as_array() else {
                     return Err(err(
-                        "template_import_not_library",
+                        codes::TEMPLATE_IMPORT_NOT_LIBRARY,
                         format!(
                             "coupling entry `expression_template_imports` value for '{target}' \
                              must be a list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8)."

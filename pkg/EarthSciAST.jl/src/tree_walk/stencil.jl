@@ -37,7 +37,7 @@
 # `ESS_STENCIL_DISABLE=1` forces the per-cell SCALAR reference (compiled cell
 # nodes on `rhs_list`, evaluated by `_eval_node`) — the differential oracle.
 
-struct _StencilFallback <: Exception
+struct _StencilFallback <: EarthSciASTError
     reason::String
 end
 

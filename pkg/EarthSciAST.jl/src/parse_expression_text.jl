@@ -65,7 +65,7 @@ or [`parse_equation`](@ref).
 - `pos`: 0-based CHARACTER offset into the source where parsing failed
   (matching the `pos` field of the TypeScript reference implementation).
 """
-struct ExpressionParseError <: Exception
+struct ExpressionParseError <: EarthSciASTError
     msg::String
     pos::Int
 end

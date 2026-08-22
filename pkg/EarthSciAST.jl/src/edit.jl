@@ -18,7 +18,7 @@ a variable, equation, reaction, event, or coupling entry that does not exist,
 or extracting a missing component. Throwing (rather than warning and
 returning the input unchanged) makes failed edits visible programmatically.
 """
-struct EditError <: Exception
+struct EditError <: EarthSciASTError
     msg::String
 end
 

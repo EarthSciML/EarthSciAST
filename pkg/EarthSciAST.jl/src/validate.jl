@@ -48,25 +48,91 @@ struct StructuralError
 end
 
 """
+    UnitWarning
+
+A single dimensional-analysis finding, in the STRUCTURED form the Python,
+TypeScript and Go bindings have always used and Julia did not: this field was
+a bare `Vector{String}`, so a caller could read the prose but could not filter
+or route findings by `code` without regex-ing the message — exactly the
+prose-parsing every binding's units documentation warns against.
+
+Fields and their JSON spellings match Go's `UnitWarning`
+(`pkg/earthsci-ast-go/pkg/esm/validate.go`) and the shape pinned by
+`CONFORMANCE_SPEC.md` §3.1:
+
+* `path` — RFC-6901 JSON Pointer to the offending equation / expression, the
+  document root being `""` (the same addressing as `StructuralError.path`).
+* `code` — the finding kind, decided AT THE POINT the finding was raised and
+  never recovered from the prose, so rewording a message can never silently
+  reclassify it. This is the SECOND, smaller unit vocabulary — the one Go's
+  `UnitFinding*`, Rust's `UNIT_FINDING_*` and TypeScript's
+  `UnitWarning['code']` union share: `dimensional_mismatch` (a PROVABLE
+  inconsistency), `unparseable_unit` (a declared unit string denoting no real
+  unit), `analysis` (the checker could not DETERMINE a dimension). It is NOT
+  the `unit_inconsistency` / `unit_parse_error` pair, which names the
+  STRUCTURAL error each finding is promoted to.
+* `message` — human-readable description (binding-local prose).
+* `lhs_units` / `rhs_units` — the inferred units of each side, `""` when the
+  raise site does not know them. Julia's units engine (`model_unit_findings`)
+  currently reports findings as prose and carries no separate unit pair, so
+  these are `""` today; `validate` reads them from the promoted
+  `StructuralError`'s `details` under those keys, so a raise site that starts
+  supplying them is picked up with no further change here.
+
+Despite the name — kept for wire compatibility, it is the `unit_warnings`
+field of the spec's `ValidationResult` — a `UnitWarning` is not necessarily
+advisory: the codes that state a defect in the FILE are promoted to hard
+`unit_inconsistency` structural errors, and those are what invalidate the
+document.
+"""
+struct UnitWarning
+    path::String
+    code::String
+    message::String
+    lhs_units::String
+    rhs_units::String
+
+    UnitWarning(path::AbstractString, code::AbstractString, message::AbstractString,
+                lhs_units::AbstractString="", rhs_units::AbstractString="") =
+        new(String(path), String(code), String(message),
+            String(lhs_units), String(rhs_units))
+end
+
+# The promoted STRUCTURAL error code -> the `UnitWarning.code` finding kind.
+# Two vocabularies, deliberately: `unit_inconsistency` / `unit_parse_error` name
+# what the finding was promoted TO, while `dimensional_mismatch` /
+# `unparseable_unit` / `analysis` name the finding itself and are the values
+# every other binding puts on this field. Mapping here rather than at the
+# `StructuralError` raise site keeps `structural_errors` byte-identical.
+function _unit_finding_code(error_type::AbstractString)::String
+    error_type == ERROR_CODES.UNIT_INCONSISTENCY && return ERROR_CODES.DIMENSIONAL_MISMATCH
+    error_type == ERROR_CODES.UNIT_PARSE_ERROR   && return ERROR_CODES.UNPARSEABLE_UNIT
+    return ERROR_CODES.ANALYSIS
+end
+
+"""
     ValidationResult
 
 Combined validation result containing schema errors, structural errors,
 unit warnings, and overall validation status.
 
-`unit_warnings` mirrors the TS/Python bindings' `ValidationResult` shape:
-unit findings appear both here (as human-readable strings) and as promoted
-`unit_inconsistency` entries in `structural_errors`. Unit warnings never
-affect `is_valid` on their own — the promoted structural errors do.
+The four-field shape (`is_valid`, `schema_errors`, `structural_errors`,
+`unit_warnings`) is pinned by `ESM_COMPLIANCE_VALIDATION_MATRIX.md` VALID-03-A.
+
+`unit_warnings` mirrors the TS/Python/Go bindings' `ValidationResult` shape:
+unit findings appear both here (as [`UnitWarning`](@ref) records) and as
+promoted `unit_inconsistency` entries in `structural_errors`. Unit warnings
+never affect `is_valid` on their own — the promoted structural errors do.
 """
 struct ValidationResult
     is_valid::Bool
     schema_errors::Vector{SchemaError}
     structural_errors::Vector{StructuralError}
-    unit_warnings::Vector{String}
+    unit_warnings::Vector{UnitWarning}
 end
 
 # Constructor for ValidationResult
-ValidationResult(schema_errors::Vector{SchemaError}, structural_errors::Vector{StructuralError}; unit_warnings::Vector{String}=String[]) =
+ValidationResult(schema_errors::Vector{SchemaError}, structural_errors::Vector{StructuralError}; unit_warnings::Vector{UnitWarning}=UnitWarning[]) =
     ValidationResult(isempty(schema_errors) && isempty(structural_errors), schema_errors, structural_errors, unit_warnings)
 
 """
@@ -75,7 +141,7 @@ ValidationResult(schema_errors::Vector{SchemaError}, structural_errors::Vector{S
 Exception thrown when schema validation fails.
 Contains detailed error information including paths and messages.
 """
-struct SchemaValidationError <: Exception
+struct SchemaValidationError <: EarthSciASTError
     message::String
     errors::Vector{SchemaError}
 end
@@ -503,7 +569,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         push!(errors, StructuralError(
             "/",
             "Species '$name' has both an explicit derivative equation and a reaction contribution",
-            "conflicting_derivative",
+            ERROR_CODES.CONFLICTING_DERIVATIVE,
         ))
     end
 
@@ -534,9 +600,16 @@ function validate(file::EsmFile)::ValidationResult
     schema_errors = validate_schema(data)
     structural_errors = validate_structural(file)
     # Mirror the TS binding (validate.ts): unit findings are surfaced both as
-    # `unit_warnings` strings and as promoted `unit_inconsistency` structural
-    # errors, so neither channel is dead.
-    unit_warnings = [e.message for e in structural_errors if e.error_type == "unit_inconsistency"]
+    # `unit_warnings` records and as promoted `unit_inconsistency` structural
+    # errors, so neither channel is dead. The SET and ORDER of findings is
+    # exactly what it has always been — only the element type gained structure
+    # (finding D-8), so `[w.message for w in result.unit_warnings]` reproduces
+    # the old `Vector{String}` byte for byte.
+    unit_warnings = [UnitWarning(e.path, _unit_finding_code(e.error_type), e.message,
+                                 string(get(e.details, "lhs_units", "")),
+                                 string(get(e.details, "rhs_units", "")))
+                     for e in structural_errors
+                     if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY]
 
     return ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
 end
@@ -741,7 +814,7 @@ function validate_model_balance(model::Model, path::String;
         push!(errors, StructuralError(
             path,
             "Number of equations ($n_eqs) does not match number of unknowns ($n_unknowns)",
-            "equation_count_mismatch",
+            ERROR_CODES.EQUATION_COUNT_MISMATCH,
             details))
     elseif !has_subsystems && !isempty(missing_for)
         # Square by COUNT but not by assignment: some unknown has nothing
@@ -751,7 +824,7 @@ function validate_model_balance(model::Model, path::String;
             path,
             "Model declares unknown '$(first(missing_for))' but has no defining " *
             "equation for it",
-            "equation_count_mismatch",
+            ERROR_CODES.EQUATION_COUNT_MISMATCH,
             Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs,
                              "missing_equations_for" => missing_for)))
     end
@@ -820,7 +893,7 @@ function _check_update_sources!(errors::Vector{StructuralError}, model::Model,
                 "$path/variables/$name/update",
                 "Parameter update names data source '$src', which the document " *
                 "does not declare",
-                "data_source_undefined",
+                ERROR_CODES.DATA_SOURCE_UNDEFINED,
                 Dict{String,Any}("variable" => name, "source" => src,
                                  "available_sources" => available)))
         end
@@ -846,7 +919,7 @@ function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path
             "$path/system_kind",
             "Model declares system_kind '$declared' but its equations and " *
             "parameters derive '$derived'",
-            "system_kind_mismatch",
+            ERROR_CODES.SYSTEM_KIND_MISMATCH,
             Dict{String,Any}("declared" => declared, "derived" => derived)))
     end
     for (subsys_name, subsys) in model_subsystems(model)
@@ -904,7 +977,7 @@ function validate_variable_map_units(file::EsmFile)::Vector{StructuralError}
             "/coupling/$(i-1)",
             "variable_map identity coupling from '$(entry.from)' ($src_units) to " *
             "'$(entry.to)' ($tgt_units) connects variables with different declared units",
-            "domain_unit_mismatch",
+            ERROR_CODES.DOMAIN_UNIT_MISMATCH,
             Dict{String,Any}("from" => entry.from, "to" => entry.to,
                              "from_units" => src_units, "to_units" => tgt_units)
         ))
@@ -1009,7 +1082,7 @@ function _check_undefined_index_set!(errors::Vector{StructuralError}, agg::OpExp
             anchor,
             "aggregate range '$sym' references index set '$from', which is not " *
             "declared in the document `index_sets` registry",
-            "undefined_index_set",
+            ERROR_CODES.UNDEFINED_INDEX_SET,
             Dict{String,Any}("index_set" => from, "range" => sym)
         ))
     end
@@ -1043,7 +1116,7 @@ function _check_join_key_type!(errors::Vector{StructuralError}, file::EsmFile,
             "aggregate join key column '$sym' ranges over categorical index set " *
             "'$(rv.from)', whose members include a non-portable float/null key " *
             "(value-equality join keys must be integers or strings)",
-            "join_key_invalid_type",
+            ERROR_CODES.JOIN_KEY_INVALID_TYPE,
             Dict{String,Any}("index_set" => rv.from, "column" => sym)
         ))
         return errors   # one finding per aggregate is enough
@@ -1084,7 +1157,7 @@ function _check_relational_in_continuous!(errors::Vector{StructuralError}, agg::
         "distinct/value-invention aggregate reads state variable '$hit' in its " *
         "key/body, classifying it CONTINUOUS — a relational node may not run on " *
         "the per-step hot path (§5.7 guard 2)",
-        "relational_node_in_continuous",
+        ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS,
         Dict{String,Any}("variable" => hit)
     ))
     return errors
@@ -1182,7 +1255,7 @@ function _walk_broadcast_fns!(errors::Vector{StructuralError}, expr::ASTExpr,
             # ONE cross-binding diagnostic code (esm-spec §9.6.6) for all four
             # defects; `details["reason"]` carries which one.
             push!(errors, StructuralError(
-                anchor, prob.message, "invalid_broadcast_fn",
+                anchor, prob.message, ERROR_CODES.INVALID_BROADCAST_FN,
                 Dict{String,Any}("fn" => expr.fn === nothing ? "" : String(expr.fn),
                                  "reason" => String(prob.kind),
                                  "operands" => length(expr.args))))
@@ -1244,7 +1317,7 @@ function _check_broadcast_axes!(errors::Vector{StructuralError}, expr::ASTExpr,
                     "Operand '$((e::VarExpr).name)' of the array-level expression " *
                     "for '$target' is declared over index set '$ax', which " *
                     "'$target' is not shaped over (esm-spec §4.3.4)",
-                    "array_shape_mismatch",
+                    ERROR_CODES.ARRAY_SHAPE_MISMATCH,
                     Dict{String,Any}("variable" => (e::VarExpr).name,
                                      "target" => target,
                                      "index_set" => ax,
@@ -1365,7 +1438,7 @@ function validate_coupling_cycles(file::EsmFile)::Vector{StructuralError}
                 push!(errors, StructuralError(
                     "/models",
                     "Circular coupling detected: " * join(cycle, " → "),
-                    "circular_dependency",
+                    ERROR_CODES.CIRCULAR_DEPENDENCY,
                     Dict{String,Any}("cycle" => cycle)
                 ))
                 return true
@@ -1923,7 +1996,7 @@ function _check_expression_references!(errors::Vector{StructuralError}, file::Es
             push!(errors, StructuralError(
                 anchor,
                 "Operator '$(expr.args[1].name)' referenced but not defined",
-                "undefined_operator"
+                ERROR_CODES.UNDEFINED_OPERATOR
             ))
             skip_operator_arg = true
         end
@@ -1966,7 +2039,7 @@ function _check_bare_variable!(errors::Vector{StructuralError}, name::String,
         push!(errors, StructuralError(
             path,
             "Variable '$name' referenced in equation is not declared",
-            "undefined_variable",
+            ERROR_CODES.UNDEFINED_VARIABLE,
             Dict{String,Any}("variable" => name)
         ))
     end
@@ -2023,7 +2096,7 @@ function _check_connector_expressions(file::EsmFile, entry::CouplingCouple,
                 push!(errors, StructuralError(
                     epath,
                     "Variable \"$name\" referenced in connector equation expression does not resolve",
-                    "unresolved_scoped_ref",
+                    ERROR_CODES.UNRESOLVED_SCOPED_REF,
                     Dict{String,Any}("variable" => name)
                 ))
             end
@@ -2050,7 +2123,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
                 push!(errors, StructuralError(
                     "$path/systems",
                     "System '$system_name' referenced in operator_compose coupling not found",
-                    "undefined_system",
+                    ERROR_CODES.UNDEFINED_SYSTEM,
                     Dict{String,Any}("system" => system_name)
                 ))
             end
@@ -2063,7 +2136,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
                 push!(errors, StructuralError(
                     "$path/systems",
                     "System '$system_name' referenced in couple coupling not found",
-                    "undefined_system",
+                    ERROR_CODES.UNDEFINED_SYSTEM,
                     Dict{String,Any}("system" => system_name)
                 ))
             end
@@ -2083,14 +2156,14 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
             push!(errors, StructuralError(
                 "$path/from",
                 "Invalid reference syntax: '$(coupling_entry.from)'",
-                "invalid_reference_syntax"
+                ERROR_CODES.INVALID_REFERENCE_SYNTAX
             ))
         else
             # A `variable_map` endpoint is a SCOPED reference (`System.var`); an
             # unresolvable one is `unresolved_scoped_ref` (§7.1), not the generic
             # `unresolved_reference` spelling.
             _check_resolvable!(errors, file, coupling_entry.from, "$path/from",
-                               "Cannot resolve 'from' reference", "unresolved_scoped_ref")
+                               "Cannot resolve 'from' reference", ERROR_CODES.UNRESOLVED_SCOPED_REF)
         end
 
         # Validate 'to' reference
@@ -2098,11 +2171,11 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
             push!(errors, StructuralError(
                 "$path/to",
                 "Invalid reference syntax: '$(coupling_entry.to)'",
-                "invalid_reference_syntax"
+                ERROR_CODES.INVALID_REFERENCE_SYNTAX
             ))
         else
             _check_resolvable!(errors, file, coupling_entry.to, "$path/to",
-                               "Cannot resolve 'to' reference", "unresolved_scoped_ref")
+                               "Cannot resolve 'to' reference", ERROR_CODES.UNRESOLVED_SCOPED_REF)
         end
 
         # `transform` may be an EXPRESSION rather than one of the named string
@@ -2115,7 +2188,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
             for name in _referenced_var_names(coupling_entry.transform)
                 occursin('.', name) || continue
                 _check_resolvable!(errors, file, name, "$path/transform",
-                                   "Cannot resolve reference", "unresolved_scoped_ref")
+                                   "Cannot resolve reference", ERROR_CODES.UNRESOLVED_SCOPED_REF)
             end
         end
 
@@ -2125,7 +2198,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         push!(errors, StructuralError(
             "$path/operator",
             "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found",
-            "undefined_operator"
+            ERROR_CODES.UNDEFINED_OPERATOR
         ))
 
     elseif isa(coupling_entry, CouplingCallback)
@@ -2134,7 +2207,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
             push!(errors, StructuralError(
                 "$path/callback_id",
                 "Callback ID cannot be empty",
-                "empty_callback_id"
+                ERROR_CODES.EMPTY_CALLBACK_ID
             ))
         end
 
@@ -2248,7 +2321,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
                     push!(errors, StructuralError(
                         "$reaction_path/substrates/$(j-1)/species",
                         "Species '$(entry.species)' not declared",
-                        "undefined_species",
+                        ERROR_CODES.UNDEFINED_SPECIES,
                         Dict{String,Any}("species" => entry.species)
                     ))
                 end
@@ -2258,7 +2331,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
                     push!(errors, StructuralError(
                         "$reaction_path/substrates/$(j-1)/species",
                         "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
-                        "invalid_stoichiometry"
+                        ERROR_CODES.INVALID_STOICHIOMETRY
                     ))
                 end
             end
@@ -2273,7 +2346,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
                     push!(errors, StructuralError(
                         "$reaction_path/products/$(j-1)/species",
                         "Species '$(entry.species)' not declared",
-                        "undefined_species",
+                        ERROR_CODES.UNDEFINED_SPECIES,
                         Dict{String,Any}("species" => entry.species)
                     ))
                 end
@@ -2283,7 +2356,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
                     push!(errors, StructuralError(
                         "$reaction_path/products/$(j-1)/species",
                         "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)",
-                        "invalid_stoichiometry"
+                        ERROR_CODES.INVALID_STOICHIOMETRY
                     ))
                 end
             end
@@ -2296,7 +2369,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
             push!(errors, StructuralError(
                 reaction_path,
                 "Reaction has no reactants or products (null-null reaction)",
-                "null_reaction"
+                ERROR_CODES.NULL_REACTION
             ))
         end
 
@@ -2317,7 +2390,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
             push!(errors, StructuralError(
                 "$reaction_path/rate",
                 "Parameter '$name' referenced in rate expression is not declared",
-                "undefined_parameter",
+                ERROR_CODES.UNDEFINED_PARAMETER,
                 Dict{String,Any}("variable" => name)
             ))
         end
@@ -2424,7 +2497,7 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{
                 "Reaction $(reaction.id) rate '$rate_name' units '$rate_units_str' " *
                 "incompatible with order-$order_str reaction for species units " *
                 "'$first_sp_units' (expected rate*substrates to have dimensions of species/time)",
-                "unit_inconsistency",
+                ERROR_CODES.UNIT_INCONSISTENCY,
             ))
         end
     end
@@ -2560,7 +2633,7 @@ function validate_single_event_consistency(model::Model, event::EventType, event
             push!(errors, StructuralError(
                 "$event_path/affects/$(j-1)/lhs",
                 "Variable '$(affect.lhs)' in event affects is not declared",
-                "event_var_undeclared",
+                ERROR_CODES.EVENT_VAR_UNDECLARED,
                 Dict{String,Any}("variable" => affect.lhs)
             ))
         end
@@ -2580,7 +2653,7 @@ function validate_single_event_consistency(model::Model, event::EventType, event
             push!(errors, StructuralError(
                 "$event_path/affects/$(j-1)/lhs",
                 "Variable '$(affect.lhs)' in event affects is not declared",
-                "event_var_undeclared",
+                ERROR_CODES.EVENT_VAR_UNDECLARED,
                 Dict{String,Any}("variable" => affect.lhs)
             ))
         end
@@ -2632,7 +2705,7 @@ function _check_event_affects_unknowns!(errors::Vector{StructuralError},
             "$event_path/affects/$(j-1)",
             "$(subject) affects '$(affect.lhs)', which is a parameter; " *
             "an event may affect unknowns only",
-            "event_affects_parameter",
+            ERROR_CODES.EVENT_AFFECTS_PARAMETER,
             details))
     end
     return errors
@@ -2758,7 +2831,7 @@ function validate_physical_constant_units(model::Model, path::String)::Vector{St
             "Physical constant used with incorrect dimensional analysis " *
             "(constant '$constant_name' ($description) declared with units '$declared_str', " *
             "expected dimensions compatible with '$canonical')",
-            "unit_inconsistency",
+            ERROR_CODES.UNIT_INCONSISTENCY,
         ))
     end
 
@@ -2840,7 +2913,7 @@ function validate_conversion_factor_consistency(model::Model, path::String)::Vec
             "Unit conversion factor is incorrect for specified unit transformation " *
             "(variable '$vname', declared_units='$lhs_units', source_units='$src_units', " *
             "declared_factor=$numeric, expected_factor=$factor)",
-            "unit_inconsistency",
+            ERROR_CODES.UNIT_INCONSISTENCY,
         ))
     end
 

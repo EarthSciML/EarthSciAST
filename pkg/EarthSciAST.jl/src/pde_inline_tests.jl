@@ -67,7 +67,7 @@ asserted variable with no field, or a per-test discretization injection
 (§9.7.10 form C) that could not build. `run_pde_tests` catches it per
 assertion and records the message on the failing [`PdeAssertionResult`](@ref).
 """
-struct PdeTestError <: Exception
+struct PdeTestError <: EarthSciASTError
     msg::String
 end
 Base.showerror(io::IO, e::PdeTestError) = print(io, "PdeTestError: ", e.msg)

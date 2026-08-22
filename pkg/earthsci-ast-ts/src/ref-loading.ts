@@ -44,19 +44,19 @@ import {
   normalizeRef,
   readFileSyncNode,
 } from './path-utils.js'
-import { ERROR_CODES } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { load, validateSchema, ROOT_PATH } from './parse.js'
 import { save } from './serialize.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
  */
-export class CircularReferenceError extends Error {
+export class CircularReferenceError extends EsmDiagnosticError {
   /** The chain of references that form the cycle */
   public readonly chain: string[]
 
   constructor(chain: string[]) {
-    super(`Circular reference detected: ${chain.join(' -> ')}`)
+    super(ERROR_CODES.CIRCULAR_DEPENDENCY, `Circular reference detected: ${chain.join(' -> ')}`)
     this.name = 'CircularReferenceError'
     this.chain = chain
   }
@@ -77,11 +77,11 @@ export class CircularReferenceError extends Error {
  * only layer that can tell those two apart — the synchronous `validate()` does
  * no I/O and reports every unresolved `{ref}` as `unresolved_subsystem_ref`.
  */
-export class RefLoadError extends Error {
+export class RefLoadError extends EsmDiagnosticError {
   /** The reference path or URL that failed to load */
   public readonly ref: string
   /** Canonical code: `unresolved_subsystem_ref` or `ambiguous_subsystem_ref`. */
-  public readonly code: string
+  declare readonly code: string
   /**
    * JSON Pointer of the SUBSYSTEM ENTRY that carries the bad ref (e.g.
    * `/models/ClimateModel/subsystems/Atm`) — not the document root. The corpus
@@ -98,12 +98,12 @@ export class RefLoadError extends Error {
     path: string = ROOT_PATH,
   ) {
     super(
+      code,
       message ??
         (cause ? `Failed to load ref "${ref}": ${cause.message}` : `Failed to load ref "${ref}"`),
     )
     this.name = 'RefLoadError'
     this.ref = ref
-    this.code = code
     this.path = path
   }
 }

@@ -371,10 +371,26 @@ StructuralError:
 
 UnitWarning:
   path: string          # JSON Pointer to the equation or expression
+  code: string          # Machine-readable finding kind (see below)
   message: string       # Human-readable description
-  lhs_units: string     # Inferred units of the LHS
-  rhs_units: string     # Inferred units of the RHS
+  lhs_units: string     # Inferred units of the LHS ("" when the raise site does not know it)
+  rhs_units: string     # Inferred units of the RHS ("" when the raise site does not know it)
 ```
+
+`UnitWarning.code` is the whole of the severity policy, and it is decided AT THE
+POINT the finding is raised — never recovered later from the prose, so rewording
+a message can never silently reclassify it. A finding is either a defect in the
+FILE, which invalidates the document, or a limit of the ANALYSIS, which does not:
+
+| Code | Meaning | Severity |
+|---|---|---|
+| `dimensional_mismatch` / `unit_inconsistency` | A *provable* inconsistency — metres added to kilograms, an equation whose sides cannot agree. | Promoted to a hard `unit_inconsistency` structural error. |
+| `unparseable_unit` / `unit_parse_error` | A declared unit string that denotes no real unit. The declaration is meaningless — a defect in the file, not in the checker. | Promoted to a hard `unit_parse_error` structural error. |
+| `analysis` | The checker cannot *determine* a dimension (a symbolic exponent, an operator with no dimensional rule, an unknown variable). A statement about the checker, not the file. | Warning; the dimension is reported unknown and the check is skipped, never assumed dimensionless. |
+
+Despite the field name — kept for wire compatibility — a `UnitWarning` is
+therefore not necessarily advisory. Callers route on `code`, not on the message
+text.
 
 **Structural error codes:**
 

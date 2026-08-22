@@ -25,16 +25,15 @@
 import type { EsmFile } from './types.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { EXPRESSION_CHILD_KEYS } from './expression.js'
+import { EsmDiagnosticError } from './errors.js'
 
 /** Shared source of truth for "which op fields carry child expressions". */
 const EXPRESSION_CHILD_KEY_SET: ReadonlySet<string> = new Set(EXPRESSION_CHILD_KEYS)
 
-export class EnumLoweringError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-  ) {
-    super(`[${code}] ${message}`)
+export class EnumLoweringError extends EsmDiagnosticError {
+  declare code: string
+  constructor(code: string, message: string) {
+    super(code, `[${code}] ${message}`)
     this.name = 'EnumLoweringError'
   }
 }

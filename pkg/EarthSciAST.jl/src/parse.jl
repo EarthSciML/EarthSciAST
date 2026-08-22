@@ -14,7 +14,7 @@ using JSONSchema
 
 Exception thrown when JSON parsing fails.
 """
-struct ParseError <: Exception
+struct ParseError <: EarthSciASTError
     message::String
     original_error::Union{Exception,Nothing}
     # MACHINE-READABLE half, defaulting empty. A few parse/load-time rejections

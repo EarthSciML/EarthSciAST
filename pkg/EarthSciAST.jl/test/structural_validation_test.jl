@@ -19,7 +19,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     @testset "ValidationResult struct" begin
         schema_errors = [EarthSciAST.SchemaError("/", "Schema error", "required")]
         structural_errors = [EarthSciAST.StructuralError("models.test", "Structural error", "missing_equation")]
-        unit_warnings = ["Unit warning"]
+        # `unit_warnings` is a STRUCTURED record (finding D-8), matching the
+        # Python/TypeScript/Go bindings and CONFORMANCE_SPEC §3.1 — not the bare
+        # string it used to be, so a caller can route findings by `code`.
+        unit_warnings = [EarthSciAST.UnitWarning("/models/m/equations/0",
+                                                 "dimensional_mismatch", "Unit warning")]
 
         # Test constructor
         result = EarthSciAST.ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
@@ -27,6 +31,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @test length(result.schema_errors) == 1
         @test length(result.structural_errors) == 1
         @test length(result.unit_warnings) == 1
+        w = result.unit_warnings[1]
+        @test w.path == "/models/m/equations/0"
+        @test w.code == "dimensional_mismatch"
+        @test w.message == "Unit warning"
+        @test w.lhs_units == ""
+        @test w.rhs_units == ""
 
         # Test valid case
         result_valid = EarthSciAST.ValidationResult(EarthSciAST.SchemaError[], EarthSciAST.StructuralError[])
@@ -332,6 +342,19 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                 @test !isempty(result.unit_warnings)
                 @test length(result.unit_warnings) ==
                       count(e -> e.error_type == "unit_inconsistency", result.structural_errors)
+                # …and each mirror is the STRUCTURED record (D-8), carrying the
+                # promoted structural error's pointer and code verbatim so a
+                # caller can filter by code without parsing prose.
+                @test all(w -> w isa EarthSciAST.UnitWarning, result.unit_warnings)
+                # The `UnitWarning.code` vocabulary is the SECOND, smaller one
+                # (Go's UnitFinding* / Rust's UNIT_FINDING_* / TS's
+                # UnitWarning['code']) — `dimensional_mismatch`, not the
+                # `unit_inconsistency` structural code it was promoted to.
+                @test all(w -> w.code == "dimensional_mismatch", result.unit_warnings)
+                promoted = [e for e in result.structural_errors
+                            if e.error_type == "unit_inconsistency"]
+                @test [w.message for w in result.unit_warnings] == [e.message for e in promoted]
+                @test [w.path for w in result.unit_warnings] == [e.path for e in promoted]
             end
         end
 

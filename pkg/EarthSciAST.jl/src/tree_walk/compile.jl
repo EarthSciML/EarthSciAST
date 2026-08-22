@@ -577,7 +577,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         # must lower it to a stencil before evaluation. The gate fires here,
         # before evaluation, with the uniform `unlowered_operator` code.
         wrtdesc = expr.wrt === nothing ? "" : " (wrt=$(expr.wrt))"
-        throw(TreeWalkError("unlowered_operator",
+        throw(TreeWalkError(ERROR_CODES.UNLOWERED_OPERATOR,
             "unlowered derivative operator 'D'$wrtdesc reached evaluation: a " *
             "spatial or right-hand-side `D` must be lowered to a stencil by a " *
             "rewrite rule before evaluation (esm-spec §4.2 / §9.6.8)."))
@@ -652,7 +652,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # own T member above. The gate fires before evaluation; the op is lowered to a
     # stencil by a discretization rule (e.g. EarthSciDiscretizations), not here.
     if _op_in_T(expr.op)
-        throw(TreeWalkError("unlowered_operator",
+        throw(TreeWalkError(ERROR_CODES.UNLOWERED_OPERATOR,
             "unlowered rewrite-target operator '$(expr.op)' reached evaluation: " *
             "no rewrite rule lowered it to a stencil before evaluation " *
             "(esm-spec §4.2 / §9.6.8). Open-tier ops are lowered by discretization " *

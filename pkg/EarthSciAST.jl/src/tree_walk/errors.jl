@@ -26,7 +26,7 @@ evaluate. `code` is one of two families:
 
 `detail` carries op name or variable name for diagnostics.
 """
-struct TreeWalkError <: Exception
+struct TreeWalkError <: EarthSciASTError
     code::String
     detail::String
 end

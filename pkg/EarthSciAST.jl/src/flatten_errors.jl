@@ -19,7 +19,7 @@ Fields:
 - `species::Vector{String}`: fully-qualified (dot-namespaced) names of every
   offending species.
 """
-struct ConflictingDerivativeError <: Exception
+struct ConflictingDerivativeError <: EarthSciASTError
     species::Vector{String}
 end
 
@@ -36,7 +36,7 @@ Raised during flatten when a variable or equation cannot be promoted from
 its source domain to the target domain given the available `Interface` rules
 (§4.7.6).
 """
-struct DimensionPromotionError <: Exception
+struct DimensionPromotionError <: EarthSciASTError
     details::String
 end
 Base.showerror(io::IO, e::DimensionPromotionError) =
@@ -48,7 +48,7 @@ Base.showerror(io::IO, e::DimensionPromotionError) =
 Raised when two systems on different domains are coupled without an `Interface`
 that defines their dimension mapping (§4.7.6).
 """
-struct UnmappedDomainError <: Exception
+struct UnmappedDomainError <: EarthSciASTError
     source::String
     target::String
 end
@@ -67,7 +67,7 @@ strategy that is not supported by the current library tier (§4.7.6). The
 and the Python `UnsupportedMappingError` exception for cross-language
 error-name parity.
 """
-struct UnsupportedMappingError <: Exception
+struct UnsupportedMappingError <: EarthSciASTError
     mapping_type::String
 end
 Base.showerror(io::IO, e::UnsupportedMappingError) =
@@ -80,7 +80,7 @@ Base.showerror(io::IO, e::UnsupportedMappingError) =
 Raised when coupling across an `Interface` requires a unit conversion that
 was not declared by the user (§4.7.6).
 """
-struct DomainUnitMismatchError <: Exception
+struct DomainUnitMismatchError <: EarthSciASTError
     variable::String
     source_units::String
     target_units::String
@@ -100,7 +100,7 @@ independent variable disagree. The Julia flatten pipeline does not currently
 perform this check, so this type is reserved and never raised by the current
 implementation — it exists so consumers can catch it by name.
 """
-struct DomainExtentMismatchError <: Exception
+struct DomainExtentMismatchError <: EarthSciASTError
     variable::String
 end
 Base.showerror(io::IO, e::DomainExtentMismatchError) =
@@ -115,7 +115,7 @@ implemented at a higher tier in the Julia flatten pipeline. Would be raised
 when a `slice` mapping's fixed coordinate lies outside the source variable's
 declared domain extent.
 """
-struct SliceOutOfDomainError <: Exception
+struct SliceOutOfDomainError <: EarthSciASTError
     coordinate::String
     value::String
 end
@@ -132,7 +132,7 @@ does promotion-graph analysis. Would signal that the declared `Interface`
 rules form a cycle (A promotes to B, B promotes back to A on a different
 axis).
 """
-struct CyclicPromotionError <: Exception
+struct CyclicPromotionError <: EarthSciASTError
     variables::Vector{String}
 end
 Base.showerror(io::IO, e::CyclicPromotionError) =

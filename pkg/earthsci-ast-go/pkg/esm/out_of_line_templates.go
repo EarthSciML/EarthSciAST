@@ -525,22 +525,22 @@ func Expand(view map[string]any) map[string]any {
 func validateApplyRef(node map[string]any, templates map[string]any, scope string) error {
 	name, ok := node["name"].(string)
 	if !ok || name == "" {
-		return newETErr("apply_expression_template_invalid_declaration",
+		return newETErr(CodeApplyExpressionTemplateInvalidDeclaration,
 			fmt.Sprintf("%s: apply_expression_template node missing 'name'", scope))
 	}
 	declRaw, ok := templates[name]
 	if !ok {
-		return newETErr("apply_expression_template_unknown_template",
+		return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
 			fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, name))
 	}
 	decl, _ := declRaw.(map[string]any)
 	if m, has := decl["match"]; has && m != nil {
-		return newETErr("apply_expression_template_unknown_template",
+		return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
 			fmt.Sprintf("%s: apply_expression_template references '%s', a `match` rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)", scope, name))
 	}
 	bindingsRaw, ok := node["bindings"].(map[string]any)
 	if !ok {
-		return newETErr("apply_expression_template_bindings_mismatch",
+		return newETErr(CodeApplyExpressionTemplateBindingsMismatch,
 			fmt.Sprintf("%s: apply_expression_template '%s' missing 'bindings' object", scope, name))
 	}
 	declared := map[string]struct{}{}
@@ -549,7 +549,7 @@ func validateApplyRef(node map[string]any, templates map[string]any, scope strin
 			if ps, ok := p.(string); ok {
 				declared[ps] = struct{}{}
 				if _, has := bindingsRaw[ps]; !has {
-					return newETErr("apply_expression_template_bindings_mismatch",
+					return newETErr(CodeApplyExpressionTemplateBindingsMismatch,
 						fmt.Sprintf("%s: apply_expression_template '%s' missing binding for param '%s'", scope, name, ps))
 				}
 			}
@@ -557,7 +557,7 @@ func validateApplyRef(node map[string]any, templates map[string]any, scope strin
 	}
 	for k := range bindingsRaw {
 		if _, ok := declared[k]; !ok {
-			return newETErr("apply_expression_template_bindings_mismatch",
+			return newETErr(CodeApplyExpressionTemplateBindingsMismatch,
 				fmt.Sprintf("%s: apply_expression_template '%s' supplies unknown param '%s'", scope, name, k))
 		}
 	}
@@ -780,8 +780,8 @@ func validateManifoldsInRefs(node any, named map[string]any, mb map[string]bool,
 			if err == nil {
 				if verr := validateGeometryManifolds(expansion, ""); verr != nil {
 					var et *ExpressionTemplateError
-					if errors.As(verr, &et) && et.Code == "geometry_manifold_invalid" {
-						return newETErr("geometry_manifold_invalid",
+					if errors.As(verr, &et) && et.Code == CodeGeometryManifoldInvalid {
+						return newETErr(CodeGeometryManifoldInvalid,
 							fmt.Sprintf("%s: instantiation of template '%s' — %s (esm-spec §9.6.9; per-instantiation manifold check)", path, name, et.Message))
 					}
 					return verr

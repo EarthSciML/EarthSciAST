@@ -41,7 +41,7 @@ function _reject_ic_in_reaction_system(raw_data)
                 "ic equation not allowed in a reaction system; a reaction system has no " *
                 "equations field and hosts no ic equations (ICs are model-hosted: " *
                 "species.default, or a scoped-reference ic equation in a model, spec §11.4.1)";
-                code = "ic_in_reaction_system",
+                code = ERROR_CODES.IC_IN_REACTION_SYSTEM,
                 path = "/reaction_systems/$(rs_name)/constraint_equations/$(i - 1)",
                 details = Dict{String,Any}("system" => String(rs_name),
                                            "species" => species,
@@ -419,13 +419,13 @@ function _reject_library_ref(raw_doc, ref::AbstractString,
     suffix = location === nothing ? "" : " ($(location))"
     if _is_template_library_doc(raw_doc)
         throw(ExpressionTemplateError(
-            "subsystem_ref_is_template_library",
+            ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
             "Subsystem ref '$(ref)' targets a template-library file$(suffix); " *
             "libraries are imported via expression_template_imports (esm-spec §9.7.1)"))
     end
     if _is_coupling_library_doc(raw_doc)
         throw(ExpressionTemplateError(
-            "subsystem_ref_is_coupling_library",
+            ERROR_CODES.SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
             "Subsystem ref '$(ref)' targets a coupling-library file$(suffix); " *
             "libraries are imported via a coupling_import coupling entry (esm-spec §10.9)"))
     end
@@ -717,7 +717,7 @@ end
 
 Exception thrown when subsystem reference resolution fails.
 """
-struct SubsystemRefError <: Exception
+struct SubsystemRefError <: EarthSciASTError
     message::String
     # The MACHINE-READABLE half (finding (f)). A subsystem ref that does not
     # resolve is a validation finding with a canonical code, a document pointer
@@ -734,7 +734,8 @@ struct SubsystemRefError <: Exception
     subsystem::String
     parent_model::String
 
-    SubsystemRefError(message::AbstractString; code::AbstractString="unresolved_subsystem_ref",
+    SubsystemRefError(message::AbstractString;
+                      code::AbstractString=ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
                       ref::AbstractString="", subsystem::AbstractString="",
                       parent_model::AbstractString="") =
         new(String(message), String(code), String(ref), String(subsystem), String(parent_model))
@@ -868,7 +869,7 @@ function _merge_subsystem_index_sets!(registry::Dict{String,IndexSet},
     for (n, decl) in loaded.index_sets
         if haskey(registry, n)
             _index_set_deep_equal(registry[n], decl) ||
-                throw(ExpressionTemplateError("subsystem_index_set_conflict",
+                throw(ExpressionTemplateError(ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
                     "index set '$(n)' from subsystem ref '$(ref)' " *
                     "($(_index_set_show(decl))) collides with a non-deep-equal " *
                     "declaration in the importing document " *
@@ -910,7 +911,7 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
         throw(SubsystemRefError(
             "Subsystem reference '$(ref.ref)' resolves to a file containing multiple " *
             "top-level systems; exactly one is required";
-            code="ambiguous_subsystem_ref", ref=ref.ref))
+            code=ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF, ref=ref.ref))
     end
     # esm-spec §4.7: the mounted file's document-scoped index sets (already
     # metaparameter-folded, incl. any brought in by ITS own subsystem refs)
@@ -1124,7 +1125,7 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     if !isfile(resolved_path)
         throw(SubsystemRefError(
             "Subsystem reference '$(ref)' could not be resolved — file does not exist";
-            code="unresolved_subsystem_ref", ref=ref))
+            code=ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, ref=ref))
     end
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library

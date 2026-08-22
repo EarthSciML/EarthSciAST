@@ -230,7 +230,7 @@ end
 # turns it into `nothing`. Callers distinguish "unresolvable" from "absent" by
 # checking for `nothing`, and the structural validator promotes it to a hard
 # `unit_parse_error` (esm-spec §4.8.4).
-struct _UnitParseError <: Exception
+struct _UnitParseError <: EarthSciASTError
     msg::String
 end
 
@@ -1156,13 +1156,13 @@ end
 
 # esm-spec §4.8.4. A PROVABLE dimensional inconsistency; the structural layer
 # emits it as `unit_inconsistency`.
-const UNIT_DIMENSION_MISMATCH = "unit_inconsistency"
+const UNIT_DIMENSION_MISMATCH = ERROR_CODES.UNIT_INCONSISTENCY
 # A declared unit string that does not parse under the §4.8.2 grammar or names a
 # symbol outside the §4.8.1 registry. A defect in the FILE, not a limit of the
 # checker — so it is a hard error, never a warning, and never silently coerced
 # to dimensionless (which would disable every dimensional check downstream of
 # it: a typo like `"1/time"` or `"m/s2"` would simply turn the checker off).
-const UNIT_PARSE_ERROR = "unit_parse_error"
+const UNIT_PARSE_ERROR = ERROR_CODES.UNIT_PARSE_ERROR
 
 """
     model_unit_findings(model::Model) -> Vector{UnitFinding}

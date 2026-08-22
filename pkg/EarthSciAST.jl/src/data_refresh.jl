@@ -40,7 +40,7 @@ shape/length mismatch at refresh time, or a call to
 [`build_refresh_callback`](@ref) before the `DiffEqCallbacks` / `SciMLBase`
 extension is loaded.
 """
-struct RefreshError <: Exception
+struct RefreshError <: EarthSciASTError
     msg::String
 end
 Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.msg)

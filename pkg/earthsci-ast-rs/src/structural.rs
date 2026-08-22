@@ -15,7 +15,7 @@ use crate::EsmFile;
 use crate::units::{
     build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
 };
-use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
+use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo, UnitWarning};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) fn validate_model(
@@ -24,7 +24,7 @@ pub(crate) fn validate_model(
     model: &crate::Model,
     system_refs: &HashMap<String, SystemInfo>,
     errors: &mut Vec<StructuralError>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<UnitWarning>,
 ) {
     let model_path = format!("/models/{model_name}");
 
@@ -1066,7 +1066,7 @@ fn record_unit_findings(
     path: &str,
     subject: &str,
     errors: &mut Vec<StructuralError>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<UnitWarning>,
 ) {
     for finding in findings {
         if finding.is_error() {
@@ -1080,7 +1080,19 @@ fn record_unit_findings(
                 }),
             });
         } else {
-            warnings.push(format!("{subject}: {} (in {path})", finding.message));
+            // Classified at the RAISE SITE from the finding's severity, never
+            // recovered from the prose (`UnitFinding::code`). `message` keeps
+            // the exact composed string this field carried when it was a
+            // `Vec<String>`; `lhs_units` / `rhs_units` stay empty because an
+            // `analysis` finding is precisely one whose operand dimensions the
+            // checker could not determine.
+            warnings.push(UnitWarning {
+                path: path.to_string(),
+                code: finding.code().to_string(),
+                message: format!("{subject}: {} (in {path})", finding.message),
+                lhs_units: String::new(),
+                rhs_units: String::new(),
+            });
         }
     }
 }

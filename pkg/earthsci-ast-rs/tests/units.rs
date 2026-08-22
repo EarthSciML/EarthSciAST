@@ -106,7 +106,7 @@ fn validate_units_propagation_fixture_warning_free() {
     let dim_warnings: Vec<_> = result
         .unit_warnings
         .iter()
-        .filter(|w| w.contains("Dimension mismatch"))
+        .filter(|w| w.message.contains("Dimension mismatch"))
         .collect();
     assert!(
         dim_warnings.is_empty(),

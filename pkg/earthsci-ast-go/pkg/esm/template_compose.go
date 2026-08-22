@@ -77,12 +77,12 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 		for _, r := range refs[name] {
 			tdeclRaw, ok := templates[r]
 			if !ok {
-				return newETErr("apply_expression_template_unknown_template",
+				return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
 					fmt.Sprintf("%s.expression_templates.%s: body references undeclared template '%s' (esm-spec §9.7.3)", scope, name, r))
 			}
 			if tdecl, ok := tdeclRaw.(map[string]any); ok {
 				if m, has := tdecl["match"]; has && m != nil {
-					return newETErr("apply_expression_template_unknown_template",
+					return newETErr(CodeApplyExpressionTemplateUnknownTemplate,
 						fmt.Sprintf("%s.expression_templates.%s: body references '%s', a `match` rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)", scope, name, r))
 				}
 			}
@@ -107,7 +107,7 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 				}
 			}
 			cyc := append(append([]string{}, chain[idx:]...), name)
-			return 0, newETErr("apply_expression_template_recursive_body",
+			return 0, newETErr(CodeApplyExpressionTemplateRecursiveBody,
 				fmt.Sprintf("%s.expression_templates: template-body reference cycle %s (esm-spec §9.7.3)", scope, strings.Join(cyc, " -> ")))
 		case 2:
 			return depth[name], nil
@@ -128,7 +128,7 @@ func composeTemplateBodies(templates map[string]any, scope string) error {
 		state[name] = 2
 		depth[name] = d
 		if d > MaxTemplateExpansionDepth {
-			return 0, newETErr("template_body_expansion_too_deep",
+			return 0, newETErr(CodeTemplateBodyExpansionTooDeep,
 				fmt.Sprintf("%s.expression_templates.%s: body-reference chain of %d templates exceeds MAX_TEMPLATE_EXPANSION_DEPTH=%d (esm-spec §9.7.3)", scope, name, d, MaxTemplateExpansionDepth))
 		}
 		order = append(order, name)

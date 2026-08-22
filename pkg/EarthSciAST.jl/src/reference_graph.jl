@@ -61,7 +61,7 @@ stable `code` (one of the `E_REF_*` constants) so callers and the cross-binding
 conformance suite can assert on the failure mode, and a human-readable
 `message`. For a cycle, `cycle` holds the offending vertex-key path.
 """
-struct ReferenceResolutionError <: Exception
+struct ReferenceResolutionError <: EarthSciASTError
     code::String
     message::String
     cycle::Union{Nothing,Vector{String}}

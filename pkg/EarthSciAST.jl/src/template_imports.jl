@@ -89,7 +89,7 @@ function reject_template_imports_pre_v08(raw_data)
     end
     isempty(offences) && return
     throw(ExpressionTemplateError(
-        "template_import_version_too_old",
+        ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
         "expression_template_imports / top-level expression_templates / metaparameters " *
         "require esm >= 0.8.0; file declares $(string(esm_raw)). " *
         "Offending paths: $(join(offences, ", "))"))
@@ -112,7 +112,7 @@ _is_template_library_doc(raw) =
 function _require_int(v, ctx::String)::Int64
     (v isa Integer && !(v isa Bool)) && return Int64(v)
     throw(ExpressionTemplateError(
-        "metaparameter_type_error",
+        ERROR_CODES.METAPARAMETER_TYPE_ERROR,
         "$ctx: value $(repr(v)) is not an integer (esm-spec §9.7.6)"))
 end
 
@@ -121,15 +121,15 @@ function _collect_metaparam_decls(raw, origin::String)::OrderedDict{String,Any}
     mp = _raw_get(raw, "metaparameters")
     mp === nothing && return out
     _is_object(mp) || throw(ExpressionTemplateError(
-        "metaparameter_type_error", "$origin: `metaparameters` must be an object"))
+        ERROR_CODES.METAPARAMETER_TYPE_ERROR, "$origin: `metaparameters` must be an object"))
     for (k, v) in pairs(mp)
         name = string(k)
         _is_object(v) || throw(ExpressionTemplateError(
-            "metaparameter_type_error",
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
             "$origin: metaparameters.$name must be an object with `type: \"integer\"`"))
         t = _raw_get(v, "type")
         (t !== nothing && string(t) == "integer") || throw(ExpressionTemplateError(
-            "metaparameter_type_error",
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
             "$origin: metaparameters.$name: `type` must be \"integer\" (the only kind)"))
         d = _raw_get(v, "default")
         d === nothing || _require_int(d, "$origin: metaparameters.$name default")
@@ -275,24 +275,24 @@ function _try_fold(x, ctx::String)::Union{Int64,Nothing}
     x isa AbstractString && return nothing
     if x isa Number
         throw(ExpressionTemplateError(
-            "metaparameter_type_error",
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
             "$ctx: non-integer literal $x in a structural integer site (esm-spec §9.7.6)"))
     end
     _is_object(x) || throw(ExpressionTemplateError(
-        "metaparameter_type_error",
+        ERROR_CODES.METAPARAMETER_TYPE_ERROR,
         "$ctx: invalid metaparameter expression (expected integer, name, or {op, args})"))
     op_raw = _raw_get(x, "op")
     args = _raw_get(x, "args")
     (op_raw === nothing || args === nothing || !_is_array(args) || isempty(args)) &&
         throw(ExpressionTemplateError(
-            "metaparameter_type_error",
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
             "$ctx: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})"))
     vals = Union{Int64,Nothing}[_try_fold(a, ctx) for a in args]
     any(v -> v === nothing, vals) && return nothing
     ivals = Int64[v for v in vals]
     op = string(op_raw)
     op in ("+", "-", "*", "/") || throw(ExpressionTemplateError(
-        "metaparameter_type_error",
+        ERROR_CODES.METAPARAMETER_TYPE_ERROR,
         "$ctx: op '$op' is not allowed in a metaparameter expression (only + - * /)"))
     try
         acc = ivals[1]
@@ -308,9 +308,9 @@ function _try_fold(x, ctx::String)::Union{Int64,Nothing}
                 acc = Base.checked_mul(acc, v)
             else # "/"
                 v == 0 && throw(ExpressionTemplateError(
-                    "metaparameter_type_error", "$ctx: division by zero"))
+                    ERROR_CODES.METAPARAMETER_TYPE_ERROR, "$ctx: division by zero"))
                 rem(acc, v) == 0 || throw(ExpressionTemplateError(
-                    "metaparameter_type_error",
+                    ERROR_CODES.METAPARAMETER_TYPE_ERROR,
                     "$ctx: $acc / $v does not divide exactly (esm-spec §9.7.6)"))
                 acc = div(acc, v)
             end
@@ -318,7 +318,7 @@ function _try_fold(x, ctx::String)::Union{Int64,Nothing}
         return acc
     catch e
         e isa OverflowError && throw(ExpressionTemplateError(
-            "metaparameter_type_error",
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
             "$ctx: 64-bit integer overflow while folding a metaparameter expression"))
         rethrow(e)
     end
@@ -350,18 +350,18 @@ function _validate_meta_expr(x, ctx::String)
     x isa AbstractString && return
     if x isa Number
         throw(ExpressionTemplateError(
-            "metaparameter_type_error",
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
             "$ctx: non-integer literal $(repr(x)) in a metaparameter expression (esm-spec §9.7.6)"))
     end
     _is_object(x) || throw(ExpressionTemplateError(
-        "metaparameter_type_error",
+        ERROR_CODES.METAPARAMETER_TYPE_ERROR,
         "$ctx: invalid metaparameter expression (expected integer, name, or {op, args})"))
     op = _raw_get(x, "op")
     args = _raw_get(x, "args")
     ((op !== nothing && string(op) in ("+", "-", "*", "/")) &&
      args !== nothing && _is_array(args) && !isempty(args)) ||
         throw(ExpressionTemplateError(
-            "metaparameter_type_error",
+            ERROR_CODES.METAPARAMETER_TYPE_ERROR,
             "$ctx: invalid metaparameter expression (expected {op: +|-|*|/, args: [...]})"))
     for a in args
         _validate_meta_expr(a, ctx)
@@ -405,7 +405,7 @@ function eval_meta_expr(expr, env::AbstractDict{String,<:Integer}, ctx::String):
     if folded === nothing
         free = sort(unique(String[n for n in _collect_names!(String[], expr) if !haskey(env, n)]))
         throw(ExpressionTemplateError(
-            "template_import_unknown_name",
+            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
             "$ctx: metaparameter expression references " *
             "$(isempty(free) ? "a name" : join(free, ", ")) not in the importing " *
             "document's metaparameter scope (esm-spec §9.7.6)"))
@@ -482,7 +482,7 @@ function _fold_index_set_sizes!(index_sets::AbstractDict, ctx::String; strict::B
         f = _try_fold(sz, "$ctx: index_sets.$(string(name)).size")
         if f === nothing
             strict && throw(ExpressionTemplateError(
-                "metaparameter_unbound",
+                ERROR_CODES.METAPARAMETER_UNBOUND,
                 "$ctx: index_sets.$(string(name)).size references unbound name(s) " *
                 "$(join(unique(_collect_names!(String[], sz)), ", ")) (esm-spec §9.7.6)"))
         else
@@ -541,11 +541,11 @@ function _compose_template_bodies!(templates::AbstractDict{String,Any}, scope::S
         for r in refs[name]
             tdecl = get(templates, r, nothing)
             tdecl === nothing && throw(ExpressionTemplateError(
-                "apply_expression_template_unknown_template",
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
                 "$scope.expression_templates.$name: body references undeclared template '$r' (esm-spec §9.7.3)"))
             if _raw_get(tdecl, "match") !== nothing
                 throw(ExpressionTemplateError(
-                    "apply_expression_template_unknown_template",
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
                     "$scope.expression_templates.$name: body references '$r', a `match` " *
                     "rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)"))
             end
@@ -563,7 +563,7 @@ function _compose_template_bodies!(templates::AbstractDict{String,Any}, scope::S
         if st == 1
             cyc = vcat(chain[findfirst(==(name), chain):end], [name])
             throw(ExpressionTemplateError(
-                "apply_expression_template_recursive_body",
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
                 "$scope.expression_templates: template-body reference cycle " *
                 "$(join(cyc, " -> ")) (esm-spec §9.7.3)"))
         end
@@ -578,7 +578,7 @@ function _compose_template_bodies!(templates::AbstractDict{String,Any}, scope::S
         state[name] = 2
         depth[name] = d
         d > MAX_TEMPLATE_EXPANSION_DEPTH && throw(ExpressionTemplateError(
-            "template_body_expansion_too_deep",
+            ERROR_CODES.TEMPLATE_BODY_EXPANSION_TOO_DEEP,
             "$scope.expression_templates.$name: body-reference chain of $d templates " *
             "exceeds MAX_TEMPLATE_EXPANSION_DEPTH=$MAX_TEMPLATE_EXPANSION_DEPTH (esm-spec §9.7.3)"))
         push!(order, name)
@@ -616,16 +616,16 @@ function _name_map(raw, field::String, ctx::String)::OrderedDict{String,String}
     out = OrderedDict{String,String}()
     raw === nothing && return out
     _is_object(raw) || throw(ExpressionTemplateError(
-        "template_import_rename_invalid",
+        ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
         "$ctx: `$field` must be an object mapping names to names (esm-spec §9.7.7)"))
     for (k, v) in pairs(raw)
         ks = string(k)
         isempty(ks) && throw(ExpressionTemplateError(
-            "template_import_rename_invalid",
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
             "$ctx: `$field` has an empty key (esm-spec §9.7.7)"))
         (v isa AbstractString && _is_valid_dotted_name(string(v))) ||
             throw(ExpressionTemplateError(
-                "template_import_rename_invalid",
+                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
                 "$ctx: `$field`.$ks target $(repr(v)) is not a valid dotted " *
                 "identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; " *
                 "esm-spec §9.7.7)"))
@@ -824,7 +824,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
     if prefix_raw !== nothing &&
        !(prefix_raw isa AbstractString && _is_valid_dotted_name(string(prefix_raw)))
         throw(ExpressionTemplateError(
-            "template_import_rename_invalid",
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
             "$ctx: `prefix` $(repr(prefix_raw)) is not a valid dotted identifier " *
             "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"))
     end
@@ -838,7 +838,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
     union!(exported, keys(scope.metaparams))
     for k in keys(rename)
         k in exported || throw(ExpressionTemplateError(
-            "template_import_rename_unknown_name",
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
             "$ctx: `rename` names '$k', which the target does not export at this " *
             "edge (the surviving exports are templates after `only`, index sets, and " *
             "metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)"))
@@ -855,7 +855,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
         seen = Dict{String,String}()
         for (o, n) in m
             haskey(seen, n) && throw(ExpressionTemplateError(
-                "template_import_rename_collision",
+                ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
                 "$ctx: $what names '$(seen[n])' and '$o' both map to '$n' after " *
                 "renaming (esm-spec §9.7.7)"))
             seen[n] = o
@@ -889,16 +889,16 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
     # --- `rebind` keys must denote free names (typo protection) ---
     for k in keys(rebind)
         k in exported && throw(ExpressionTemplateError(
-            "template_import_rebind_unknown_name",
+            ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
             "$ctx: `rebind` names '$k', a declared name of the target (template / " *
             "index set / metaparameter) — `rebind` addresses only free names; use " *
             "`rename` for declared names (esm-spec §9.7.7)"))
         k in bound && throw(ExpressionTemplateError(
-            "template_import_rename_invalid",
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
             "$ctx: `rebind` key '$k' is a bound index symbol (`output_idx` / " *
             "`ranges`) of an imported template, not a free name (esm-spec §9.7.7)"))
         k in free || throw(ExpressionTemplateError(
-            "template_import_rebind_unknown_name",
+            ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
             "$ctx: `rebind` names '$k', which does not occur free in the imported " *
             "declarations (esm-spec §9.7.7)"))
     end
@@ -914,7 +914,7 @@ function _apply_edge_renames!(scope, entry, origin::String, ref::String)
     end
     for t in newnames
         t in taken && throw(ExpressionTemplateError(
-            "template_import_rename_collision",
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
             "$ctx: renamed/rebound name '$t' collides with a name still in use " *
             "inside the imported declarations (a remaining free name, a bound index " *
             "symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)"))
@@ -996,13 +996,16 @@ end
 
 function _merge_scope!(dst::_TemplateScope, src::_TemplateScope, origin::String)
     for (n, d) in src.templates
-        _merge_named!(dst.templates, n, d, "template_import_name_conflict", "template", origin)
+        _merge_named!(dst.templates, n, d,
+                      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
     end
     for (n, d) in src.index_sets
-        _merge_named!(dst.index_sets, n, d, "template_import_index_set_conflict", "index set", origin)
+        _merge_named!(dst.index_sets, n, d,
+                      ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT, "index set", origin)
     end
     for (n, d) in src.metaparams
-        _merge_named!(dst.metaparams, n, d, "template_import_name_conflict", "metaparameter", origin)
+        _merge_named!(dst.metaparams, n, d,
+                      ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, "metaparameter", origin)
     end
     return
 end
@@ -1034,7 +1037,7 @@ end
 # §9.7.4/§9.7.5 dedup/conflict rules.
 function _merge_own_templates!(dst::OrderedDict{String,Any}, raw, origin::String)
     for (n, d) in _collect_own_templates(raw, origin)
-        _merge_named!(dst, n, d, "template_import_name_conflict", "template", origin)
+        _merge_named!(dst, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT, "template", origin)
     end
     return dst
 end
@@ -1046,11 +1049,11 @@ function _merge_scope_registries!(doc_isets::OrderedDict{String,Any},
                                   doc_meta::OrderedDict{String,Any},
                                   scope::_TemplateScope, origin::String)
     for (n, d) in scope.index_sets
-        _merge_named!(doc_isets, n, d, "template_import_index_set_conflict",
+        _merge_named!(doc_isets, n, d, ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
                       "index set", origin)
     end
     for (n, d) in scope.metaparams
-        _merge_named!(doc_meta, n, d, "template_import_name_conflict",
+        _merge_named!(doc_meta, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
                       "metaparameter", origin)
     end
     return
@@ -1111,7 +1114,7 @@ function _load_import_raw(ref::String, base_dir::String, origin::String)
             content = _fetch_url(url)
         catch e
             throw(ExpressionTemplateError(
-                "template_import_unresolved",
+                ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
                 "$origin: failed to download template-library ref '$ref' " *
                 "(resolved to '$url'): $e"))
         end
@@ -1119,7 +1122,7 @@ function _load_import_raw(ref::String, base_dir::String, origin::String)
             JSON3.read(content)
         catch e
             throw(ExpressionTemplateError(
-                "template_import_unresolved",
+                ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
                 "$origin: template-library ref '$url' is not valid JSON: $e"))
         end
         # Relative refs INSIDE the URL-loaded library resolve against the
@@ -1128,13 +1131,13 @@ function _load_import_raw(ref::String, base_dir::String, origin::String)
     end
     path = abspath(joinpath(base_dir, ref))
     isfile(path) || throw(ExpressionTemplateError(
-        "template_import_unresolved",
+        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
         "$origin: template-library file not found: $path (from ref '$ref')"))
     raw = try
         JSON3.read(read(path, String))
     catch e
         throw(ExpressionTemplateError(
-            "template_import_unresolved",
+            ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
             "$origin: template-library ref '$path' is not valid JSON: $e"))
     end
     return raw, dirname(path)
@@ -1156,19 +1159,19 @@ to the file/URL loader `_load_import_raw`.
 function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
                                origin::String; load_ref=_load_import_raw)::_TemplateScope
     _is_object(entry) || throw(ExpressionTemplateError(
-        "template_import_unresolved",
+        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
         "$origin: expression_template_imports entries must be objects with a `ref` field"))
     ref_raw = _raw_get(entry, "ref")
     (ref_raw isa AbstractString && !isempty(string(ref_raw))) ||
         throw(ExpressionTemplateError(
-            "template_import_unresolved",
+            ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
             "$origin: expression_template_imports entry requires a non-empty string `ref`"))
     ref = string(ref_raw)
     canonical = _canonical_ref(ref, base_dir)
     if canonical in stack
         cyc = vcat(stack[findfirst(==(canonical), stack):end], [canonical])
         throw(ExpressionTemplateError(
-            "template_import_cycle",
+            ERROR_CODES.TEMPLATE_IMPORT_CYCLE,
             "$origin: import-graph cycle detected: $(join(cyc, " -> ")) (esm-spec §9.7.2)"))
     end
 
@@ -1181,22 +1184,22 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
     # not importable as a template library.
     if _is_coupling_library_doc(raw)
         throw(ExpressionTemplateError(
-            "template_import_is_coupling_library",
+            ERROR_CODES.TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
             "$origin: import target '$ref' is a coupling-library file " *
             "(has `coupling_roles`), not a template library (esm-spec §10.9)"))
     end
     _is_template_library_doc(raw) || throw(ExpressionTemplateError(
-        "template_import_not_library",
+        ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
         "$origin: import target '$ref' lacks top-level `expression_templates` — " *
         "not a template-library file (esm-spec §9.7.1)"))
     for k in _LIBRARY_FORBIDDEN_KEYS
         _raw_haskey(raw, k) && throw(ExpressionTemplateError(
-            "template_import_not_library",
+            ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
             "$origin: import target '$ref' declares `$k` — not a pure template-library file (esm-spec §9.7.1)"))
     end
     schema_errors = validate_schema(raw)
     isempty(schema_errors) || throw(ExpressionTemplateError(
-        "template_import_unresolved",
+        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
         "$origin: import target '$ref' failed schema validation: " *
         "$(schema_errors[1].path): $(schema_errors[1].message)"))
 
@@ -1218,7 +1221,7 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
         for (k, v) in pairs(bindings_raw)
             name = string(k)
             haskey(scope.metaparams, name) || throw(ExpressionTemplateError(
-                "template_import_unknown_name",
+                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
                 "$origin: import of '$ref' binds metaparameter '$name', which the " *
                 "target neither declares nor re-exports (esm-spec §9.7.6)"))
             values[name] = require_meta_expr(_to_ordered(v),
@@ -1239,7 +1242,7 @@ function _resolve_import_entry(entry, base_dir::String, stack::Vector{String},
         keep = String[string(n) for n in only_raw]
         for n in keep
             haskey(scope.templates, n) || throw(ExpressionTemplateError(
-                "template_import_unknown_name",
+                ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
                 "$origin: `only` names template '$n', which '$ref' does not declare (esm-spec §9.7.2)"))
         end
         keepset = Set(keep)
@@ -1301,12 +1304,12 @@ function _process_library(raw, dir::String, stack::Vector{String},
     if isets !== nothing && _is_object(isets)
         for (n, d) in pairs(isets)
             _merge_named!(scope.index_sets, string(n), _to_ordered(d),
-                          "template_import_index_set_conflict", "index set", origin)
+                          ERROR_CODES.TEMPLATE_IMPORT_INDEX_SET_CONFLICT, "index set", origin)
         end
     end
 
     for (n, d) in _collect_metaparam_decls(raw, origin)
-        _merge_named!(scope.metaparams, n, d, "template_import_name_conflict",
+        _merge_named!(scope.metaparams, n, d, ERROR_CODES.TEMPLATE_IMPORT_NAME_CONFLICT,
                       "metaparameter", origin)
     end
 
@@ -1407,7 +1410,7 @@ function _close_document_metaparams(doc_meta::OrderedDict{String,Any},
     end
     for k in sort(collect(keys(api)))
         haskey(doc_meta, k) || throw(ExpressionTemplateError(
-            "template_import_unknown_name",
+            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
             "loader API binds metaparameter '$k', which the document does not declare (esm-spec §9.7.6)"))
     end
     values = Dict{String,Int64}()
@@ -1421,7 +1424,7 @@ function _close_document_metaparams(doc_meta::OrderedDict{String,Any},
         end
     end
     isempty(open_names) || throw(ExpressionTemplateError(
-        "metaparameter_unbound",
+        ERROR_CODES.METAPARAMETER_UNBOUND,
         "metaparameter(s) $(join(open_names, ", ")) still open after edge bindings, " *
         "loader-API bindings, and defaults (esm-spec §9.7.6)"))
     return values
@@ -1449,7 +1452,7 @@ function _check_metaparam_name_conflicts(root::OrderedDict{String,Any},
     end
     for name in keys(doc_meta)
         name in visible && throw(ExpressionTemplateError(
-            "metaparameter_name_conflict",
+            ERROR_CODES.METAPARAMETER_NAME_CONFLICT,
             "metaparameter '$name' collides with a visible " *
             "variable/parameter/species/index-set name (esm-spec §9.7.6)"))
     end
@@ -1540,7 +1543,7 @@ function resolve_template_machinery(raw_data, base_path::AbstractString;
         load_ref=nothing)
     if !_has_import_machinery(raw_data)
         isempty(metaparameters) || throw(ExpressionTemplateError(
-            "template_import_unknown_name",
+            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
             "loader API binds metaparameter(s) " *
             "$(join(sort(collect(String[string(k) for k in keys(metaparameters)])), ", ")) " *
             "but the document declares none (esm-spec §9.7.6)"))
@@ -1771,14 +1774,14 @@ function _apply_coupling_injections!(root::AbstractDict)
         inj = get(entry, "expression_template_imports", nothing)
         inj === nothing && continue
         inj isa AbstractDict || throw(ExpressionTemplateError(
-            "template_inject_target_not_component",
+            ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
             "coupling entry `expression_template_imports` must be a map from a " *
             "target system name to a list of imports (esm-spec §9.7.10 / §10.8)"))
         referenced = _coupling_referenced_systems(entry)
         for (target, imports) in pairs(inj)
             tname = string(target)
             (tname in referenced) || throw(ExpressionTemplateError(
-                "template_inject_target_unknown",
+                ERROR_CODES.TEMPLATE_INJECT_TARGET_UNKNOWN,
                 "coupling entry `expression_template_imports` key '$tname' names no " *
                 "system referenced by that entry (esm-spec §9.7.10 / §10.8). " *
                 "The entry references: " *
@@ -1789,17 +1792,17 @@ function _apply_coupling_injections!(root::AbstractDict)
                 comp = rsystems[tname]
             else
                 throw(ExpressionTemplateError(
-                    "template_inject_target_not_component",
+                    ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
                     "coupling entry `expression_template_imports` key '$tname' resolves to " *
                     "neither a top-level model nor a reaction system " *
                     "(esm-spec §9.7.10). Nested `Parent.Child` targets are out of scope."))
             end
             comp isa AbstractDict || throw(ExpressionTemplateError(
-                "template_inject_target_not_component",
+                ERROR_CODES.TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
                 "coupling entry `expression_template_imports` key '$tname' does not name a " *
                 "component object (esm-spec §9.7.10)."))
             imports isa AbstractVector || throw(ExpressionTemplateError(
-                "template_import_not_library",
+                ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
                 "coupling entry `expression_template_imports` value for '$tname' must be a " *
                 "list of §9.7.2 import entries (esm-spec §9.7.10 / §10.8)."))
             _append_component_imports!(comp, imports)

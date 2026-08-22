@@ -48,15 +48,16 @@
 import type { Expr, ExprNode, Equation } from './types.js'
 import { isExprNode } from './expression.js'
 import { opPrecedence } from './op-registry.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /** Thrown when an expression string cannot be parsed. */
-export class ExpressionParseError extends Error {
+export class ExpressionParseError extends EsmDiagnosticError {
   constructor(
     message: string,
     /** 0-based character offset into the source where parsing failed. */
     public pos: number,
   ) {
-    super(message)
+    super(ERROR_CODES.PARSE_ERROR, message)
     this.name = 'ExpressionParseError'
   }
 }

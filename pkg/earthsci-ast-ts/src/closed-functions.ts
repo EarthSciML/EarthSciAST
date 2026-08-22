@@ -16,6 +16,8 @@
  */
 
 /** Stable diagnostic codes raised by the registry. */
+import { EsmDiagnosticError } from './errors.js'
+
 export type ClosedFunctionErrorCode =
   | 'unknown_closed_function'
   | 'closed_function_arity'
@@ -34,12 +36,10 @@ export type ClosedFunctionErrorCode =
  * `code` identifies the spec-pinned diagnostic; cross-binding harnesses
  * compare against this exact string.
  */
-export class ClosedFunctionError extends Error {
-  constructor(
-    public code: ClosedFunctionErrorCode,
-    message: string,
-  ) {
-    super(`[${code}] ${message}`)
+export class ClosedFunctionError extends EsmDiagnosticError {
+  declare code: ClosedFunctionErrorCode
+  constructor(code: ClosedFunctionErrorCode, message: string) {
+    super(code, `[${code}] ${message}`)
     this.name = 'ClosedFunctionError'
   }
 }

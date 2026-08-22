@@ -38,7 +38,7 @@ const APPLY_OP: &str = "apply_expression_template";
 /// pass. Mirrors the codes emitted by the TS / Python / Julia / Go bindings.
 pub type ExpressionTemplateError = crate::diagnostic::DiagnosticError;
 
-use crate::diagnostic::err;
+use crate::diagnostic::{codes, err};
 
 // ---------------------------------------------------------------------------
 // Shared-value mirror (structural sharing for the expansion pipeline)
@@ -246,7 +246,7 @@ fn assert_no_nested_apply(
         Value::Object(obj) => {
             if obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP) {
                 return Err(err(
-                    "apply_expression_template_invalid_declaration",
+                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     format!(
                         "expression_templates.{template_name}: `match` contains an \
                          'apply_expression_template' node at {path}; match patterns MUST NOT \
@@ -270,7 +270,7 @@ pub(crate) fn validate_templates(
     for (name, decl) in templates {
         let decl_obj = decl.as_object().ok_or_else(|| {
             err(
-                "apply_expression_template_invalid_declaration",
+                codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 format!(
                     "{scope}.expression_templates.{name}: entry must be an object \
                      with params + body"
@@ -284,7 +284,7 @@ pub(crate) fn validate_templates(
             .and_then(|p| p.as_array())
             .ok_or_else(|| {
                 err(
-                    "apply_expression_template_invalid_declaration",
+                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     format!("{scope}.expression_templates.{name}: 'params' must be an array"),
                 )
             })?;
@@ -292,26 +292,26 @@ pub(crate) fn validate_templates(
         for p in params {
             let p_str = p.as_str().ok_or_else(|| {
                 err(
-                    "apply_expression_template_invalid_declaration",
+                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     format!("{scope}.expression_templates.{name}: param names must be strings"),
                 )
             })?;
             if p_str.is_empty() {
                 return Err(err(
-                    "apply_expression_template_invalid_declaration",
+                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     format!("{scope}.expression_templates.{name}: param names must be non-empty"),
                 ));
             }
             if !seen.insert(p_str) {
                 return Err(err(
-                    "apply_expression_template_invalid_declaration",
+                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     format!("{scope}.expression_templates.{name}: param '{p_str}' declared twice"),
                 ));
             }
         }
         let _body = decl_obj.get("body").ok_or_else(|| {
             err(
-                "apply_expression_template_invalid_declaration",
+                codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 format!("{scope}.expression_templates.{name}: 'body' is required"),
             )
         })?;
@@ -338,7 +338,7 @@ pub(crate) fn validate_templates(
         if let Some(whr) = decl_obj.get("where").filter(|v| !v.is_null()) {
             if decl_obj.get("match").is_none() {
                 return Err(err(
-                    "apply_expression_template_invalid_declaration",
+                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     format!(
                         "{scope}.expression_templates.{name}: 'where' is only admissible \
                          alongside 'match' — constraints scope an auto-applied rewrite rule, not \
@@ -348,7 +348,7 @@ pub(crate) fn validate_templates(
             }
             let whr_obj = whr.as_object().filter(|o| !o.is_empty()).ok_or_else(|| {
                 err(
-                    "apply_expression_template_invalid_declaration",
+                    codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     format!(
                         "{scope}.expression_templates.{name}: 'where' must be a non-empty object \
                          mapping declared params to constraint objects"
@@ -358,7 +358,7 @@ pub(crate) fn validate_templates(
             for (p, cobj) in whr_obj {
                 if !seen.contains(p.as_str()) {
                     return Err(err(
-                        "apply_expression_template_invalid_declaration",
+                        codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                         format!(
                             "{scope}.expression_templates.{name}: 'where' constrains '{p}', which \
                              is not a declared param (esm-spec §9.6.1)"
@@ -367,7 +367,7 @@ pub(crate) fn validate_templates(
                 }
                 let cobj_obj = cobj.as_object().ok_or_else(|| {
                     err(
-                        "apply_expression_template_invalid_declaration",
+                        codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                         format!(
                             "{scope}.expression_templates.{name}: where.{p} must be a constraint \
                              object (v1 admits exactly the 'shape' kind)"
@@ -379,7 +379,7 @@ pub(crate) fn validate_templates(
                     let mut kinds: Vec<&str> = cobj_obj.keys().map(String::as_str).collect();
                     kinds.sort_unstable();
                     return Err(err(
-                        "apply_expression_template_invalid_declaration",
+                        codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                         format!(
                             "{scope}.expression_templates.{name}: where.{p} carries constraint \
                              kind(s) {}; the v1 constraint vocabulary is exactly {{shape}} \
@@ -394,7 +394,7 @@ pub(crate) fn validate_templates(
                     .filter(|a| !a.is_empty())
                     .ok_or_else(|| {
                         err(
-                            "apply_expression_template_invalid_declaration",
+                            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                             format!(
                                 "{scope}.expression_templates.{name}: where.{p}.shape must be a \
                                  non-empty array of index-set names"
@@ -404,7 +404,7 @@ pub(crate) fn validate_templates(
                 for s in shp {
                     if s.as_str().is_none_or(|s| s.is_empty()) {
                         return Err(err(
-                            "apply_expression_template_invalid_declaration",
+                            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                             format!(
                                 "{scope}.expression_templates.{name}: where.{p}.shape entries \
                                  must be non-empty strings"
@@ -489,7 +489,7 @@ pub(crate) fn compose_template_bodies(
         for r in rs {
             let Some(tdecl) = templates.get(r) else {
                 return Err(err(
-                    "apply_expression_template_unknown_template",
+                    codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
                     format!(
                         "{scope}.expression_templates.{name}: body references undeclared \
                          template '{r}' (esm-spec §9.7.3)"
@@ -498,7 +498,7 @@ pub(crate) fn compose_template_bodies(
             };
             if tdecl.get("match").is_some() {
                 return Err(err(
-                    "apply_expression_template_unknown_template",
+                    codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
                     format!(
                         "{scope}.expression_templates.{name}: body references '{r}', a `match` \
                          rewrite rule — only match-less templates are invocable by name \
@@ -524,7 +524,7 @@ pub(crate) fn compose_template_bodies(
                 let mut cyc: Vec<String> = chain[start..].to_vec();
                 cyc.push(name.to_string());
                 Err(err(
-                    "apply_expression_template_recursive_body",
+                    codes::APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
                     format!(
                         "{scope}.expression_templates: template-body reference cycle {} \
                          (esm-spec §9.7.3)",
@@ -547,7 +547,7 @@ pub(crate) fn compose_template_bodies(
                 depth.insert(name.to_string(), d);
                 if d > MAX_TEMPLATE_EXPANSION_DEPTH {
                     return Err(err(
-                        "template_body_expansion_too_deep",
+                        codes::TEMPLATE_BODY_EXPANSION_TOO_DEEP,
                         format!(
                             "{scope}.expression_templates.{name}: body-reference chain of {d} \
                              templates exceeds \
@@ -1016,7 +1016,7 @@ fn registered_where(
         for s in &req {
             if !iset_names.contains(s) {
                 return Err(err(
-                    "template_constraint_unknown_index_set",
+                    codes::TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
                     format!(
                         "{scope}.expression_templates.{tname}: where.{p}.shape names index set \
                          '{s}', which the consuming document's index_sets registry does not \
@@ -1153,25 +1153,25 @@ fn expand_apply(
     }
     .ok_or_else(|| {
         err(
-            "apply_expression_template_invalid_declaration",
+            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             format!("{scope}: apply_expression_template node missing or empty 'name'"),
         )
     })?;
     if name.is_empty() {
         return Err(err(
-            "apply_expression_template_invalid_declaration",
+            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             format!("{scope}: apply_expression_template 'name' must be non-empty"),
         ));
     }
     let decl = named.get(name).ok_or_else(|| {
         err(
-            "apply_expression_template_unknown_template",
+            codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
             format!("{scope}: apply_expression_template references undeclared template '{name}'"),
         )
     })?;
     let SNode::Obj(decl_fields) = &**decl else {
         return Err(err(
-            "apply_expression_template_invalid_declaration",
+            codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
             format!("{scope}: template '{name}' declaration is not an object"),
         ));
     };
@@ -1179,7 +1179,7 @@ fn expand_apply(
         Some(SNode::Obj(fields)) => fields,
         _ => {
             return Err(err(
-                "apply_expression_template_bindings_mismatch",
+                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 format!("{scope}: apply_expression_template '{name}' missing 'bindings' object"),
             ));
         }
@@ -1201,7 +1201,7 @@ fn expand_apply(
     for p in &params {
         if !provided.contains(p) {
             return Err(err(
-                "apply_expression_template_bindings_mismatch",
+                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 format!(
                     "{scope}: apply_expression_template '{name}' missing binding for param '{p}'"
                 ),
@@ -1211,7 +1211,7 @@ fn expand_apply(
     for (p, _) in bindings {
         if !declared.contains(p.as_str()) {
             return Err(err(
-                "apply_expression_template_bindings_mismatch",
+                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 format!("{scope}: apply_expression_template '{name}' supplies unknown param '{p}'"),
             ));
         }
@@ -1405,20 +1405,20 @@ fn validate_apply_ref(
         Some(SNode::Str(s)) => s.as_str(),
         _ => {
             return Err(err(
-                "apply_expression_template_invalid_declaration",
+                codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                 format!("{scope}: apply_expression_template node missing 'name'"),
             ));
         }
     };
     let decl = named.get(name).ok_or_else(|| {
         err(
-            "apply_expression_template_unknown_template",
+            codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
             format!("{scope}: apply_expression_template references undeclared template '{name}'"),
         )
     })?;
     if decl_has_match(decl) {
         return Err(err(
-            "apply_expression_template_unknown_template",
+            codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
             format!(
                 "{scope}: apply_expression_template references '{name}', a `match` rewrite rule — \
                  only match-less templates are invocable by name (esm-spec §9.6.2)"
@@ -1429,7 +1429,7 @@ fn validate_apply_ref(
         Some(SNode::Obj(b)) => b,
         _ => {
             return Err(err(
-                "apply_expression_template_bindings_mismatch",
+                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 format!("{scope}: apply_expression_template '{name}' missing 'bindings' object"),
             ));
         }
@@ -1453,7 +1453,7 @@ fn validate_apply_ref(
     for p in &params {
         if !provided.contains(p) {
             return Err(err(
-                "apply_expression_template_bindings_mismatch",
+                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 format!(
                     "{scope}: apply_expression_template '{name}' missing binding for param '{p}'"
                 ),
@@ -1463,7 +1463,7 @@ fn validate_apply_ref(
     for (p, _) in bindings {
         if !declared.contains(p.as_str()) {
             return Err(err(
-                "apply_expression_template_bindings_mismatch",
+                codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
                 format!("{scope}: apply_expression_template '{name}' supplies unknown param '{p}'"),
             ));
         }
@@ -1659,7 +1659,7 @@ fn rewrite_to_fixpoint(
         }
     }
     Err(err(
-        "rewrite_rule_nonterminating",
+        codes::REWRITE_RULE_NONTERMINATING,
         format!(
             "{scope}: expression-template rewriting did not converge within \
              MAX_REWRITE_PASSES={MAX_REWRITE_PASSES} passes (last rewritten op '{last}'). \
@@ -1720,7 +1720,7 @@ pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), Expressio
 
     if !offences.is_empty() {
         return Err(err(
-            "apply_expression_template_version_too_old",
+            codes::APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
             format!(
                 "expression_templates / apply_expression_template require esm >= 0.4.0; \
                  file declares {esm}. Offending paths: {}",
@@ -2023,7 +2023,7 @@ pub fn validate_geometry_manifolds(
                     .is_some_and(|s| GEOMETRY_MANIFOLD_VALUES.contains(&s));
                 if !ok {
                     return Err(err(
-                        "geometry_manifold_invalid",
+                        codes::GEOMETRY_MANIFOLD_INVALID,
                         format!(
                             "{path}: `{op}` carries manifold {m}, not a member of the \
                              closed set {{planar, spherical, geodesic}}. The manifold \
@@ -2095,7 +2095,7 @@ pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), Expres
                         };
                         if hi < lo - 1 {
                             return Err(err(
-                                "makearray_region_inverted",
+                                codes::MAKEARRAY_REGION_INVERTED,
                                 format!(
                                     "{path}: makearray regions[{ri}] dimension {di} bound pair \
                                      [{lo}, {hi}] is inverted (stop < start - 1). An empty bound \
@@ -2297,9 +2297,9 @@ fn validate_manifolds_in_refs(
                 if let Ok(expansion) = expand_all(node, named, path, &mut expand_memo) {
                     let ev = to_value(&expansion);
                     if let Err(e) = validate_geometry_manifolds(&ev, "") {
-                        if e.code == "geometry_manifold_invalid" {
+                        if e.code == codes::GEOMETRY_MANIFOLD_INVALID {
                             return Err(err(
-                                "geometry_manifold_invalid",
+                                codes::GEOMETRY_MANIFOLD_INVALID,
                                 format!(
                                     "{path}: instantiation of template '{name}' — {} \
                                      (esm-spec §9.6.9; per-instantiation manifold check)",

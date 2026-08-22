@@ -54,7 +54,7 @@ fn main() {
     if !result.unit_warnings.is_empty() {
         println!("Unit warnings:");
         for warning in &result.unit_warnings {
-            println!("  - {warning}");
+            println!("  - {}", warning.message);
         }
     }
 
@@ -117,7 +117,7 @@ fn main() {
     if !result.unit_warnings.is_empty() {
         println!("Unit warnings:");
         for warning in &result.unit_warnings {
-            println!("  - {warning}");
+            println!("  - {}", warning.message);
         }
     } else {
         println!("No unit warnings - model is dimensionally consistent!");
