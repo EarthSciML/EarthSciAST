@@ -28,7 +28,7 @@ Component-level node representing a model, reaction system, data source, or oper
 struct ComponentNode
     id::String
     name::String
-    type::String  # 'model' | 'reaction_system' | 'data_source' | 'operator'
+    type::String  # 'model' | 'reaction_system' (§4.8.1: a data source is not a node)
     description::Union{String, Nothing}
     reference::Any
     metadata::Dict{String, Any}
@@ -52,7 +52,9 @@ Variable-level node for expression graphs.
 """
 struct VariableNode
     name::String
-    kind::String  # 'state' | 'parameter' | 'observed' | 'species'
+    # DERIVED (esm-spec §6.3.1), never the declared type: 'state' | 'algebraic' |
+    # 'observed' | 'parameter' | 'brownian' | 'discrete' | 'species'.
+    kind::String
     units::Union{String, Nothing}
     system::String
 end
@@ -63,7 +65,7 @@ Edge representing dependency between variables.
 struct DependencyEdge
     source::String
     target::String
-    relationship::String  # 'additive' | 'rate' | 'stoichiometric' | 'coupling'
+    relationship::String  # 'additive' | 'multiplicative' | 'rate' | 'stoichiometric'
     equation_index::Union{Int, Nothing}
     expression::Union{ASTExpr, Nothing}
 end
@@ -86,12 +88,18 @@ function adjacency(graph::Graph{N, E}, node::N) where {N, E}
 end
 
 """
-Get nodes that point to this node.
+Get nodes that point to this node, each ONCE.
+
+Deduplicated: two parallel edges between the same pair (a pair of
+`variable_map` couplings between the same two components, or two equations of
+one model that read the same variable) name one predecessor, not two. This
+returns a NODE SET, unlike [`adjacency`](@ref), which pairs each neighbour with
+the edge that reaches it and so legitimately repeats a neighbour per edge.
 """
 function predecessors(graph::Graph{N, E}, node::N) where {N, E}
     result = N[]
     for edge in graph.edges
-        if edge.target == node
+        if edge.target == node && !(edge.source in result)
             push!(result, edge.source)
         end
     end
@@ -99,14 +107,32 @@ function predecessors(graph::Graph{N, E}, node::N) where {N, E}
 end
 
 """
-Get nodes that this node points to.
+Get nodes that this node points to, each ONCE. See [`predecessors`](@ref) for
+why this deduplicates and [`adjacency`](@ref) for why that one does not.
 """
 function successors(graph::Graph{N, E}, node::N) where {N, E}
     result = N[]
     for edge in graph.edges
-        if edge.source == node
+        if edge.source == node && !(edge.target in result)
             push!(result, edge.target)
         end
+    end
+    return result
+end
+
+"""
+The neighbour SET of `node` — every node an edge joins it to, in either
+direction, each once.
+
+`adjacency` pairs each neighbour with the edge that reaches it, so it repeats a
+neighbour once per parallel edge; this is the plain node set that
+esm-libraries-spec §4.8.3's adjacency map and the other bindings' `adjacency`
+return.
+"""
+function _adjacent_nodes(graph::Graph{N, E}, node::N) where {N, E}
+    result = N[]
+    for (neighbor, _) in adjacency(graph, node)
+        neighbor in result || push!(result, neighbor)
     end
     return result
 end
@@ -172,8 +198,17 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     # Create nodes for reaction systems
     if file.reaction_systems !== nothing
         for (name, rxn_sys) in file.reaction_systems
+            # `var_count` is 0, matching the oracle: a reaction system declares
+            # no `variables`; its species and reactions are counted by the two
+            # fields below and its parameters by nothing. This is the ONE corpus
+            # field carried without a majority behind it (TypeScript writes 0,
+            # this module and Python used to write length(parameters), Go and
+            # Rust report no variable count for a reaction system at all), so it
+            # is pinned to keep consumers agreeing rather than because
+            # esm-libraries-spec §4.8.1 settles it — it asks only for "summary
+            # metadata".
             metadata = Dict{String, Any}(
-                "var_count" => length(rxn_sys.parameters),
+                "var_count" => 0,
                 "eq_count" => length(rxn_sys.reactions),
                 "species_count" => length(rxn_sys.species)
             )
@@ -191,30 +226,14 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
         end
     end
 
-    # Create nodes for data sources. From esm 1.0.0 a source is an ingest
-    # registry entry rather than a component, so it is drawn as a leaf that
-    # nothing couples to — the consuming parameters name it through their
-    # `update` (esm-spec §8).
-    if file.data_sources !== nothing
-        for (name, loader) in file.data_sources
-            metadata = Dict{String, Any}(
-                "var_count" => 0,
-                "eq_count" => 0,
-                "species_count" => 0
-            )
-
-            node = ComponentNode(
-                name,
-                name,
-                "data_source",
-                nothing,  # DataSource has no description; scientific role lives in metadata.tags
-                loader,
-                metadata
-            )
-            push!(nodes, node)
-            node_map[name] = node
-        end
-    end
+    # `data_sources` contributes NO node. esm-libraries-spec §4.8.1 is
+    # explicit: "A `data_sources` entry is not a component and is NOT a node:
+    # from 1.0.0 external data is a parameter of the consuming model, so it is
+    # an attribute of an existing node rather than a node of its own". A model
+    # reaches a source through a parameter whose `update` names it (esm-spec
+    # §8.5), and that parameter is already a variable of an existing node.
+    # This module used to draw a leaf `data_source` node; TypeScript, Go and
+    # Python never did.
 
     # Shared edge builder for the two two-system coupling forms
     # (operator_compose / couple). Although the coupling SEMANTICS are
@@ -255,10 +274,17 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
             from_parts = split(coupling.from, ".")
             to_parts = split(coupling.to, ".")
 
-            if length(from_parts) >= 1 && length(to_parts) >= 1
+            # Both endpoints must be SCOPED `Component.variable` references: a
+            # bare name identifies no component. The label is the mapped
+            # variable — everything after the first dot, so a subsystem-scoped
+            # endpoint keeps its path (§4.8.1: "labeled with the mapped
+            # variable"). This used to emit `[<second segment>]`, which for
+            # `EmissionSources.Transportation.traffic_density` printed the
+            # SUBSYSTEM name rather than the variable.
+            if length(from_parts) >= 2 && length(to_parts) >= 2
                 from_system = from_parts[1]
                 to_system = to_parts[1]
-                variable_name = length(from_parts) > 1 ? from_parts[2] : "var"
+                variable_name = join(from_parts[2:end], ".")
 
                 from_node = get(node_map, from_system, nothing)
                 to_node = get(node_map, to_system, nothing)
@@ -269,7 +295,7 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
                         from_system,
                         to_system,
                         "variable_map",
-                        "[$variable_name]",
+                        variable_name,
                         "Variable mapping: $(coupling.from) -> $(coupling.to)",
                         coupling
                     )
@@ -318,340 +344,307 @@ graph = expression_graph(model)
 graph = expression_graph(equation)
 ```
 """
-function expression_graph(file::EsmFile)::Graph{VariableNode, DependencyEdge}
+# ── expression_graph ────────────────────────────────────────────────────────
+#
+# The variable-level dependency graph (esm-libraries-spec §4.8.2). One builder
+# accumulates nodes and edges for every granularity; the six public methods are
+# thin dispatchers over it, so a Model reached through an EsmFile and a Model
+# passed on its own share one definition of what a node and an edge are.
+
+"""
+`system` for a standalone `Model` / `ReactionSystem` / `Equation` / `Reaction` /
+expression target. Node names are NOT scoped under it, so a standalone target
+yields bare names while a whole-file target yields `Component.variable`.
+"""
+const _DEFAULT_SYSTEM = "default"
+
+"""
+`equation_index` for a dependency no positionally-numbered equation or reaction
+produced — a coupling variable map. Spelled -1 rather than `nothing` so "no
+positional equation" is a positive statement rather than "not tracked".
+"""
+const _NON_EQUATION_INDEX = -1
+
+"""Name of the synthetic node standing for a bare expression's VALUE, so the
+§4.8.2 expression overload has a target to draw its dependency edges to."""
+const _EXPR_RESULT = "expr_result"
+
+"""
+Mutable accumulator threaded through the `expression_graph` helpers: the growing
+node and edge lists plus the dedup map, keyed by SCOPED name.
+"""
+struct _ExprGraphBuilder
+    nodes::Vector{VariableNode}
+    edges::Vector{_GraphEdge{VariableNode, DependencyEdge}}
+    node_map::Dict{String, VariableNode}
+end
+_ExprGraphBuilder() = _ExprGraphBuilder(
+    VariableNode[],
+    _GraphEdge{VariableNode, DependencyEdge}[],
+    Dict{String, VariableNode}(),
+)
+
+"""Add a node (deduped by scoped name) and return that scoped name."""
+function _add_node!(b::_ExprGraphBuilder, name::AbstractString, kind::AbstractString,
+                    units::Union{String,Nothing}, system::AbstractString)
+    scoped = system == _DEFAULT_SYSTEM ? String(name) : "$(system).$(name)"
+    if !haskey(b.node_map, scoped)
+        node = VariableNode(scoped, String(kind), units, String(system))
+        push!(b.nodes, node)
+        b.node_map[scoped] = node
+    end
+    return scoped
+end
+
+"""Append a dependency edge between two already-added scoped names."""
+function _add_dependency!(b::_ExprGraphBuilder, source::AbstractString, target::AbstractString,
+                          relationship::AbstractString, equation_index::Int,
+                          expression::Union{ASTExpr,Nothing})
+    source_node = b.node_map[source]
+    target_node = b.node_map[target]
+    edge = DependencyEdge(String(source), String(target), String(relationship),
+                          equation_index, expression)
+    push!(b.edges, (source=source_node, target=target_node, data=edge))
+    return nothing
+end
+
+_graph(b::_ExprGraphBuilder) = Graph{VariableNode, DependencyEdge}(b.nodes, b.edges)
+
+"""
+The single variable an equation's LHS defines: a bare name, or the name under
+the derivative / element-index / aggregate-output wrappers (`D(x)`,
+`index(v, i)`, `aggregate(…, expr: D(index(v, i)))`). `nothing` when the LHS
+addresses no single variable (an implicit constraint such as `H*H*SO4 ~ Ksp`).
+
+Reuses classification's `_lhs_unwrap` so the graph and §6.3.1 agree on what an
+equation assigns to. Note this is NOT `free_variables(lhs)`: that returns every
+name the LHS mentions, including an `index`'s subscript, which would fabricate
+an index variable as a graph node and draw an edge to it.
+"""
+function _lhs_target_name(lhs::ASTExpr)::Union{String,Nothing}
+    head = _lhs_unwrap(lhs)
+    head isa VarExpr && return head.name
+    if head isa OpExpr && (head.op == "D") && !isempty(head.args)
+        base = _lhs_unwrap(head.args[1])
+        base isa VarExpr && return base.name
+    end
+    return nothing
+end
+
+"""
+Every variable of `model` mapped to its DERIVED graph kind (esm-spec §6.3.1).
+
+The kind is derived, never read off `var.type`: the format declares only
+`unknown` and `parameter`, so `var.type` would label every unknown `"unknown"` —
+a value that appears in no §4.8.2 vocabulary and tells a reader nothing about
+how the node behaves. This module used to do exactly that.
+
+Computed once per model rather than per reference, since each classifier walks
+the equation list.
+"""
+function _variable_kinds(model::Model)::Dict{String,String}
+    kinds = Dict{String,String}()
+    for n in ode_states(model);          kinds[n] = "state";     end
+    for n in observed_unknowns(model);   kinds[n] = "observed";  end
+    for n in algebraic_unknowns(model);  kinds[n] = "algebraic"; end
+    for n in brownian_parameters(model); kinds[n] = "brownian";  end
+    for n in discrete_parameters(model); kinds[n] = "discrete";  end
+    for n in sampled_parameters(model);  kinds[n] = "parameter"; end
+    for n in constant_parameters(model); kinds[n] = "parameter"; end
+    return kinds
+end
+
+"""Add one equation's LHS/RHS dependency edges under `system`."""
+function _process_equation!(b::_ExprGraphBuilder, equation::Equation,
+                            equation_index::Int, system::AbstractString)
+    target_name = _lhs_target_name(equation.lhs)
+    target_name === nothing && return nothing  # no single defined variable
+    lhs_key = _add_node!(b, target_name, "state", nothing, system)
+
+    # Every RHS free variable feeds the LHS. A SELF-reference is kept: §4.8.2's
+    # worked example lists `NO → NO` / `O₃ → O₃` self-loss edges explicitly.
+    for rhs_var in sort!(collect(free_variables(equation.rhs)))
+        source_key = _add_node!(b, rhs_var, "parameter", nothing, system)
+        _add_dependency!(b, source_key, lhs_key, "additive", equation_index, equation.rhs)
+    end
+    return nothing
+end
+
+"""Add one reaction's rate (parameter → species) and stoichiometric edges."""
+function _process_reaction!(b::_ExprGraphBuilder, reaction::Reaction,
+                            reaction_index::Int, system::AbstractString)
+    rate_vars = sort!(collect(free_variables(reaction.rate)))
+    substrates = reaction.substrates === nothing ? StoichiometryEntry[] : reaction.substrates
+    products   = reaction.products   === nothing ? StoichiometryEntry[] : reaction.products
+
+    # Substrates are consumed; the rate drives that consumption.
+    for substrate in substrates
+        substrate_key = _add_node!(b, substrate.species, "species", nothing, system)
+        for rate_var in rate_vars
+            param_key = _add_node!(b, rate_var, "parameter", nothing, system)
+            _add_dependency!(b, param_key, substrate_key, "rate", reaction_index, reaction.rate)
+        end
+    end
+
+    # Products are produced by the rate, and by each substrate's stoichiometry.
+    for product in products
+        product_key = _add_node!(b, product.species, "species", nothing, system)
+        for rate_var in rate_vars
+            param_key = _add_node!(b, rate_var, "parameter", nothing, system)
+            _add_dependency!(b, param_key, product_key, "rate", reaction_index, reaction.rate)
+        end
+        for substrate in substrates
+            substrate_key = _add_node!(b, substrate.species, "species", nothing, system)
+            _add_dependency!(b, substrate_key, product_key, "stoichiometric",
+                             reaction_index, reaction.rate)
+        end
+    end
+    return nothing
+end
+
+"""Add a model's declared variables and its equations' edges."""
+function _process_model!(b::_ExprGraphBuilder, model::Model, system::AbstractString)
+    kinds = _variable_kinds(model)
+    for var_name in sort!(collect(keys(model.variables)))
+        var = model.variables[var_name]
+        _add_node!(b, var_name, get(kinds, var_name, "parameter"), var.units, system)
+    end
+    for (i, equation) in enumerate(model.equations)
+        # 0-BASED, matching every other binding. This module used to emit the
+        # Julia 1-based `enumerate` index, leaking a language convention into a
+        # cross-binding wire field.
+        _process_equation!(b, equation, i - 1, system)
+    end
+    return nothing
+end
+
+"""Add a reaction system's species, parameters, and its reactions' edges."""
+function _process_reaction_system!(b::_ExprGraphBuilder, rxn_sys::ReactionSystem,
+                                   system::AbstractString)
+    # Species carry their DECLARED units; this module used to drop them.
+    for species in rxn_sys.species
+        _add_node!(b, species.name, "species", species.units, system)
+    end
+    for parameter in rxn_sys.parameters
+        _add_node!(b, parameter.name, "parameter", parameter.units, system)
+    end
+    for (i, reaction) in enumerate(rxn_sys.reactions)
+        _process_reaction!(b, reaction, i - 1, system)
+    end
+    return nothing
+end
+
+"""
+Process one component and, recursively, its inline `subsystems`.
+
+An unresolved `SubsystemRef` is skipped: it is a reference stub, not a
+component, and its variables live in the file it names. Scoped names compose
+with a dot, so a `Meteorology` model's `Temperature` subsystem contributes
+`Meteorology.Temperature.surface_temp`. This module used to visit only the
+top-level components, so a document like `tests/valid/scoped_refs_coupling.esm`
+produced 4 nodes where the oracle produces 37.
+"""
+function _process_component_tree!(b::_ExprGraphBuilder, component::Model,
+                                  system::AbstractString)
+    _process_model!(b, component, system)
+    for child_name in sort!(collect(keys(component.subsystems)))
+        child = component.subsystems[child_name]
+        child isa Model || continue  # SubsystemRef: unresolved stub
+        child_scoped = system == _DEFAULT_SYSTEM ? child_name : "$(system).$(child_name)"
+        _process_component_tree!(b, child, child_scoped)
+    end
+    return nothing
+end
+
+function _process_component_tree!(b::_ExprGraphBuilder, component::ReactionSystem,
+                                  system::AbstractString)
+    _process_reaction_system!(b, component, system)
+    for child_name in sort!(collect(keys(component.subsystems)))
+        child_scoped = system == _DEFAULT_SYSTEM ? child_name : "$(system).$(child_name)"
+        _process_component_tree!(b, component.subsystems[child_name], child_scoped)
+    end
+    return nothing
+end
+
+"""Fold `variable_map` coupling entries into cross-system dependency edges."""
+function _process_coupling!(b::_ExprGraphBuilder, coupling)
+    for entry in coupling
+        entry isa CouplingVariableMap || continue
+        from_parts = split(entry.from, ".")
+        to_parts = split(entry.to, ".")
+        (length(from_parts) >= 2 && length(to_parts) >= 2) || continue
+        source_key = _add_node!(b, join(from_parts[2:end], "."), "parameter",
+                                nothing, from_parts[1])
+        target_key = _add_node!(b, join(to_parts[2:end], "."), "parameter",
+                                nothing, to_parts[1])
+        _add_dependency!(b, source_key, target_key, "multiplicative",
+                         _NON_EQUATION_INDEX, nothing)
+    end
+    return nothing
+end
+
+function expression_graph(file::EsmFile; merge_coupled::Bool=false)::Graph{VariableNode, DependencyEdge}
     # Expand at the boundary (RFC out-of-line-expression-templates §7.7): a
     # surviving `apply_expression_template` node hides its BODY's free component
     # variables from `free_variables` (bindings are traversed; the body lives in
     # the registry), so dependency edges would be incomplete. No-op without refs.
     file.component_templates === nothing || (file = _expand_refs!(deepcopy(file)))
-    nodes = VariableNode[]
-    edges = _GraphEdge{VariableNode, DependencyEdge}[]
 
-    # Create mapping from scoped variable name to node
-    node_map = Dict{String, VariableNode}()
-
-    # Merge a component's expression graph, prefixing every node and edge
-    # endpoint with "<component_name>." scoping.
-    function add_scoped_subgraph!(component_name, subgraph)
-        for node in subgraph.nodes
-            scoped_name = "$(component_name).$(node.name)"
-            scoped_node = VariableNode(
-                scoped_name,
-                node.kind,
-                node.units,
-                component_name
-            )
-            push!(nodes, scoped_node)
-            node_map[scoped_name] = scoped_node
-        end
-
-        for edge in subgraph.edges
-            source_scoped = "$(component_name).$(edge.data.source)"
-            target_scoped = "$(component_name).$(edge.data.target)"
-
-            source_node = get(node_map, source_scoped, nothing)
-            target_node = get(node_map, target_scoped, nothing)
-
-            if source_node !== nothing && target_node !== nothing
-                scoped_edge = DependencyEdge(
-                    source_scoped,
-                    target_scoped,
-                    edge.data.relationship,
-                    edge.data.equation_index,
-                    edge.data.expression
-                )
-                push!(edges, (source=source_node, target=target_node, data=scoped_edge))
-            end
-        end
-    end
-
+    b = _ExprGraphBuilder()
     if file.models !== nothing
-        for (model_name, model) in file.models
-            add_scoped_subgraph!(model_name, expression_graph(model))
+        for name in sort!(collect(keys(file.models)))
+            _process_component_tree!(b, file.models[name], name)
         end
     end
-
     if file.reaction_systems !== nothing
-        for (rxn_name, rxn_sys) in file.reaction_systems
-            add_scoped_subgraph!(rxn_name, expression_graph(rxn_sys))
+        for name in sort!(collect(keys(file.reaction_systems)))
+            _process_component_tree!(b, file.reaction_systems[name], name)
         end
     end
-
-    # Add cross-system coupling edges
-    for coupling in file.coupling
-        if coupling isa CouplingVariableMap
-            # Parse from and to
-            from_parts = split(coupling.from, ".")
-            to_parts = split(coupling.to, ".")
-
-            if length(from_parts) >= 2 && length(to_parts) >= 2
-                from_node = get(node_map, coupling.from, nothing)
-                to_node = get(node_map, coupling.to, nothing)
-
-                if from_node !== nothing && to_node !== nothing
-                    coupling_edge = DependencyEdge(
-                        coupling.from,
-                        coupling.to,
-                        "coupling",
-                        nothing,
-                        nothing  # transform field doesn't exist in EarthSciAST.ASTExpr
-                    )
-                    push!(edges, (source=from_node, target=to_node, data=coupling_edge))
-                end
-            end
-        end
-    end
-
-    return Graph{VariableNode, DependencyEdge}(nodes, edges)
+    # OFF by default, matching TypeScript's `mergeCoupled` and Python's
+    # `merge_coupled`. This module used to add these edges unconditionally, and
+    # under the relationship `"coupling"` — a value in no §4.8.2 vocabulary.
+    merge_coupled && _process_coupling!(b, file.coupling)
+    return _graph(b)
 end
 
 function expression_graph(model::Model)::Graph{VariableNode, DependencyEdge}
-    nodes = VariableNode[]
-    edges = _GraphEdge{VariableNode, DependencyEdge}[]
-
-    # Create mapping from variable name to node
-    node_map = Dict{String, VariableNode}()
-
-    # Create nodes for all variables. The graph node-kind string IS the
-    # variable type's wire spelling by contract (MODEL_VARIABLE_TYPE_TABLE,
-    # types.jl), so from esm 1.0.0 it is `"unknown"` or `"parameter"` and
-    # nothing else; the finer role is DERIVED and belongs to the classification
-    # API (esm-spec §6.3.1), not to a node label. `""` is the fail-soft for a
-    # future enum member the table has not caught up with (the table's
-    # load-time assert makes that unreachable today).
-    for (var_name, var) in model.variables
-        kind = get(_MODEL_VARIABLE_TYPE_WIRE, var.type, "")
-
-        node = VariableNode(
-            var_name,
-            kind,
-            var.units,  # ModelVariable has units field
-            "model"
-        )
-        push!(nodes, node)
-        node_map[var_name] = node
-    end
-
-    # Create edges from equations
-    for (eq_idx, equation) in enumerate(model.equations)
-        eq_graph = expression_graph(equation)
-
-        # Add edges from this equation's graph
-        for edge in eq_graph.edges
-            source_node = get(node_map, edge.data.source, nothing)
-            target_node = get(node_map, edge.data.target, nothing)
-
-            if source_node !== nothing && target_node !== nothing
-                dep_edge = DependencyEdge(
-                    edge.data.source,
-                    edge.data.target,
-                    edge.data.relationship,
-                    eq_idx,
-                    edge.data.expression
-                )
-                push!(edges, (source=source_node, target=target_node, data=dep_edge))
-            end
-        end
-    end
-
-    return Graph{VariableNode, DependencyEdge}(nodes, edges)
+    b = _ExprGraphBuilder()
+    _process_component_tree!(b, model, _DEFAULT_SYSTEM)
+    return _graph(b)
 end
 
 function expression_graph(rxn_sys::ReactionSystem)::Graph{VariableNode, DependencyEdge}
-    nodes = VariableNode[]
-    edges = _GraphEdge{VariableNode, DependencyEdge}[]
-
-    # Create mapping from name to node
-    node_map = Dict{String, VariableNode}()
-
-    # Create nodes for species
-    for species in rxn_sys.species
-        node = VariableNode(
-            species.name,
-            "species",
-            nothing,  # Species doesn't have units field
-            "reaction_system"
-        )
-        push!(nodes, node)
-        node_map[species.name] = node
-    end
-
-    # Create nodes for parameters
-    for param in rxn_sys.parameters
-        node = VariableNode(
-            param.name,
-            "parameter",
-            param.units,  # Parameter has units field
-            "reaction_system"
-        )
-        push!(nodes, node)
-        node_map[param.name] = node
-    end
-
-    # Create edges from reactions
-    for (rxn_idx, reaction) in enumerate(rxn_sys.reactions)
-        rxn_graph = expression_graph(reaction)
-
-        # Add edges from this reaction's graph
-        for edge in rxn_graph.edges
-            source_node = get(node_map, edge.data.source, nothing)
-            target_node = get(node_map, edge.data.target, nothing)
-
-            if source_node !== nothing && target_node !== nothing
-                dep_edge = DependencyEdge(
-                    edge.data.source,
-                    edge.data.target,
-                    edge.data.relationship,
-                    rxn_idx,
-                    edge.data.expression
-                )
-                push!(edges, (source=source_node, target=target_node, data=dep_edge))
-            end
-        end
-    end
-
-    return Graph{VariableNode, DependencyEdge}(nodes, edges)
+    b = _ExprGraphBuilder()
+    _process_component_tree!(b, rxn_sys, _DEFAULT_SYSTEM)
+    return _graph(b)
 end
 
 function expression_graph(equation::Equation)::Graph{VariableNode, DependencyEdge}
-    nodes = VariableNode[]
-    edges = _GraphEdge{VariableNode, DependencyEdge}[]
-
-    # Get LHS variable (target of dependencies)
-    lhs_vars = free_variables(equation.lhs)
-    rhs_vars = free_variables(equation.rhs)
-
-    # Create nodes for all variables
-    node_map = Dict{String, VariableNode}()
-    all_vars = union(lhs_vars, rhs_vars)
-
-    for var_name in all_vars
-        node = VariableNode(var_name, "unknown", nothing, "equation")
-        push!(nodes, node)
-        node_map[var_name] = node
-    end
-
-    # Create edges: RHS variables -> LHS variables
-    for lhs_var in lhs_vars
-        for rhs_var in rhs_vars
-            if rhs_var != lhs_var  # Don't create self-loops
-                source_node = get(node_map, rhs_var, nothing)
-                target_node = get(node_map, lhs_var, nothing)
-
-                if source_node !== nothing && target_node !== nothing
-                    dep_edge = DependencyEdge(
-                        rhs_var,
-                        lhs_var,
-                        "additive",  # Default relationship
-                        nothing,
-                        equation.rhs
-                    )
-                    push!(edges, (source=source_node, target=target_node, data=dep_edge))
-                end
-            end
-        end
-    end
-
-    return Graph{VariableNode, DependencyEdge}(nodes, edges)
+    b = _ExprGraphBuilder()
+    _process_equation!(b, equation, 0, _DEFAULT_SYSTEM)
+    return _graph(b)
 end
 
 function expression_graph(reaction::Reaction)::Graph{VariableNode, DependencyEdge}
-    nodes = VariableNode[]
-    edges = _GraphEdge{VariableNode, DependencyEdge}[]
-
-    # Create mapping from name to node
-    node_map = Dict{String, VariableNode}()
-
-    # Collect all species and parameters.
-    # Use the unordered Dict{String,Float64} views (`get_reactants_dict` /
-    # `get_products_dict`) intentionally: the dependency graph wants each
-    # species once (Dict-key semantics), not the ordered author-entry list
-    # (`raw_substrates`/`raw_products`), which may repeat a species.
-    all_species = Set{String}()
-    for (species, _) in get_reactants_dict(reaction)
-        push!(all_species, species)
-    end
-    for (species, _) in get_products_dict(reaction)
-        push!(all_species, species)
-    end
-
-    rate_vars = free_variables(reaction.rate)
-
-    # Create nodes
-    for species in all_species
-        node = VariableNode(species, "species", nothing, "reaction")
-        push!(nodes, node)
-        node_map[species] = node
-    end
-
-    for var in rate_vars
-        if !haskey(node_map, var)
-            node = VariableNode(var, "parameter", nothing, "reaction")
-            push!(nodes, node)
-            node_map[var] = node
-        end
-    end
-
-    # Create stoichiometric edges (reactants and products affect each other)
-    for (reactant, _) in get_reactants_dict(reaction)
-        for (product, _) in get_products_dict(reaction)
-            if reactant != product
-                # Reactant affects product (consumption -> production)
-                source_node = get(node_map, reactant, nothing)
-                target_node = get(node_map, product, nothing)
-
-                if source_node !== nothing && target_node !== nothing
-                    dep_edge = DependencyEdge(
-                        reactant,
-                        product,
-                        "stoichiometric",
-                        nothing,
-                        reaction.rate
-                    )
-                    push!(edges, (source=source_node, target=target_node, data=dep_edge))
-                end
-            end
-        end
-    end
-
-    # Create rate parameter edges (parameters affect all species)
-    for param in rate_vars
-        for species in all_species
-            source_node = get(node_map, param, nothing)
-            target_node = get(node_map, species, nothing)
-
-            if source_node !== nothing && target_node !== nothing
-                dep_edge = DependencyEdge(
-                    param,
-                    species,
-                    "rate",
-                    nothing,
-                    reaction.rate
-                )
-                push!(edges, (source=source_node, target=target_node, data=dep_edge))
-            end
-        end
-    end
-
-    return Graph{VariableNode, DependencyEdge}(nodes, edges)
+    b = _ExprGraphBuilder()
+    _process_reaction!(b, reaction, 0, _DEFAULT_SYSTEM)
+    return _graph(b)
 end
 
 function expression_graph(expr::ASTExpr)::Graph{VariableNode, DependencyEdge}
-    nodes = VariableNode[]
-    edges = _GraphEdge{VariableNode, DependencyEdge}[]
-
-    # For single expressions, just create nodes for free variables
-    # No dependencies since we don't know the target
-    vars = free_variables(expr)
-    node_map = Dict{String, VariableNode}()
-
-    for var_name in vars
-        node = VariableNode(var_name, "unknown", nothing, "expression")
-        push!(nodes, node)
-        node_map[var_name] = node
+    # §4.8.2 requires this overload to produce EDGES, not just nodes: "every
+    # variable in the expression becomes a node, and the tree structure is
+    # flattened into dependency edges". The expression's VALUE has no name in
+    # the document, so it gets a synthetic target every free variable feeds.
+    # This module used to return nodes only.
+    b = _ExprGraphBuilder()
+    result_key = _add_node!(b, _EXPR_RESULT, "observed", nothing, _DEFAULT_SYSTEM)
+    for var_name in sort!(collect(free_variables(expr)))
+        source_key = _add_node!(b, var_name, "parameter", nothing, _DEFAULT_SYSTEM)
+        _add_dependency!(b, source_key, result_key, "multiplicative", 0, expr)
     end
-
-    return Graph{VariableNode, DependencyEdge}(nodes, edges)
+    return _graph(b)
 end
 
 # Chemical subscript rendering utilities
@@ -715,8 +708,7 @@ _dot_escape(s::AbstractString)::String =
 const _COMPONENT_NODE_STYLE = Dict{String,@NamedTuple{dot_fillcolor::String, mermaid::Tuple{String,String}}}(
     "model"           => (dot_fillcolor = "lightgreen",  mermaid = ("[", "]")),
     "reaction_system" => (dot_fillcolor = "lightcoral",  mermaid = ("(", ")")),
-    "data_source"     => (dot_fillcolor = "lightyellow", mermaid = ("{", "}")),
-)
+)  # no "data_source" row: §4.8.1 says a data source is not a node.
 const _COMPONENT_NODE_DEFAULT_STYLE =
     (dot_fillcolor = "lightgray", mermaid = ("((", "))"))
 
@@ -733,9 +725,16 @@ const _COUPLING_EDGE_DEFAULT_STYLE = (dot_color = "black", mermaid_arrow = "-->"
 # VariableNode.kind → styling ("state" has a DOT shape but the default
 # Mermaid delimiters).
 const _VARIABLE_NODE_STYLE = Dict{String,@NamedTuple{dot_shape::String, mermaid::Tuple{String,String}}}(
-    "species"   => (dot_shape = "ellipse", mermaid = ("(", ")")),
-    "parameter" => (dot_shape = "box",     mermaid = ("[", "]")),
-    "state"     => (dot_shape = "circle",  mermaid = ("((", "))")),
+    "species"   => (dot_shape = "ellipse",       mermaid = ("(", ")")),
+    "parameter" => (dot_shape = "box",           mermaid = ("[", "]")),
+    "state"     => (dot_shape = "circle",        mermaid = ("((", "))")),
+    # The remaining §6.3.1 derived kinds. Before the kind became derived this
+    # table only ever saw the two DECLARED types, so an observed, algebraic,
+    # brownian or discrete node fell through to the default diamond.
+    "algebraic" => (dot_shape = "circle",        mermaid = ("((", "))")),
+    "observed"  => (dot_shape = "diamond",       mermaid = ("{", "}")),
+    "brownian"  => (dot_shape = "doubleoctagon", mermaid = ("{{", "}}")),
+    "discrete"  => (dot_shape = "hexagon",       mermaid = ("[/", "/]")),
 )
 const _VARIABLE_NODE_DEFAULT_STYLE = (dot_shape = "diamond", mermaid = ("((", "))"))
 
@@ -846,20 +845,38 @@ function to_mermaid(graph::Graph{VariableNode, DependencyEdge})::String
 end
 
 """
-Export graph to JSON adjacency list format.
+Export graph to the JSON adjacency list of esm-libraries-spec §4.8.3.
+
+Three top-level keys:
+
+* `nodes` — each node's own fields, prefixed with the `id` that keys it (a
+  component node's `id`, a variable node's `name`);
+* `edges` — `{"source", "target", "data"}`, endpoints by node key with the edge
+  payload under `data`;
+* `adjacency` — every node key mapped to its UNDIRECTED neighbours, matching
+  [`adjacency`](@ref). (This used to map to SUCCESSORS, so a graph's JSON export
+  disagreed with its own `adjacency` method.)
+
+Pinned by `tests/conformance/graph/cases.json` at the level of the top-level
+keys, the node ids, the edge endpoints and the adjacency map; the per-node and
+per-edge payloads are this binding's own and are not.
 """
 function to_json(graph::Graph{ComponentNode, CouplingEdge})::String
     adj_list = Dict{String, Vector{String}}()
     for node in graph.nodes
-        adj_list[node.id] = String[]
-    end
-    for edge in graph.edges
-        push!(adj_list[edge.data.from], edge.data.to)
+        adj_list[node.id] = sort!(String[n.id for n in _adjacent_nodes(graph, node)])
     end
 
     result = Dict(
-        "nodes" => [Dict("id" => node.id, "name" => node.name, "type" => node.type) for node in graph.nodes],
-        "edges" => [Dict("from" => edge.data.from, "to" => edge.data.to, "type" => edge.data.type, "label" => edge.data.label) for edge in graph.edges],
+        "nodes" => [Dict("id" => node.id, "name" => node.name, "type" => node.type,
+                         "metadata" => node.metadata) for node in graph.nodes],
+        "edges" => [Dict("source" => edge.source.id, "target" => edge.target.id,
+                         "data" => Dict("id" => edge.data.id,
+                                        "from" => edge.data.from,
+                                        "to" => edge.data.to,
+                                        "type" => edge.data.type,
+                                        "label" => edge.data.label))
+                    for edge in graph.edges],
         "adjacency" => adj_list
     )
     return JSON3.write(result, pretty=true)
@@ -868,15 +885,19 @@ end
 function to_json(graph::Graph{VariableNode, DependencyEdge})::String
     adj_list = Dict{String, Vector{String}}()
     for node in graph.nodes
-        adj_list[node.name] = String[]
-    end
-    for edge in graph.edges
-        push!(adj_list[edge.data.source], edge.data.target)
+        adj_list[node.name] = sort!(String[n.name for n in _adjacent_nodes(graph, node)])
     end
 
     result = Dict(
-        "nodes" => [Dict("name" => node.name, "kind" => node.kind, "system" => node.system) for node in graph.nodes],
-        "edges" => [Dict("source" => edge.data.source, "target" => edge.data.target, "relationship" => edge.data.relationship) for edge in graph.edges],
+        "nodes" => [Dict("id" => node.name, "name" => node.name, "kind" => node.kind,
+                         "units" => node.units, "system" => node.system)
+                    for node in graph.nodes],
+        "edges" => [Dict("source" => edge.data.source, "target" => edge.data.target,
+                         "data" => Dict("source" => edge.data.source,
+                                        "target" => edge.data.target,
+                                        "relationship" => edge.data.relationship,
+                                        "equation_index" => edge.data.equation_index))
+                    for edge in graph.edges],
         "adjacency" => adj_list
     )
     return JSON3.write(result, pretty=true)

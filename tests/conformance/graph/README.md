@@ -61,6 +61,36 @@ unrelated `name`. §4.8.1 asks for "summary metadata" and names neither field.
 and the bindings differ on whether a stoichiometric edge carries the rate
 expression that produced it.
 
+## Open questions the corpus records rather than settles
+
+Three points where the oracle's answer is pinned but is NOT clearly the right
+one. Each is a decision for a human, not a bug to fix quietly.
+
+**1. An INDEXED-LHS unknown: `observed` or `algebraic`?** In
+`wildfire_atmosphere_ocean`, `rg_pairs`, `rg_src_bin` and `rg_tgt_bin` are
+defined by an indexed LHS (`rg_src_bin[a] ~ …`). esm-spec §6.3.1 defines an
+observed unknown as one with a "bare-variable LHS", so TypeScript and Go call
+these `algebraic` — and the corpus carries that. Python, Rust and Julia call them
+`observed`, because their `observed_definitions` deliberately credits the arrayed
+form (an arrayed observed's cadence must resolve through its RHS). So the SPEC
+favours the oracle 2-of-5 while the MAJORITY is against it 3-of-5. Narrowing the
+classifier in those three would also move `algebraic_unknowns`, which their
+codegen and value-invention passes consume as the solved-unknowns set, so this
+reaches well past §4.8. Python and Julia mark exactly this fixture's
+expression-graph cases as a named expected failure rather than bend either way.
+
+**2. Are an `aggregate`'s BOUND index variables graph nodes?** The corpus carries
+nodes named `a`, `o` and `v` for the same document — the bound range indices of
+its reductions. TypeScript's `freeVariables` does not subtract an aggregate's own
+indices, so they reach the graph; Julia's and Go's do subtract them. A bound
+index is not a model variable, so the oracle looks wrong here, but
+`freeVariables` is shared with other TypeScript passes.
+
+**3. A reaction system's `var_count`.** The oracle writes 0; Julia and Python
+used to write `len(parameters)`; Go and Rust report no variable count for a
+reaction system at all. §4.8.1 asks only for "summary metadata" and settles
+nothing. This is the one corpus field pinned purely to keep consumers agreeing.
+
 ## Oracle
 
 TypeScript (`pkg/earthsci-ast-ts`), on the grounds set out at the top of
