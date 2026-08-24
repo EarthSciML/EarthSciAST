@@ -249,7 +249,7 @@ Libraries at a tier that produces simulation-ready systems (currently: Julia via
 |---|---|---|
 | Python (`earthsci_ast`) | ✅ conforms | `tests/test_simulation.py` calls `scipy.integrate.solve_ivp` on multiple canonical problems and asserts trajectory correctness. |
 | Rust (`earthsci-ast-rs`) | ✅ conforms (partial) | `tests/simulate_tests.rs` runs Robertson, exponential decay, reversible, and autocatalytic problems through `diffsol`. `diffsol` is currently an unconditional dependency; moving it behind a `simulate` feature flag is a recommended follow-up. |
-| Julia (`EarthSciAST.jl`) | ❌ does not conform | The test suite constructs `ODESystem` objects but never calls `solve()`. `real_mtk_integration_test.jl` has `@test_skip` gates and only verifies the returned object is a non-`MockMTKSystem`. Tracked as a follow-up gap. |
+| Julia (`EarthSciAST.jl`) | ✅ conforms | *Row corrected 2026-08-24; it was stale on both of its stated grounds.* `real_mtk_integration_test.jl` contains zero `@test_skip`, and `mtk_export_test.jl` solves both the original and the round-tripped MTK problem and compares trajectories. The tree-walk path additionally asserts analytic values end-to-end — `simulate_run_test.jl` against `A0·exp(-(k1+k)t)`, plus `conformance_scalar_ic`, `subsystem_loader`, `build_once_spatial_field` and `wildfire` against golden trajectories. `esm_problem_test.jl` now also integrates through `solve`, and pins retcode discrimination, the `init`/`step!`/`solve!` lifecycle, name-indexing, and an ensemble sweep. |
 
 ### 2.5 The Simulation Problem (Julia, Python, Rust)
 
@@ -294,6 +294,19 @@ providers, metaparameters, and the model to build when the file holds several.
 A binding MAY expose additional construction arguments for its own build
 observability (Julia's `inspect`, Rust's progress observer). Those are extension
 seam, not stable API.
+
+**A failed build RAISES; it does not return a code.** Construction is where the
+right-hand side is compiled, so an unlowerable operator, a cyclic observed graph,
+or an undiscretized spatial operator is a *construction* error and MUST be raised
+as one. `retcode` (§2.5.3) describes runs that happened; a document that never
+became a Problem has no run to describe. This resolves a split the previous
+entry points had: `simulate` reported build failures as a failed result while
+`prepare` raised.
+
+**`sample_time` defaults to `tspan[1]`, not to zero.** Providers are sampled at
+construction, and a literal zero default silently samples the wrong instant for
+any run that does not start at `t = 0`. A binding MUST default it to the start of
+the integration interval and MUST let a caller override it.
 
 `build_evaluator` survives as a **documented tier-2 extension seam**. It is the
 entry point for a caller that wants the compiled right-hand side without a
@@ -341,6 +354,18 @@ solve(prob; callback = compose(callbacks(prob), my_extra_callback))
 this reason: without it, replacement semantics would make a Problem-level
 callback impossible to extend.
 
+**Solver stops are unioned, not replaced.** A Problem's refresh and output
+anchors are `tstops` its callbacks *need* in order to be correct — a refresh
+callback that is never stopped at silently interpolates across a data boundary.
+Replacing the callback set therefore MUST NOT discard the Problem's stops: a
+caller-supplied `tstops` is unioned with the Problem's. Replacement is about
+*which callbacks run*, not about where the solver is allowed to stop.
+
+**Firing points.** A callback fires at the run's output points and after each
+accepted step. A binding whose solver ecosystem has a richer callback vocabulary
+(continuous/discrete conditions, affect!/initialize) MAY expose it; this section
+fixes only composition and stops, which are the parts that must agree.
+
 #### 2.5.5 `remake`
 
 `remake(prob; p, u0, tspan, ...)` returns a NEW Problem with the named
@@ -360,6 +385,11 @@ un-substitutable, rather than silently rebuilding or silently ignoring it.
 completion. This is the same lifecycle `solve` performs internally, exposed for
 callers that need to interleave their own work with the integration — the
 coupling driver in a host model, an interactive session, a progress UI.
+
+**The caller owns the sink lifecycle on this path.** `solve` opens and closes the
+Problem's output sinks around the run; a caller driving `init`/`step!` is outside
+that bracket and MUST open and close them itself. A binding MUST document how,
+and MUST NOT leave a half-written sink as the failure mode for forgetting.
 
 #### 2.5.7 Accessing results by name
 
@@ -384,6 +414,14 @@ it: the solver is a test dependency, an optional extra, a Cargo feature, or a
 package extension — never an unconditional runtime dependency. Constructing a
 Problem MUST NOT require the solver to be present. Only `solve`, `init`, and
 `solve!` may.
+
+"The solver" means the *integrator* — the package that steps the ODE. It does not
+mean the solver ecosystem's shared interface and callback vocabulary: a Problem
+that composes refresh or output callbacks at construction necessarily needs those
+callback constructors at construction, and that is conforming. The line this
+section draws is that building a Problem must not drag in a time-stepping
+integrator, not that it must be free of every package the solver ecosystem
+ships.
 
 ---
 
