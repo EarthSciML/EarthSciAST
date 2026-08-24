@@ -55,18 +55,16 @@
 #     default `"t"` where the oracle preserves the field's absence as `null`.
 #     Domain PRESENCE is pinned; a null-vs-`"t"` difference is accepted, a
 #     different declared axis is not.
-#   * `domain.element_type` / `domain.array_type` — an ORACLE GAP, not a
-#     contract. The corpus records `null` for both on EVERY case because
-#     Python's `Domain` dataclass does not declare them, so the generator's
-#     `getattr(flat.domain, "element_type", None)` can only ever record `null`.
-#     esm-schema.json defines both (`element_type` ∈ {Float32, Float64},
-#     `array_type` e.g. "CuArray") and they select real behaviour — precision and
-#     array backend for the assembled problem — and §4.7.5 step 4 says `domain` is
-#     the file's section UNCHANGED. Julia now carries them (it dropped them too,
-#     until this commit). The gap is pinned as its own test asserting BOTH halves
-#     — corpus null everywhere, Julia reading the declared `Float32` — so it fails
-#     loudly once the oracle is fixed and the corpus regenerated, instead of the
-#     omission being baked into this binding.
+#   * `domain.element_type` / `domain.array_type` — COMPARED normally, no
+#     exemption. esm-schema.json defines both (`element_type` ∈ {Float32,
+#     Float64}, `array_type` e.g. "CuArray") and they select real behaviour —
+#     precision and array backend for the assembled problem — and §4.7.5 step 4
+#     says `domain` is the file's section UNCHANGED. Both Julia AND the Python
+#     oracle used to drop them at load (each round-tripping the loss back out);
+#     both were fixed on 2026-08-24 and the corpus regenerated, so these are
+#     ordinary compared fields now. A corpus-INDEPENDENT test still pins the
+#     pass-through on tests/valid/model_only.esm, which declares Float32 and is
+#     not a corpus fixture.
 #
 # ── behavioural divergences, NOT normalized ─────────────────────────────────
 #
@@ -97,11 +95,14 @@ Every entry is a DIVERGENCE REPORT. Nothing here is "Julia is wrong and we shrug
 each is a place where the two bindings answer differently and the reason is
 recorded so the disagreement is visible in the source rather than in a diff.
 
-* `independent_variables` — the oracle SORTS them (`for dim in
-  sorted(spatial_dims)`), which §4.7.5 step 4's ordering rule forbids. It only
-  shows on `full_coupled`, whose `grad` dims are declared `lon, lat, lev`; every
-  other case's axes happen to sort into document order. Julia's document order is
-  pinned locally below.
+(RESOLVED 2026-08-24: `independent_variables` used to diverge because the oracle
+SORTED them — `for dim in sorted(spatial_dims)` — which §4.7.5 step 4's ordering
+rule forbids. It showed only on `full_coupled`, whose `grad` dims are declared
+`lon, lat, lev`; every other case's axes happen to sort into document order,
+which is why it hid. Julia's document order was the correct one; the ORACLE was
+fixed, along with TypeScript, Go and Rust, all four of which accumulated into an
+unordered set and sorted on the way out. The corpus now records
+`["t","lon","lat","lev"]` and this field is compared normally.)
 * `equation_count` / `algebraic_variables` on `full_coupled` — the fixture's
   reaction system declares species `OH` that no reaction touches. §4.7.5 step 1
   says the lowering "still emits `D(species, t) = Σ stoich·rate`", and for `OH`
@@ -147,7 +148,7 @@ recorded so the disagreement is visible in the source rather than in a diff.
   mis-specification must not have. The refusal is asserted below instead.
 """
 const _FC_DIVERGENCES = Dict{String,Vector{String}}(
-    "full_coupled" => ["independent_variables", "equation_count", "equations",
+    "full_coupled" => ["equation_count", "equations",
                        "algebraic_variables", "continuous_events"],
     "complete_coupling_types" => ["equations"],
     "edge_enumeration_area_eff" => ["state_variables", "observed_variables", "equations"],
@@ -453,25 +454,19 @@ end
               ["t", "lon", "lat", "lev"]
     end
 
-    @testset "domain element_type / array_type: the oracle gap" begin
-        # The corpus records BOTH as null for every case, because the Python
-        # oracle's `Domain` dataclass declares neither and drops them at load.
-        # Assert that — so this test fails the moment the oracle is fixed and the
-        # corpus regenerated — AND assert that Julia reads the real declared
-        # value, so the omission is not quietly inherited here. §4.7.5 step 4:
-        # `domain` is the file's section UNCHANGED.
-        corpus = JSON3.read(read(_FLATTEN_CORPUS_PATH, String))
-        for case in corpus.cases
-            case.domain === nothing && continue
-            @test (String(case.id), "corpus element_type",
-                   get(case.domain, :element_type, nothing)) ==
-                  (String(case.id), "corpus element_type", nothing)
-            @test (String(case.id), "corpus array_type",
-                   get(case.domain, :array_type, nothing)) ==
-                  (String(case.id), "corpus array_type", nothing)
-        end
+    @testset "domain element_type / array_type survive flatten" begin
+        # HISTORY: the corpus used to record BOTH as null for every case, because
+        # the Python oracle's `Domain` dataclass declared neither and dropped them
+        # at load (its round trip was lossy too). Julia had the SAME bug and it
+        # was fixed here in the same commit. The oracle was fixed on 2026-08-24
+        # and the corpus regenerated, so `element_type` / `array_type` are now
+        # compared per-case like any other field. §4.7.5 step 4: `domain` is the
+        # file's section UNCHANGED.
+        #
+        # What remains is the corpus-INDEPENDENT half.
         # tests/valid/model_only.esm declares `element_type: "Float32"`. It is not
-        # a corpus fixture, so nothing above would notice Julia dropping it.
+        # a corpus fixture, so nothing in the per-case comparison would notice
+        # Julia dropping it.
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid", "model_only.esm")))
         @test flat.domain !== nothing
         @test flat.domain.element_type == "Float32"
