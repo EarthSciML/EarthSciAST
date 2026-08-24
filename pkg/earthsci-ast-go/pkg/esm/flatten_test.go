@@ -30,10 +30,10 @@ func TestFlatten_SingleModelNamespacesVariables(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 
-	if !contains(flat.StateVariables, "Atmos.T") {
+	if !containsVar(flat.StateVariables, "Atmos.T") {
 		t.Errorf("expected Atmos.T in state variables, got %v", flat.StateVariables)
 	}
-	if !contains(flat.Parameters, "Atmos.k") {
+	if !containsVar(flat.Parameters, "Atmos.k") {
 		t.Errorf("expected Atmos.k in parameters, got %v", flat.Parameters)
 	}
 	if !contains(flat.Metadata.SourceSystems, "Atmos") {
@@ -61,10 +61,10 @@ func TestFlatten_ReactionSystemNamespacesSpecies(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 
-	if !contains(flat.StateVariables, "Chem.O3") {
+	if !containsVar(flat.StateVariables, "Chem.O3") {
 		t.Errorf("expected Chem.O3 in state variables, got %v", flat.StateVariables)
 	}
-	if !contains(flat.Parameters, "Chem.k1") {
+	if !containsVar(flat.Parameters, "Chem.k1") {
 		t.Errorf("expected Chem.k1 in parameters, got %v", flat.Parameters)
 	}
 }
@@ -100,9 +100,10 @@ func TestFlatten_ReactionSystemHonorsSpeciesDefault(t *testing.T) {
 		"Chem.O":   0.0,
 	}
 	for name, want := range cases {
-		got, ok := flat.InitialValues[name]
+		initial := flat.InitialValues()
+		got, ok := initial[name]
 		if !ok {
-			t.Errorf("expected initial value for %s, got none (map=%v)", name, flat.InitialValues)
+			t.Errorf("expected initial value for %s, got none (map=%v)", name, initial)
 			continue
 		}
 		if got != want {
@@ -153,34 +154,75 @@ func TestFlatten_RecordsCouplingRules(t *testing.T) {
 	}
 }
 
-func TestReplaceVarToken_RespectsTokenBoundaries(t *testing.T) {
-	// "A.x" must not corrupt the distinct tokens "A.x2" and "BA.x" the way a
-	// naive strings.ReplaceAll would (esm audit bug).
-	if got, want := replaceVarToken("A.x + A.x2 + BA.x", "A.x", "Z"), "Z + A.x2 + BA.x"; got != want {
-		t.Errorf("replaceVarToken = %q; want %q", got, want)
+// TestFlatten_VariableMapSubstitutionIsTokenExact pins what the old text-splice
+// substitution could only approximate: a `variable_map` targeting `B.y` rewrites
+// exactly that reference and never the distinct longer name `B.y2`.
+//
+// It used to be a unit test on a string-rewriting helper (replaceVarToken) whose
+// whole job was to re-derive token boundaries out of rendered text. The
+// substitution is STRUCTURAL now — it replaces a string LEAF of the AST — so a
+// prefix collision is impossible by construction, and this exercises the property
+// end to end instead of the machinery that used to be needed for it.
+func TestFlatten_VariableMapSubstitutionIsTokenExact(t *testing.T) {
+	src := `{
+	  "esm":"1.0.0",
+	  "metadata":{"name":"token-exact"},
+	  "models":{
+	    "A":{"variables":{"p":{"type":"unknown","default":0.0},"x":{"type":"parameter","default":1.0}},
+	         "equations":[{"lhs":{"op":"D","args":["p"],"wrt":"t"},"rhs":"x"}]},
+	    "B":{"variables":{"q":{"type":"unknown","default":0.0},
+	                      "y":{"type":"parameter","default":1.0},
+	                      "y2":{"type":"parameter","default":1.0}},
+	         "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},"rhs":{"op":"+","args":["y","y2"]}}]}
+	  },
+	  "coupling":[{"type":"variable_map","from":"A.x","to":"B.y","transform":"param_to_var"}]}`
+
+	file, err := LoadString(src)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// A whole-token match inside a function wrapper is still replaced.
-	if got, want := replaceVarToken("D(A.x, t)", "A.x", "Z"), "D(Z, t)"; got != want {
-		t.Errorf("replaceVarToken = %q; want %q", got, want)
+	flat, err := Flatten(file)
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
 	}
-	// A deeper path names a different variable and must be left intact.
-	if got, want := replaceVarToken("A.x.y", "A.x", "Z"), "A.x.y"; got != want {
-		t.Errorf("replaceVarToken = %q; want %q", got, want)
+	for _, eq := range flat.Equations {
+		rhs := eq.RHSString()
+		if !strings.Contains(rhs, "B.y2") {
+			continue
+		}
+		if strings.Contains(rhs, "A.x2") || !strings.Contains(rhs, "A.x") {
+			t.Errorf("variable_map rewrote the wrong tokens: %q", rhs)
+		}
+		return
+	}
+	t.Fatal("no flattened equation referenced the mapped variables")
+}
+
+// TestFlattenEquationRendering_PowIsLeftAssociative pins that a flattened
+// equation renders through the SHARED display renderer: (a^b)^c must not come
+// out as a^b^c, which reparses right-associatively. Flatten used to carry its own
+// pretty-printer, which is why this assertion lived on that printer; the trees
+// now render with ToAscii, which the cross-language display corpus pins.
+func TestFlattenEquationRendering_PowIsLeftAssociative(t *testing.T) {
+	inner := ExprNode{Op: "^", Args: []any{"a", "b"}}
+	eq := FlattenedEquation{RHS: ExprNode{Op: "^", Args: []any{inner, "c"}}}
+	if got := eq.RHSString(); !strings.HasPrefix(got, "(") {
+		t.Errorf("RHSString = %q; a pow base must be parenthesized", got)
+	}
+	eq2 := FlattenedEquation{RHS: ExprNode{Op: "^", Args: []any{"a", ExprNode{Op: "^", Args: []any{"b", "c"}}}}}
+	if got := eq2.RHSString(); strings.HasPrefix(got, "(") {
+		t.Errorf("RHSString = %q; a pow exponent needs no parentheses", got)
 	}
 }
 
-func TestNamespaceExpression_PowIsLeftAssociative(t *testing.T) {
-	// (a^b)^c must not render as a^b^c, which reparses as a^(b^c).
-	inner := ExprNode{Op: "^", Args: []any{"a", "b"}}
-	node := ExprNode{Op: "^", Args: []any{inner, "c"}}
-	if got, want := namespaceExpression(node, "S", map[string]bool{}), "(a^b)^c"; got != want {
-		t.Errorf("namespaceExpression = %q; want %q", got, want)
+// containsVar reports whether an ordered flattened-variable map holds `needle`.
+func containsVar(haystack []FlattenedVariable, needle string) bool {
+	for _, v := range haystack {
+		if v.Name == needle {
+			return true
+		}
 	}
-	// A pow exponent needs no parens: a^(b^c) renders as a^b^c.
-	node2 := ExprNode{Op: "^", Args: []any{"a", ExprNode{Op: "^", Args: []any{"b", "c"}}}}
-	if got, want := namespaceExpression(node2, "S", map[string]bool{}), "a^b^c"; got != want {
-		t.Errorf("namespaceExpression = %q; want %q", got, want)
-	}
+	return false
 }
 
 func contains(haystack []string, needle string) bool {

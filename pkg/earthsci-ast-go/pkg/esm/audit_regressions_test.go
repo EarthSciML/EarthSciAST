@@ -152,13 +152,10 @@ func TestAuditG4_FlattenPreservesFnName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Flatten: %v", err)
 	}
-	if len(flat.Events) == 0 {
+	if len(flat.DiscreteEvents) == 0 {
 		t.Fatal("expected the discrete event to survive Flatten")
 	}
-	ev, ok := flat.Events[0].(DiscreteEvent)
-	if !ok {
-		t.Fatalf("flattened event has unexpected type %T", flat.Events[0])
-	}
+	ev := flat.DiscreteEvents[0]
 	if len(ev.Affects) == 0 {
 		t.Fatal("expected the affect to survive Flatten")
 	}
@@ -219,25 +216,37 @@ func TestAuditG5_OperatorComposeIsDeterministic(t *testing.T) {
 			t.Fatalf("iteration %d: equation count %d != %d", iter, len(flat.Equations), len(want))
 		}
 		for i := range want {
-			if flat.Equations[i] != want[i] {
-				t.Fatalf("NON-DETERMINISTIC flatten at iteration %d, equation %d:\n first run: %+v\n this run: %+v",
-					iter, i, want[i], flat.Equations[i])
+			// FlattenedEquation carries Expression TREES, which are not
+			// comparable with ==; render both sides through the shared renderer.
+			got := flat.Equations[i]
+			if got.LHSString() != want[i].LHSString() || got.RHSString() != want[i].RHSString() ||
+				got.SourceSystem != want[i].SourceSystem {
+				t.Fatalf("NON-DETERMINISTIC flatten at iteration %d, equation %d:\n first run: %s ~ %s\n this run: %s ~ %s",
+					iter, i, want[i].LHSString(), want[i].RHSString(), got.LHSString(), got.RHSString())
 			}
 		}
 	}
 }
 
-// TestAuditG5_RenamesDoNotChain pins the semantics the determinism rests on: the
-// translate map is a SIMULTANEOUS substitution, so a value written out by one
-// rename is never re-read as the key of another.
-func TestAuditG5_RenamesDoNotChain(t *testing.T) {
-	got := replaceVarTokens("A.q + B.r", map[string]string{"A.q": "B.r", "B.r": "A.q"})
-	if want := "B.r + A.q"; got != want {
-		t.Errorf("replaceVarTokens swap = %q, want %q (renames must not chain)", got, want)
+// TestAuditG5_TranslateIsAppliedOnce pins the semantics the determinism above
+// rests on. The translate map used to drive a TEXT rename over every rendered
+// equation, where a value written out by one entry could be re-read as the key of
+// another and the outcome depended on Go's randomized map order.
+//
+// operator_compose is structural now: `translate` only redirects which of A's
+// equations a given B equation merges into, and each B equation is looked up
+// exactly once, so a rename cannot chain by construction. What is left to pin is
+// that the swap map does not corrupt either system's own references.
+func TestAuditG5_TranslateIsAppliedOnce(t *testing.T) {
+	flat, err := Flatten(operatorComposeSwapFile(t))
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
 	}
-	// Token boundaries: "A.x" must not corrupt "A.x2" or "BA.x".
-	if got := replaceVarTokens("A.x2 + BA.x + A.x", map[string]string{"A.x": "Z"}); got != "A.x2 + BA.x + Z" {
-		t.Errorf("replaceVarTokens is not token-aware: %q", got)
+	for _, eq := range flat.Equations {
+		rhs := eq.RHSString()
+		if strings.Contains(rhs, "A.q") && strings.Contains(rhs, "B.r") {
+			t.Errorf("a translate entry chained into the other: RHS = %q", rhs)
+		}
 	}
 }
 
@@ -573,19 +582,23 @@ func TestAuditG12_MetaparamDoesNotRewriteOpSlot(t *testing.T) {
 
 // --- G13: text splices must be precedence- and token-safe -------------------
 
-// A `factor` was spliced as UNPARENTHESIZED text, so substituting `A.x -> 2*B.y`
-// into `A.x^2` produced `2*B.y^2`, which re-parses as `2*(B.y^2)` when the
-// correct reading is `(2*B.y)^2`.
+// A `factor` was spliced as UNPARENTHESIZED text, so substituting the mapped
+// reference inside `…^2` produced `2*A.x^2`, which re-parses as `2*(A.x^2)` when
+// the correct reading is `(2*A.x)^2`.
+//
+// The substitution replaces the TARGET parameter with the SOURCE variable
+// (esm-libraries-spec §4.7.5 step 3: "replace all occurrences of `Target.param`
+// with `Source.var`"), so the exponent lives on B's side of the map.
 func TestAuditG13_VariableMapFactorIsParenthesized(t *testing.T) {
 	src := `{
 	  "esm":"0.2.0",
 	  "metadata":{"name":"g13"},
 	  "models":{
 	    "A":{"variables":{"p":{"type":"unknown","default":0.0},"x":{"type":"parameter","default":1.0}},
-	         "equations":[{"lhs":{"op":"D","args":["p"],"wrt":"t"},
-	                       "rhs":{"op":"^","args":["x",2.0]}}]},
+	         "equations":[{"lhs":{"op":"D","args":["p"],"wrt":"t"},"rhs":"x"}]},
 	    "B":{"variables":{"q":{"type":"unknown","default":0.0},"y":{"type":"parameter","default":1.0}},
-	         "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},"rhs":"y"}]}
+	         "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},
+	                       "rhs":{"op":"^","args":["y",2.0]}}]}
 	  },
 	  "coupling":[{"type":"variable_map","from":"A.x","to":"B.y",
 	               "transform":"conversion_factor","factor":2.0}]}`
@@ -599,34 +612,45 @@ func TestAuditG13_VariableMapFactorIsParenthesized(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 	for _, eq := range flat.Equations {
-		if !strings.Contains(eq.RHS, "B.y") {
+		rhs := eq.RHSString()
+		if !strings.Contains(rhs, "A.x") || !strings.Contains(rhs, "^") {
 			continue
 		}
-		if strings.Contains(eq.RHS, "(2*B.y)") {
-			return // parenthesized: precedence-safe in every context
+		// The factor is a `*` NODE spliced into the `^` node's base slot, so the
+		// grouping is carried by the tree and the renderer parenthesizes it. The
+		// old text splice had to remember to write the brackets itself.
+		if strings.Contains(rhs, "(2 * A.x)^2") {
+			return // precedence-safe in every context
 		}
-		t.Errorf("the factor splice is not parenthesized, so it re-parses under the "+
-			"surrounding precedence: RHS = %q", eq.RHS)
+		t.Errorf("the conversion factor lost its grouping, so it re-parses under the "+
+			"surrounding precedence: RHS = %q", rhs)
 		return
 	}
 	t.Fatal("no flattened equation referenced the mapped variable")
 }
 
 // TestAuditG13_ConnectorTargetMatchIsTokenAware pins the other half of G13: the
-// connector-target test was a bare strings.Contains, so a target of "A.v" also
-// matched the equation for the longer name "A.v2".
+// connector-target test was a bare strings.Contains over a rendered LHS, so a
+// target of "A.v" also matched the equation for the longer name "A.v2".
+//
+// The target is resolved through lhsDependentVar and matched by NAME EQUALITY
+// now, so this asserts that function reads the exact dependent variable out of
+// each LHS shape a connector can address.
 func TestAuditG13_ConnectorTargetMatchIsTokenAware(t *testing.T) {
-	if !lhsMentionsVar("D(Sys.v, t)", "Sys.v") {
-		t.Error("lhsMentionsVar must find the target inside a derivative LHS")
+	wrt := "t"
+	deriv := func(name string) Expression {
+		return ExprNode{Op: "D", Args: []any{name}, Wrt: &wrt}
 	}
-	if !lhsMentionsVar("Sys.v", "Sys.v") {
-		t.Error("lhsMentionsVar must find a bare target")
+	if got := lhsDependentVar(deriv("Sys.v")); got != "Sys.v" {
+		t.Errorf("lhsDependentVar(D(Sys.v, t)) = %q, want %q", got, "Sys.v")
 	}
-	if lhsMentionsVar("D(A.v2, t)", "A.v") {
-		t.Error("lhsMentionsVar matched a LONGER variable that merely has the target as a prefix")
+	if got := lhsDependentVar("Sys.v"); got != "Sys.v" {
+		t.Errorf("lhsDependentVar(Sys.v) = %q, want %q", got, "Sys.v")
 	}
-	if lhsMentionsVar("D(BA.v, t)", "A.v") {
-		t.Error("lhsMentionsVar matched a variable that merely has the target as a suffix")
+	for _, longer := range []string{"A.v2", "BA.v"} {
+		if got := lhsDependentVar(deriv(longer)); got == "A.v" {
+			t.Errorf("lhsDependentVar(D(%s, t)) resolved to the shorter name A.v", longer)
+		}
 	}
 }
 

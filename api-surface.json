@@ -145,18 +145,18 @@
     }
   },
   "counts": {
-    "symbols": 949,
+    "symbols": 954,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 291,
       "typescript": 219,
       "python": 234,
       "rust": 291,
-      "go": 374,
+      "go": 383,
       "editor": 71
     },
     "by_tier": {
-      "extension": 694,
+      "extension": 699,
       "stable": 255
     }
   },
@@ -1784,6 +1784,7 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "ConflictingDerivativeError",
         "julia": "ConflictingDerivativeError",
         "python": "ConflictingDerivativeError",
         "typescript": "ConflictingDerivativeError"
@@ -2428,6 +2429,7 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "DimensionPromotionError",
         "julia": "DimensionPromotionError",
         "python": "DimensionPromotionError",
         "typescript": "DimensionPromotionError"
@@ -3567,6 +3569,14 @@
       }
     },
     {
+      "name": "field_ic",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FieldIC"
+      }
+    },
+    {
       "name": "field_initial_condition",
       "kind": "type",
       "tier": "extension",
@@ -3766,6 +3776,22 @@
       }
     },
     {
+      "name": "flattened_function_table",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FlattenedFunctionTable"
+      }
+    },
+    {
+      "name": "flattened_index_set",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FlattenedIndexSet"
+      }
+    },
+    {
       "name": "flattened_system",
       "kind": "type",
       "tier": "stable",
@@ -3775,6 +3801,14 @@
         "python": "FlattenedSystem",
         "rust": "FlattenedSystem",
         "typescript": "FlattenedSystem"
+      }
+    },
+    {
+      "name": "flattened_template",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FlattenedTemplate"
       }
     },
     {
@@ -3790,6 +3824,7 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "FlattenedVariable",
         "python": "FlattenedVariable",
         "typescript": "FlattenedVariable"
       }
@@ -4466,6 +4501,14 @@
       }
     },
     {
+      "name": "lifted_shape",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "LiftedShape"
+      }
+    },
+    {
       "name": "literal_value",
       "kind": "function",
       "tier": "extension",
@@ -4587,6 +4630,7 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "LoaderField",
         "python": "LoaderField",
         "typescript": "LoaderField"
       }

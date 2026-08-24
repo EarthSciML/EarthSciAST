@@ -44,6 +44,14 @@ func (o *orderedMap) len() int { return len(o.m) }
 // orderedKeysOf returns m's keys, honouring `order` first and appending any
 // keys absent from `order` in sorted-name order.
 func orderedKeysOf(m map[string]any, order []string) []string {
+	return orderedKeys(m, order)
+}
+
+// orderedKeys is orderedKeysOf over a map of any value type. Declaration order
+// is normative for every map a FlattenedSystem carries (esm-libraries-spec
+// §4.7.5 step 4), and the typed document holds those maps as
+// map[string]ModelVariable, map[string]Species, ... rather than map[string]any.
+func orderedKeys[V any](m map[string]V, order []string) []string {
 	seen := make(map[string]bool, len(m))
 	keys := make([]string, 0, len(m))
 	for _, k := range order {
@@ -60,4 +68,16 @@ func orderedKeysOf(m map[string]any, order []string) []string {
 	}
 	sort.Strings(rest)
 	return append(keys, rest...)
+}
+
+// sortedKeys returns the sorted keys of a map. Use it for a DETERMINISTIC walk
+// of a map whose order is not itself meaningful; where declaration order IS
+// meaningful (esm-libraries-spec §4.7.5 step 4), use orderedKeys instead.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

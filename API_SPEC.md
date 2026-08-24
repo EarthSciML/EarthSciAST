@@ -637,6 +637,7 @@ reading that as a gap.
 | `canonicalize` | function | `canonicalize` | `canonicalize` | – | `canonicalize` | `Canonicalize` |
 | `closed_function_error` | error | `ClosedFunctionError` | `ClosedFunctionError` | – | `ClosedFunctionError` | `ClosedFunctionError` |
 | `component_graph` | function | `component_graph` | `componentGraph` / `component_graph` | `component_graph` | `component_graph` | – |
+| `conflicting_derivative_error` | error | `ConflictingDerivativeError` | `ConflictingDerivativeError` | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` |
 | `contains` | function | – | `contains` | `contains` | `contains` | `Contains` |
 | `continuous_event` | type | `ContinuousEvent` | – | `ContinuousEvent` | `ContinuousEvent` | `ContinuousEvent` |
 | `coupling_entry` | type | `CouplingEntry` | – | `CouplingEntry` | `CouplingEntry` | `CouplingEntry` |
@@ -646,6 +647,7 @@ reading that as a gap.
 | `data_source_location` | type | `DataSourceLocation` | – | `DataSourceLocation` | `DataSourceLocation` | `DataSourceLocation` |
 | `data_source_temporal` | type | `DataSourceTemporal` | – | `DataSourceTemporal` | `DataSourceTemporal` | `DataSourceTemporal` |
 | `derive_odes` | function | `derive_odes` | `deriveODEs` | `derive_odes` | `derive_odes` | – |
+| `dimension_promotion_error` | error | `DimensionPromotionError` | `DimensionPromotionError` | `DimensionPromotionError` | – | `DimensionPromotionError` |
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |
 | `distribution` | type | `Distribution` | – | `Distribution` | `Distribution` | `Distribution` |
@@ -693,11 +695,9 @@ reading that as a gap.
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
 | `compose` | function | `compose` | `compose` | – | – | `Compose` |
-| `conflicting_derivative_error` | error | `ConflictingDerivativeError` | `ConflictingDerivativeError` | `ConflictingDerivativeError` | – | – |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
-| `dimension_promotion_error` | error | `DimensionPromotionError` | `DimensionPromotionError` | `DimensionPromotionError` | – | – |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
@@ -706,12 +706,14 @@ reading that as a gap.
 | `extract` | function | `extract` | `extract` | – | – | `Extract` |
 | `flatten_error` | error | – | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `flattened_equation` | type | – | `FlattenedEquation` | `FlattenedEquation` | – | `FlattenedEquation` |
+| `flattened_variable` | type | – | `FlattenedVariable` | `FlattenedVariable` | – | `FlattenedVariable` |
 | `format_canonical_float` | function | `format_canonical_float` | `formatCanonicalFloat` | – | `format_canonical_float` | – |
 | `free_parameters` | function | – | `freeParameters` | `free_parameters` | `free_parameters` | – |
 | `function_table` | type | `FunctionTable` | – | `FunctionTable` | – | `FunctionTable` |
 | `function_table_axis` | type | `FunctionTableAxis` | – | `FunctionTableAxis` | – | `FunctionTableAxis` |
 | `graph` | type | `Graph` | `Graph` | `Graph` | – | – |
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
+| `loader_field` | type | – | `LoaderField` | `LoaderField` | – | `LoaderField` |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
@@ -774,7 +776,6 @@ reading that as a gap.
 | `field_reduce` | function | `field_reduce` | – | – | `field_reduce` | – |
 | `flatten_template_registries` | function | – | `flattenTemplateRegistries` | `flatten_template_registries` | – | – |
 | `flatten_with_options` | function | – | – | – | `flatten_with_options` | `FlattenWithOptions` |
-| `flattened_variable` | type | – | `FlattenedVariable` | `FlattenedVariable` | – | – |
 | `float_key_error` | error | – | – | `FloatKeyError` | `FloatKeyError` | – |
 | `geometry_error` | error | – | – | `GeometryError` | `GeometryError` | – |
 | `get_component_type` | function | – | `getComponentType` | – | `get_component_type` | – |
@@ -786,7 +787,6 @@ reading that as a gap.
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
-| `loader_field` | type | – | `LoaderField` | `LoaderField` | – | – |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
 | `merge` | function | – | `merge` | – | – | `Merge` |
