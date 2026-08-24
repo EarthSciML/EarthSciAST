@@ -177,10 +177,19 @@ end
 # ---- Emission context (one per generated function) --------------------------
 mutable struct _CGCtx
     # Runtime objects the generated code needs (const arrays, connectivity /
-    # valence tables, interp specs, outs vectors) — passed as ONE tuple
-    # argument and hoisted to locals in the prologue. Deduped by identity.
-    tabs::Vector{Any}
-    tabid::IdDict{Any,Int}
+    # valence tables, interp specs, outs vectors), GROUPED BY CONCRETE TYPE into
+    # homogeneous containers (ess-iip-tabgroup). The generated code indexes a
+    # concrete-element container — `_cggrpG[pos]` — so its element type infers in
+    # O(1); the runtime `tabs` argument is a small tuple of those containers, one
+    # per distinct type. This replaces a per-object heterogeneous N-tuple whose
+    # TYPE alone made inference super-linear: the duo LMARS momentum RHS registers
+    # ~2.5e5 tabs, EVERY one a `Vector{Int}`; as `Tuple{Vector{Int},…×2.5e5}` it
+    # drove the split helpers' compile to ~850 s, as one `Vector{Vector{Int}}` it
+    # is cheap. `tab_types[g]` is group g's element type, `tab_objs[g]` its objects
+    # (deduped by identity via `tabid` → (group, position)).
+    tab_types::Vector{DataType}
+    tab_objs::Vector{Vector{Any}}
+    tabid::IdDict{Any,Tuple{Int,Int}}
     # Invariant-slot local names per kernel object (parent or sub), filled by
     # prologue statements in `_run_acc_kernel!`'s nested-first order. Values
     # are recomputed-identical across sharing parents, so one fill suffices.
@@ -200,12 +209,26 @@ mutable struct _CGCtx
     # sub-functions so both call them by name; each captures nothing (params
     # only), so the RHS stays allocation-free.
     helpers::Vector{Any}
+    # Helper dedup (ess-iip-helper-dedup): identical spilled bodies (same code —
+    # the momentum spine bears LAZY nodes, so scalar CSE was skipped and its
+    # redundant sub-expressions reach codegen un-shared) collapse to ONE compiled
+    # `@noinline`, still called per occurrence. Body string → the helper name it
+    # was first minted as. Reset per kernel so a declined kernel's rolled-back
+    # helpers are never referenced (dedup scope is one kernel — where the
+    # redundancy is; distinct kernels are distinct equations).
+    helper_dedup::Dict{String,Symbol}
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
-    _CGCtx(Any[], IdDict{Any,Int}(), IdDict{Any,Vector{Symbol}}(),
-           Any[], Any[], 0, budget, 0, shared_cache, 0, Any[])
+    _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
+           IdDict{Any,Vector{Symbol}}(),
+           Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Symbol}())
+
+_cg_helper_dedup_disabled() = get(ENV, "ESS_CG_HELPER_DEDUP_DISABLE", "") == "1"
 
 _cg_name(ctx::_CGCtx, base::String) = Symbol("_cg", base, ctx.nname += 1)
+
+# The local that holds group `g`'s homogeneous tab container (`_cggrpG`).
+_cg_grp_sym(g::Int) = Symbol("_cggrp", g)
 
 @inline function _cg_budget!(ctx::_CGCtx)
     ctx.nodes += 1
@@ -213,14 +236,24 @@ _cg_name(ctx::_CGCtx, base::String) = Symbol("_cg", base, ctx.nname += 1)
     return nothing
 end
 
-# Register a runtime object; returns the prologue-local Symbol that holds it.
+# Register a runtime object; returns the indexing expression `_cggrpG[pos]` into
+# its by-type container (ess-iip-tabgroup). Deduped by identity; a new object is
+# appended to the container for its concrete type (a new group if that type is
+# unseen). The returned `_cggrpG[pos]` reads a CONCRETE-element container, so its
+# element type infers in O(1) — the whole point of grouping.
 function _cg_tab!(ctx::_CGCtx, obj)
-    id = get(ctx.tabid, obj, 0)
-    id != 0 && return Symbol("_cgtab", id)
-    push!(ctx.tabs, obj)
-    id = length(ctx.tabs)
-    ctx.tabid[obj] = id
-    return Symbol("_cgtab", id)
+    got = get(ctx.tabid, obj, nothing)
+    got !== nothing && return :($(_cg_grp_sym(got[1]))[$(got[2])])
+    T = typeof(obj)
+    g = findfirst(==(T), ctx.tab_types)
+    if g === nothing
+        push!(ctx.tab_types, T); push!(ctx.tab_objs, Any[])
+        g = length(ctx.tab_types)
+    end
+    push!(ctx.tab_objs[g], obj)
+    pos = length(ctx.tab_objs[g])
+    ctx.tabid[obj] = (g, pos)
+    return :($(_cg_grp_sym(g))[$pos])
 end
 
 # ---- Per-kernel-evaluation context ------------------------------------------
@@ -943,44 +976,32 @@ _cg_is_passable(s::Symbol) =
     (n = String(s); startswith(n, "_cg") && s !== :_cgT && !startswith(n, "_cgh"))
 
 # Spill `sub` (already ≤ cap) into a fresh `@noinline` helper returning its
-# value; return the call expression that replaces it.
-# Rewrite every hoisted tab local `_cgtabN` inside `ex` to the tuple index
-# `tabs[N]` (IN PLACE). A cell body references THOUSANDS of distinct tabs; passing
-# each as its own helper parameter makes the parameter set propagate up the tree
-# and the split O(#helpers × #tabs). Threading the single `tabs` tuple instead
-# keeps every helper's tab dependency to ONE argument. Returns whether any tab
-# was rewritten (⇒ the helper must receive `tabs`). `tabs[N]` on a tuple with a
-# literal index is type-stable — same access the hoisted local compiled to.
-function _cg_detab!(ex)::Bool
-    used = false
-    if ex isa Expr
-        for i in eachindex(ex.args)
-            a = ex.args[i]
-            if a isa Symbol
-                s = String(a)
-                if startswith(s, "_cgtab")
-                    n = tryparse(Int, SubString(s, 7))
-                    if n !== nothing
-                        ex.args[i] = Expr(:ref, :tabs, n); used = true
-                    end
-                end
-            else
-                used |= _cg_detab!(a)
-            end
-        end
-    end
-    return used
-end
-
+# value; return the call expression that replaces it. Tab reads in `sub` are
+# already the by-type container indices `_cggrpG[pos]` (ess-iip-tabgroup), so the
+# helper's tab dependency is ONE argument per GROUP (a few concrete-typed
+# containers) no matter how many distinct tabs it touches — this is what keeps
+# the split's parameter/inference cost from exploding with the tab count.
 function _cg_spill!(ctx::_CGCtx, sub)
-    _cg_detab!(sub)                                  # _cgtabN → tabs[N]
     syms = Set{Symbol}()
-    _cg_collect_syms!(syms, sub)                     # picks up `tabs` from tabs[N] and child calls
+    _cg_collect_syms!(syms, sub)                     # `_cggrpG` containers + coords + child calls
     bound = _cg_collect_bound!(Set{Symbol}(), sub)   # names the helper binds itself
     extra = sort!([s for s in syms if _cg_is_passable(s) && !(s in bound)]; by = string)
     params = Symbol[:u, :p, :t]
-    (:tabs in syms) && push!(params, :tabs)
     append!(params, extra)
+    # Helper dedup: an identical body (same code ⇒ same params, since params are
+    # exactly the passable names it references) reuses the first helper minted for
+    # it. Only the CALL is re-emitted; the compiled function is shared. Value-exact
+    # and laziness-preserving — a call in place of the sub-expression evaluates
+    # exactly when the sub-expression would.
+    dedup = !_cg_helper_dedup_disabled()
+    key = dedup ? string(sub) : ""
+    if dedup
+        got = get(ctx.helper_dedup, key, nothing)
+        if got !== nothing
+            _tally_cascade!(:cg_helper_deduped)
+            return Expr(:call, got, params...)
+        end
+    end
     fname = _cg_name(ctx, "h")
     ln = LineNumberNode(0, Symbol("ess-iip-split"))
     stmts = Any[]
@@ -988,6 +1009,7 @@ function _cg_spill!(ctx::_CGCtx, sub)
     push!(stmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $sub)))
     fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, stmts...))
     push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+    dedup && (ctx.helper_dedup[key] = fname)
     return Expr(:call, fname, params...)
 end
 
@@ -1071,6 +1093,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         nhelpers = length(ctx.helpers)
         nodes0 = ctx.nodes
         fscratch0 = ctx.fscratch
+        empty!(ctx.helper_dedup)   # dedup scope = this kernel (see the field doc)
         try
             lx = _cg_emit_kernel!(ctx, K)
             push!(kloops, (lx, ctx.nodes - nodes0))
@@ -1095,7 +1118,6 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         end
     end
     any(covered) || return nothing
-    tabstmts = Any[:(local $(Symbol("_cgtab", i)) = tabs[$i]) for i in 1:length(ctx.tabs)]
     ln = LineNumberNode(0, Symbol("ess-codegen"))
 
     # Outer locals a chunk may need as arguments: the table locals and every
@@ -1104,15 +1126,14 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # the call boundary loses the constant-propagation that keeps `convert(_cgT,
     # …)` type-stable, boxing every scalar. Each chunk recomputes `_cgT` locally
     # from (u, p, t) instead, so inference constant-propagates it as before.
+    ngrp = length(ctx.tab_types)
     outer_passed = Set{Symbol}()
-    for i in 1:length(ctx.tabs)
-        push!(outer_passed, Symbol("_cgtab", i))
+    # The by-type tab containers (`_cggrpG`, one per distinct tab type — a handful,
+    # not one per object) are the only tab locals now; every chunk / helper that
+    # reads a tab references a container, so it receives that container.
+    for g in 1:ngrp
+        push!(outer_passed, _cg_grp_sym(g))
     end
-    # A split kernel's loop body calls its helpers with the `tabs` TUPLE (the
-    # ess-iip-split thread that avoids O(#tabs) per-helper params), so a chunk
-    # carrying such a loop must receive `tabs` too. The main body has it (the
-    # RGF argument); helpers pass it onward to nested helpers themselves.
-    push!(outer_passed, :tabs)
     for stmt in ctx.prologue
         s = _cg_local_lhs(stmt)
         s === nothing || push!(outer_passed, s)
@@ -1155,8 +1176,11 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
     end
 
+    # `tabs` is now a tuple of the by-type containers; hoist each to its `_cggrpG`
+    # local (a handful of statements, not one per object).
+    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     body = Expr(:block,
-                tabstmts...,
+                grpstmts...,
                 :(local _cgT = _rhs_value_type(u, p, t)),
                 # Intra-kernel split helpers (ess-iip-split): defined FIRST so the
                 # invariant prologue and every chunk sub-function can call them by
@@ -1173,15 +1197,21 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     # disjointness verdict, both facts of the BUILD (the runtime chunk verdict
     # is `_sec_prep_threads!`'s).
     ncells, disjoint = _cg_covered_outs_disjoint(acc_kernels, covered)
+    # The runtime `tabs` argument: one HOMOGENEOUS container per group, converted
+    # to the group's concrete element type (`Vector{Vector{Int}}`, …), packed in a
+    # small tuple. `_cggrpG[pos]` then reads a concrete-element container.
+    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    ntabs = sum(length, ctx.tab_objs; init=0)
     if _codegen_debug()
         ms = (time_ns() - t0) / 1e6
         println(stderr, "[ess-codegen/$tally] emitted $(count(covered))/$(length(covered)) ",
-                "kernels in $(length(chunks)) fn(s), $(ctx.nodes) nodes, ",
-                "$(length(ctx.tabs)) tab objects, $(ncells) cells ",
+                "kernels in $(length(chunks)) fn(s) + $(length(ctx.helpers)) split helper(s) ",
+                "($(get(_CASCADE_TALLY, :cg_helper_deduped, 0)) deduped), $(ctx.nodes) nodes, ",
+                "$ntabs tabs in $ngrp typed group(s), $(ncells) cells ",
                 "(outs $(disjoint ? "disjoint" : "SHARED")), ",
                 "build $(round(ms; digits=1)) ms")
     end
-    return _CGBuilt(f, Tuple(ctx.tabs), covered, ncells, disjoint)
+    return _CGBuilt(f, tabpack, covered, ncells, disjoint)
 end
 
 # ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
