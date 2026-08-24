@@ -12,7 +12,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use earthsci_ast::{EsmFile, load, save};
+//! use earthsci_ast::{EsmFile, load_string, to_json};
 //!
 //! // Load an ESM file
 //! let esm_data = r#"

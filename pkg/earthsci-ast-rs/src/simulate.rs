@@ -19,7 +19,7 @@
 //! ## Usage
 //!
 //! ```no_run
-//! use earthsci_ast::{load, simulate, SimulateOptions};
+//! use earthsci_ast::{load_string, simulate, SimulateOptions};
 //! use std::collections::HashMap;
 //!
 //! let file = load_string(r#"{"esm":"1.0.0","metadata":{},"models":{}}"#).unwrap();

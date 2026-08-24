@@ -14,7 +14,7 @@ from conftest import FIXTURES_ROOT
 
 from earthsci_ast import brownian_parameters, system_kind
 from earthsci_ast.parse import load_path, SchemaValidationError
-from earthsci_ast.serialize import to_json
+from earthsci_ast.serialize import write_path
 
 
 SDE_DIR = FIXTURES_ROOT / "fixtures" / "sde"
@@ -36,7 +36,7 @@ def test_ornstein_uhlenbeck_round_trip(tmp_path):
     assert system_kind(model) == "sde"
 
     out_path = tmp_path / "ou.esm"
-    to_json(parsed, str(out_path))
+    write_path(parsed, str(out_path))
     reparsed = load_path(str(out_path))
     remodel = reparsed.models["OU"]
     _assert_wiener(remodel.variables["Bw"])
@@ -58,7 +58,7 @@ def test_correlated_noise_round_trip(tmp_path):
     assert system_kind(model) == "sde"
 
     out_path = tmp_path / "cn.esm"
-    to_json(parsed, str(out_path))
+    write_path(parsed, str(out_path))
     reparsed = load_path(str(out_path))
     remodel = reparsed.models["TwoBody"]
     renoise = remodel.variables["B"]

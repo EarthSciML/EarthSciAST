@@ -4,7 +4,7 @@ import json
 import tempfile
 import os
 
-from earthsci_ast import to_json
+from earthsci_ast import to_json, write_path
 from earthsci_ast.serialize import _serialize_expression
 from earthsci_ast.esm_types import (
     EsmFile,
@@ -135,8 +135,8 @@ def test_save_reaction_system():
     assert len(reaction_data["products"]) == 1
 
 
-def test_save_to_file():
-    """Test saving ESM file to disk."""
+def test_write_path():
+    """Test writing an ESM file to disk."""
     metadata = Metadata(title="File Test")
     esm_file = EsmFile(version="1.0.0", metadata=metadata)
 
@@ -145,8 +145,12 @@ def test_save_to_file():
         tmp_path = tmp_file.name
 
     try:
-        # Save to file
-        json_str = to_json(esm_file, tmp_path)
+        # `write_path` WRITES and returns nothing -- it is deliberately not the
+        # `save(file, path) -> str` it replaced, which both wrote the file and
+        # handed back the payload. The bytes it wrote must still equal what the
+        # pure `to_json` produces.
+        assert write_path(esm_file, tmp_path) is None
+        json_str = to_json(esm_file)
 
         # Verify file exists and has content
         assert os.path.exists(tmp_path)
