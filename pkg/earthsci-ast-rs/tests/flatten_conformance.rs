@@ -67,10 +67,15 @@ fn update_kinds(var: &ModelVariable) -> Vec<String> {
 }
 
 /// The owning component of a namespaced name — the corpus's `source_system`.
-/// Namespacing is `<component>.<var>` (a subsystem-local var keeps further
-/// dots), so the FIRST segment is the component.
+///
+/// Namespacing is `<prefix>.<var>` where `<var>` is a DECLARED variable name
+/// and therefore carries no dot of its own, while `<prefix>` grows one segment
+/// per nesting level: a subsystem's variable lands at
+/// `Parent.Sub.var` and is owned by `Parent.Sub`, not by `Parent`. So the
+/// owner is everything up to the LAST dot — splitting on the first one
+/// attributed every nested variable to its top-level ancestor.
 fn owner(name: &str) -> &str {
-    name.split_once('.').map(|(o, _)| o).unwrap_or(name)
+    name.rsplit_once('.').map(|(o, _)| o).unwrap_or(name)
 }
 
 /// The corpus's DERIVED `role` tag for one entry of one map.
