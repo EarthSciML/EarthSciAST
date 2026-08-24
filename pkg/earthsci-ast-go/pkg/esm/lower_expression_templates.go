@@ -1593,11 +1593,25 @@ func applyExpressionTemplatesToJSON(jsonStr string) (string, error) {
 // tie-breaking honours imports-then-locals order. Returns the rewritten JSON;
 // the input is not modified.
 func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int64) (string, error) {
+	out, _, err := resolveAndLowerJSONCapturing(jsonStr, basePath, metaparameters)
+	return out, err
+}
+
+// resolveAndLowerJSONCapturing is resolveAndLowerJSON that ALSO returns each
+// component's `expression_templates` block as it stood after import resolution
+// and before Expand-at-build stripped it, keyed "models.<name>" /
+// "reaction_systems.<name>" with the resolved declaration order preserved.
+//
+// The merged template registry is a normative field of the flattened
+// representation (esm-libraries-spec §4.7.5 step 4), and Expand-at-build
+// deletes exactly the inputs that merge needs. Capturing them here is the only
+// point at which they still exist: `expandDocument` runs two lines below.
+func resolveAndLowerJSONCapturing(jsonStr, basePath string, metaparameters map[string]int64) (string, map[string]*orderedMap, error) {
 	var view map[string]any
 	dec := json.NewDecoder(strings.NewReader(jsonStr))
 	dec.UseNumber()
 	if err := dec.Decode(&view); err != nil {
-		return "", fmt.Errorf("template resolution pass: %w", err)
+		return "", nil, fmt.Errorf("template resolution pass: %w", err)
 	}
 	orders := extractTemplateOrders(jsonStr)
 	// esm-spec §9.7.10 form B: fold any coupling-entry injection into the target
@@ -1606,23 +1620,57 @@ func resolveAndLowerJSON(jsonStr, basePath string, metaparameters map[string]int
 	// assembler-chosen discretization. No-op when no coupling entry carries an
 	// injection map.
 	if err := applyCouplingInjections(view); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if _, err := resolveTemplateMachinery(view, orders, basePath, metaparameters); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err := lowerExpressionTemplatesOrdered(view, orders); err != nil {
-		return "", err
+		return "", nil, err
 	}
+	componentTemplates := captureComponentTemplates(view, orders)
 	// Expand-at-build (§9.6.4 rule 2 / RFC §7.7): the raw §9.7 pipeline emits the
 	// Option-A image (references replaced by their expansion, registries
 	// stripped) so external conformance runners reproduce the expanded goldens.
 	expandDocument(view)
 	out, err := json.Marshal(view)
 	if err != nil {
-		return "", fmt.Errorf("template resolution pass: re-marshal: %w", err)
+		return "", nil, fmt.Errorf("template resolution pass: re-marshal: %w", err)
 	}
-	return string(out), nil
+	return string(out), componentTemplates, nil
+}
+
+// captureComponentTemplates snapshots every component's `expression_templates`
+// block, keyed "<section>.<component>", in the DOCUMENT order the components
+// are declared in and, within a component, the resolved template declaration
+// order (imports depth-first post-order, then local declarations) that
+// resolveComponentImports wrote back into `orders`. Components declaring no
+// block are omitted, so the common document yields an empty map and flatten's
+// registry merge is a no-op.
+func captureComponentTemplates(view map[string]any, orders map[string][]string) map[string]*orderedMap {
+	out := map[string]*orderedMap{}
+	for _, kind := range templateComponentKinds {
+		comps, ok := view[kind].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, cname := range orderedKeysOf(comps, orders["/"+kind]) {
+			comp, ok := comps[cname].(map[string]any)
+			if !ok {
+				continue
+			}
+			tpl, ok := comp["expression_templates"].(map[string]any)
+			if !ok || len(tpl) == 0 {
+				continue
+			}
+			block := newOrderedMap()
+			for _, n := range orderedKeysOf(tpl, orders["/"+kind+"/"+cname+"/expression_templates"]) {
+				block.set(n, deepCopyJSON(tpl[n]))
+			}
+			out[kind+"."+cname] = block
+		}
+	}
+	return out
 }
 
 // ResolveAndLower is the exported raw §9.7 pipeline — resolveAndLowerJSON

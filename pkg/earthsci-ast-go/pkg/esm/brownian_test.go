@@ -137,19 +137,27 @@ func TestFlattenBrownianParameters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flatten: %v", err)
 	}
-	if want := []string{"TwoBody.B"}; !reflect.DeepEqual(flat.BrownianParameters, want) {
-		t.Errorf("BrownianParameters = %v, want %v", flat.BrownianParameters, want)
-	}
-	found := false
-	for _, p := range flat.Parameters {
-		if p == "TwoBody.B" {
-			found = true
+	names := func(vs []FlattenedVariable) []string {
+		out := []string{}
+		for _, v := range vs {
+			out = append(out, v.Name)
 		}
+		return out
 	}
-	if !found {
-		t.Errorf("Parameters = %v, want it to include TwoBody.B — a noise source IS a parameter", flat.Parameters)
+	if want := []string{"TwoBody.B"}; !reflect.DeepEqual(names(flat.BrownianParameters), want) {
+		t.Errorf("BrownianParameters = %v, want %v", names(flat.BrownianParameters), want)
 	}
-	if want := []string{"TwoBody.x", "TwoBody.y"}; !reflect.DeepEqual(flat.StateVariables, want) {
-		t.Errorf("StateVariables = %v, want %v", flat.StateVariables, want)
+	if !containsVar(flat.Parameters, "TwoBody.B") {
+		t.Errorf("Parameters = %v, want it to include TwoBody.B — a noise source IS a parameter",
+			names(flat.Parameters))
+	}
+	// The Brownian bucket carries the FULL variable, not a bare name: a consumer
+	// building an SDE problem needs its distribution and shape from here
+	// (esm-libraries-spec §4.7.5 step 4, "Full metadata, not names").
+	if b := flat.BrownianParameters[0]; b.Distribution == nil || len(b.Shape) == 0 {
+		t.Errorf("flattened Brownian parameter lost its metadata: %+v", b)
+	}
+	if want := []string{"TwoBody.x", "TwoBody.y"}; !reflect.DeepEqual(names(flat.StateVariables), want) {
+		t.Errorf("StateVariables = %v, want %v", names(flat.StateVariables), want)
 	}
 }

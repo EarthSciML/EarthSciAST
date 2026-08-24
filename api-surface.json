@@ -145,19 +145,19 @@
     }
   },
   "counts": {
-    "symbols": 946,
+    "symbols": 954,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 291,
-      "typescript": 210,
+      "typescript": 219,
       "python": 234,
       "rust": 292,
-      "go": 374,
+      "go": 383,
       "editor": 71
     },
     "by_tier": {
-      "extension": 692,
-      "stable": 254
+      "extension": 699,
+      "stable": 255
     }
   },
   "planned": [
@@ -1784,8 +1784,10 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "ConflictingDerivativeError",
         "julia": "ConflictingDerivativeError",
-        "python": "ConflictingDerivativeError"
+        "python": "ConflictingDerivativeError",
+        "typescript": "ConflictingDerivativeError"
       }
     },
     {
@@ -2427,8 +2429,10 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "DimensionPromotionError",
         "julia": "DimensionPromotionError",
-        "python": "DimensionPromotionError"
+        "python": "DimensionPromotionError",
+        "typescript": "DimensionPromotionError"
       }
     },
     {
@@ -2599,7 +2603,8 @@
       "tier": "stable",
       "bindings": {
         "julia": "DomainUnitMismatchError",
-        "python": "DomainUnitMismatchError"
+        "python": "DomainUnitMismatchError",
+        "typescript": "DomainUnitMismatchError"
       }
     },
     {
@@ -3564,6 +3569,22 @@
       }
     },
     {
+      "name": "field_ic",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FieldIC"
+      }
+    },
+    {
+      "name": "field_initial_condition",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "FieldInitialCondition"
+      }
+    },
+    {
       "name": "field_reduce",
       "kind": "function",
       "tier": "stable",
@@ -3694,7 +3715,8 @@
       "tier": "stable",
       "bindings": {
         "python": "FlattenError",
-        "rust": "FlattenError"
+        "rust": "FlattenError",
+        "typescript": "FlattenError"
       }
     },
     {
@@ -3754,6 +3776,22 @@
       }
     },
     {
+      "name": "flattened_function_table",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FlattenedFunctionTable"
+      }
+    },
+    {
+      "name": "flattened_index_set",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FlattenedIndexSet"
+      }
+    },
+    {
       "name": "flattened_system",
       "kind": "type",
       "tier": "stable",
@@ -3763,6 +3801,14 @@
         "python": "FlattenedSystem",
         "rust": "FlattenedSystem",
         "typescript": "FlattenedSystem"
+      }
+    },
+    {
+      "name": "flattened_template",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "FlattenedTemplate"
       }
     },
     {
@@ -3776,9 +3822,27 @@
     {
       "name": "flattened_variable",
       "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "FlattenedVariable",
+        "python": "FlattenedVariable",
+        "typescript": "FlattenedVariable"
+      }
+    },
+    {
+      "name": "flattened_variable_map",
+      "kind": "type",
       "tier": "extension",
       "bindings": {
-        "python": "FlattenedVariable"
+        "typescript": "FlattenedVariableMap"
+      }
+    },
+    {
+      "name": "flattened_variable_role",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "FlattenedVariableRole"
       }
     },
     {
@@ -4437,6 +4501,14 @@
       }
     },
     {
+      "name": "lifted_shape",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "go": "LiftedShape"
+      }
+    },
+    {
       "name": "literal_value",
       "kind": "function",
       "tier": "extension",
@@ -4558,8 +4630,10 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
+        "go": "LoaderField",
         "python": "LoaderField",
-        "rust": "LoaderField"
+        "rust": "LoaderField",
+        "typescript": "LoaderField"
       }
     },
     {

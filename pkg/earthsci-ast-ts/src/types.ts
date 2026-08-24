@@ -110,6 +110,35 @@ export type EsmFile = ESMFormat1 &
      * "Property 'ref' is missing".
      */
     models?: { [k: string]: Model | GeneratedSubsystemRef }
+
+    /**
+     * NON-SCHEMA, LOADER-POPULATED. The per-component `expression_templates`
+     * registries of the Option-B loaded image, keyed
+     * `"models.<name>"` / `"reaction_systems.<name>"` — the Julia / Python
+     * `component_templates` key shape.
+     *
+     * `loadInput` (`parse.ts`) snapshots these between
+     * `lowerExpressionTemplates` (which preserves the per-component blocks) and
+     * `expandDocument` (which strips them), because esm-libraries-spec §4.7.5
+     * step 4 requires `flatten` to carry the MERGED template registry as a
+     * first-class field of the flattened representation — see
+     * `mergedTemplateRegistry` in `flatten-template-registry.ts`.
+     *
+     * It is NOT part of `esm-schema.json`, is NEVER serialized (`toJson`
+     * excludes it), and is absent on a document that declares no per-component
+     * `expression_templates` block — i.e. on almost every document. Values are
+     * raw JSON template declarations (`{params, body, match?, …}`), not the
+     * typed `Expression` form.
+     *
+     * `loadInput` attaches it as a NON-ENUMERABLE own property, so
+     * `Object.keys`, `JSON.stringify`, spread and structural equality all see
+     * exactly the document and nothing else — the conformance round-trip
+     * (`loadString(toJson(loadString(f)))` deep-equals `loadString(f)`) would
+     * otherwise fail for every template-bearing fixture. A consequence worth
+     * knowing: a shallow copy (`{...file}`) DROPS it, so a pass that rebuilds
+     * the file object must re-attach it if the result will be flattened.
+     */
+    componentTemplates?: Record<string, unknown>
   }
 
 /** @deprecated Prefer {@link EsmFile}. Identical to the generated `ESMFormat`. */

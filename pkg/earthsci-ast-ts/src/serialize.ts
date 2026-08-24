@@ -75,11 +75,34 @@ export interface ToJsonOptions {
  */
 export function toJson(file: EsmFile, options?: ToJsonOptions): string {
   const indent = options?.indent ?? 2
+  const view = withoutNonSchemaFields(file)
   if (options?.canonical === true) {
-    return emitCanonical(file, indent)
+    return emitCanonical(view, indent)
   }
-  const stripped = stripNumericLiterals(file)
+  const stripped = stripNumericLiterals(view)
   return JSON.stringify(stripped, null, indent)
+}
+
+/**
+ * The NON-SCHEMA, loader-populated fields an `EsmFile` may carry that must
+ * never reach the wire. Currently just `componentTemplates` (see
+ * `EsmFile.componentTemplates` in `types.ts`): it is a load-time snapshot of
+ * the per-component `expression_templates` blocks kept for flatten's merged
+ * registry, not a document field, and emitting it would break the
+ * load → `toJson` → load round trip against `esm-schema.json`.
+ */
+const NON_SCHEMA_FIELDS = ['componentTemplates'] as const
+
+/**
+ * A shallow view of `file` with every {@link NON_SCHEMA_FIELDS} key removed.
+ * Returns `file` itself (no copy, so key order is untouched) when it carries
+ * none of them — the overwhelmingly common case.
+ */
+function withoutNonSchemaFields(file: EsmFile): EsmFile {
+  if (!NON_SCHEMA_FIELDS.some((k) => k in file)) return file
+  const out: Record<string, unknown> = { ...(file as Record<string, unknown>) }
+  for (const k of NON_SCHEMA_FIELDS) delete out[k]
+  return out as EsmFile
 }
 
 /**
