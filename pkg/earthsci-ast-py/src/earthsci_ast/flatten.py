@@ -632,7 +632,7 @@ def _has_array_op(expr: Expr) -> bool:
     return False
 
 
-def _spatial_dims_in_expr(expr: Expr) -> set[str]:
+def _spatial_dims_in_expr(expr: Expr) -> list[str]:
     """Return the set of spatial dimension labels named by an unlowered spatial
     differential in ``expr``.
 
@@ -645,10 +645,19 @@ def _spatial_dims_in_expr(expr: Expr) -> set[str]:
     it yields the empty set and stays a pure ODE (``independent_variables ==
     ["t"]``), exactly as before.
     """
-    out: set[str] = set()
+    # ORDER-PRESERVING, deduplicated by first encounter. This used to be a
+    # `set`, which destroyed the order the document declares its axes in and was
+    # then re-imposed as `sorted()` by the caller -- so `full_coupled.esm`, whose
+    # equations name lon, lat, lev in that order, came out lat, lev, lon.
+    # esm-libraries-spec §4.7.5 step 4 makes ordering document order, and §4.7.6
+    # says to add "each referenced spatial dimension" as the scan encounters it.
+    # For a PDE the axis order is not cosmetic: it is the order a downstream
+    # array layout follows.
+    out: list[str] = []
     for node in walk(expr):
         if isinstance(node, ExprNode) and node.dim:
-            out.add(node.dim)
+            if node.dim not in out:
+                out.append(node.dim)
     return out
 
 
@@ -1679,12 +1688,10 @@ def _derive_independent_vars(flat: FlattenedSystem) -> None:
     and correctly stays a pure ODE (``independent_variables == ["t"]``).
     """
     independent: list[str] = ["t"]
-    spatial_dims: set[str] = set()
     for eq in flat.equations:
-        spatial_dims.update(_spatial_dims_in_expr(eq.lhs))
-        spatial_dims.update(_spatial_dims_in_expr(eq.rhs))
-    for dim in sorted(spatial_dims):
-        independent.append(dim)
+        for dim in (*_spatial_dims_in_expr(eq.lhs), *_spatial_dims_in_expr(eq.rhs)):
+            if dim not in independent:
+                independent.append(dim)
     flat.independent_variables = independent
 
 

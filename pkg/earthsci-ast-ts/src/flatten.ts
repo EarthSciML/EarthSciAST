@@ -1560,7 +1560,12 @@ function deriveIndependentVars(flat: FlattenedSystem): void {
     spatialDimsInExpr(eq.lhs, dims)
     spatialDimsInExpr(eq.rhs, dims)
   }
-  flat.independentVariables = ['t', ...[...dims].sort()]
+  // Document order, NOT sorted: a JS Set preserves insertion order, so spreading
+  // it yields the order the scan first encountered each axis. Sorting here made
+  // `full_coupled` (which names lon, lat, lev) emit lat, lev, lon. For a PDE the
+  // axis order is the order a downstream array layout follows — see
+  // esm-libraries-spec §4.7.5 step 4's ordering rule and §4.7.6.
+  flat.independentVariables = ['t', ...dims]
 }
 
 // ---------------------------------------------------------------------------
