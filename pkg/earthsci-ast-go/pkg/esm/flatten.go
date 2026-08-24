@@ -69,6 +69,32 @@ type ConflictingDerivativeError struct{ Message string }
 
 func (e *ConflictingDerivativeError) Error() string { return e.Message }
 
+// CoupleMultiplicativeNoTendencyError reports that a `couple` connector equation
+// applies the `multiplicative` transform to a target with no `D(to)` equation in
+// the flattened system (esm-spec §10.3, esm-libraries-spec §4.7.2).
+//
+// Both sections define `multiplicative` against the target's EXISTING ODE
+// right-hand side. When `to` names a parameter, an observed, an algebraic
+// unknown, or a name nothing defines, there is no tendency to multiply and the
+// operation has no meaning — so the entry is rejected rather than dropped.
+//
+// `additive` has no counterpart error: zero is the additive identity, so an
+// additive term against an absent tendency simply becomes the tendency.
+type CoupleMultiplicativeNoTendencyError struct {
+	// Target is the connector equation's `to` scoped reference.
+	Target  string
+	Message string
+}
+
+func (e *CoupleMultiplicativeNoTendencyError) Error() string {
+	return fmt.Sprintf("[%s] %s", CodeCoupleMultiplicativeNoTendency, e.Message)
+}
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *CoupleMultiplicativeNoTendencyError) DiagnosticCode() string {
+	return CodeCoupleMultiplicativeNoTendency
+}
+
 // DimensionPromotionError reports that a variable or equation cannot be
 // promoted onto the target grid (esm-libraries-spec §4.7.6): here, that the
 // pointwise spatial lift (esm-spec §10.5) could not read the spatial loop
@@ -1257,24 +1283,41 @@ func inlinedUnknownSet(model *Model) map[string]bool {
 // Coupling resolution
 // ============================================================================
 
-// translateEntry is one normalized `operator_compose` translate rule: a target
-// scoped reference plus an optional conversion factor.
+// translateEntry is one normalized `operator_compose` translate rule: the
+// system-A variable a system-B variable translates TO, plus an optional
+// conversion factor.
 type translateEntry struct {
 	target string
 	factor float64
 }
 
+// buildTranslateMap normalizes the `operator_compose` translate map, INVERTED
+// for matching.
+//
+// The authored direction is normative and is not symmetric (esm-spec §10.2,
+// esm-libraries-spec §4.7.1 step 2): for `"systems": [A, B]` every KEY names a
+// variable of A (`systems[0]`) and every VALUE names a variable of B
+// (`systems[1]`).
+//
+// applyOperatorCompose walks B's equations, so it needs the map the other way
+// round; this returns the INVERSE, `{b_name: (a_name, factor)}`. Indexing the
+// authored (A-keyed) map by B's dependent variable — what this binding did
+// before — is the bug this function exists to prevent: a correctly spelled
+// `translate` map then matches nothing at all and the whole entry is a silent
+// no-op.
 func buildTranslateMap(entry OperatorComposeCoupling) map[string]translateEntry {
 	out := map[string]translateEntry{}
-	for k, v := range entry.Translate {
+	for aName, v := range entry.Translate {
 		switch t := v.(type) {
 		case string:
-			out[k] = translateEntry{target: t, factor: 1.0}
+			if t != "" {
+				out[t] = translateEntry{target: aName, factor: 1.0}
+			}
 		case map[string]any:
-			target := ""
+			bName := ""
 			for _, key := range []string{"to", "target", "var"} {
 				if s, ok := t[key].(string); ok && s != "" {
-					target = s
+					bName = s
 					break
 				}
 			}
@@ -1282,8 +1325,8 @@ func buildTranslateMap(entry OperatorComposeCoupling) map[string]translateEntry 
 			if f, ok := exprNumber(t["factor"]); ok {
 				factor = f
 			}
-			if target != "" {
-				out[k] = translateEntry{target: target, factor: factor}
+			if bName != "" {
+				out[bName] = translateEntry{target: aName, factor: factor}
 			}
 		}
 	}
@@ -1352,11 +1395,25 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			surviving = append(surviving, bEq)
 			continue
 		}
+		// esm-libraries-spec §4.7.1 step 3 lists the match kinds in precedence
+		// order: DIRECT first, then TRANSLATION, then the bare-name fallback.
+		// Direct-first is load-bearing, not cosmetic: placeholder expansion has
+		// already rewritten `_var` to A's own variable name, so an expanded
+		// equation IS a direct match. Consulting `translate` first would let a
+		// map keyed by A's names hit spuriously on that rewritten name and
+		// redirect the match to a target that does not exist — turning a working
+		// composition into an over-determination error (the
+		// `translate: {"A.x": "B._var"}` redundancy invariant, esm-spec §10.2).
 		targetDep := bDep
 		factor := 1.0
-		if t, ok := translate[bDep]; ok {
+		_, direct := aIndex[bDep]
+		t, hasTranslation := translate[bDep]
+		switch {
+		case direct:
+			// Direct match; `targetDep` is already right.
+		case hasTranslation:
 			targetDep, factor = t.target, t.factor
-		} else {
+		default:
 			// Map a bare name from B back to A's equivalent.
 			short := bDep
 			if _, rest, found := strings.Cut(bDep, "."); found {
@@ -1375,6 +1432,16 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			continue
 		}
 		aEq := a.equations[i]
+		// §4.7.1 step 4: on a TRANSLATION match, B's dependent variable is
+		// rewritten to A's target throughout `rhs_B` before summing — a
+		// `translate` pair names two spellings of the SAME quantity (§10.2), and
+		// leaving `rhs_B` in B's spelling strands that variable as an unknown
+		// nothing defines, since its own defining equation was just consumed by
+		// this merge. The same argument applies to the bare-name fallback above.
+		// On a DIRECT match, and on a PLACEHOLDER match (where expansion already
+		// substituted), the two names are equal and this rewrite is the identity.
+		// Only the dependent variable is rewritten; B's parameters and observeds
+		// keep their names.
 		rhs := substituteExpr(bEq.RHS, map[string]Expression{bDep: targetDep})
 		if factor != 1.0 {
 			rhs = ExprNode{Op: "*", Args: []any{factor, rhs}}
@@ -1391,20 +1458,33 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 // applyCouple resolves a `couple` connector by injecting source/sink terms: each
 // connector equation appends its expression to (or multiplies it with, or
 // replaces) the target variable's equation.
-func applyCouple(components map[string]*componentSystem, order []string, entry CouplingCouple) {
+//
+// It fails with *CoupleMultiplicativeNoTendencyError when a `multiplicative`
+// equation targets something with no `D(to)` tendency to multiply (esm-spec
+// §10.3, esm-libraries-spec §4.7.2).
+func applyCouple(components map[string]*componentSystem, order []string, entry CouplingCouple) error {
 	if len(entry.Connector.Equations) == 0 {
-		return
+		return nil
 	}
 	type eqRef struct {
 		system string
 		index  int
 	}
 	eqIndex := map[string]eqRef{}
+	// Which targets carry a TENDENCY (`D(x)`), as opposed to merely SOME
+	// defining equation: `multiplicative` is defined against an ODE right-hand
+	// side, not against an algebraic or observed definition (§10.3, §4.7.2).
+	tendencies := map[string]bool{}
 	for _, sysName := range order {
 		comp := components[sysName]
 		for i, eq := range comp.equations {
-			if dep := lhsDependentVar(eq.LHS); dep != "" {
-				eqIndex[dep] = eqRef{system: sysName, index: i}
+			dep := lhsDependentVar(eq.LHS)
+			if dep == "" {
+				continue
+			}
+			eqIndex[dep] = eqRef{system: sysName, index: i}
+			if node, ok := asExprNode(eq.LHS); ok && node.Op == OpDerivative {
+				tendencies[dep] = true
 			}
 		}
 	}
@@ -1412,6 +1492,16 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 	for _, ceq := range entry.Connector.Equations {
 		if ceq.To == "" {
 			continue
+		}
+		if ceq.Transform == "multiplicative" && !tendencies[ceq.To] {
+			return &CoupleMultiplicativeNoTendencyError{
+				Target: ceq.To,
+				Message: fmt.Sprintf(
+					"couple connector 'multiplicative' transform targets %q, which has no "+
+						"tendency (D(%s)) to multiply (esm-spec §10.3). To scale a constant "+
+						"parameter by a factor, use a variable_map entry with an Expression "+
+						"transform (esm-spec §10.4) instead.", ceq.To, ceq.To),
+			}
 		}
 		ref, ok := eqIndex[ceq.To]
 		if !ok {
@@ -1438,6 +1528,7 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 			SourceSystem: existing.SourceSystem,
 		}
 	}
+	return nil
 }
 
 // applyVariableMap substitutes the target parameter with the source variable.
@@ -1788,7 +1879,9 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		applyOperatorCompose(components, oc)
 	}
 	for _, cp := range couples {
-		applyCouple(components, order, cp)
+		if err := applyCouple(components, order, cp); err != nil {
+			return err
+		}
 	}
 	loaderNames := map[string]bool{}
 	for k := range file.DataSources {
