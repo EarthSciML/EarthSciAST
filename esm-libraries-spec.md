@@ -476,9 +476,30 @@ Libraries at **all tiers** (including Core) must implement coupling resolution a
 
 Libraries that support simulation (Julia, Python) additionally convert the flattened system into native solver objects (see Section 4.7.5). Libraries at the Core tier produce the flattened representation but do not convert to solver-specific types.
 
-**Resolution order:** The order of entries in the `coupling` array does not affect the final result. Coupling rules are commutative — the same mathematical system is produced regardless of the order in which rules are applied. (This matches the behavior of EarthSciMLBase.jl, which is tested across all permutations of system ordering.)
+**Resolution order:** The order of entries in the `coupling` array does not affect the final result.
+(This matches the behavior of EarthSciMLBase.jl, which is tested across all permutations of system
+ordering.)
 
-However, for deterministic intermediate representations (e.g., variable naming), libraries should process coupling entries in array order.
+That property is not free, and it is not because the rules commute — they do not. A `couple`
+`multiplicative` connector and an `operator_compose` that target the same variable produce
+`(rhs + t) * m` or `(rhs * m) + t` depending on which runs first, and those are different systems.
+Order-independence holds because entries are applied **by kind**, in the order the subsections below
+are written:
+
+1. every `operator_compose` entry (§4.7.1), then
+2. every `couple` entry (§4.7.2), then
+3. every `variable_map` entry (§4.7.3).
+
+Array order is preserved **within** a kind, which is what keeps intermediate representations (e.g.
+variable naming) deterministic. `callback` and `operator_apply` entries (§4.7.4) are recorded as
+metadata and applied at no point in this sequence.
+
+Kind-ordering is normative, not an implementation convenience: it is the whole reason the first
+paragraph is true. A library that instead walked the array in declaration order — which an earlier
+revision of this section advised — would make the flattened system depend on the order the author
+happened to write the entries in, and the two spellings above would silently disagree. Any metadata
+recording which coupling rules were applied (§4.7.5 step 4) still reports them in **declaration**
+order; the application sequence and the reporting sequence are separate.
 
 #### 4.7.1 `operator_compose` Algorithm
 

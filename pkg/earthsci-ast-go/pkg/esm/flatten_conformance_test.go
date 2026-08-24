@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -380,68 +379,6 @@ func diffStrSeq(t *testing.T, field string, got, want []string) {
 	}
 }
 
-// oracleTransformRepr matches the Python oracle's dataclass repr where a
-// `variable_map` coupling rule reports an EXPRESSION transform.
-var oracleTransformRepr = regexp.MustCompile(`transform=ExprNode\(.*\)\)$`)
-
-// normalizeOracleTransformRepr rewrites the oracle's Python-repr rendering of an
-// Expression `transform` back to the cross-binding spelling `expression`.
-//
-// EXEMPTION, asserted from both sides by TestFlattenCouplingRuleExpressionRepr
-// below, and scoped to exactly this one substring: everything else about
-// `metadata.coupling_rules` — the entries, their wording, and their ORDER — is
-// still compared verbatim.
-//
-// The oracle's _describe_coupling interpolates the transform with
-// f"transform={entry.transform}", and for an Expression transform `entry
-// .transform` is Python's ExprNode dataclass, whose str() is its repr. The
-// corpus therefore records the ~40 `None`-valued optional FIELDS of that
-// dataclass (`wrt=None, dim=None, ... output=None`) as the normative expected
-// text. That is a Python implementation detail: it is not derivable from the
-// document, it changes whenever the dataclass gains a field, and no other
-// binding can or does reproduce it. The three bindings that record this field
-// at all agree on `transform=expression` — Go (flatten.go describeCoupling),
-// Julia (coupling_apply.jl:665) and TypeScript (flatten.ts:694, whose source
-// comment names this same leak) — and Rust exempts the coupling-rule prose from
-// conformance outright (tests/flatten_conformance.rs:167).
-//
-// This is the same shape as the `element_type` / `array_type` exemption
-// documented on TestFlattenDomainPassthrough: Go is right, the ORACLE is wrong.
-// It should be closed the same way — teach the oracle's _describe_coupling to
-// report a non-string transform by KIND, regenerate the corpus, delete this
-// function — not by teaching Go to emit Python reprs.
-func normalizeOracleTransformRepr(rules []string) []string {
-	out := make([]string, len(rules))
-	for i, r := range rules {
-		out[i] = oracleTransformRepr.ReplaceAllString(r, "transform=expression)")
-	}
-	return out
-}
-
-// TestFlattenCouplingRuleExpressionRepr pins the exemption above from the ORACLE
-// side, so it cannot rot silently: if the corpus is regenerated with a fixed
-// _describe_coupling, this test fails and normalizeOracleTransformRepr must go.
-func TestFlattenCouplingRuleExpressionRepr(t *testing.T) {
-	corpus := loadFlattenCorpus(t)
-	found := false
-	for _, c := range corpus.Cases {
-		for _, rule := range c.Metadata.CouplingRules {
-			if !oracleTransformRepr.MatchString(rule) {
-				continue
-			}
-			found = true
-			if got := normalizeOracleTransformRepr([]string{rule})[0]; strings.Contains(got, "ExprNode(") {
-				t.Errorf("case %s: normalization left an oracle repr behind: %s", c.ID, got)
-			}
-		}
-	}
-	if !found {
-		t.Error("no corpus coupling rule carries the oracle's ExprNode repr any more: " +
-			"the oracle was fixed — delete normalizeOracleTransformRepr and compare " +
-			"metadata.coupling_rules verbatim")
-	}
-}
-
 func TestFlattenConformance(t *testing.T) {
 	corpus := loadFlattenCorpus(t)
 	root := flattenCorpusRoot(t)
@@ -488,7 +425,7 @@ func TestFlattenConformance(t *testing.T) {
 			diffDomain(t, got.Domain, want.Domain)
 			diffStrSeq(t, "metadata.source_systems", got.Metadata.SourceSystems, want.Metadata.SourceSystems)
 			diffStrSeq(t, "metadata.coupling_rules",
-				got.Metadata.CouplingRules, normalizeOracleTransformRepr(want.Metadata.CouplingRules))
+				got.Metadata.CouplingRules, want.Metadata.CouplingRules)
 			diffStrSeq(t, "metadata.operator_applies", got.Metadata.OperatorApplies, want.Metadata.OperatorApplies)
 			diffStrSeq(t, "metadata.callbacks", got.Metadata.Callbacks, want.Metadata.Callbacks)
 

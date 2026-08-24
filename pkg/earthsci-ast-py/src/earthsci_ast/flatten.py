@@ -690,15 +690,34 @@ def _describe_coupling(entry: CouplingEntry) -> str:
         systems = " + ".join(entry.systems)
         rule = f"operator_compose({systems})"
         if entry.translate:
+            def _tr(v: object) -> str:
+                # Same leak as the transform above, latent: an object-valued
+                # translate entry would otherwise render as a Python dict repr.
+                if isinstance(v, dict):
+                    target = v.get("to") or v.get("target") or v.get("var") or "?"
+                    factor = v.get("factor")
+                    return f"{target}" if factor is None else f"{target}*{factor}"
+                return str(v)
+
             rule += (
-                " [translate: " + ", ".join(f"{k}->{v}" for k, v in entry.translate.items()) + "]"
+                " [translate: "
+                + ", ".join(f"{k}->{_tr(v)}" for k, v in entry.translate.items())
+                + "]"
             )
         return rule
     if isinstance(entry, CouplingCouple):
         systems = " <-> ".join(entry.systems)
         return f"couple({systems})"
     if isinstance(entry, VariableMapCoupling):
-        rule = f"variable_map({entry.from_var} -> {entry.to_var}, transform={entry.transform})"
+        # A §10.4 Expression transform is an ExprNode, and interpolating it here
+        # emits the DATACLASS REPR -- ~900 characters naming forty None-valued
+        # optional fields of a Python implementation detail. That string then got
+        # pinned in the shared corpus as normative cross-language text, which no
+        # other binding can reproduce and which changes whenever the dataclass
+        # gains a field. Julia, TypeScript and Go all render the word
+        # `expression` here; match them.
+        transform = entry.transform if isinstance(entry.transform, str) else "expression"
+        rule = f"variable_map({entry.from_var} -> {entry.to_var}, transform={transform})"
         if entry.factor is not None:
             rule += f" [factor={entry.factor}]"
         return rule

@@ -867,7 +867,7 @@
         ],
         "coupling_rules": [
           "couple(Chemistry <-> Surface)",
-          "variable_map(Chemistry.O3 -> Surface.surface_resistance, transform=ExprNode(op='*', args=[100.0, ExprNode(op='+', args=[1.0, ExprNode(op='*', args=[0.1, 'Chemistry.O3'], wrt=None, dim=None, var=None, lower=None, upper=None, output_idx=None, expr=None, reduce=None, semiring=None, ranges=None, join=None, filter=None, distinct=None, key=None, label=None, regions=None, values=None, shape=None, perm=None, axis=None, fn=None, id=None, manifold=None, handler_id=None, name=None, value=None, table=None, table_axes=None, output=None)], wrt=None, dim=None, var=None, lower=None, upper=None, output_idx=None, expr=None, reduce=None, semiring=None, ranges=None, join=None, filter=None, distinct=None, key=None, label=None, regions=None, values=None, shape=None, perm=None, axis=None, fn=None, id=None, manifold=None, handler_id=None, name=None, value=None, table=None, table_axes=None, output=None)], wrt=None, dim=None, var=None, lower=None, upper=None, output_idx=None, expr=None, reduce=None, semiring=None, ranges=None, join=None, filter=None, distinct=None, key=None, label=None, regions=None, values=None, shape=None, perm=None, axis=None, fn=None, id=None, manifold=None, handler_id=None, name=None, value=None, table=None, table_axes=None, output=None))",
+          "variable_map(Chemistry.O3 -> Surface.surface_resistance, transform=expression)",
           "operator_compose(Chemistry + Transport) [translate: Chemistry.O3->Transport._var, Chemistry.NO->Transport._var]",
           "callback(DiagnosticOutput)"
         ],
