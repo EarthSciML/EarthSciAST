@@ -170,20 +170,23 @@ halves and the field is compared normally.)
   system's, and the merge was reading the A/B roles off the dependent variable's
   prefix and getting them backwards. Provenance is now recorded at collection
   (`_attribute_equations!`) and the sum is §4.7.1 step 4's `rhs_A + rhs_B`.
-* `equations` on `advanced_coupling` — the ORDER OF COUPLING-ENTRY APPLICATION,
-  and only that; all five equations and every term agree. The document's entries
-  are, in order, a `couple` (an additive deposition term onto `Chemistry.O3`), a
-  `variable_map`, an `operator_compose` (advection). Julia applies them in
-  DOCUMENT ORDER, which is how §4.7.5 step 3 reads ("Process each coupling
-  entry"), giving `chemistry + deposition + advection`. The oracle buckets the
-  entries BY TYPE and runs every `operator_compose` first, then every `couple`,
-  then every `variable_map` — a deliberate choice with a stated reason (keeping a
-  `variable_map` substitution from renaming a dependent variable out from under
-  the merge) — giving `chemistry + advection + deposition`. §4.7.5's own bridge between
-  steps 2 and 3 calls the coupling-rule step COMMUTATIVE, which is true of the
-  sum and is why nothing but the summand order differs. Nothing in the spec picks one
-  evaluation order over the other; Julia's is pinned locally below, and the
-  divergence is a finding for the corpus rather than a defect on either side.
+(RESOLVED 2026-08-24: `equations` on `advanced_coupling`, a summand-order
+divergence. The document declares a `couple` (an additive deposition term onto
+`Chemistry.O3`), then a `variable_map`, then an `operator_compose` (advection).
+Julia applied entries in DECLARATION order and produced
+`chemistry + deposition + advection`; the corpus and all four other bindings had
+`chemistry + advection + deposition`. §4.7 "Resolution order" now settles it
+NORMATIVELY and against Julia's reading: entries are applied BY KIND —
+`operator_compose`, then `couple`, then `variable_map` — with array order kept
+within a kind. The rule is what MAKES the section's commutativity claim true: a
+`couple` multiplicative connector and an `operator_compose` on one variable give
+`(rhs + t) * m` or `(rhs * m) + t` depending on which runs first, so applying in
+declaration order would make the flattened system depend on the order the author
+typed the entries in. Metadata still reports declaration order. The case now
+matches the corpus in full and every field is compared; the rule itself — which
+the corpus cannot express, since it records one document in one order — is pinned
+locally below.)
+
 * `discrete_events` on `bare_reference_resolution` — the fixture declares
   `daily_reset` on the SUBSYSTEM `SimpleChemistry.Photochemistry`. §4.7.5 step 4
   collects "all events from all component systems", and a subsystem is a
@@ -216,7 +219,6 @@ const _FC_DIVERGENCES = Dict{String,Vector{String}}(
     "advection_reaction_loaded_ic_bc" => ["equations"],
     "minimal_chemistry" => ["equations"],
     "metadata_inheritance_coupled" => ["equations"],
-    "advanced_coupling" => ["equations"],
     "bare_reference_resolution" => ["discrete_events"],
 )
 
@@ -655,27 +657,68 @@ end
                "D(SimpleChemistry.Photochemistry.NO2_photo)/Dt"]
     end
 
-    @testset "advanced_coupling: coupling entries apply in DOCUMENT order" begin
-        # The only difference left on this case (see `_FC_DIVERGENCES`): §4.7.5
-        # step 3 says "process each coupling entry", and the document orders them
-        # couple → variable_map → operator_compose, so the deposition term lands
-        # on `D(Chemistry.O3)` before the advection terms do. The oracle buckets
-        # by type and runs every `operator_compose` first. Same five equations,
-        # same terms, one summand order apart.
-        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "coupling",
-                                          "advanced_coupling.esm")))
-        @test String[to_ascii(eq) for eq in flat.equations] == [
-            "D(Chemistry.O3)/Dt = -0.1 * Chemistry.O3 * Chemistry.NO + " *
-                "(-Surface.deposition_velocity) * Chemistry.O3 + " *
-                "(-Transport.wind_speed) * grad(Chemistry.O3) + " *
-                "Transport.diffusivity * laplacian(Chemistry.O3)",
-            "D(Chemistry.NO)/Dt = -0.1 * Chemistry.O3 * Chemistry.NO + " *
-                "(-Transport.wind_speed) * grad(Chemistry.NO) + " *
-                "Transport.diffusivity * laplacian(Chemistry.NO)",
-            "Chemistry.deposition_flux = Chemistry.O3 * 1.0e-3",
-            "Surface.deposition_velocity = 1 / Surface.surface_resistance",
-            "Surface.surface_resistance = 100 * (1 + 0.1 * Chemistry.O3)",
-        ]
+    @testset "coupling entries apply BY KIND, not in declaration order" begin
+        # §4.7 "Resolution order". The corpus cannot pin this: it records one
+        # document in one declaration order, so a binding that applied entries as
+        # they came would still match it whenever the author happened to type
+        # them in kind order. What the rule actually claims is that declaration
+        # order is IRRELEVANT — and that claim is only true BECAUSE of the
+        # bucketing.
+        #
+        # The two documents below are the same three edges in two array orders,
+        # over a state carrying BOTH an `operator_compose` term and a `couple`
+        # MULTIPLICATIVE connector — the pair that does not commute. Applying in
+        # declaration order gives `(rhs + advection) * scale` for one spelling and
+        # `(rhs * scale) + advection` for the other; under the rule both must
+        # flatten identically.
+        doc(order) = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "ResolutionOrder",
+                      "description": "same edges, two declaration orders",
+                      "authors": ["EarthSciAST test suite"],
+                      "created": "2026-08-24T00:00:00Z"},
+         "models": {
+           "Chem": {"variables": {"O3": {"type": "unknown", "units": "mol/mol", "default": 1.0},
+                                  "loss": {"type": "parameter", "units": "1/s", "default": 0.5}},
+                    "equations": [{"lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["loss"]}, "O3"]}}]},
+           "Scale": {"variables": {"factor": {"type": "parameter", "units": "1/s", "default": 2.0}},
+                     "equations": []},
+           "Adv": {"variables": {"wind": {"type": "parameter", "units": "m/s", "default": 3.0}},
+                   "equations": [{"lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+                                  "rhs": {"op": "*", "args": [{"op": "-", "args": ["wind"]},
+                                                              {"op": "grad", "args": ["_var"]}]}}]}},
+         "coupling": [$(join(order, ", "))]}
+        """
+        compose = """{"type": "operator_compose", "systems": ["Chem", "Adv"]}"""
+        couple = """{"type": "couple", "systems": ["Chem", "Scale"],
+                     "connector": {"equations": [
+                       {"from": "Scale.factor", "to": "Chem.O3",
+                        "transform": "multiplicative", "expression": "Scale.factor"}]}}"""
+        varmap = """{"type": "variable_map", "from": "Scale.factor", "to": "Chem.loss",
+                     "transform": "identity"}"""
+
+        declared = flatten(load_string(doc([couple, varmap, compose])))
+        permuted = flatten(load_string(doc([compose, couple, varmap])))
+
+        # Same flattened equations, whichever order the author typed them in.
+        @test String[to_ascii(eq) for eq in declared.equations] ==
+              String[to_ascii(eq) for eq in permuted.equations]
+        # ... and it is the BY-KIND answer: `operator_compose` runs first, so
+        # advection is summed onto the tendency and only then is the whole sum
+        # scaled by the multiplicative connector. Declaration order would have
+        # scaled the bare reaction term and added advection outside the product.
+        @test length(declared.equations) == 1
+        @test to_ascii(declared.equations[1]) ==
+              "D(Chem.O3)/Dt = ((-Scale.factor) * Chem.O3 + " *
+              "(-Adv.wind) * grad(Chem.O3)) * Scale.factor"
+
+        # METADATA still reports DECLARATION order — application order and
+        # reporting order are separate, which is why these two disagree.
+        kinds(f) = String[String(first(split(r, '('))) for r in
+                          f.metadata.coupling_rules_applied]
+        @test kinds(declared) == ["couple", "variable_map", "operator_compose"]
+        @test kinds(permuted) == ["operator_compose", "couple", "variable_map"]
     end
 
     @testset "subsystem events reach the flattened system" begin
