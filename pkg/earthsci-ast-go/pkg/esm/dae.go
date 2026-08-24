@@ -161,10 +161,10 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 // an now-undefined variable — a silently corrupted model returned with err=nil
 // (audit G2).
 //
-// Substitution errors are propagated rather than discarded. The acyclicity of a
-// single binding makes a SubstitutionError unreachable in principle, but
-// swallowing it with `_ =` would have hidden exactly the class of corruption
-// above, so the error path is real.
+// Substitution errors are propagated rather than discarded. Single-pass
+// substitution has no failure mode of its own, so the error is unreachable in
+// practice, but swallowing it with `_ =` would have hidden exactly the class of
+// corruption above, so the error path is kept real.
 func factorTrivialDAE(model *Model, indep string) (int, error) {
 	factored := 0
 	for {

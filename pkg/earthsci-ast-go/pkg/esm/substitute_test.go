@@ -2,7 +2,6 @@ package esm
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -328,14 +327,18 @@ func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 	result, err := Substitute(input, bindings)
 	assert.NoError(t, err)
 
-	// The result should have 'rate' replaced with the complex expression
-	// and 'T' within that expression should be substituted with 298.15
+	// 'rate' is replaced with the complex expression VERBATIM. The "T" inside
+	// that replacement is NOT substituted, even though the bindings also bind
+	// "T": substitution is single-pass (CONFORMANCE_SPEC.md §2.2.3 rule 1), so a
+	// binding applies to the variables of the INPUT, never to the variables of a
+	// replacement it just inserted. The "T" binding has no occurrence to act on
+	// here because the input mentions only "rate" and "concentration".
 	expected := ExprNode{
 		Op: "*",
 		Args: []any{
 			ExprNode{
 				Op:   "exp",
-				Args: []any{ExprNode{Op: "/", Args: []any{-1000, 298.15}}},
+				Args: []any{ExprNode{Op: "/", Args: []any{-1000, "T"}}},
 			},
 			"concentration",
 		},
@@ -344,44 +347,47 @@ func TestSubstituteWithComplexExpressionAsReplacement(t *testing.T) {
 	assert.Equal(t, expected, result)
 }
 
-// A cyclic binding (x → f(x)) must not stack-overflow: cycle detection halts
-// the recursion and returns a SubstitutionError instead of panicking or looping.
-func TestSubstituteCyclicBindingErrors(t *testing.T) {
+// A self-referential binding {x -> f(x)} is NOT an error. Substitution is
+// single-pass (CONFORMANCE_SPEC.md §2.2.3 rule 1): the replacement is inserted
+// verbatim and never re-substituted, so the walk terminates on its own and the
+// inner "x" survives.
+func TestSubstituteSelfReferentialBindingIsSinglePass(t *testing.T) {
 	bindings := map[string]Expression{
 		"x": ExprNode{Op: "f", Args: []any{"x"}},
 	}
-	type res struct {
-		out Expression
-		err error
-	}
-	done := make(chan res, 1)
-	go func() {
-		out, err := Substitute("x", bindings) // must return, not crash or hang
-		done <- res{out, err}
-	}()
-	select {
-	case r := <-done:
-		var se *SubstitutionError
-		require.ErrorAs(t, r.err, &se, "cyclic binding must surface a SubstitutionError")
-		assert.Equal(t, codeCyclicSubstitution, se.DiagnosticCode())
-	case <-time.After(10 * time.Second):
-		t.Fatal("Substitute did not terminate on a cyclic binding")
-	}
+	out, err := Substitute("x", bindings)
+	require.NoError(t, err)
+	assert.Equal(t, ExprNode{Op: "f", Args: []any{"x"}}, out)
 }
 
-// A transitive cycle (x → y, y → x) is detected the same way.
-func TestSubstituteTransitiveCycleErrors(t *testing.T) {
+// A mutually-referential binding set {x -> y, y -> x} is likewise not an
+// error: substituting "x" yields "y", exactly as the normative contract spells
+// out. This is what makes a binding map usable as a simultaneous SWAP rename.
+func TestSubstituteMutuallyReferentialBindingIsSinglePass(t *testing.T) {
 	bindings := map[string]Expression{
-		"x": ExprNode{Op: "+", Args: []any{"y", 1.0}},
-		"y": ExprNode{Op: "+", Args: []any{"x", 1.0}},
+		"x": "y",
+		"y": "x",
 	}
-	_, err := Substitute("x", bindings)
-	var se *SubstitutionError
-	require.ErrorAs(t, err, &se)
+	out, err := Substitute("x", bindings)
+	require.NoError(t, err)
+	assert.Equal(t, "y", out)
+}
+
+// A chained binding set {a -> b, b -> c} renames a to b — NOT to c. Transitive
+// expansion here would silently corrupt every chained rename that goes through
+// renameRawExpr (edit.go).
+func TestSubstituteChainedBindingIsNotTransitive(t *testing.T) {
+	bindings := map[string]Expression{
+		"a": "b",
+		"b": "c",
+	}
+	out, err := Substitute("a", bindings)
+	require.NoError(t, err)
+	assert.Equal(t, "b", out)
 }
 
 // A binding whose replacement mentions a variable twice in sibling positions
-// (not its own key) substitutes cleanly without a false-positive cycle.
+// (not its own key) substitutes cleanly.
 func TestSubstituteRepeatedVariableNotACycle(t *testing.T) {
 	bindings := map[string]Expression{
 		"x": ExprNode{Op: "*", Args: []any{"a", "a"}}, // a appears twice, no cycle

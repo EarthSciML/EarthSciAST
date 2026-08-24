@@ -1,77 +1,58 @@
 package esm
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 )
 
-// SubstitutionError is returned when substitution cannot complete. Currently
-// the only cause is a cyclic binding — a variable whose expansion reaches
-// itself (directly, x → f(x), or transitively, x → y, y → x) — which would
-// otherwise recurse forever. It carries the shared "[code] message" diagnostic
-// form (DiagnosticError).
-type SubstitutionError struct {
-	Code    string
-	Message string
-}
-
-func (e *SubstitutionError) Error() string { return fmt.Sprintf("[%s] %s", e.Code, e.Message) }
-
-// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
-func (e *SubstitutionError) DiagnosticCode() string { return e.Code }
-
-// codeCyclicSubstitution is raised when a binding is cyclic.
-const codeCyclicSubstitution = "cyclic_substitution"
-
 // Substitute performs variable substitution in expressions.
 // expr: the expression to substitute into
 // bindings: map from variable names to replacement expressions
-// Returns a SubstitutionError if the bindings are cyclic.
+//
+// Substitution is SINGLE-PASS (non-transitive), per the normative contract in
+// CONFORMANCE_SPEC.md §2.2.3 rule 1: a binding's replacement is inserted
+// verbatim and is NOT itself re-substituted. Given {x -> y, y -> x},
+// substituting "x" yields "y". This is what guarantees termination for
+// self-referential and mutually-referential binding sets without any cycle
+// detection, and it is what makes a binding map usable as a simultaneous
+// RENAME map (edit.go's renameRawExpr): {a -> b, b -> c} renames a to b, not
+// to c.
+//
+// The error return is retained for signature stability across the package's
+// substitution family; single-pass substitution over a decoded expression has
+// no failure mode of its own.
 func Substitute(expr Expression, bindings map[string]Expression) (Expression, error) {
 	return substituteRecursiveWithScoped(expr, bindings, nil, "")
 }
 
 // substituteRecursiveWithScoped is the internal recursive substitution entry
 // with scoped-reference support (file != nil enables dotted-name resolution).
-// It seeds a fresh cycle-tracking set for each top-level call.
 func substituteRecursiveWithScoped(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
-	return substituteRec(expr, bindings, file, currentSystem, map[string]bool{})
+	return substituteRec(expr, bindings, file, currentSystem)
 }
 
-// substituteRec recursively substitutes bindings into expr. visiting is the set
-// of binding keys currently being expanded on the active path; re-entering a key
-// means the binding is cyclic and yields a SubstitutionError. The set is
-// backtracked (a key is removed once its expansion returns), so a variable
-// appearing in independent sibling positions is not mistaken for a cycle.
-func substituteRec(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string, visiting map[string]bool) (Expression, error) {
+// substituteRec recursively substitutes bindings into expr. The recursion is
+// over the AST STRUCTURE only — it descends into an operator node's children,
+// never into a replacement it just inserted (see Substitute).
+func substituteRec(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
 	switch e := expr.(type) {
 	case string:
-		// Variable reference — resolve to a binding key (direct name, else a
-		// scoped dotted name), then expand it with cycle tracking.
-		key, replacement, ok := lookupBinding(e, bindings, file, currentSystem)
+		// Variable reference — resolve to a binding (direct name, else a
+		// scoped dotted name) and insert the replacement verbatim.
+		_, replacement, ok := lookupBinding(e, bindings, file, currentSystem)
 		if !ok {
 			return e, nil
 		}
-		if visiting[key] {
-			return nil, &SubstitutionError{
-				Code:    codeCyclicSubstitution,
-				Message: fmt.Sprintf("cyclic binding: variable '%s' is reachable from its own substitution", key),
-			}
-		}
-		visiting[key] = true
-		out, err := substituteRec(replacement, bindings, file, currentSystem, visiting)
-		delete(visiting, key)
-		return out, err
+		return replacement, nil
 
 	case ExprNode:
-		return substituteNode(e, bindings, file, currentSystem, visiting)
+		return substituteNode(e, bindings, file, currentSystem)
 
 	case *ExprNode:
 		if e == nil {
 			return nil, nil
 		}
-		return substituteNode(*e, bindings, file, currentSystem, visiting)
+		return substituteNode(*e, bindings, file, currentSystem)
 
 	case float64, int, int32, int64, float32:
 		// Numeric literals - no substitution needed
@@ -85,7 +66,7 @@ func substituteRec(expr Expression, bindings map[string]Expression, file *ESMFil
 		// Try to handle the case where expr is wrapped in a pointer.
 		v := reflect.ValueOf(e)
 		if v.Kind() == reflect.Pointer && !v.IsNil() {
-			return substituteRec(v.Elem().Interface(), bindings, file, currentSystem, visiting)
+			return substituteRec(v.Elem().Interface(), bindings, file, currentSystem)
 		}
 		// For unknown types, return as-is
 		return e, nil
@@ -120,9 +101,9 @@ func lookupBinding(name string, bindings map[string]Expression, file *ESMFile, c
 // privileged op semantics: grad/div/laplacian all carry it, and so may any
 // open-tier user op. Keying it on the `grad` op (as this did) silently skipped
 // the `dim` of `div`/`laplacian`.
-func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile, currentSystem string, visiting map[string]bool) (Expression, error) {
+func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
 	out, err := mapExprChildren(node, func(child Expression) (Expression, error) {
-		return substituteRec(child, bindings, file, currentSystem, visiting)
+		return substituteRec(child, bindings, file, currentSystem)
 	})
 	if err != nil {
 		return out, err
@@ -140,7 +121,7 @@ func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile
 // slot (a `wrt`/`dim` name a D/grad op carries outside `args`). A binding is
 // applied only when the replacement is itself a bare name (string); a
 // non-string replacement, or no binding, leaves the slot unchanged. It performs
-// no recursion (a name has no children), so it cannot introduce a cycle.
+// no recursion (a name has no children).
 func substituteScalarField(field *string, bindings map[string]Expression, file *ESMFile, currentSystem string) *string {
 	if field == nil {
 		return nil

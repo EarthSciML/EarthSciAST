@@ -306,19 +306,29 @@ class TestSubstitutionErrorHandling:
         assert result is not None
 
     def test_substitute_circular_reference_detection(self):
-        """Test detection of circular references in substitution."""
-        # This is a challenging case - might not be implemented yet
+        """Mutually-referential bindings resolve in a SINGLE PASS.
+
+        Pinned identically by Julia (expression_test.jl, ``substitute edge
+        cases``), Rust (tests/substitution.rs) and TypeScript
+        (substitute.test.ts). Shared corpus:
+        tests/substitution/cyclic_bindings.json.
+        """
         expr = "x"
         substitutions = {"x": "y", "y": "x"}  # Circular reference
 
-        # Different implementations might handle this differently
-        try:
-            result = substitute(expr, substitutions)
-            # Should either detect the cycle or substitute once
-            assert result in ["y", "x"]
-        except Exception as e:
-            # Might raise a circular reference error
-            assert "circular" in str(e).lower() or "cycle" in str(e).lower()
+        # There is nothing to hedge over: CONFORMANCE_SPEC.md 2.2.3 rule 1 is
+        # normative and says substitution is SINGLE-PASS. The replacement "y"
+        # is inserted verbatim and is NOT re-resolved back to "x", which is
+        # what guarantees termination without any cycle detection.
+        assert substitute(expr, substitutions) == "y"
+        assert substitute("y", substitutions) == "x"
+
+        # Across a compound expression the same binding set is a simultaneous
+        # SWAP: each variable of the INPUT is replaced exactly once.
+        assert substitute({"op": "-", "args": ["x", "y"]}, substitutions) == {
+            "op": "-",
+            "args": ["y", "x"],
+        }
 
     def test_substitute_deep_nesting(self):
         """Test substitution with deeply nested expressions."""
@@ -340,3 +350,39 @@ class TestSubstitutionErrorHandling:
 
         result = substitute("x", {"x": None})
         assert result is None
+
+    def test_substitute_self_referential_binding_terminates(self):
+        """A self-referential binding {x -> f(x)} terminates, inner name intact."""
+        substitutions = {"x": {"op": "f", "args": ["x"]}}
+
+        # The "x" inside the replacement is not recursed into.
+        assert substitute({"op": "+", "args": ["x", "z"]}, substitutions) == {
+            "op": "+",
+            "args": [{"op": "f", "args": ["x"]}, "z"],
+        }
+
+        # The identity binding is the degenerate case.
+        assert substitute("x", {"x": "x"}) == "x"
+
+    def test_substitute_chained_binding_is_not_transitive(self):
+        """{a -> b, b -> c} renames a to b -- never to c.
+
+        Transitive expansion here would silently corrupt every chained rename
+        that runs a binding map as a simultaneous rename map.
+        """
+        assert substitute({"op": "+", "args": ["a", "b"]}, {"a": "b", "b": "c"}) == {
+            "op": "+",
+            "args": ["b", "c"],
+        }
+
+    def test_substitute_repeated_variable_is_not_a_cycle(self):
+        """A variable appearing REPEATEDLY is substituted at every occurrence."""
+        substitutions = {"x": {"op": "*", "args": ["a", "a"]}}
+
+        assert substitute({"op": "*", "args": ["x", "x"]}, substitutions) == {
+            "op": "*",
+            "args": [
+                {"op": "*", "args": ["a", "a"]},
+                {"op": "*", "args": ["a", "a"]},
+            ],
+        }

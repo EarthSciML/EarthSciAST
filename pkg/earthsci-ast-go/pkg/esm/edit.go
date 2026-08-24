@@ -33,7 +33,7 @@ package esm
 // The operations that can fail return a typed error: *EntityNotFoundError when
 // the target does not exist, *VariableInUseError when a removal would strand a
 // live reference, and *EditError for anything else. All three carry a stable
-// DiagnosticCode(), matching the SubstitutionError / EvaluationError convention
+// DiagnosticCode(), matching the EvaluationError / ExpressionTemplateError convention
 // elsewhere in this package. Operations that cannot fail (the `Add*` family)
 // return a bare value, as they do in TypeScript and Julia.
 //
