@@ -6,7 +6,7 @@ This module is the Python binding's whole simulation surface
 .. code-block:: python
 
     prob = esm_problem(input, tspan, p=..., u0=..., providers=...)   # build once
-    sol  = solve(prob, alg="LSODA", abstol=1e-14, reltol=1e-10)      # run per knob-set
+    sol  = solve(prob, alg="LSODA", abstol=1e-6, reltol=1e-4)        # run per knob-set
     sol["Chem.O3"]                                                    # index by NAME
 
 ``esm_problem`` absorbs the whole deterministic-per-document pipeline — the
@@ -123,8 +123,16 @@ __all__ = [
 DEFAULT_ALG = "LSODA"
 #: Canonical cross-binding tolerance defaults (API_SPEC §5.8): the same knobs
 #: under the same names produce comparable trajectories in Julia, Python and Rust.
-DEFAULT_RELTOL = 1e-10
-DEFAULT_ABSTOL = 1e-14
+#:
+#: These are Julia's values, and they are LOOSER than what this binding used to
+#: default to (1e-10 / 1e-14). A default is what a document gets when its author
+#: has expressed no opinion about accuracy, so it is the cheapest of the three
+#: rather than the most accurate. A caller who needs tighter integration passes
+#: `reltol=` / `abstol=` -- and a TEST that asserts trajectory accuracy must do
+#: so, rather than lean on the default and thereby assert something about the
+#: library's default instead of about the model.
+DEFAULT_RELTOL = 1e-4
+DEFAULT_ABSTOL = 1e-6
 
 
 def _discover_loader_extents(
@@ -714,9 +722,11 @@ def solve(
 
     The vocabulary is SciML's, not SciPy's (API_SPEC §4): ``alg`` (not
     ``method``), ``abstol`` (not ``atol``), ``reltol`` (not ``rtol``), ``saveat``
-    (not ``t_eval``). The defaults — ``reltol=1e-10``, ``abstol=1e-14`` — are the
+    (not ``t_eval``). The defaults — ``reltol=1e-4``, ``abstol=1e-6`` — are the
     canonical cross-binding ones, so Julia, Python and Rust solving the same
-    document with default options produce comparable trajectories.
+    document with default options produce comparable trajectories. They are
+    looser than this binding's historical ``1e-10`` / ``1e-14``; pass an explicit
+    tolerance when accuracy matters.
 
     Parameters
     ----------

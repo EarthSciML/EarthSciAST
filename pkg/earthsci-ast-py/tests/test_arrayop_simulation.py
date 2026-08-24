@@ -23,6 +23,7 @@ from conftest import FIXTURES_ROOT
 
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
+from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
 
 
 _FIXTURES_DIR = FIXTURES_ROOT / "fixtures" / "arrayop"
@@ -121,7 +122,12 @@ def test_arrayop_fixture_conformance(fixture_path: Path) -> None:
             for k, v in (test.get("parameter_overrides") or {}).items():
                 params[k] = float(v)
 
-            result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
+            # Explicit TEST tolerances — this compares against analytic values.
+            result = solve(
+                esm_problem(esm_file, tspan, u0=ics, p=params),
+                reltol=TEST_RELTOL,
+                abstol=TEST_ABSTOL,
+            )
             assert (result.retcode is ReturnCode.Success), (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )

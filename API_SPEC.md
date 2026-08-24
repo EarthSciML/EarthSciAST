@@ -574,12 +574,28 @@ different tolerances**, spanning six orders of magnitude —
 docstring says its defaults were chosen to match Julia's; they match the *test*
 constants, not the simulate ones.
 
-**The canonical default value is an OPEN DECISION, deliberately not settled
-here.** Naming the knob is a harmonization question; choosing its value is a
-numerical-accuracy-versus-cost question with a wide blast radius — adopting
-Python's `1e-10`/`1e-14` would tighten Julia's default solve by six orders of
-magnitude and slow every default run. The option *names* are canonical now
-(§4); the values stay per-binding until this is ruled on.
+**Ruled: the canonical defaults are Julia's.**
+
+| Canonical | Value |
+|---|---|
+| `reltol` | `1e-4` |
+| `abstol` | `1e-6` |
+
+Python loosens by six orders and Rust by two; Julia is unchanged. The direction
+is deliberate. A library default is what a document gets when its author has
+expressed no opinion about accuracy, and the cheapest of the three is the right
+thing to hand someone who has not asked — a default should be a sane starting
+point, not a silent decision to spend six orders of magnitude of extra work on
+their behalf. An author who needs tighter integration says so, and now says so
+under the same name in every binding, which is the part that was actually
+broken.
+
+**A test that asserts trajectory accuracy MUST pass an explicit tolerance**
+rather than lean on the default. Some did, and they are why this change is
+visible: a test calibrated against an implicit `1e-10` is really asserting
+something about the library's default, not about the model. Widening such a
+test's own comparison threshold to keep it green is the wrong repair; give it
+the tolerance it actually needs.
 
 `observed_field` also had three different arities — Julia
 `(prep, insp::BuildInspection, name)`, requiring the caller to have threaded the

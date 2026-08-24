@@ -35,6 +35,7 @@ from conftest import VALID_DIR
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
+from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
 from earthsci_ast.simulation import (
     _order_observed_equations,
     _time_varying_observeds,
@@ -155,7 +156,12 @@ def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
+            # Explicit TEST tolerances — this compares against analytic values.
+            result = solve(
+                esm_problem(esm_file, tspan, u0=ics, p=params),
+                reltol=TEST_RELTOL,
+                abstol=TEST_ABSTOL,
+            )
             assert (result.retcode is ReturnCode.Success), (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )

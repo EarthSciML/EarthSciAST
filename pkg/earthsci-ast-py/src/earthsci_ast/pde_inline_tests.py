@@ -74,10 +74,31 @@ from .simulation_common import ReturnCode
 # nor the model declares one (same constant as the Julia run_tests reference).
 _DEFAULT_REL_TOL = 1e-6
 
-# Default scipy ``solve_ivp`` accuracy for the PDE simulation pathway (the
-# solver tolerances the inline-test runs pin unless a caller overrides them).
-_DEFAULT_SOLVER_RTOL = 1e-10
-_DEFAULT_SOLVER_ATOL = 1e-12
+#: Solver tolerances for INLINE-TEST execution, and for any test that asserts a
+#: trajectory against a declared or closed-form value.
+#:
+#: These are deliberately NOT the library's default tolerances
+#: (:data:`~earthsci_ast.problem.DEFAULT_RELTOL` / ``DEFAULT_ABSTOL``). A default
+#: is what a document gets when its author expressed no opinion about accuracy;
+#: a test asserting a number has very much expressed one, and leaning on the
+#: default would make it assert something about the library's default rather than
+#: about the model. Julia draws the same line, with the same values
+#: (``DEFAULT_TEST_RELTOL`` / ``DEFAULT_TEST_ABSTOL`` in ``src/run_tests.jl``).
+#:
+#: ``TEST_ABSTOL`` is tighter than Julia's ``1e-12``, and deliberately. An
+#: absolute tolerance is only meaningful against the magnitude of the states it
+#: bounds, and several fixtures here integrate concentrations of order ``1e-6``
+#: while asserting a RELATIVE ``1e-6`` -- an absolute bound near ``3.7e-13``.
+#: ``1e-12`` is looser than the assertion itself at that scale, so the run could
+#: not be accurate enough to be worth asserting on. Julia's fixtures do not go
+#: that small, so its ``1e-12`` is fine there; this is a property of the
+#: fixtures, not a divergence in the library.
+TEST_RELTOL = 1e-10
+TEST_ABSTOL = 1e-14
+
+# Historical private spellings, kept so existing call sites keep working.
+_DEFAULT_SOLVER_RTOL = TEST_RELTOL
+_DEFAULT_SOLVER_ATOL = TEST_ABSTOL
 
 # Relative slack for matching a requested ``saveat`` time to the solver's dense
 # output grid (``_SAVEAT_MATCH_TOL · max(1, |t|)``); span endpoints always fit.

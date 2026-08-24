@@ -40,6 +40,7 @@ from earthsci_ast.problem import (
     solve_all,
     step,
 )
+from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
 from earthsci_ast.sympy_bridge import SimulationError
 
 pytest.importorskip("scipy")  # the solve() half of the surface needs the solver
@@ -85,7 +86,7 @@ def test_simulate_and_prepare_are_gone() -> None:
 
 def test_solve_integrates_to_the_closed_form() -> None:
     prob = esm_problem(_decay_file(k=0.5), (0.0, 4.0), u0={"A": 2.0})
-    sol = solve(prob)
+    sol = solve(prob, reltol=TEST_RELTOL, abstol=TEST_ABSTOL)
     assert sol.retcode is ReturnCode.Success
     # §2.5.7: indexed by NAME, not by position in the state vector.
     a = sol["Decay.A"]
@@ -100,13 +101,20 @@ def test_solve_integrates_to_the_closed_form() -> None:
 
 
 def test_canonical_tolerance_defaults() -> None:
-    """API_SPEC §5.8 pins the cross-binding defaults at reltol 1e-10 / abstol
-    1e-14 so two bindings solving one document are comparable."""
+    """API_SPEC §5.8 pins the cross-binding defaults at reltol 1e-4 / abstol 1e-6
+    so two bindings solving one document are comparable.
+
+    These are Julia's values, and they are the LOOSEST of the three the bindings
+    used to carry. That direction is deliberate: a default is what a document
+    gets when its author expressed no opinion about accuracy, and it should be a
+    sane starting point rather than a silent decision to spend six orders of
+    magnitude of extra work on their behalf. Tests that assert numbers pass
+    TEST_RELTOL / TEST_ABSTOL instead — see pde_inline_tests."""
     import inspect
 
     sig = inspect.signature(solve)
-    assert sig.parameters["reltol"].default == 1e-10
-    assert sig.parameters["abstol"].default == 1e-14
+    assert sig.parameters["reltol"].default == 1e-4
+    assert sig.parameters["abstol"].default == 1e-6
     # SciPy's spellings must NOT be the surface (API_SPEC §4).
     assert "rtol" not in sig.parameters
     assert "atol" not in sig.parameters
@@ -117,7 +125,7 @@ def test_canonical_tolerance_defaults() -> None:
 def test_saveat_names_the_output_times() -> None:
     prob = esm_problem(_decay_file(k=0.5), (0.0, 4.0), u0={"A": 2.0})
     want = [0.0, 1.0, 2.0, 4.0]
-    sol = solve(prob, saveat=want)
+    sol = solve(prob, saveat=want, reltol=TEST_RELTOL, abstol=TEST_ABSTOL)
     np.testing.assert_allclose(sol.t, want)
     np.testing.assert_allclose(
         sol["Decay.A"], [2.0 * math.exp(-0.5 * t) for t in want], rtol=1e-6
@@ -201,8 +209,8 @@ def test_remake_is_pure_and_reuses_the_build() -> None:
     assert faster.const_arrays is prob.const_arrays
     assert faster.static_cache is prob.static_cache
 
-    a_slow = solve(prob)["Decay.A"][-1]
-    a_fast = solve(faster)["Decay.A"][-1]
+    a_slow = solve(prob, reltol=TEST_RELTOL, abstol=TEST_ABSTOL)["Decay.A"][-1]
+    a_fast = solve(faster, reltol=TEST_RELTOL, abstol=TEST_ABSTOL)["Decay.A"][-1]
     assert a_fast == pytest.approx(2.0 * math.exp(-2.0 * 4.0), abs=1e-9)
     assert a_fast < a_slow
 
@@ -235,7 +243,7 @@ def test_remake_refuses_a_substitution_it_cannot_honour() -> None:
 
 def test_init_step_and_solve_all() -> None:
     prob = esm_problem(_decay_file(k=0.5), (0.0, 4.0), u0={"A": 2.0})
-    integ = init(prob, alg="RK45")
+    integ = init(prob, alg="RK45", reltol=TEST_RELTOL, abstol=TEST_ABSTOL)
     assert isinstance(integ, Integrator)
     assert integ.t == 0.0
     assert integ["Decay.A"] == pytest.approx(2.0)
@@ -266,7 +274,7 @@ def test_ensemble_problem_sweeps_a_parameter() -> None:
     ks = [0.25, 0.5, 1.0]
     base = esm_problem(_decay_file(), (0.0, 2.0), u0={"A": 1.0})
     ens = EnsembleProblem(base, lambda prob, i: remake(prob, p={"k": ks[i]}))
-    sols = solve(ens, trajectories=len(ks))
+    sols = solve(ens, trajectories=len(ks), reltol=TEST_RELTOL, abstol=TEST_ABSTOL)
 
     assert len(sols) == len(ks)
     for k, sol in zip(ks, sols):

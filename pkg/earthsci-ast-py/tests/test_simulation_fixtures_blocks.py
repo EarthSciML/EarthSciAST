@@ -41,6 +41,7 @@ pytest.importorskip("scipy")
 
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
+from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
 
 
 SIMULATION_DIR = str(FIXTURES_ROOT / "simulation")
@@ -156,7 +157,14 @@ def _execute_component_tests(
         params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
         ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
 
-        result = solve(esm_problem(file_subset, tspan, p=params, u0=ics))
+        # Explicit TEST tolerances, not the library default: this asserts the
+        # fixture's own declared values, so it must pin the accuracy it needs
+        # rather than inherit whatever the default happens to be (API_SPEC §5.8).
+        result = solve(
+            esm_problem(file_subset, tspan, p=params, u0=ics),
+            reltol=TEST_RELTOL,
+            abstol=TEST_ABSTOL,
+        )
         assert (result.retcode is ReturnCode.Success), f"{label}/{test['id']}: solve() did not succeed: {result.message}"
 
         test_tol = test.get("tolerance")

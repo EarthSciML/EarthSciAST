@@ -319,6 +319,18 @@ by this section, and it is not stable API either.
 completion. `alg` is the solver algorithm; a binding whose ecosystem has no
 first-class algorithm object MAY accept a name.
 
+**Default tolerances are `reltol = 1e-4`, `abstol = 1e-6`, in every binding.**
+Before this was settled the three simulation-capable bindings defaulted to three
+different pairs spanning six orders of magnitude, so no two of them solved the
+same document comparably without the caller naming a tolerance. A default is
+what a document gets when its author has expressed no opinion, so it is the
+cheapest of the three rather than the most accurate; an author who needs tighter
+integration asks for it, under the same option name everywhere.
+
+A test that asserts numerical accuracy MUST pass an explicit tolerance rather
+than rely on the default — otherwise it is asserting something about the
+library's default rather than about the model.
+
 The result carries a **`retcode`** drawn from the SciML `ReturnCode` vocabulary
 — at minimum `Success`, `MaxIters`, `Unstable`, `Terminated`, and a failure code
 for a solver-reported error. `retcode` REPLACES the ad-hoc pairs the bindings
