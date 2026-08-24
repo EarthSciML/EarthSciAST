@@ -580,6 +580,13 @@ function spatialDimsInExpr(expr: Expression, into: Set<string>): void {
   walkNodes(expr, (node) => {
     const dim = (node as { dim?: unknown }).dim
     if (typeof dim === 'string' && dim !== '') into.add(dim)
+    // `wrt` is the other axis-naming scalar field, and a differential taken with
+    // respect to anything but time names a spatial axis exactly as `dim` does --
+    // §4.7.6 step 2 lists it alongside grad/div/laplacian as "`D` with
+    // `wrt !== "t"`". Scanning `dim` alone made `D(u,t) = k * D(u,x)`, the heat
+    // equation, come out as a pure ODE.
+    const wrt = (node as { wrt?: unknown }).wrt
+    if (typeof wrt === 'string' && wrt !== '' && wrt !== 't') into.add(wrt)
   })
 }
 

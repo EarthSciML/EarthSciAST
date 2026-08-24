@@ -775,22 +775,6 @@ var arrayOps = map[string]struct{}{
 	"intersect_polygon": {}, "polygon_intersection_area": {},
 }
 
-// spatialDimsInExpr returns the spatial dimension labels named by an
-// UNDISCRETIZED spatial differential in expr.
-//
-// Harvested STRUCTURALLY from every node's `dim` axis field (esm-spec §4.9.1),
-// NOT from a list of op names: the open-tier sugar ops grad/div/laplacian/curl
-// carry no spatial-detection privilege, and only an undiscretized differential
-// node carries a `dim`. A discretized system has folded its spatial axes into
-// array dimensions and yields the empty set, staying a pure ODE.
-func spatialDimsInExpr(expr Expression, out map[string]bool) {
-	walkExprNodes(expr, func(n ExprNode) {
-		if n.Dim != nil && *n.Dim != "" {
-			out[*n.Dim] = true
-		}
-	})
-}
-
 // addExprs sums two expressions, normalizing the trivial zero cases.
 func addExprs(left, right Expression) Expression {
 	if isNumericZero(left) {
@@ -2152,13 +2136,27 @@ func namespaceAffects(affects []AffectEquation, bare map[string]Expression) []Af
 func deriveIndependentVars(flat *FlattenedSystem) {
 	seen := map[string]bool{}
 	names := make([]string, 0, 4)
+	add := func(axis string) {
+		if axis == "" || seen[axis] {
+			return
+		}
+		seen[axis] = true
+		names = append(names, axis)
+	}
 	appendDims := func(expr Expression) {
 		walkExprNodes(expr, func(n ExprNode) {
-			if n.Dim == nil || *n.Dim == "" || seen[*n.Dim] {
-				return
+			if n.Dim != nil {
+				add(*n.Dim)
 			}
-			seen[*n.Dim] = true
-			names = append(names, *n.Dim)
+			// `wrt` is the other axis-naming scalar field, and a differential
+			// taken with respect to anything but time names a spatial axis
+			// exactly as `dim` does -- §4.7.6 step 2 lists it alongside
+			// grad/div/laplacian as "`D` with `wrt != \"t\"`". Scanning `dim`
+			// alone made `D(u,t) = k * D(u,x)`, the heat equation, come out as
+			// a pure ODE.
+			if n.Wrt != nil && *n.Wrt != DefaultIndepVar {
+				add(*n.Wrt)
+			}
 		})
 	}
 	for _, eq := range flat.Equations {
