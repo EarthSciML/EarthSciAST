@@ -61,8 +61,30 @@
 
 _codegen_disabled() = get(ENV, "ESS_CODEGEN_DISABLE", "") == "1"
 _codegen_debug() = get(ENV, "ESS_CODEGEN_DEBUG", "") == "1"
+# CUMULATIVE emitted-node budget across all kernels in one build call — a
+# build-latency backstop, NOT a per-function compile bound (the intra-kernel
+# split, ess-iip-split, handles that: every generated function stays under
+# `_codegen_fn_node_cap` regardless of a kernel's total size). Since a kernel
+# that exceeds this used to DECLINE to the interpreter — which is forbidden
+# (runtime speed is critical) — the default is high enough that realistic
+# models always emit fully; it only backstops a runaway. The duo LMARS `:inplace`
+# state RHS is ~1.5e6 nodes (13 spine-dominated momentum kernels, ~1.1e5–1.6e5
+# each); the AST build of that is ~3 GB and cheap. Override with
+# ESS_CODEGEN_NODE_BUDGET.
 _codegen_node_budget() =
-    something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 400_000)
+    something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 64_000_000)
+
+# Emitted-node size of a kernel: its spine, both CSE recipe tiers, and
+# (recursively) every template sub-kernel it inlines. A sub-kernel shared by
+# several parents is counted once per parent.
+_cg_node_tree_size(n::_Node) = 1 + sum(_cg_node_tree_size, n.children; init=0)
+function _cg_kernel_node_size(K::_AccKernel)
+    s = _cg_node_tree_size(K.spine)
+    for r in K.cse.recipes;     s += _cg_node_tree_size(r); end
+    for r in K.cse.inv_recipes; s += _cg_node_tree_size(r); end
+    for sub in K.subs;          s += _cg_kernel_node_size(sub); end
+    return s
+end
 
 # ---- Dual overflow tier (ess-dualfp) ----------------------------------------
 # Kernels the primary emission declines — in practice on the node BUDGET, which
@@ -173,10 +195,15 @@ mutable struct _CGCtx
     # per-build count of reads emitted (tally bookkeeping in the build loop).
     shared_cache::Union{Nothing,_CSECache}
     fscratch::Int
+    # Intra-kernel split (ess-iip-split): top-level `@noinline` helper defs a
+    # large kernel's body was partitioned into. Spliced ahead of the chunk
+    # sub-functions so both call them by name; each captures nothing (params
+    # only), so the RHS stays allocation-free.
+    helpers::Vector{Any}
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
     _CGCtx(Any[], IdDict{Any,Int}(), IdDict{Any,Vector{Symbol}}(),
-           Any[], Any[], 0, budget, 0, shared_cache, 0)
+           Any[], Any[], 0, budget, 0, shared_cache, 0, Any[])
 
 _cg_name(ctx::_CGCtx, base::String) = Symbol("_cg", base, ctx.nname += 1)
 
@@ -383,7 +410,7 @@ end
 # setindex!) converts. Shared by the kernel cell body and the subcall inliner.
 function _cg_emit_recipes!(stmts::Vector{Any}, ctx::_CGCtx, kc::_CGKernCtx)
     for r in kc.K.cse.recipes
-        e = _cg_emit(ctx, kc, r)
+        e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
         s = _cg_name(ctx, "q")
         push!(stmts, :(local $s = convert(_cgT, $e)))
         push!(kc.cellsyms, s)
@@ -574,7 +601,7 @@ function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
     ctx.invdone[K] = syms
     push!(ctx.invlog, K)
     for r in K.cse.inv_recipes
-        e = _cg_emit(ctx, kc, r)
+        e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
         s = _cg_name(ctx, "v")
         push!(ctx.prologue, :(local $s = convert(_cgT, $e)))
         push!(syms, s)
@@ -607,7 +634,7 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # interpreter's scratch store converts), then the spine into du[oln].
     function cellbody(kc::_CGKernCtx)
         stmts = _cg_emit_recipes!(Any[], ctx, kc)
-        push!(stmts, :(du[$(kc.oln)] = $(_cg_emit(ctx, kc, K.spine))))
+        push!(stmts, :(du[$(kc.oln)] = $(_cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine)))))
         return stmts
     end
 
@@ -844,6 +871,176 @@ function _cg_local_lhs(stmt)
     a isa Expr && a.head === :(=) ? a.args[1] : nothing
 end
 
+# ---- Intra-kernel body split (ess-iip-split) --------------------------------
+# `_cg_emit` lowers one output cell to a SINGLE Julia expression. For a
+# spine-dominated kernel that tree can be ~1e5 nodes; emitted as one function it
+# blows the Julia compiler (compile is superlinear in single-function size — the
+# duo LMARS momentum kernels OOM a 40 GB `:inplace` build). The kernel-CLASS
+# merge already made the cell body grid-INDEPENDENT (one body over a lane axis),
+# so the fix is purely to cap the SINGLE-FUNCTION size: partition the emitted
+# expression so no generated function exceeds `_codegen_fn_node_cap`, while the
+# WHOLE RHS stays compiled and NEVER touches the interpreter.
+#
+# The transform SPILLS an oversized sub-expression into an `@noinline` helper
+# that RETURNS its value; the parent replaces the sub-expression with a CALL to
+# that helper, sitting EXACTLY where the sub-expression was. Threading by return
+# value (not a scratch buffer) means (a) laziness is preserved automatically — a
+# spill inside an `ifelse`/`&&`/`||` arm becomes a call in that same arm, still
+# only evaluated when the branch is taken; (b) zero allocation — helpers return
+# scalars and capture nothing; (c) eltype-generic — each helper recomputes `_cgT`
+# locally from `(u, p, t)`, exactly as the chunk sub-functions do. Bit-identical:
+# the arithmetic and its evaluation order are unchanged, only wrapped in calls.
+_cg_expr_size(ex) = ex isa Expr ? 1 + sum(_cg_expr_size, ex.args; init=0)::Int : 1
+
+# True for a call to a split helper (`_cgh…(…)`) minted by `_cg_spill!` — an
+# irreducible leaf of the partition (re-spilling it cannot shrink it).
+_cg_is_spill_call(ex) =
+    ex isa Expr && ex.head === :call && ex.args[1] isa Symbol &&
+    startswith(String(ex.args[1]::Symbol), "_cgh")
+
+# A head that introduces its own scope / bindings (a `_NK_REDUCE`/subcall body is
+# a `quote` block with a `local` accumulator and a `for` loop var). Partitioning
+# must treat such a node ATOMICALLY — never hoist a sub-expression out of it,
+# since that sub-expression may reference a name bound INSIDE it — so it is
+# spilled whole (with its internal bindings excluded from the helper's params)
+# or left inline, never cut open.
+_cg_binding_head(h::Symbol) =
+    h === :block || h === :for || h === :while || h === :let ||
+    h === :local || h === :global || h === :function || h === :(->) || h === :do
+
+# Names bound WITHIN `ex` (`local x`, `for x in …`, `x = …`, loop/let targets):
+# excluded from a spilled helper's parameter list because the helper carries the
+# binding with it, and the call site does not have that name in scope.
+function _cg_collect_bound!(acc::Set{Symbol}, ex)
+    ex isa Expr || return acc
+    if ex.head === :(=) || ex.head === :local || ex.head === :global
+        for a in ex.args
+            if a isa Symbol
+                push!(acc, a)
+            elseif a isa Expr && a.head === :(=) && a.args[1] isa Symbol
+                push!(acc, a.args[1])
+            end
+        end
+    elseif ex.head === :for || ex.head === :while
+        # `for v in range` / a `while`'s loop spec binds its target(s).
+        spec = ex.args[1]
+        if spec isa Expr && spec.head === :(=) && spec.args[1] isa Symbol
+            push!(acc, spec.args[1])
+        end
+    end
+    for a in ex.args
+        _cg_collect_bound!(acc, a)
+    end
+    return acc
+end
+
+# An outer-scope local the emitter minted (coords, tabs, cellsyms, invsyms) —
+# every such name is `_cg…` EXCEPT the value-type `_cgT` (recomputed inside each
+# helper) and the split helpers `_cgh…` themselves (top-level names, called, not
+# passed). Anything else a helper body references (u, p, t, global fns, literals)
+# needs no argument.
+_cg_is_passable(s::Symbol) =
+    (n = String(s); startswith(n, "_cg") && s !== :_cgT && !startswith(n, "_cgh"))
+
+# Spill `sub` (already ≤ cap) into a fresh `@noinline` helper returning its
+# value; return the call expression that replaces it.
+# Rewrite every hoisted tab local `_cgtabN` inside `ex` to the tuple index
+# `tabs[N]` (IN PLACE). A cell body references THOUSANDS of distinct tabs; passing
+# each as its own helper parameter makes the parameter set propagate up the tree
+# and the split O(#helpers × #tabs). Threading the single `tabs` tuple instead
+# keeps every helper's tab dependency to ONE argument. Returns whether any tab
+# was rewritten (⇒ the helper must receive `tabs`). `tabs[N]` on a tuple with a
+# literal index is type-stable — same access the hoisted local compiled to.
+function _cg_detab!(ex)::Bool
+    used = false
+    if ex isa Expr
+        for i in eachindex(ex.args)
+            a = ex.args[i]
+            if a isa Symbol
+                s = String(a)
+                if startswith(s, "_cgtab")
+                    n = tryparse(Int, SubString(s, 7))
+                    if n !== nothing
+                        ex.args[i] = Expr(:ref, :tabs, n); used = true
+                    end
+                end
+            else
+                used |= _cg_detab!(a)
+            end
+        end
+    end
+    return used
+end
+
+function _cg_spill!(ctx::_CGCtx, sub)
+    _cg_detab!(sub)                                  # _cgtabN → tabs[N]
+    syms = Set{Symbol}()
+    _cg_collect_syms!(syms, sub)                     # picks up `tabs` from tabs[N] and child calls
+    bound = _cg_collect_bound!(Set{Symbol}(), sub)   # names the helper binds itself
+    extra = sort!([s for s in syms if _cg_is_passable(s) && !(s in bound)]; by = string)
+    params = Symbol[:u, :p, :t]
+    (:tabs in syms) && push!(params, :tabs)
+    append!(params, extra)
+    fname = _cg_name(ctx, "h")
+    ln = LineNumberNode(0, Symbol("ess-iip-split"))
+    stmts = Any[]
+    (:_cgT in syms) && push!(stmts, :(local _cgT = _rhs_value_type(u, p, t)))
+    push!(stmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $sub)))
+    fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, stmts...))
+    push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+    return Expr(:call, fname, params...)
+end
+
+# Partition `ex` so every generated function (this expression and every helper
+# it spills) is ≤ `cap` nodes. Bottom-up: partition children first (each becomes
+# ≤ cap), then, while this node's inlined size exceeds `cap`, spill its largest
+# still-inline `Expr` child into a helper CALL (small). A node whose children are
+# all spilled is `op(call, call, …)` — small — so the loop always terminates.
+# Returns `(bounded_expr, size)`.
+function _cg_partition!(ctx::_CGCtx, ex, cap::Int)
+    ex isa Expr || return (ex, 1)
+    # A scope-introducing node is atomic: do not recurse into it (a hoist could
+    # escape a name bound inside). The caller may still spill it WHOLE.
+    _cg_binding_head(ex.head) && return (ex, _cg_expr_size(ex))
+    total = 1
+    argsz = Vector{Int}(undef, length(ex.args))
+    for i in eachindex(ex.args)
+        (ex.args[i], argsz[i]) = _cg_partition!(ctx, ex.args[i], cap)
+        total += argsz[i]
+    end
+    while total > cap
+        bi = 0; bs = 0
+        for i in eachindex(ex.args)
+            a = ex.args[i]
+            # Only a genuine sub-expression is worth spilling; an already-spilled
+            # helper call is irreducible (spilling it again just wraps one call in
+            # another of the SAME size — the non-termination this guards against).
+            if a isa Expr && !_cg_is_spill_call(a) && argsz[i] > bs
+                bs = argsz[i]; bi = i
+            end
+        end
+        bi == 0 && break                       # only calls/leaves left — irreducible
+        ex.args[bi] = _cg_spill!(ctx, ex.args[bi])
+        newsz = _cg_expr_size(ex.args[bi])
+        total += newsz - argsz[bi]
+        argsz[bi] = newsz
+    end
+    return (ex, total)
+end
+
+# Cap an emitted cell expression to the per-function node target, spilling into
+# helpers as needed. A no-op (returns `ex` unchanged, no helper minted) when it
+# already fits — so small kernels keep today's single-function fast path byte
+# for byte. `ESS_CODEGEN_BODY_SPLIT_DISABLE=1` forces the no-op (the pre-split
+# build; used as the differential oracle and to reproduce the OOM).
+function _cg_bound_body!(ctx::_CGCtx, ex)
+    get(ENV, "ESS_CODEGEN_BODY_SPLIT_DISABLE", "") == "1" && return ex
+    cap = _codegen_fn_node_cap()
+    cap <= 0 && return ex
+    _cg_expr_size(ex) <= cap && return ex
+    return _cg_partition!(ctx, ex, cap)[1]
+end
+
 # Emit + compile every codegen-able kernel into a RuntimeGeneratedFunction
 # `(du, u, p, t, tabs, ci, nchunks) -> nothing` — the per-CHUNK form of the
 # section (see `_cg_emit_kernel!`): each kernel's loop nest covers its cell
@@ -871,6 +1068,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         # sharing that sub-kernel would otherwise reference rolled-back locals).
         nprologue = length(ctx.prologue)
         ninvlog = length(ctx.invlog)
+        nhelpers = length(ctx.helpers)
         nodes0 = ctx.nodes
         fscratch0 = ctx.fscratch
         try
@@ -888,6 +1086,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
                 delete!(ctx.invdone, ctx.invlog[i])
             end
             resize!(ctx.invlog, ninvlog)
+            resize!(ctx.helpers, nhelpers)     # discard this kernel's split helpers
             ctx.nodes = nodes0
             ctx.fscratch = fscratch0
             _tally_cascade!(Symbol(tally, "_decline_", err.reason))
@@ -909,6 +1108,11 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     for i in 1:length(ctx.tabs)
         push!(outer_passed, Symbol("_cgtab", i))
     end
+    # A split kernel's loop body calls its helpers with the `tabs` TUPLE (the
+    # ess-iip-split thread that avoids O(#tabs) per-helper params), so a chunk
+    # carrying such a loop must receive `tabs` too. The main body has it (the
+    # RGF argument); helpers pass it onward to nested helpers themselves.
+    push!(outer_passed, :tabs)
     for stmt in ctx.prologue
         s = _cg_local_lhs(stmt)
         s === nothing || push!(outer_passed, s)
@@ -954,6 +1158,10 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     body = Expr(:block,
                 tabstmts...,
                 :(local _cgT = _rhs_value_type(u, p, t)),
+                # Intra-kernel split helpers (ess-iip-split): defined FIRST so the
+                # invariant prologue and every chunk sub-function can call them by
+                # name. Each is `@noinline`, params-only (captures nothing).
+                ctx.helpers...,
                 Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, ctx.prologue...)),
                 fndefs...,
                 callstmts...,
