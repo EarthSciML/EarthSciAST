@@ -504,40 +504,58 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 ### 5.8 Simulation (Julia, Python, Rust)
 
-**Canonical.**
+**Canonical.** One noun and one verb. `esm-libraries-spec.md` §2.5 is normative;
+this is the surface it implies.
 
 ```
-prepare(input, *, parameters, const_arrays, providers, model_name,
-        metaparameters, base_path, sample_time) -> PreparedModel
-simulate(prepared_or_input, tspan, *, alg, parameters, initial_conditions,
-         reltol, abstol, saveat) -> SimulationResult
-observed_field(prepared, name) -> Array
+esm_problem(input, tspan, *, p, u0, providers, model_name,
+            metaparameters, base_path, sample_time) -> Problem
+solve(prob, *, alg, abstol, reltol, saveat, callback, maxiters) -> Solution
+remake(prob, *, p, u0, tspan) -> Problem
+init(prob, *, alg, ...) -> Integrator
+step!(integrator) / solve!(integrator)
+callbacks(prob) -> CallbackSet
+observed_field(prob, name) -> Array
+EnsembleProblem(prob, rewrite) -> EnsembleProblem
 ```
 
-`prepare` runs the deterministic-per-document pipeline once; `simulate` varies
-only per-run knobs. Both raise `SimulateError`.
+A `Solution` carries `retcode` (SciML `ReturnCode`) and is indexed **by variable
+name**. Errors are `SimulateError`.
 
-**Today:**
+**`simulate` is deleted in all three bindings**, not deprecated — it conflated
+build with run, which is why two of the three had already grown a second
+`prepare`-shaped entry point beside it. `prepare` / `PreparedModel` / `Prepared`
+are replaced by Problem construction, which absorbs the same pipeline (rewrite →
+value invention → gated fetch → compile). `build_evaluator` survives as a
+documented extension seam (§7), not stable API.
 
-| Knob | Julia | Python | Rust |
+**Callback composition:** a `callback` argument to `solve` REPLACES the
+Problem's set entirely. To extend rather than replace, read the set back with
+`callbacks(prob)` and compose explicitly. See §2.5.4 of the libraries spec for
+why replacement is the safe default.
+
+**What this replaced, per binding:**
+
+| Knob | Julia (was) | Python (was) | Rust (was) |
 |---|---|---|---|
-| relative tolerance | `reltol` (`1e-10`) | **`rtol`** (`1e-10`) | `reltol` (**`1e-6`**) |
-| absolute tolerance | `abstol` (`1e-14`) | **`atol`** (`1e-14`) | `abstol` (**`1e-8`**) |
-| solver | `alg` (SciML algorithm, required) | **`method: str = "LSODA"`** | **`solver: SolverChoice`** |
-| output times | `saveat` | **absent** | **`output_times: Option<Vec<f64>>`** |
+| relative tolerance | `reltol` (`1e-10`) | `rtol` (`1e-10`) | `reltol` (`1e-6`) |
+| absolute tolerance | `abstol` (`1e-14`) | `atol` (`1e-14`) | `abstol` (`1e-8`) |
+| solver | `alg` | `method: str = "LSODA"` | `solver: SolverChoice` |
+| output times | `saveat` | absent | `output_times: Option<Vec<f64>>` |
 | options passing | keywords | positional-or-keyword | `&SimulateOptions` struct |
+| run outcome | `success` + `retcode` + `message` | `success` + `message` + counters | step/eval counters |
+| re-parameterize | `remake_parameters` (params only) | rebuild | rebuild |
 
-> **⚠ Rust's default tolerances are four orders of magnitude looser than
-> Julia's and Python's** (`1e-6`/`1e-8` against `1e-10`/`1e-14`). Python's
-> docstring says its defaults were deliberately matched to Julia's; Rust's were
-> never brought into that agreement. Two bindings solving the same document with
-> default options do not produce comparable trajectories.
+Rust's defaults were four orders of magnitude looser than the other two
+(`1e-6`/`1e-8` against `1e-10`/`1e-14`), so two bindings solving the same
+document with default options did not produce comparable trajectories. The
+canonical defaults are `reltol = 1e-10`, `abstol = 1e-14`.
 
-`observed_field` arity differs three ways: Julia takes
-`(prep, insp::BuildInspection, name)` — the caller must have threaded the same
-`BuildInspection` through `prepare` — Python takes `(prep, name)`, and Rust is a
-method on `Prepared` taking only `name`. Rust also returns a borrowed array
-only, where Python may return a float scalar.
+`observed_field` also had three different arities — Julia
+`(prep, insp::BuildInspection, name)`, requiring the caller to have threaded the
+same `BuildInspection` through `prepare`; Python `(prep, name)`; Rust a method on
+`Prepared` taking only `name`. It is `(prob, name)` in all three, with build
+observability moved to a construction-time seam.
 
 ### 5.9 Reference resolution
 
@@ -899,7 +917,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 1 | `load` | Julia and Go took a **file path**; TypeScript and Rust took **JSON text**; Python sniffed. Same name, same argument type, opposite meanings. | **DONE.** Split into `load_path` / `load_string` / `load_document`; `load` deleted (a deprecation shim would have to keep the sniff). See §5.1. | all five |
 | 2 | `save` | Pure serialization in TypeScript and Rust, a disk write in Julia, both in Python. Go alone distinguished them by name, using nobody else's names. | **DONE.** `to_json(file, opts) -> string` pure everywhere; `write_path(file, path)` writes and returns nothing; `to_json_compact` in all five. See §5.1. | all five |
 | 2b | `VERSION` | Meant the SCHEMA version in TypeScript and the PACKAGE version in Rust. Julia exported only `ESM_FORMAT_VERSION`; Python kept the format version private as a tuple; Go exposed neither. | **DONE.** `SCHEMA_VERSION` and `LIBRARY_VERSION`, both public strings, in all five; `VERSION` deleted. See §5.1. | all five |
-| 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | SciML spelling everywhere (§4). Python gains `reltol`/`abstol`/`alg`; Rust renames `solver`→`alg`, `output_times`→`saveat`; Rust's defaults align to `1e-10`/`1e-14`. | Python, Rust |
+| 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | Subsumed by the phase-4 simulation reshape: the option names come along with `simulate` being deleted and `Problem`/`solve` replacing it. SciML spelling everywhere (§4), Rust's defaults aligned to `1e-10`/`1e-14`. See §5.8 and libraries-spec §2.5. | Python, Rust |
 | 4 | `closed_function_names` | A function in Julia, Rust and Go; a **constant array** `CLOSED_FUNCTION_NAMES` in TypeScript. | TypeScript adds `closedFunctionNames()`; the constant becomes a deprecated alias. | TypeScript |
 | 5 | `derive_odes` | TypeScript spells it `deriveODEs`, violating §2 — and is internally inconsistent, since it already spells the siblings `odeStates` and `isOdeState`. | Rename to `deriveOdes`. | TypeScript |
 | 6 | `unknowns` / `parameters` | TypeScript and Python export `unknowns`/`parameters`; Julia exports `unknown_names`/`parameter_names` for the same query. | Canonical is `unknowns`/`parameters`. Julia keeps its `*_names` spellings as aliases — the bare names collide badly in Julia's flat namespace. | Julia |

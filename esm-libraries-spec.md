@@ -251,6 +251,140 @@ Libraries at a tier that produces simulation-ready systems (currently: Julia via
 | Rust (`earthsci-ast-rs`) | ✅ conforms (partial) | `tests/simulate_tests.rs` runs Robertson, exponential decay, reversible, and autocatalytic problems through `diffsol`. `diffsol` is currently an unconditional dependency; moving it behind a `simulate` feature flag is a recommended follow-up. |
 | Julia (`EarthSciAST.jl`) | ❌ does not conform | The test suite constructs `ODESystem` objects but never calls `solve()`. `real_mtk_integration_test.jl` has `@test_skip` gates and only verifies the returned object is a non-`MockMTKSystem`. Tracked as a follow-up gap. |
 
+### 2.5 The Simulation Problem (Julia, Python, Rust)
+
+*Normative for simulation-capable bindings. TypeScript and Go implement none of
+this — they have no Problem type, by decision, and stop at the flattened system.*
+
+§2.4 says a library sets systems up and does not solve them. This section says
+what "set up" produces: **one noun, `Problem`, and one verb, `solve`.** The
+SciML common interface is the model, and §4 of `API_SPEC.md` makes its spellings
+canonical in every binding.
+
+#### 2.5.1 `simulate` does not exist
+
+There is no `simulate` entry point in any binding. A run is always two steps:
+
+```
+prob = esm_problem(input, tspan; p, u0, providers, ...)   # build once
+sol  = solve(prob; alg, abstol, reltol, saveat, ...)      # run per-knob-set
+```
+
+The two steps are separated because their costs differ by orders of magnitude
+and their inputs differ in kind. Construction is deterministic per document: it
+rewrites, invents values, fetches gated data, and compiles. `solve` varies only
+per-run knobs. A single `simulate` call conflates them, and every binding that
+had one grew a second, `prepare`-shaped entry point next to it precisely because
+callers needed the split — Julia and Python already carried both, spelled
+differently and with different arguments.
+
+`prepare` is therefore *replaced by* Problem construction, not kept alongside
+it. `PreparedModel` and `Prepared` are the same concept under a local name;
+`Problem` is that concept under the canonical one.
+
+#### 2.5.2 Construction
+
+Construction absorbs the whole deterministic-per-document pipeline: the pushdown
+rewrite, value invention, the gated fetch of provider data, and the compile of
+the right-hand side. It takes the document (a path, a native document, a typed
+document, or a `FlattenedSystem`), the integration interval, and the bindings
+that fix a *document* rather than a *run* — parameters, initial state, data
+providers, metaparameters, and the model to build when the file holds several.
+
+A binding MAY expose additional construction arguments for its own build
+observability (Julia's `inspect`, Rust's progress observer). Those are extension
+seam, not stable API.
+
+`build_evaluator` survives as a **documented tier-2 extension seam**. It is the
+entry point for a caller that wants the compiled right-hand side without a
+Problem around it, and it has substantial downstream use; it is not deprecated
+by this section, and it is not stable API either.
+
+#### 2.5.3 `solve`, and the return code
+
+`solve(prob; alg, abstol, reltol, saveat, callback, maxiters)` runs to
+completion. `alg` is the solver algorithm; a binding whose ecosystem has no
+first-class algorithm object MAY accept a name.
+
+The result carries a **`retcode`** drawn from the SciML `ReturnCode` vocabulary
+— at minimum `Success`, `MaxIters`, `Unstable`, `Terminated`, and a failure code
+for a solver-reported error. `retcode` REPLACES the ad-hoc pairs the bindings
+carried before it: a `success` boolean beside a free-text `message`, and Rust's
+step counters read as a proxy for whether the run finished. A caller MUST be
+able to distinguish "ran to `tspan[2]`" from "stopped early, here is why" without
+parsing prose.
+
+A binding MAY additionally carry solver statistics; those are informative.
+
+#### 2.5.4 Callbacks: an argument to `solve` REPLACES the Problem's set
+
+Callbacks are declared on the **Problem**, because a callback that refreshes
+provider buffers or writes an output stream belongs to the document, not to a
+particular run's tolerances.
+
+A `callback` argument to `solve` **replaces the Problem's callback set
+entirely.** It does not append, merge, or wrap.
+
+This is the one genuinely ambiguous point in the design, and it is settled this
+way deliberately. Silent composition is the more dangerous default: a caller who
+passes `callback` to override a Problem-level callback would instead get both,
+and two callbacks that both write output or both mutate the same buffer produce
+a wrong run rather than an error. Replacement is visible in the result the first
+time it is wrong. A caller who wants to *extend* rather than replace reads the
+existing set back with `callbacks(prob)` and composes explicitly:
+
+```
+solve(prob; callback = compose(callbacks(prob), my_extra_callback))
+```
+
+`callbacks(prob)` is stable API in every simulation-capable binding, for exactly
+this reason: without it, replacement semantics would make a Problem-level
+callback impossible to extend.
+
+#### 2.5.5 `remake`
+
+`remake(prob; p, u0, tspan, ...)` returns a NEW Problem with the named
+substitutions applied and everything else shared. It MUST NOT mutate the
+original, and it MUST NOT redo the parts of construction the substitution cannot
+have invalidated — a changed parameter value does not re-fetch provider data or
+recompile the right-hand side.
+
+`remake` generalizes Julia's `remake_parameters`, which took parameters only.
+Refusal behavior is preserved: a substitution that a Problem cannot honor
+without a rebuild MUST raise, naming the parameter and the class that makes it
+un-substitutable, rather than silently rebuilding or silently ignoring it.
+
+#### 2.5.6 Stepping
+
+`init(prob; ...)` returns an integrator; `step!` advances it; `solve!` runs it to
+completion. This is the same lifecycle `solve` performs internally, exposed for
+callers that need to interleave their own work with the integration — the
+coupling driver in a host model, an interactive session, a progress UI.
+
+#### 2.5.7 Accessing results by name
+
+A solution is indexed by **variable name**, not by position in the state vector.
+Julia implements `SymbolicIndexingInterface`; the other bindings expose
+name-keyed accessors with the same meaning. Position-indexed access MAY remain
+available but is not the documented path: the flattened state ordering is an
+implementation detail that coupling can change.
+
+#### 2.5.8 Ensembles
+
+`EnsembleProblem` wraps a Problem plus a per-trajectory rewrite, and solves the
+family. It is the canonical form for parameter sweeps, Monte Carlo over declared
+distributions, and perturbed initial conditions. Go's orphaned `ParameterSweep` /
+`SweepRange` / `SweepDimension` types — a sweep vocabulary in the one binding
+with no solver to run it — are deleted rather than harmonized.
+
+#### 2.5.9 Solver dependencies stay optional
+
+§2.4's rule is unchanged by any of the above, and applies to the `solve` half of
+it: the solver is a test dependency, an optional extra, a Cargo feature, or a
+package extension — never an unconditional runtime dependency. Constructing a
+Problem MUST NOT require the solver to be present. Only `solve`, `init`, and
+`solve!` may.
+
 ---
 
 ## 3. Validation
