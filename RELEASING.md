@@ -84,14 +84,15 @@ Both the Rust and Julia bindings depend on **EarthSciIO**:
 1. **`earthsciio` → crates.io** — done (0.1.1). The Rust binding declares
    `earthsciio = { path = ..., version = "0.1", optional = true }`; cargo
    resolves the `version` when publishing and rejects a path-only dep.
-2. **`EarthSciIO` → General registry** (from `EarthSciIO/julia`) — still
-   outstanding. It is a `[weakdeps]` entry of EarthSciAST.jl, and Registrator
-   refuses to register a package whose dependencies are not themselves
-   registered, so EarthSciAST.jl is blocked until this merges.
+2. **`EarthSciIO` → General registry** (from `EarthSciIO/julia`) — done.
+   `E/EarthSciIO/Package.toml` is in General with `subdir = "julia"` (0.1.1
+   merged; 0.1.2 registered 2026-08-24). It is a `[weakdeps]` entry of
+   EarthSciAST.jl, and Registrator refuses to register a package whose
+   dependencies are not themselves registered, so this was the blocker. It is
+   no longer one.
 
-New packages sit in a **3-day AutoMerge waiting period** in the General
-registry, and these two are sequential, so the Julia binding lands roughly a
-week after EarthSciIO is submitted.
+EarthSciAST.jl is still a **new** package to General, so its first registration
+sits in a **3-day AutoMerge waiting period**.
 
 ## Cutting a release
 
@@ -114,15 +115,25 @@ week after EarthSciIO is submitted.
    - calls `release-publish.yml` to publish to each registry,
    - builds cross-platform binaries and runs conformance.
 
-3. Post the Julia registration comment on the release commit:
+3. Nothing. Julia registration is automated — `release-publish.yml`'s
+   `julia-register` job posts
 
    ```
    @JuliaRegistrator register subdir=pkg/EarthSciAST.jl
    ```
 
-   This cannot be automated: registering a package that lives in a
-   subdirectory requires the `subdir=` argument, which is only expressible
-   through a Registrator comment.
+   on the release commit for you. Registering a subdirectory package does
+   require the `subdir=` argument and that argument is only expressible in a
+   Registrator comment, but a workflow can post that comment: Registrator
+   whitelists `github-actions[bot]` ahead of its collaborator check
+   (`Registrator.jl` `src/commentbot/github_utils.jl:36`), and the
+   GITHUB_TOKEN recursion rule does not apply because Registrator is a GitHub
+   App consuming a webhook, not a workflow run.
+
+   Watch for the registry PR at
+   <https://github.com/JuliaRegistries/General/pulls>. If none appears, the
+   JuliaRegistrator App has come off the repository — the one prerequisite CI
+   cannot satisfy for itself.
 
 ## Things that were broken, and why they are worth not re-breaking
 
