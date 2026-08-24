@@ -697,6 +697,7 @@ reading that as a gap.
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
 | `compose` | function | `compose` | `compose` | – | – | `Compose` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
+| `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
@@ -746,7 +747,6 @@ reading that as a gap.
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
-| `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | – |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
 | `coupling_role` | type | – | – | – | `CouplingRole` | `CouplingRole` |
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |

@@ -151,7 +151,7 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // model is really spelled with `_var`, which is what makes a composition
     // observable at all.
     expect(corpus.cases.length).toBe(22)
-    expect(corpus.refusals.length).toBe(2)
+    expect(corpus.refusals.length).toBe(3)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 

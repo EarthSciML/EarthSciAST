@@ -241,6 +241,23 @@ REFUSALS: list[dict[str, str]] = [
         ),
     },
     {
+        "fixture": "coupling/couple_multiplicative_no_tendency.esm",
+        "error": "CoupleMultiplicativeNoTendencyError",
+        "reason": (
+            "a `couple` connector applies `multiplicative` to `Surface.resistance`, a constant "
+            "parameter with no `D(...)` tendency. esm-spec \u00a710.3 and libraries \u00a74.7.2 both "
+            "define the transform against the target's EXISTING ODE RHS, so there is nothing to "
+            "multiply. Four of five bindings used to drop the connector equation SILENTLY -- the "
+            "document declared a coupling and the flattened system carried no trace of it. This "
+            "case exists so `couple_multiplicative_no_tendency` cannot rot the way "
+            "`operator_compose` did: every fixture that used the idiom was migrated to the "
+            "\u00a710.4 `variable_map` spelling, which left the diagnostic with no fixture at all. "
+            "It lives in tests/coupling/ and NOT in tests/invalid/ because it is schema-valid and "
+            "structurally valid -- `tests/invalid/` means `validate()` must reject, and this "
+            "document is refused at FLATTEN. Same placement rule as valid/template_import_lib.esm."
+        ),
+    },
+    {
         "fixture": "conformance/expression_templates/nonterminating_rewrite/fixture.esm",
         "error": "ExpressionTemplateError",
         "reason": (
