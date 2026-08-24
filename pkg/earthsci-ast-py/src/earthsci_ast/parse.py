@@ -2116,6 +2116,32 @@ _LOAD_ARGS_DOC = """
 """
 
 
+def _capture_component_templates(data: Any) -> dict[str, Any]:
+    """The per-component ``expression_templates`` blocks of an Option-B loaded
+    document, keyed ``"<section>.<component>"``.
+
+    Snapshot taken on the tree BETWEEN ``lower_expression_templates`` (which
+    preserves the blocks) and ``expand_document`` (which strips them). Deep
+    copied so a later in-place pass over ``data`` cannot mutate the snapshot.
+    Components declaring no block are omitted, so the common document yields
+    ``{}`` and flatten's registry merge is a no-op.
+    """
+    out: dict[str, Any] = {}
+    if not isinstance(data, dict):
+        return out
+    for section in ("models", "reaction_systems"):
+        comps = data.get(section)
+        if not isinstance(comps, dict):
+            continue
+        for cname, comp in comps.items():
+            if not isinstance(comp, dict):
+                continue
+            block = comp.get("expression_templates")
+            if isinstance(block, dict) and block:
+                out[f"{section}.{cname}"] = copy.deepcopy(block)
+    return out
+
+
 def load_path(
     path: str | Path,
     *,
@@ -2330,6 +2356,13 @@ def _load_data(
     # NON-eager `apply_expression_template` references and the per-component
     # `expression_templates` registries SURVIVE on the returned tree.
     data = lower_expression_templates(data)
+    # Capture the per-component registries while the Option-B image still holds
+    # them: `expand_document` below strips every `expression_templates` block,
+    # and esm-libraries-spec §4.7.5 step 4 requires `flatten` to carry the MERGED
+    # registry as a first-class field of the flattened representation. Keyed
+    # `"models.<name>"` / `"reaction_systems.<name>"` (the Julia
+    # `component_templates` key shape).
+    _raw_component_templates = _capture_component_templates(data)
     # esm-spec §9.6.4 Option B: the typed IR / build path (simulate, flatten,
     # codegen) is Expand-at-build (RFC out-of-line-expression-templates §7.7) —
     # call `Expand` once here so `_parse_esm_data` sees the fully-expanded
@@ -2343,6 +2376,7 @@ def _load_data(
 
     esm_file.expression_templates = _raw_expression_templates
     esm_file.metaparameters = _raw_metaparameters
+    esm_file.component_templates = _raw_component_templates
     if _raw_index_sets is not None:
         esm_file.index_sets = _raw_index_sets
 

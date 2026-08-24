@@ -151,6 +151,15 @@ class FlattenedVariable:
     # operand (a loaded wind / BC field bound by ``variable_map``) that must be
     # indexed per grid cell.
     shape: list[str] | None = None
+    # The DECLARED cadence machinery, carried verbatim so the flattened form is
+    # self-describing (esm-libraries-spec §4.7.5 step 4, "Full metadata, not
+    # names"): a consumer must be able to build a solver problem — and to re-run
+    # the §6.3.1 parameter classification — from the FlattenedSystem alone,
+    # without re-reading the source document. ``update`` is one
+    # :class:`~.esm_types.ParameterUpdate` or an ordered list of >= 2;
+    # ``distribution`` is the sampling law. Both are None for an unknown.
+    update: Any = None
+    distribution: Any = None
 
 
 @dataclass
@@ -284,6 +293,67 @@ class FlattenedSystem:
     _infer_shapes_cache: dict[str, tuple[int, ...]] | None = field(
         default=None, compare=False, repr=False
     )
+    # ---- The remaining canonical fields of esm-libraries-spec §4.7.5 step 4 ----
+    #
+    # `algebraic_variables`, `brownian_parameters` and `discrete_parameters` are
+    # the §6.3.1 classification of the FLATTENED system, re-derived through
+    # :mod:`.classification` (never re-implemented here) and re-ordered into
+    # document order. Each is a SUBSET of the map it classifies, not a sibling
+    # bucket: §6.3.1 says the four parameter sets "partition the parameters", so
+    # a wiener-updated entry appears in BOTH `parameters` and
+    # `brownian_parameters`. Dropping it from `parameters` would make the
+    # parameter vector's LENGTH depend on whether the model is stochastic, and
+    # leave the four sets partitioning nothing.
+    #
+    # Unknowns constrained only by an expression-LHS equation (`H*H*SO4 ~ Ksp`).
+    # A SUBSET of `state_variables`: an algebraic unknown is solved for, so it
+    # rides in the unknown vector the simulator assembles, and this map says
+    # which members of that vector carry no defining equation.
+    algebraic_variables: OrderedDict[str, FlattenedVariable] = field(default_factory=OrderedDict)
+    # Parameters whose `update.kind` is "wiener" — the SDE noise sources. A
+    # SUBSET of `parameters` (see above). Non-empty is exactly the condition
+    # `system_kind` tests FIRST, so carrying it is what keeps the flattened form
+    # able to report "sde".
+    brownian_parameters: OrderedDict[str, FlattenedVariable] = field(default_factory=OrderedDict)
+    # Parameters carrying any OTHER update — piecewise-constant between
+    # refreshes. A SUBSET of `parameters`.
+    discrete_parameters: OrderedDict[str, FlattenedVariable] = field(default_factory=OrderedDict)
+    # The document-scoped `function_tables` registry (esm-spec §9.5), copied
+    # from the source document. Required to resolve a surviving `table_lookup`
+    # node without re-reading the file.
+    function_tables: dict[str, Any] = field(default_factory=dict)
+    # The MERGED expression-template registry (esm-spec §9.6.4 rule 7, §10.7;
+    # esm-libraries-spec §4.7.5 step 4): the union of the component registries
+    # with their bodies component-scoped first, deep-equal same-name entries
+    # deduplicated at first occurrence, and non-deep-equal collisions renamed to
+    # `<ComponentPath>.<name>` along the reference DAG. See
+    # :func:`_merged_template_registry`.
+    template_registry: dict[str, Any] = field(default_factory=dict)
+    # Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1) as
+    # ordered `(target_state, rhs)` pairs. These are INITIAL CONDITIONS, not
+    # dynamics: a consumer folds them into `u0` rather than integrating them.
+    #
+    # They are classified OUT of `equations` and appear ONLY here, matching Rust.
+    # `equations` is then directly usable as a right-hand side without filtering,
+    # and its length is comparable across bindings.
+    field_ics: list[tuple[str, Expr]] = field(default_factory=list)
+
+    @property
+    def system_kind(self) -> str:
+        """The flattened system's derived MTK system kind (esm-spec §6.3.1),
+        computed by :func:`classification.system_kind` over the flattened
+        variables and equations — "sde" / "pde" / "nonlinear" / "ode", tested in
+        that order.
+
+        Available on the flattened form precisely because `brownian_parameters`
+        survives flattening: the derivation's first row is "any parameter in
+        `brownian_parameters`", so a FlattenedSystem that dropped the bucket
+        could not report `"sde"` and a consumer would integrate a stochastic
+        system as a deterministic one.
+        """
+        from .classification import system_kind as _system_kind
+
+        return _system_kind(_classification_view(self))
 
     @property
     def variables(self) -> dict[str, str]:
@@ -854,6 +924,8 @@ def _collect_model(
             description=var.description,
             source_system=full_prefix,
             shape=list(var.shape) if var.shape else None,
+            update=var.update,
+            distribution=var.distribution,
         )
         if role == "state":
             component.state_vars[namespaced] = flat_var
@@ -1479,6 +1551,13 @@ def _assemble_system(
     doc_index_sets = getattr(esm_file, "index_sets", None)
     if doc_index_sets:
         flat.index_sets.update(doc_index_sets)
+    # The document-scoped `function_tables` registry (esm-spec §9.5) travels with
+    # the flattened form for the same reason `index_sets` does: a surviving
+    # `table_lookup` node names a table id, and a consumer handed only the
+    # FlattenedSystem has nowhere else to resolve it (§4.7.5 step 4).
+    doc_function_tables = getattr(esm_file, "function_tables", None)
+    if doc_function_tables:
+        flat.function_tables.update(doc_function_tables)
     # Fold every component into one bag via the shared merge (same last-writer /
     # order-preserving semantics as the previous per-field loops), then copy its
     # variable tables into the FlattenedSystem's (differently named) fields.
@@ -1609,6 +1688,275 @@ def _derive_independent_vars(flat: FlattenedSystem) -> None:
     flat.independent_variables = independent
 
 
+# ============================================================================
+# The canonical §4.7.5-step-4 fields derived from the assembled system
+# ============================================================================
+
+
+def _classification_var(var: FlattenedVariable, declared: str) -> dict[str, Any]:
+    """One flattened variable as the two-type DECLARED view esm-spec §6.3.1's
+    classification functions read.
+
+    ``FlattenedVariable.type`` is already a DERIVED role ("state" / "observed" /
+    "species" / "parameter"), and §6.3.1 is explicit that reading a derived role
+    to answer a derived question is exactly what 1.0.0 removes. So the view hands
+    the classifier the two declared types and the raw ``update`` /
+    ``distribution`` metadata, and lets it derive everything else from the
+    flattened equations — the same code path, and therefore the same answers, as
+    the per-model accessors.
+    """
+    return {
+        "type": declared,
+        "units": var.units,
+        "default": var.default,
+        "shape": var.shape,
+        "update": var.update,
+        "distribution": var.distribution,
+    }
+
+
+def _classification_view(flat: FlattenedSystem) -> dict[str, Any]:
+    """A model-shaped view of ``flat`` that :mod:`.classification` accepts.
+
+    Classification is re-run over the FLATTENED system rather than per component
+    because flattening moves the ground under it: ``operator_compose`` merges two
+    RHSs into one equation, ``variable_map`` deletes a parameter and promotes a
+    variable in its place, and the pointwise lift rewrites a scalar state ODE
+    into an ``aggregate``. A per-component answer namespaced after the fact would
+    describe the document, not the system that was produced from it.
+    """
+    variables: dict[str, Any] = {}
+    for name, var in flat.state_variables.items():
+        variables[name] = _classification_var(var, "unknown")
+    for name, var in flat.observed_variables.items():
+        variables.setdefault(name, _classification_var(var, "unknown"))
+    for name, var in flat.parameters.items():
+        variables.setdefault(name, _classification_var(var, "parameter"))
+    return {"variables": variables, "equations": flat.equations}
+
+
+def _in_document_order(
+    names: set[str], *maps: OrderedDict[str, FlattenedVariable]
+) -> OrderedDict[str, FlattenedVariable]:
+    """Select ``names`` out of ``maps``, keeping each map's insertion order.
+
+    The classification accessors return SORTED name lists — a set-valued answer
+    spelled as a list. esm-libraries-spec §4.7.5 step 4 requires DOCUMENT order
+    of every map on the FlattenedSystem, so membership comes from the accessor
+    and position comes from the already-document-ordered map being filtered.
+    Sorting here instead would be observable: a parameter vector is positional.
+    """
+    out: OrderedDict[str, FlattenedVariable] = OrderedDict()
+    for m in maps:
+        for name, var in m.items():
+            if name in names and name not in out:
+                out[name] = var
+    return out
+
+
+def _classify_flattened(flat: FlattenedSystem) -> None:
+    """Fill the §6.3.1 SUBSET maps — `algebraic_variables`,
+    `brownian_parameters`, `discrete_parameters` — on ``flat``.
+
+    Delegates every membership decision to :mod:`.classification`, the binding's
+    only sanctioned answer to these questions (esm-spec §6.3.1), and does nothing
+    here but re-impose document order. In particular there is no local
+    ``update.kind == "wiener"`` test: one derivation serving flatten, validation
+    and the conformance corpus is the whole point of that module.
+
+    Each map is a SUBSET of the map it classifies and the classified map keeps
+    every member: `brownian_parameters` ⊆ `parameters`, `discrete_parameters` ⊆
+    `parameters`, `algebraic_variables` ⊆ `state_variables`.
+    """
+    from .classification import algebraic_unknowns, brownian_parameters, discrete_parameters
+
+    view = _classification_view(flat)
+    flat.algebraic_variables = _in_document_order(
+        set(algebraic_unknowns(view)), flat.state_variables, flat.observed_variables
+    )
+    flat.brownian_parameters = _in_document_order(set(brownian_parameters(view)), flat.parameters)
+    flat.discrete_parameters = _in_document_order(set(discrete_parameters(view)), flat.parameters)
+
+
+def _collect_field_ics(flat: FlattenedSystem) -> None:
+    """Record the deferred ``ic`` equations (esm-spec §11.4.1) as ordered
+    ``(target_state, rhs)`` pairs on ``flat.field_ics``.
+
+    An ``ic`` equation pins a state's value at t=0 — a loaded initial field, or a
+    broadcast constant — rather than defining its dynamics, so a consumer folds
+    it into ``u0`` instead of the RHS. Mirrors Rust's ``extract_ic_target``: the
+    LHS must be ``ic(<bare variable>)`` with exactly one argument.
+
+    The matched equations are CLASSIFIED OUT of ``flat.equations`` and reported
+    only here (esm-libraries-spec §4.7.5 step 4). An initial condition is a
+    datum, not an equation of motion: leaving it in ``equations`` makes that list
+    unusable for building a right-hand side without first filtering it, and makes
+    equation counts incomparable across bindings. Consumers that need the initial
+    values — the array and scalar simulators' ``u0`` folding — read ``field_ics``.
+
+    Runs LAST, after the pointwise lift and the independent-variable derivation,
+    so every intermediate pass still sees the same equation list it always did
+    and only the FINAL, observable ``equations`` differs.
+    """
+    ics: list[tuple[str, Expr]] = []
+    remaining: list[FlattenedEquation] = []
+    for eq in flat.equations:
+        lhs = eq.lhs
+        target = (
+            lhs.args[0]
+            if isinstance(lhs, ExprNode) and lhs.op == "ic" and len(lhs.args) == 1
+            else None
+        )
+        if isinstance(target, str):
+            ics.append((target, eq.rhs))
+        else:
+            remaining.append(eq)
+    flat.field_ics = ics
+    flat.equations = remaining
+
+
+def _scope_template_body(
+    expr: Expr, prefix: str, local_names: set[str], bound: frozenset[str] = frozenset()
+) -> Expr:
+    """Component-scope one carried template body: prefix exactly the references
+    that name one of the OWNING component's locals.
+
+    This is the "post-step-2 scoping" esm-libraries-spec §4.7.5 step 4 calls an
+    ordering requirement rather than a parenthetical. A body's FREE variables are
+    resolved in its owner's scope, so two components importing one library carry
+    byte-identical bodies whose free ``inv_dx`` denotes a DIFFERENT variable in
+    each; deduplicating them pre-scoping keeps one body that is correct for
+    neither. Scoping also makes them non-deep-equal, which is what routes them
+    into the collision rename and keeps an entry per component.
+
+    Unlike :func:`_namespace_expr` (which prefixes every bare reference except an
+    explicit leave-alone set) this is a WHITELIST, matching Julia's
+    ``namespace_expr(body, cname, local_names)``: a body legitimately references
+    its own formal ``params``, loop symbols, and document-scoped index sets, none
+    of which are component locals and none of which may be prefixed. The caller
+    removes the template's ``params`` from ``local_names`` before calling.
+    """
+    if expr is None or _is_number(expr):
+        return expr
+    if isinstance(expr, str):
+        if expr in bound:
+            return expr
+        if "." in expr:
+            head = expr.split(".", 1)[0]
+            return f"{prefix}.{expr}" if head in local_names else expr
+        return f"{prefix}.{expr}" if expr in local_names else expr
+    if isinstance(expr, ExprNode):
+        local_bound = set(bound)
+        if expr.op == "aggregate":
+            for sym in expr.output_idx or ():
+                if isinstance(sym, str):
+                    local_bound.add(sym)
+            for sym in (expr.ranges or {}).keys():
+                local_bound.add(sym)
+        frozen = frozenset(local_bound)
+        out = map_children(expr, lambda c: _scope_template_body(c, prefix, local_names, frozen))
+        if getattr(expr, "join", None):
+            binders = set(expr.output_idx or ()) | set((expr.ranges or {}).keys())
+            out = replace(out, join=_namespace_join(expr.join, binders, prefix, local_names))
+        return out
+    return expr
+
+
+def _merged_template_registry(esm_file: EsmFile) -> dict[str, Any]:
+    """The MERGED expression-template registry of the flattened representation
+    (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4).
+
+    Union of the per-component registries, in this order:
+
+    1. **Scope, then union.** Each MODEL block's bodies are component-scoped
+       first (:func:`_scope_template_body`), because the dedup below compares
+       post-scoping bodies. Reaction-system blocks pass through unscoped BY
+       POLICY, mirroring the Julia reference: a rate-law reference is expanded
+       eagerly at collect, so a reaction-system entry is never resolved against
+       the post-flatten scope — it rides along so the reconstituted document
+       round-trips.
+    2. **Deep-equal dedup at first occurrence** — two components importing one
+       stencil keep one entry under the bare name.
+    3. **Collision rename** — a same-name entry whose occurrences are not all
+       deep-equal renames to ``<ComponentPath>.<name>`` in EVERY owning
+       component, and the rename propagates along the reference DAG
+       (:func:`~.lower_expression_templates._registry_collision_names`) so no
+       surviving body holds a reference the merged registry cannot resolve.
+
+    ``match`` rules are excluded: only match-less templates are referenceable
+    (§9.6.2), so only they can be merged.
+
+    Components are walked in DOCUMENT order (models in file order, then reaction
+    systems), which is what step 4's ordering rule requires and what makes
+    "first occurrence" mean the first occurrence in the file. The Julia reference
+    sorts the component keys instead; the two agree whenever component names sort
+    in declaration order, and where they disagree the spec's rule governs.
+
+    Python's typed path expands every reference at load (esm-spec §9.6.4 rule 2),
+    so no equation reaching here carries an ``apply_expression_template`` node
+    and the rename has no component reference sites left to rewrite — step 4's
+    "Applicability" paragraph says exactly this. The registry is still carried,
+    because the field is normative and a consumer must be able to reconstitute
+    the reference-preserving document from the flattened form.
+    """
+    from .lower_expression_templates import _registry_collision_names, _rename_apply_refs
+    from .parse import _parse_expression
+    from .serialize import _serialize_expression
+
+    component_templates = getattr(esm_file, "component_templates", None) or {}
+    if not component_templates:
+        return {}
+
+    # Document order: models as the file declares them, then reaction systems.
+    ordered_keys = [f"models.{n}" for n in esm_file.models] + [
+        f"reaction_systems.{n}" for n in esm_file.reaction_systems
+    ]
+    for key in component_templates:  # a component the typed file no longer holds
+        if key not in ordered_keys:
+            ordered_keys.append(key)
+
+    # name -> [(component_path, declaration), ...] in document order.
+    byname: dict[str, list[tuple[str, Any]]] = {}
+    for compkey in ordered_keys:
+        block = component_templates.get(compkey)
+        if not isinstance(block, dict):
+            continue
+        section, _, cname = compkey.partition(".")
+        model = esm_file.models.get(cname) if section == "models" else None
+        local_names = set(model.variables) | set(model.subsystems) if model is not None else set()
+        for tname, decl in block.items():
+            if isinstance(decl, dict) and decl.get("match") is not None:
+                continue  # match rules are not referenceable, so not merged
+            scoped = decl
+            body = decl.get("body") if isinstance(decl, dict) else None
+            if model is not None and body is not None:
+                params = {p for p in (decl.get("params") or []) if isinstance(p, str)}
+                scoped = dict(decl)
+                scoped["body"] = _serialize_expression(
+                    _scope_template_body(_parse_expression(body), cname, local_names - params)
+                )
+            byname.setdefault(str(tname), []).append((cname, scoped))
+
+    collide = _registry_collision_names(byname)
+    merged: dict[str, Any] = {}
+    rename: dict[str, dict[str, str]] = {}
+    for name, occurrences in byname.items():
+        if name in collide:
+            for path, decl in occurrences:
+                newname = f"{path}.{name}"
+                merged[newname] = decl
+                rename.setdefault(path, {})[name] = newname
+        else:
+            merged[name] = occurrences[0][1]
+    # A renamed body's own nested references follow its owner's map, so a
+    # per-owner wrapper reaches its owner's leaf and never the other owner's.
+    for _path, per_owner in rename.items():
+        for _old, new in per_owner.items():
+            if new in merged:
+                merged[new] = _rename_apply_refs(merged[new], per_owner)
+    return merged
+
+
 def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> FlattenedSystem:
     """Flatten a coupled multi-system EsmFile per spec §4.7.5.
 
@@ -1672,6 +2020,19 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
 
     # Step 6: derive independent variables from the equation set.
     _derive_independent_vars(flat)
+
+    # Step 7: the remaining canonical §4.7.5-step-4 fields. All three run LAST,
+    # over the finished system, so they see the equations coupling and the
+    # pointwise lift actually produced rather than the ones the document
+    # declared.
+    #
+    # The §6.3.1 subsets (`algebraic_variables`, `brownian_parameters`,
+    # `discrete_parameters`), re-derived through `classification`.
+    _classify_flattened(flat)
+    # The deferred `ic` equations (esm-spec §11.4.1) as (state, expr) pairs.
+    _collect_field_ics(flat)
+    # The merged expression-template registry (esm-spec §9.6.4 rule 7, §10.7).
+    flat.template_registry = _merged_template_registry(esm_file)
 
     return flat
 
