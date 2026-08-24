@@ -489,12 +489,17 @@ def _apply_equation_to_dy(
 
     # Case C: an equation left over after elimination whose LHS matched neither a
     # scalar/element state derivative (Case A) nor an aggregate ODE (Case B), so
-    # nothing is written to ``dy``. A scalar ``ic`` op is an intentional no-op on
-    # the RHS (its initial value is folded into u0 at build time), so it is NOT
-    # "unrecognized" and must not warn. Every other shape means a state this
-    # equation was meant to constrain silently stays frozen at its initial value —
-    # emit a diagnostic naming it rather than dropping it silently (Python dedups
-    # per distinct message, so this fires once per LHS).
+    # nothing is written to ``dy``. Every such shape means a state this equation
+    # was meant to constrain silently stays frozen at its initial value — emit a
+    # diagnostic naming it rather than dropping it silently (Python dedups per
+    # distinct message, so this fires once per LHS).
+    #
+    # The ``ic`` guard below is now defensive only: flatten classifies ``ic``
+    # equations out of ``equations`` into ``field_ics`` (esm-libraries-spec
+    # §4.7.5 step 4), so none reaches here from a flattened system. It is kept
+    # for a hand-built FlattenedSystem, where an ``ic`` LHS is still an
+    # intentional no-op on the RHS (its value is folded into u0 at build time)
+    # and must not warn.
     if isinstance(lhs, ExprNode) and lhs.op == "ic":
         return
     warnings.warn(
@@ -1022,20 +1027,18 @@ def scalar_ic_equations(flat: FlattenedSystem) -> list[tuple[str, Expr]]:
     is a target that is not a state of this system at all (``ic`` is also written
     against a discrete parameter that events mutate — see
     :func:`_fold_scalar_ics`). Used by the scalar-SymPy pathway, which has no
-    array machinery of its own."""
+    array machinery of its own.
+
+    Reads ``flat.field_ics``, not ``flat.equations``: flatten classifies the
+    ``ic`` equations OUT of the equation list (esm-libraries-spec §4.7.5 step 4)
+    because an initial condition is a datum rather than an equation of motion.
+    """
     out: list[tuple[str, Expr]] = []
-    for eq in flat.equations:
-        lhs = eq.lhs
-        if (
-            isinstance(lhs, ExprNode)
-            and lhs.op == "ic"
-            and lhs.args
-            and isinstance(lhs.args[0], str)
-        ):
-            var = flat.state_variables.get(lhs.args[0])
-            if var is None or getattr(var, "shape", None):
-                continue
-            out.append((lhs.args[0], eq.rhs))
+    for target, rhs in flat.field_ics:
+        var = flat.state_variables.get(target)
+        if var is None or getattr(var, "shape", None):
+            continue
+        out.append((target, rhs))
     return out
 
 
@@ -2074,25 +2077,26 @@ def _build_numpy_rhs(
     # silently started at its declared ``default``. Nothing warned, because the
     # no-op is deliberate for the ARRAY case whose value has already been
     # folded.
+    # The initial conditions arrive on `flat.field_ics`, not in `flat.equations`:
+    # flatten classifies them out (esm-libraries-spec §4.7.5 step 4) so the
+    # equation list is a right-hand side and nothing else. Split by TARGET SHAPE,
+    # which is what decides whether the value is folded per grid cell or as a
+    # scalar; the resolved `shapes` map is only available here, which is why the
+    # split is not done in flatten.
     field_ic_eqs: list[tuple[str, Expr]] = []
     scalar_ic_eqs: list[tuple[str, Expr]] = []
+    for _target, _rhs in flat.field_ics:
+        if shapes.get(_target):
+            field_ic_eqs.append((_target, _rhs))
+        else:
+            scalar_ic_eqs.append((_target, _rhs))
     for eq in flat.equations:
         # Value-invention state assignments (bin skolem maps, distinct
         # candidate-set membership) are materialized at setup, not integrated.
         _base = _vi_lhs_base(eq.lhs)
         if _base is not None and _base in vi_var_names:
             continue
-        if (
-            isinstance(eq.lhs, ExprNode)
-            and eq.lhs.op == "ic"
-            and eq.lhs.args
-            and isinstance(eq.lhs.args[0], str)
-        ):
-            if shapes.get(eq.lhs.args[0]):
-                field_ic_eqs.append((eq.lhs.args[0], eq.rhs))
-            else:
-                scalar_ic_eqs.append((eq.lhs.args[0], eq.rhs))
-        elif isinstance(eq.lhs, str) and eq.lhs in observed_names:
+        if isinstance(eq.lhs, str) and eq.lhs in observed_names:
             observed_eqs.append((eq.lhs, eq.rhs))
         else:
             driver_equations.append(eq)

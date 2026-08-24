@@ -333,10 +333,9 @@ class FlattenedSystem:
     # ordered `(target_state, rhs)` pairs. These are INITIAL CONDITIONS, not
     # dynamics: a consumer folds them into `u0` rather than integrating them.
     #
-    # Divergence from Rust worth knowing: Rust classifies the `ic` equations OUT
-    # of `equations`, Python leaves them there (`simulation_array` reads them
-    # from the equation list) and reports them here as well. The step-4 table
-    # says `equations` holds "All equations", which is the reading Python takes.
+    # They are classified OUT of `equations` and appear ONLY here, matching Rust.
+    # `equations` is then directly usable as a right-hand side without filtering,
+    # and its length is comparable across bindings.
     field_ics: list[tuple[str, Expr]] = field(default_factory=list)
 
     @property
@@ -1788,19 +1787,32 @@ def _collect_field_ics(flat: FlattenedSystem) -> None:
     it into ``u0`` instead of the RHS. Mirrors Rust's ``extract_ic_target``: the
     LHS must be ``ic(<bare variable>)`` with exactly one argument.
 
-    Python keeps the equation in ``flat.equations`` as well (``simulation_array``
-    resolves it there, and step 4's table says `equations` holds "All
-    equations"); Rust classifies it out. The pair is what both agree on.
+    The matched equations are CLASSIFIED OUT of ``flat.equations`` and reported
+    only here (esm-libraries-spec §4.7.5 step 4). An initial condition is a
+    datum, not an equation of motion: leaving it in ``equations`` makes that list
+    unusable for building a right-hand side without first filtering it, and makes
+    equation counts incomparable across bindings. Consumers that need the initial
+    values — the array and scalar simulators' ``u0`` folding — read ``field_ics``.
+
+    Runs LAST, after the pointwise lift and the independent-variable derivation,
+    so every intermediate pass still sees the same equation list it always did
+    and only the FINAL, observable ``equations`` differs.
     """
     ics: list[tuple[str, Expr]] = []
+    remaining: list[FlattenedEquation] = []
     for eq in flat.equations:
         lhs = eq.lhs
-        if not isinstance(lhs, ExprNode) or lhs.op != "ic" or len(lhs.args) != 1:
-            continue
-        target = lhs.args[0]
+        target = (
+            lhs.args[0]
+            if isinstance(lhs, ExprNode) and lhs.op == "ic" and len(lhs.args) == 1
+            else None
+        )
         if isinstance(target, str):
             ics.append((target, eq.rhs))
+        else:
+            remaining.append(eq)
     flat.field_ics = ics
+    flat.equations = remaining
 
 
 def _scope_template_body(

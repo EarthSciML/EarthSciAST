@@ -834,7 +834,7 @@
         "Chemistry.temperature",
         "Transport.wind_speed"
       ],
-      "equation_count": 8,
+      "equation_count": 5,
       "equations": [
         {
           "lhs": "D(Chemistry.O3)/Dt",
@@ -844,16 +844,6 @@
         {
           "lhs": "D(Chemistry.NO)/Dt",
           "rhs": "-0.1 * Chemistry.O3 * Chemistry.NO",
-          "source_system": "Chemistry"
-        },
-        {
-          "lhs": "ic(Chemistry.O3)",
-          "rhs": "1.0e-9",
-          "source_system": "Chemistry"
-        },
-        {
-          "lhs": "ic(Chemistry.NO)",
-          "rhs": "1.0e-9",
           "source_system": "Chemistry"
         },
         {
@@ -869,11 +859,6 @@
         {
           "lhs": "D(Transport.u)/Dt",
           "rhs": "(-Transport.wind_speed) * grad(Transport.u) + Transport.diffusivity * laplacian(Transport.u)",
-          "source_system": "Transport"
-        },
-        {
-          "lhs": "ic(Transport.u)",
-          "rhs": "1.0e-9",
           "source_system": "Transport"
         }
       ],
@@ -1377,7 +1362,7 @@
         "EmissionSources.diurnal_factor",
         "EmissionSources.weekday_factor"
       ],
-      "equation_count": 10,
+      "equation_count": 6,
       "equations": [
         {
           "lhs": "D(AtmosphericChemistry.O3)/Dt",
@@ -1395,28 +1380,8 @@
           "source_system": "AtmosphericChemistry"
         },
         {
-          "lhs": "ic(AtmosphericChemistry.O3)",
-          "rhs": "0",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
-          "lhs": "ic(AtmosphericChemistry.NO)",
-          "rhs": "0",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
-          "lhs": "ic(AtmosphericChemistry.NO2)",
-          "rhs": "0",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
           "lhs": "D(AdvectionTransport.u)/Dt",
           "rhs": "(-AdvectionTransport.u_wind) * grad(AdvectionTransport.u) + (-AdvectionTransport.v_wind) * grad(AdvectionTransport.u)",
-          "source_system": "AdvectionTransport"
-        },
-        {
-          "lhs": "ic(AdvectionTransport.u)",
-          "rhs": "0",
           "source_system": "AdvectionTransport"
         },
         {
@@ -1934,7 +1899,7 @@
         "EmissionSources.diurnal_factor",
         "EmissionSources.weekday_factor"
       ],
-      "equation_count": 17,
+      "equation_count": 12,
       "equations": [
         {
           "lhs": "D(AtmosphericChemistry.O3)/Dt",
@@ -1959,31 +1924,6 @@
         {
           "lhs": "D(AtmosphericChemistry.HO2)/Dt",
           "rhs": "(-AtmosphericChemistry.k_HO2_NO) * AtmosphericChemistry.HO2 * AtmosphericChemistry.NO * AtmosphericChemistry.M + 2 * AtmosphericChemistry.jHCHO * AtmosphericChemistry.HCHO",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
-          "lhs": "ic(AtmosphericChemistry.O3)",
-          "rhs": "4.0e-8",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
-          "lhs": "ic(AtmosphericChemistry.NO)",
-          "rhs": "5.0e-10",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
-          "lhs": "ic(AtmosphericChemistry.NO2)",
-          "rhs": "2.0e-9",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
-          "lhs": "ic(AtmosphericChemistry.HCHO)",
-          "rhs": "1.0e-9",
-          "source_system": "AtmosphericChemistry"
-        },
-        {
-          "lhs": "ic(AtmosphericChemistry.HO2)",
-          "rhs": "1.0e-12",
           "source_system": "AtmosphericChemistry"
         },
         {
@@ -3198,23 +3138,8 @@
         "ChemistryICs.NO_init",
         "ChemistryICs.NO2_init"
       ],
-      "equation_count": 6,
+      "equation_count": 3,
       "equations": [
-        {
-          "lhs": "ic(Chemistry.O3)",
-          "rhs": "ChemistryICs.O3_init",
-          "source_system": "ChemistryICs"
-        },
-        {
-          "lhs": "ic(Chemistry.NO)",
-          "rhs": "ChemistryICs.NO_init",
-          "source_system": "ChemistryICs"
-        },
-        {
-          "lhs": "ic(Chemistry.NO2)",
-          "rhs": "ChemistryICs.NO2_init",
-          "source_system": "ChemistryICs"
-        },
         {
           "lhs": "sum[Advection.i, Advection.j] (D(Chemistry.O3[Advection.i, Advection.j])/Dt) where {Advection.i in 1:4, Advection.j in 1:2}",
           "rhs": "sum[Advection.i, Advection.j] (-1 * Chemistry.k1 * Chemistry.NO[Advection.i, Advection.j] * Chemistry.O3[Advection.i, Advection.j] + Chemistry.jNO2 * Chemistry.NO2[Advection.i, Advection.j] + (-Advection.u_wind[Advection.i, Advection.j]) * (makearray([2:3, 1:2] = (Chemistry.O3[Advection.i + 1, Advection.j] - Chemistry.O3[Advection.i - 1, Advection.j]) / (2 * Advection.dx), [1:1, 1:2] = (Chemistry.O3[Advection.i + 1, Advection.j] - Advection.O3_inflow[Advection.j]) / (2 * Advection.dx), [4:4, 1:2] = (Chemistry.O3[Advection.i, Advection.j] - Chemistry.O3[Advection.i - 1, Advection.j]) / Advection.dx))[Advection.i, Advection.j]) where {Advection.i in 1:4, Advection.j in 1:2}",
