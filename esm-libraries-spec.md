@@ -646,6 +646,54 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      component view (the `flatten_template_registries` conformance surface); such a function
      implements step 4 only, and a caller that goes on to namespace MUST compose it with step 2.
 
+**The canonical `FlattenedSystem` field set (normative, from `esm: 1.0.0`).** Step 4's prose
+above says *what* is collected; this table fixes the *shape*, so that a `FlattenedSystem`
+is a cross-binding contract rather than five lookalike structs. Names are the canonical
+`snake_case` spellings and transliterate mechanically per API_SPEC.md §2 (Go `PascalCase`,
+TypeScript `camelCase`, others verbatim).
+
+| Field | Type | Contents |
+|---|---|---|
+| `independent_variables` | list of name | Always `["t"]` for a discretized system. An undiscretized spatial operator never reaches step 4. |
+| `state_variables` | ordered map name → variable | Unknowns under `D(·,t)`, plus every reaction-system species. |
+| `parameters` | ordered map name → variable | **ALL** parameters of every cadence, minus any promoted to variables by `variable_map`. |
+| `observed_variables` | ordered map name → variable | Unknowns DEFINED by an equation (esm-spec §6.3.1). |
+| `algebraic_variables` | ordered map name → variable | Unknowns CONSTRAINED only by an expression-LHS equation (esm-spec §6.3.1). |
+| `brownian_parameters` | ordered map name → variable | `update.kind == "wiener"`. A **subset** of `parameters`, not a sibling bucket. |
+| `discrete_parameters` | ordered map name → variable | Any other `update`. A **subset** of `parameters`. |
+| `equations` | list | All equations, coupling applied, dot-namespaced. |
+| `continuous_events` / `discrete_events` | list | Events, dot-namespaced. |
+| `domain` | domain or null | The file's `domain` section, unchanged. |
+| `metadata` | record | Which components were flattened, which coupling rules applied. |
+| `index_sets` | ordered map | Document-scoped index-set registry; required to interpret arrayed equations. |
+| `function_tables` | ordered map | Merged function-table registry; resolves `table_lookup`. |
+| `template_registry` | ordered map | The merged expression-template registry specified above. |
+| `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1). |
+| `loader_fields` | list | Provider-served loaded fields the system consumes. |
+| `lifted_shapes` | ordered map | Post-lift grid shapes for arrayed states. |
+
+- **The parameter subsets do not partition the struct; they partition `parameters`.**
+  esm-spec §6.3.1 states that `brownian_parameters`, `discrete_parameters`,
+  `sampled_parameters` and `constant_parameters` **partition the parameters**. A
+  `wiener`-updated entry is therefore a parameter that ALSO appears in
+  `brownian_parameters`; removing it from `parameters` is non-conforming, because the
+  four sets then partition nothing and the parameter vector's length depends on whether
+  the model happens to be stochastic. `sampled_parameters` and `constant_parameters` are
+  recoverable from the carried variable metadata and need not be stored.
+- **Losing the subsets loses `system_kind`.** esm-spec §6.3.1's `system_kind` derivation tests
+  `brownian_parameters` FIRST, so a `FlattenedSystem` that drops the bucket cannot report
+  `"sde"` and a consumer will integrate a stochastic system as a deterministic one. The
+  buckets are not a convenience: they are what makes the flattened form self-describing.
+- **Ordering (normative).** Every ordered map and list above is in **document order**:
+  components in the order the file declares them, and within a component, the order the
+  component declares its variables. Coupling-merged entries keep the position of their
+  first occurrence. Ordering is observable — a binding's parameter vector is positional —
+  so lexicographic sorting, insertion-hash order, or any order that varies with the host
+  language's map implementation is non-conforming.
+- **Full metadata, not names.** Each `name → variable` map carries the complete declared
+  variable (units, `default`, `shape`, `update`, `distribution`), not a bare name list. A
+  consumer must be able to build a solver problem from the flattened form alone.
+
 **Example:** Given an ESM file with `SimpleOzone` (reaction system with O₃, NO, NO₂) and `Advection` (model with `_var` placeholder), where T, u, and v are parameters drawing from the `GEOSFP` data source, coupled via `operator_compose`, the flattened system contains:
 
 ```
