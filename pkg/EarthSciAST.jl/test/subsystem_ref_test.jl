@@ -629,4 +629,68 @@
             end
         end
     end
+
+    @testset "load(::IO) runs the same pipeline as load(::String)" begin
+        # REGRESSION: `load(::IO)` used to call the typed pipeline directly,
+        # skipping top-level `{ref}` inlining AND `resolve_subsystem_refs!`.
+        # A stream-loaded document therefore kept its subsystem refs as
+        # unresolved `SubsystemRef`s — which `flatten` SILENTLY SKIPS. Same
+        # bytes, smaller system, no error.
+        tmp_dir = mktempdir()
+        try
+            write(joinpath(tmp_dir, "child.esm"), """{
+                "esm": "0.1.0",
+                "metadata": {"name": "child", "authors": ["Test"]},
+                "models": {"Inner": {
+                    "variables": {"u": {"type": "unknown", "default": 1.0},
+                                  "k": {"type": "parameter", "units": "s^-1",
+                                        "default": 0.5}},
+                    "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": ["k", "u"]}}]
+                }}
+            }""")
+            main_path = joinpath(tmp_dir, "main.esm")
+            main_json = """{
+                "esm": "0.1.0",
+                "metadata": {"name": "main", "authors": ["Test"]},
+                "models": {"Host": {
+                    "variables": {"y": {"type": "unknown", "default": 2.0}},
+                    "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": ["y", 0.0]}}],
+                    "subsystems": {"Sub": {"ref": "./child.esm"}}
+                }}
+            }"""
+            write(main_path, main_json)
+
+            from_path = EarthSciAST.load(main_path)
+            from_io = EarthSciAST.load(IOBuffer(main_json); base_path=tmp_dir)
+            from_dict = EarthSciAST.load(JSON3.read(main_json, Dict{String,Any});
+                                         base_path=tmp_dir)
+
+            # The ref is linked, not left as a stub, on every entry point.
+            for f in (from_path, from_io, from_dict)
+                @test f.models["Host"].subsystems["Sub"] isa Model
+            end
+
+            fp = flatten(from_path)
+            fi = flatten(from_io)
+            fd = flatten(from_dict)
+
+            # The subsystem's variables and equation survive the stream path.
+            @test "Host.Sub.u" in collect(keys(fi.state_variables))
+            for other in (fi, fd)
+                @test collect(keys(other.state_variables)) ==
+                      collect(keys(fp.state_variables))
+                @test collect(keys(other.parameters)) == collect(keys(fp.parameters))
+                @test length(other.equations) == length(fp.equations)
+                @test [to_ascii(e.lhs) for e in other.equations] ==
+                      [to_ascii(e.lhs) for e in fp.equations]
+                @test [to_ascii(e.rhs) for e in other.equations] ==
+                      [to_ascii(e.rhs) for e in fp.equations]
+            end
+        finally
+            rm(tmp_dir, recursive=true, force=true)
+        end
+    end
+
 end

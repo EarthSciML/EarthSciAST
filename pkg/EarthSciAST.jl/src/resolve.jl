@@ -102,7 +102,8 @@ Factored out so a file and the identical document held as a dict cannot drift
 apart — the only difference between them is which `base_path` anchors the refs.
 """
 function _load_document(raw_data, base_path::String;
-                        metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+                        metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                        injected_imports::AbstractVector=Any[])::EsmFile
     # Inline any top-level model `{ref}` stubs (schema §4.7: `models.*` is
     # oneOf [Model, {ref}]) before the typed pipeline, so a simulation file that
     # references its components by `{"ref": "..."}` — as the Python runner's
@@ -123,7 +124,8 @@ function _load_document(raw_data, base_path::String;
     # tree the parse boundary produces, so there is no re-serialize
     # type-launder between them and the typed pipeline.
     doc = inlined === nothing ? raw_data : inlined
-    file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters)
+    file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters,
+                        injected_imports=injected_imports)
     # Resolve nested subsystem references relative to the document's directory.
     resolve_subsystem_refs!(file, base_path)
     return file
@@ -132,18 +134,25 @@ end
 """
     load(io::IO; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
 
-Load and parse an ESM file from an IO stream. `base_path` anchors relative
-`expression_template_imports` refs (esm-spec §9.7.2); `metaparameters` binds
-the document's open metaparameters at the loader API (esm-spec §9.7.6).
+Load and parse an ESM file from an IO stream. Runs the SAME pipeline
+`load(::String)` and `load(::AbstractDict)` run — `_load_document`: top-level
+`{ref}` inlining, version gates, schema validation, template lowering,
+coercion, and nested subsystem-ref resolution. (Before this was shared, a
+stream-loaded document kept its subsystem refs as unresolved `SubsystemRef`s,
+which `flatten` silently SKIPS: the same document loaded from a stream
+flattened to a strictly smaller system, with no error.) `base_path` anchors
+relative `expression_template_imports` refs and nested `{ref}`s (esm-spec
+§9.7.2, §4.7); `metaparameters` binds the document's open metaparameters at
+the loader API (esm-spec §9.7.6).
 """
 function load(io::IO; base_path::AbstractString=pwd(),
               metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
               injected_imports::AbstractVector=Any[])::EsmFile
     json_string = read(io, String)
     raw_data = _read_json_document(json_string)
-    return _load_parsed(raw_data; base_path=base_path,
-                        metaparameters=metaparameters,
-                        injected_imports=injected_imports)
+    return _load_document(raw_data, String(base_path);
+                          metaparameters=metaparameters,
+                          injected_imports=injected_imports)
 end
 
 """
@@ -190,8 +199,11 @@ end
 
 Shared typed-load pipeline over an already-JSON-parsed document: version
 gates → schema validation → raw structural checks → §9.7 machinery →
-template lowering → typed coercion. Used by both `load(::IO)` and
-`load(::String)` (which parses the file once and reuses the document).
+template lowering → typed coercion. Reached by every public `load*` entry
+point through `_load_document`, which wraps it with the top-level `{ref}`
+inlining and nested subsystem-ref resolution that make a loaded document
+complete; `_load_local_ref` calls it directly because it drives the nested
+walk itself with a shared cycle-detection set.
 """
 function _load_parsed(raw_data; base_path::AbstractString=pwd(),
                       metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
@@ -1134,14 +1146,18 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     raw_ref_doc = JSON3.read(content)
     _reject_library_ref(raw_ref_doc, ref, resolved_path)
 
-    # Parse the referenced file using the IO-based load (no ref resolution on
-    # its own); the ref's directory anchors its template imports, the edge's
-    # `bindings` close its metaparameters (esm-spec §9.7.6 site 3), and
-    # `injected_imports` inject the edge's discretization into its single
-    # component's scope (esm-spec §9.7.10 form A).
+    # Parse the referenced file with the typed pipeline ONLY — deliberately not
+    # a public `load*` entry point, which would resolve nested refs with a
+    # FRESH `visited` set and defeat cycle detection. This function drives the
+    # nested walk itself, below, carrying the shared `visited` through. The
+    # ref's directory anchors its template imports, the edge's `bindings` close
+    # its metaparameters (esm-spec §9.7.6 site 3), and `injected_imports`
+    # inject the edge's discretization into its single component's scope
+    # (esm-spec §9.7.10 form A).
     ref_base = dirname(resolved_path)
-    file = load(IOBuffer(content); base_path=ref_base, metaparameters=metaparameters,
-                injected_imports=injected_imports)
+    file = _load_parsed(_read_json_document(content); base_path=ref_base,
+                        metaparameters=metaparameters,
+                        injected_imports=injected_imports)
 
     # Recursively resolve refs in the loaded file, relative to its own directory
     _resolve_refs_in_file!(file, ref_base, visited)
