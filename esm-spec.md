@@ -1609,9 +1609,35 @@ Python, Rust, and Go; `odeStates` in TypeScript).
 | Function | Returns |
 |---|---|
 | `ode_states(model)` | unknowns appearing under `D(·, t)` on some equation LHS |
-| `observed_unknowns(model)` | unknowns defined by a bare-variable LHS (`y ~ f(…)`) — eliminable, materializable |
-| `algebraic_unknowns(model)` | unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`) |
+| `observed_unknowns(model)` | unknowns **defined** by an equation whose LHS names them — a bare-variable LHS (`y ~ f(…)`) or an indexed-variable LHS (`y[i] ~ f(…)`, which defines the whole array `y`) — eliminable, materializable |
+| `algebraic_unknowns(model)` | unknowns constrained only implicitly — no equation names them on its LHS (`H*H*SO4 ~ Ksp`) |
 | `is_ode_state(model, name)` | membership test for the first |
+
+The split between the last two is **semantic, not syntactic**: an unknown is
+observed when some equation *defines* it and algebraic when it is only
+*constrained*. The defining form is read through the LHS's **base name** — the
+variable an `index` node indexes is the variable that LHS defines — so an
+arrayed definition is observed exactly as its scalar counterpart is. Only a
+genuine **expression LHS**, one that names no single variable (`H*H*SO4 ~ Ksp`),
+is an implicit constraint.
+
+Earlier drafts of this table wrote the observed criterion as "a bare-variable
+LHS", which was written for scalar equations and contradicts the semantic
+criterion in the arrayed case: `rg_src_bin[a] ~ …` fails a literal bare-variable
+test yet is plainly eliminable and materializable and constrains nothing
+implicitly. The semantic criterion governs. The distinction is load-bearing
+beyond bookkeeping: `algebraic_unknowns` seeds the cadence partition
+`CONTINUOUS` (CONFORMANCE_SPEC.md §5.7.2), whereas an observed unknown's cadence
+resolves through its defining equation's RHS — so misclassifying an arrayed
+definition as algebraic pushes build-time work (const-backed geometry and
+regridding arrays) onto the per-timestep hot path.
+
+Note that *eliminable* and *inlineable* are not the same thing. A scalar
+observed is eliminated by substituting its definition into every consumer; an
+arrayed observed materializes into a buffer its consumers index. Both are
+observed. A binding that needs the strict `y ~ f(…)` form — for inlining
+specifically — recovers it as a **narrower** set alongside `observed_unknowns`
+(Python spells it `inlined_unknowns`); it does not narrow the partition.
 
 **Parameters.** These four sets **partition** the parameters:
 
@@ -1688,6 +1714,11 @@ to answer a derived question is precisely what 1.0.0 removes.
 `ode_states` → `["c"]`; `observed_unknowns` → `["v_dep"]`; `algebraic_unknowns`
 → `["SO4"]`; `brownian_parameters` → `["eps"]`; `constant_parameters` → `["k"]`;
 `system_kind` → `"sde"`.
+
+Adding an arrayed unknown `w` shaped over `bins` and the equation
+`{"lhs": {"op": "index", "args": ["w", "i"]}, "rhs": …}` puts `w` in
+`observed_unknowns`, not `algebraic_unknowns`: the LHS's base name is `w`, so
+the equation defines it.
 
 ### 6.4 Advection Model Example
 
