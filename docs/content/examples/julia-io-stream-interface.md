@@ -27,7 +27,7 @@
 
         # Test loading from IOBuffer
         input_buffer = IOBuffer(test_json)
-        esm_file = load(input_buffer)
+        esm_file = load_string(input_buffer)
 
         @test esm_file.metadata.name == "stream_test"
         @test haskey(esm_file.models, "stream_model")
@@ -36,7 +36,7 @@
 
         # Test saving to IOBuffer
         output_buffer = IOBuffer()
-        save(esm_file, output_buffer)
+        write(output_buffer, to_json(esm_file))
 
         # Parse the output to verify
         output_json = String(take!(output_buffer))

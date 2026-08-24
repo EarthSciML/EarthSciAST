@@ -17,7 +17,7 @@ yarn add @earthsciml/ast
 ### CDN (Browser)
 ```html
 <script type="module">
-  import { load, validate, toUnicode } from 'https://unpkg.com/@earthsciml/ast/dist/esm/index.js';
+  import { loadString, validate, toUnicode } from 'https://unpkg.com/@earthsciml/ast/dist/esm/index.js';
 </script>
 ```
 
@@ -37,16 +37,16 @@ The TypeScript implementation provides **Interactive** tier capabilities:
 ### Loading and Parsing ESM Files
 
 ```typescript
-import { load, save, validate, type EsmFile } from '@earthsciml/ast';
+import { loadString, loadDocument, toJson, validate, type EsmFile } from '@earthsciml/ast';
 import fs from 'fs';
 
 // Load from file (Node.js)
 const jsonString = fs.readFileSync('model.esm', 'utf8');
-const esmFile: EsmFile = load(jsonString);
+const esmFile: EsmFile = loadString(jsonString);
 console.log('Loaded:', esmFile.metadata.name);
 
 // Load from object
-const esmFile2 = load({
+const esmFile2 = loadDocument({
   esm: "0.1.0",
   metadata: {
     name: "Test Model",
@@ -65,7 +65,7 @@ if (result.isValid) {
 }
 
 // Save back to JSON
-const jsonOutput = save(esmFile);
+const jsonOutput = toJson(esmFile);
 ```
 
 ### Working with Expressions
@@ -152,7 +152,7 @@ const esmFile: EsmFile = {
 ### React Integration
 ```tsx
 import React, { useState, useEffect } from 'react';
-import { load, validate, toUnicode } from '@earthsciml/ast';
+import { loadString, validate, toUnicode } from '@earthsciml/ast';
 
 const ModelViewer: React.FC<{ esmData: string }> = ({ esmData }) => {
   const [esmFile, setEsmFile] = useState(null);
@@ -160,7 +160,7 @@ const ModelViewer: React.FC<{ esmData: string }> = ({ esmData }) => {
 
   useEffect(() => {
     try {
-      const parsed = load(esmData);
+      const parsed = loadString(esmData);
       const validation = validate(parsed);
 
       if (validation.isValid) {
@@ -230,7 +230,7 @@ const ModelViewer: React.FC<{ esmData: string }> = ({ esmData }) => {
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { load, validate, toUnicode, type EsmFile } from '@earthsciml/ast';
+import { loadString, validate, toUnicode, type EsmFile } from '@earthsciml/ast';
 
 const props = defineProps<{ esmData: string }>();
 
@@ -239,7 +239,7 @@ const validationErrors = ref([]);
 
 const loadModel = () => {
   try {
-    const parsed = load(props.esmData);
+    const parsed = loadString(props.esmData);
     const validation = validate(parsed);
 
     if (validation.isValid) {
@@ -335,7 +335,7 @@ import '@earthsciml/ast/web-components';
 ### Express.js API
 ```typescript
 import express from 'express';
-import { load, validate, save } from '@earthsciml/ast';
+import { loadString, loadDocument, validate, toJson } from '@earthsciml/ast';
 
 const app = express();
 app.use(express.json());
@@ -343,7 +343,7 @@ app.use(express.json());
 // Validation endpoint
 app.post('/api/validate', (req, res) => {
   try {
-    const esmFile = load(req.body);
+    const esmFile = loadDocument(req.body);
     const result = validate(esmFile);
 
     res.json({
@@ -361,8 +361,8 @@ app.post('/api/validate', (req, res) => {
 // Model conversion endpoint
 app.post('/api/convert', (req, res) => {
   try {
-    const esmFile = load(req.body);
-    const jsonOutput = save(esmFile, { pretty: true });
+    const esmFile = loadDocument(req.body);
+    const jsonOutput = toJson(esmFile, { pretty: true });
 
     res.setHeader('Content-Type', 'application/json');
     res.send(jsonOutput);
@@ -380,12 +380,12 @@ app.listen(3000, () => {
 ```typescript
 // pages/api/models/[id].ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { load, validate, save } from '@earthsciml/ast';
+import { loadString, loadDocument, validate, toJson } from '@earthsciml/ast';
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'POST') {
     try {
-      const esmFile = load(req.body);
+      const esmFile = loadDocument(req.body);
       const validation = validate(esmFile);
 
       if (!validation.isValid) {
@@ -394,7 +394,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
       // Save to database or file system
       const modelId = req.query.id as string;
-      const jsonString = save(esmFile);
+      const jsonString = toJson(esmFile);
 
       // ... save logic ...
 
@@ -422,14 +422,14 @@ const ModelEditor = lazy(() => import('@earthsciml/ast/interactive').then(m => (
 ### Web Workers
 ```typescript
 // worker.ts
-import { validate, load } from '@earthsciml/ast';
+import { validate, loadString, loadDocument } from '@earthsciml/ast';
 
 self.onmessage = (e) => {
   const { type, data } = e.data;
 
   if (type === 'validate') {
     try {
-      const esmFile = load(data);
+      const esmFile = loadDocument(data);
       const result = validate(esmFile);
       self.postMessage({ type: 'validation-result', result });
     } catch (error) {
@@ -452,7 +452,7 @@ worker.onmessage = (e) => {
 
 ### Jest Testing
 ```typescript
-import { load, validate, toUnicode } from '@earthsciml/ast';
+import { loadString, validate, toUnicode } from '@earthsciml/ast';
 
 describe('ESM Format', () => {
   test('loads valid ESM file', () => {
@@ -461,12 +461,12 @@ describe('ESM Format', () => {
       metadata: { name: 'Test' }
     };
 
-    const esmFile = load(esmData);
+    const esmFile = loadString(esmData);
     expect(esmFile.metadata.name).toBe('Test');
   });
 
   test('validates model structure', () => {
-    const esmFile = load(validEsmData);
+    const esmFile = loadString(validEsmData);
     const result = validate(esmFile);
 
     expect(result.isValid).toBe(true);

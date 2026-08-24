@@ -76,10 +76,10 @@ mtk_system = to_mtk(esm_file)
 
 ### TypeScript/JavaScript
 ```typescript
-import { load, validate, toUnicode } from '@earthsciml/ast';
+import { loadString, validate, toUnicode } from '@earthsciml/ast';
 
 // Load and validate
-const esm_file = load(fs.readFileSync('simple-model.esm', 'utf8'));
+const esm_file = loadString(fs.readFileSync('simple-model.esm', 'utf8'));
 const result = validate(esm_file);
 
 if (result.isValid) {

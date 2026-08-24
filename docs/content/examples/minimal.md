@@ -127,12 +127,12 @@ println("Decay factor: ", sol[end] / sol[1])  # Should be ≈ exp(-1)
 
 ### TypeScript
 ```typescript
-import { load, validate, toUnicode } from '@earthsciml/ast';
+import { loadString, validate, toUnicode } from '@earthsciml/ast';
 import fs from 'fs';
 
 // Load and validate
 const esmData = fs.readFileSync('minimal.esm', 'utf8');
-const esmFile = load(esmData);
+const esmFile = loadString(esmData);
 
 console.log('Loaded:', esmFile.metadata.name);
 

@@ -38,7 +38,7 @@
 
         try
             # Test loading
-            esm_file = load(temp_file)
+            esm_file = load_path(temp_file)
 
             @test esm_file.esm == "0.1.0"
             @test esm_file.metadata.name == "test_model"

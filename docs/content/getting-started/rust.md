@@ -44,13 +44,13 @@ The Rust implementation provides **Core + CLI** tier capabilities:
 ### Loading and Validating ESM Files
 
 ```rust
-use earthsci_ast::{load, save, validate, EsmFile};
+use earthsci_ast::{load_string, to_json, validate, EsmFile};
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load from file
     let content = fs::read_to_string("model.esm")?;
-    let esm_file: EsmFile = load(&content)?;
+    let esm_file: EsmFile = load_string(&content)?;
     println!("Loaded: {}", esm_file.metadata.name);
 
     // Validate loaded file
@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Save back to JSON
-    let json_output = save(&esm_file)?;
+    let json_output = to_json(&esm_file)?;
     fs::write("output.esm", json_output)?;
 
     Ok(())
@@ -186,13 +186,13 @@ esm schema --version
 ### Error Handling
 
 ```rust
-use earthsci_ast::{EsmError, ValidationError, load, validate};
+use earthsci_ast::{EsmError, ValidationError, load_string, validate};
 
 fn robust_loading(filename: &str) -> Result<(), EsmError> {
     let content = std::fs::read_to_string(filename)
         .map_err(|e| EsmError::Io(e))?;
 
-    match load(&content) {
+    match load_string(&content) {
         Ok(esm_file) => {
             let validation = validate(&esm_file);
             if !validation.valid {
@@ -304,7 +304,7 @@ impl Validator for CustomValidator {
 }
 
 fn main() {
-    let esm_file = load(&content).unwrap();
+    let esm_file = load_string(&content).unwrap();
 
     // Use custom validator
     let custom_validator = CustomValidator;
@@ -350,7 +350,7 @@ async function main() {
     const esmData = '{"esm": "1.0.0", "metadata": {"name": "Test"}}';
 
     try {
-        const esmFile = load(esmData);
+        const esmFile = loadString(esmData);
         console.log('Loaded:', esmFile.metadata.name);
 
         const validation = validate(esmFile);
@@ -407,7 +407,7 @@ main();
             const errorsDiv = document.getElementById('errors');
 
             try {
-                const esmFile = load(content);
+                const esmFile = loadString(content);
                 const validation = validate(esmFile);
 
                 if (validation.valid) {
@@ -527,7 +527,7 @@ mod tests {
             }
         }"#;
 
-        let esm_file = load(esm_data).unwrap();
+        let esm_file = load_string(esm_data).unwrap();
         assert_eq!(esm_file.metadata.name, "Test Model");
     }
 
@@ -552,7 +552,7 @@ mod tests {
             }
         }"#;
 
-        let esm_file = load(invalid_esm).unwrap();
+        let esm_file = load_string(invalid_esm).unwrap();
         let validation = validate(&esm_file);
         assert!(!validation.valid);
         assert!(!validation.errors.is_empty());
@@ -588,14 +588,14 @@ mod tests {
 
 ```rust
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use earthsci_ast::{load, validate};
+use earthsci_ast::{load_string, validate};
 
 fn bench_load_large_file(c: &mut Criterion) {
     let large_esm = generate_large_test_file(1000); // 1000 models
 
     c.bench_function("load_large_file", |b| {
         b.iter(|| {
-            let esm_file = load(black_box(&large_esm)).unwrap();
+            let esm_file = load_string(black_box(&large_esm)).unwrap();
             black_box(esm_file);
         });
     });
@@ -603,7 +603,7 @@ fn bench_load_large_file(c: &mut Criterion) {
 
 fn bench_validation(c: &mut Criterion) {
     let esm_data = std::fs::read_to_string("test_data/complex_model.esm").unwrap();
-    let esm_file = load(&esm_data).unwrap();
+    let esm_file = load_string(&esm_data).unwrap();
 
     c.bench_function("validate_complex", |b| {
         b.iter(|| {
@@ -657,7 +657,7 @@ use std::process::{Command, Stdio};
 fn run_external_validator(filename: &str) -> Result<bool, Box<dyn std::error::Error>> {
     // First, validate with our internal validator
     let content = std::fs::read_to_string(filename)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
     let internal_result = validate(&esm_file);
 
     if !internal_result.valid {

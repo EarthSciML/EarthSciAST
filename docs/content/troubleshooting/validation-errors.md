@@ -552,9 +552,9 @@ end
 
 ### TypeScript
 ```typescript
-import { load, validate } from '@earthsciml/ast';
+import { loadString, validate } from '@earthsciml/ast';
 
-const esmFile = load(esmData);
+const esmFile = loadString(esmData);
 const result = validate(esmFile);
 
 if (!result.isValid) {

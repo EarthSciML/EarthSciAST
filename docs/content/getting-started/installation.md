@@ -93,7 +93,7 @@ pnpm add @earthsciml/ast
 ```html
 <!-- ES Modules -->
 <script type="module">
-  import { load, validate } from 'https://unpkg.com/@earthsciml/ast/dist/esm/index.js';
+  import { loadString, validate } from 'https://unpkg.com/@earthsciml/ast/dist/esm/index.js';
 </script>
 
 <!-- UMD (older browsers) -->
@@ -106,11 +106,11 @@ pnpm add @earthsciml/ast
 const { load, validate } = require('@earthsciml/ast');
 
 // ES Modules
-import { load, validate } from '@earthsciml/ast';
+import { loadString, validate } from '@earthsciml/ast';
 
 // Test functionality
 const esmData = '{"esm": "1.0.0", "metadata": {"name": "Test"}}';
-const esmFile = load(esmData);
+const esmFile = loadString(esmData);
 console.log('Loaded test model:', esmFile.metadata.name);
 ```
 
@@ -225,11 +225,11 @@ esm validate test.esm
 
 ```rust
 // Library usage
-use earthsci_ast::{load, validate};
+use earthsci_ast::{load_string, validate};
 
 fn main() {
     let esm_data = r#"{"esm": "1.0.0", "metadata": {"name": "Test"}}"#;
-    let esm_file = load(esm_data).unwrap();
+    let esm_file = load_string(esm_data).unwrap();
     println!("Loaded test model: {}", esm_file.metadata.name);
 }
 ```

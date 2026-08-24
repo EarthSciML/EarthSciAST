@@ -22,11 +22,11 @@
 
         try
             # Save
-            save(original_file, temp_file)
+            write_path(original_file, temp_file)
             @test isfile(temp_file)
 
             # Load
-            loaded_file = load(temp_file)
+            loaded_file = load_path(temp_file)
 
             # Check basic properties
             @test loaded_file.esm == original_file.esm
