@@ -14,13 +14,13 @@
 //! mean different things than the oracle's — a silent, numerically-wrong result
 //! rather than an error. Membership-only comparison would not see it.
 //!
-//! All 19 cases are compared. One field is NOT, and it is asserted LOUDLY
-//! rather than skipped, so the day it is resolved this test fails and someone
-//! looks: [`domain_oracle_gap`] — the oracle DROPS `domain.element_type` /
-//! `domain.array_type` at load, so the corpus records `null` for fixtures that
-//! plainly declare them. Rust preserves them, which is what step 4's "the file's
-//! `domain` section, unchanged" requires. Degrading Rust to match would be the
-//! wrong fix.
+//! All 19 cases are compared, every recorded field included. `element_type` /
+//! `array_type` were briefly exempt: the oracle DROPPED them at load, so the
+//! corpus recorded `null` for fixtures that plainly declare them, and Rust —
+//! which preserves them, as step 4's "the file's `domain` section, unchanged"
+//! requires — was the one that disagreed. The oracle was fixed rather than Rust
+//! degraded to match. [`domain_element_type_survives_flatten`] keeps a
+//! corpus-independent check so the pass-through stays pinned regardless.
 //!
 //! Four of the cases (`advanced_coupling`, `full_coupled`,
 //! `complete_coupling_types`, `coupled_atmospheric_system`) carry UNDISCRETIZED
@@ -407,61 +407,38 @@ fn corpus_refusals_are_refused() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// ORACLE GAP, pinned so it fails loudly once the oracle is fixed.
+/// `domain.element_type` survives flatten — pinned independently of the corpus.
 ///
 /// `domain` is, per esm-libraries-spec §4.7.5 step 4, "the file's `domain`
 /// section, unchanged" — `element_type` (float precision) and `array_type`
-/// (array backend, e.g. `"CuArray"`) included. The Python oracle's `Domain`
-/// dataclass models neither, so it DROPS them at load and the corpus records
-/// `null` for fixtures that plainly declare them. Rust preserves them, which is
-/// correct; degrading Rust to match the corpus would throw away the GPU/precision
-/// selection a downstream backend needs.
+/// (array backend, e.g. `"CuArray"`) included.
 ///
-/// So the domain comparison in `flatten_matches_the_shared_corpus` covers only
-/// what the corpus can currently express, and this test asserts BOTH halves of
-/// the gap: the fixture declares a value, the corpus records null, and Rust
-/// reads the real one. Regenerating the corpus from a fixed oracle makes this
-/// fail, which is the intent.
+/// HISTORY. Both fields used to be `null` for EVERY corpus case: the Python
+/// oracle's `Domain` dataclass modelled neither, so it dropped them at load
+/// (and its round trip was lossy too). Rust preserved them and was right, so
+/// the comparison below skipped them and this test asserted the gap from both
+/// sides. The oracle was fixed on 2026-08-24 and the corpus regenerated, so
+/// `domain_passthrough_matches_the_corpus` now compares BOTH fields for all 19
+/// cases. What survives here is the corpus-INDEPENDENT half, so the
+/// pass-through stays pinned even if no corpus fixture declares the field.
 #[test]
-fn domain_oracle_gap() {
-    let corpus = corpus();
-    let mut checked = 0usize;
-    for case in corpus["cases"].as_array().unwrap() {
-        let id = case["id"].as_str().unwrap();
-        let path = tests_dir().join(case["fixture"].as_str().unwrap());
-        let raw: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture readable"))
-                .expect("fixture parses");
-        let declared = raw["domain"]["element_type"].as_str();
-        let Some(declared) = declared else { continue };
-        checked += 1;
-
-        assert!(
-            case["domain"]["element_type"].is_null(),
-            "{id}: the corpus now records domain.element_type — the oracle's \
-             Domain gap is fixed, so delete this test and compare `domain` \
-             in full in flatten_matches_the_shared_corpus"
-        );
-
-        let file = load_path(&path).expect("load");
-        let flat = flatten(&file).unwrap_or_else(|e| panic!("{id}: flatten failed: {e:?}"));
-        assert_eq!(
-            flat.domain.as_ref().and_then(|d| d.element_type.as_deref()),
-            Some(declared),
-            "{id}: Rust must pass domain.element_type through flatten unchanged"
-        );
-    }
-    assert!(
-        checked >= 3,
-        "expected at least 3 corpus fixtures declaring domain.element_type, saw {checked}"
+fn domain_element_type_survives_flatten() {
+    let path = tests_dir().join("valid/model_only.esm");
+    let file = load_path(&path).expect("load");
+    let flat = flatten(&file).expect("flatten");
+    assert_eq!(
+        flat.domain.as_ref().and_then(|d| d.element_type.as_deref()),
+        Some("Float32"),
+        "valid/model_only.esm declares Float32; it must survive flatten"
     );
 }
 
-/// The `domain` fields the corpus CAN express, compared for every case.
+/// The whole `domain` record, compared for every case.
 ///
-/// Split out of the main comparison only because of `domain_oracle_gap` above:
-/// `independent_variable` and the presence/absence of the whole section are
-/// faithfully recorded, so they are pinned here.
+/// `element_type` / `array_type` were once exempt here because the oracle could
+/// not represent them (see `domain_element_type_survives_flatten`). That gap is
+/// closed, so all of `independent_variable`, `element_type` and `array_type` are
+/// compared, along with the presence/absence of the section itself.
 #[test]
 fn domain_passthrough_matches_the_corpus() {
     let corpus = corpus();
@@ -488,6 +465,20 @@ fn domain_passthrough_matches_the_corpus() {
         if got != expect {
             failures.push(format!(
                 "{id}: domain.independent_variable rust={got:?} oracle={expect:?}"
+            ));
+        }
+        let got_elem = domain.element_type.clone();
+        let want_elem = want["element_type"].as_str().map(str::to_string);
+        if got_elem != want_elem {
+            failures.push(format!(
+                "{id}: domain.element_type rust={got_elem:?} oracle={want_elem:?}"
+            ));
+        }
+        let got_arr = domain.array_type.clone();
+        let want_arr = want["array_type"].as_str().map(str::to_string);
+        if got_arr != want_arr {
+            failures.push(format!(
+                "{id}: domain.array_type rust={got_arr:?} oracle={want_arr:?}"
             ));
         }
     }

@@ -847,13 +847,18 @@ fn scope_template_body(
 /// stays a pure ODE with `["t"]`.
 ///
 /// **Ordering.** `t` first, then the spatial axes LEXICOGRAPHIC. This is the one
-/// field the step-4 document-order rule does not govern: an axis is discovered
-/// by scanning equations, not declared in a position, so there is no document
-/// order to preserve and a deterministic total order is what makes the list
-/// comparable across bindings (`full_coupled` → `["t", "lat", "lev", "lon"]`).
+/// The axes follow DOCUMENT ORDER, like every other ordered field in step 4 —
+/// the order the scan first encounters them, which is the order the document
+/// names them (`full_coupled` → `["t", "lon", "lat", "lev"]`). This used to
+/// collect into a `BTreeSet`, i.e. sorted, on the reasoning that a scanned list
+/// has no document order to preserve. That was wrong: the axis order is the
+/// order a downstream array layout follows, so sorting silently permutes the
+/// modeller's axes.
 fn derive_independent_variables(parts: &AssembledParts) -> Vec<String> {
-    let mut spatial: BTreeSet<String> = BTreeSet::new();
-    let mut scan = |e: &Expr| collect_spatial_dims(e, &mut spatial);
+    // First-encounter order, deduplicated. `out` doubles as the seen-set: it
+    // starts with "t", which also drops a spatial `wrt` naming time.
+    let mut out = vec!["t".to_string()];
+    let mut scan = |e: &Expr| collect_spatial_dims(e, &mut out);
     for eq in &parts.equations {
         scan(&eq.lhs);
         scan(&eq.rhs);
@@ -862,28 +867,29 @@ fn derive_independent_variables(parts: &AssembledParts) -> Vec<String> {
         scan(rhs);
     }
     // Step 3 is vacuous — see the doc comment.
-    let mut out = vec!["t".to_string()];
-    out.extend(spatial.into_iter().filter(|d| d != "t"));
     out
 }
 
 /// Collect the spatial dimension labels an UNDISCRETIZED differential names
 /// anywhere in `expr`. Helper of [`derive_independent_variables`].
-fn collect_spatial_dims(expr: &Expr, out: &mut BTreeSet<String>) {
+fn collect_spatial_dims(expr: &Expr, out: &mut Vec<String>) {
     let Expr::Operator(node) = expr else { return };
     // The axis a `grad` / `div` / `laplacian` (or any custom differential)
     // iterates over. Only an undiscretized differential carries it; no
     // evaluable-core op uses `dim`.
-    if let Some(dim) = &node.dim {
-        out.insert(dim.clone());
+    if let Some(dim) = &node.dim
+        && !out.iter().any(|d| d == dim)
+    {
+        out.push(dim.clone());
     }
     // A SPATIAL `D`: `wrt` naming an axis other than time. The structural
     // `D(u, t)` of an ODE is excluded, as is a `D` with no `wrt` (time by
     // default).
     if let Some(wrt) = &node.wrt
         && wrt != "t"
+        && !out.iter().any(|d| d == wrt)
     {
-        out.insert(wrt.clone());
+        out.push(wrt.clone());
     }
     node.for_each_child(&mut |child| collect_spatial_dims(child, out));
 }
