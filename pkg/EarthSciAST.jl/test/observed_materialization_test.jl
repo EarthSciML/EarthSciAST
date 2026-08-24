@@ -203,7 +203,7 @@ function _prepared()
     end
     g = MockGatedSR(SR, Any[])
     insp = EA.BuildInspection()
-    prep = EA.prepare(_doc(); const_arrays=ca,
+    prep = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays=ca,
                       providers=Dict{String,Any}("Binned.SR_PM25" => g),
                       inspect=insp, pushdown_rewrite=true)
     return prep, insp, g
@@ -213,11 +213,11 @@ end
     prep, insp, g = _prepared()
     mf = Int.(insp.const_arrays["pd_member_factor__src_cells"])
     @test mf == [1, 2, 3]                    # cell 4 is met by nothing
-    @test EA.observed_field(prep, insp, "seg_len") ≈ [1.0, 0.25, 0.6, 1.0]
-    @test EA.observed_field(prep, insp, "road_len") ≈ [1.25, 1.25, 0.6, 1.0]
-    @test EA.observed_field(prep, insp, "seg_emis") ≈ [8.0, 2.0, 4.0, 7.0]
-    @test EA.observed_field(prep, insp, "E_PM25") ≈ EXPECT_E
-    @test EA.observed_field(prep, insp, "conc_PM25") ≈ EXPECT_CONC
+    @test EA.observed_field(prep, "seg_len") ≈ [1.0, 0.25, 0.6, 1.0]
+    @test EA.observed_field(prep, "road_len") ≈ [1.25, 1.25, 0.6, 1.0]
+    @test EA.observed_field(prep, "seg_emis") ≈ [8.0, 2.0, 4.0, 7.0]
+    @test EA.observed_field(prep, "E_PM25") ≈ EXPECT_E
+    @test EA.observed_field(prep, "conc_PM25") ≈ EXPECT_CONC
     # Mass in equals mass out for every road that lies inside the grid: the
     # length shares of a segment sum to exactly 1, with no clipping tolerance
     # anywhere to leak through. Roads 1 and 2 are inside; road 3 (segment 4) is

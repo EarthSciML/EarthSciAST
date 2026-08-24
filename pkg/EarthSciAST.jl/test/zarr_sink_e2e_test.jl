@@ -4,7 +4,7 @@
 # assert the decoded gridded arrays equal an in-RAM reference run — TOLERANCE-BASED
 # (RFC §16.6), not byte-identity. Exercises the flat→gridded column-major scatter
 # (`derive_output_gridding`/`scatter_grid!`), the sink lifecycle wired into
-# `simulate`, and the round-trip through EarthSciIO.
+# `esm_problem` + `solve`, and the round-trip through EarthSciIO.
 #
 # Requires the EarthSciIO + DiffEqCallbacks + SciMLBase + solver weakdeps; run under
 # a target that provides them (see the guard in runtests.jl).
@@ -20,7 +20,6 @@ using OrdinaryDiffEqTsit5: Tsit5
     fixture = joinpath(@__DIR__, "fixtures", "streaming_decay_grid.esm")
     @test isfile(fixture)
 
-    prep = prepare(fixture)
     tspan = (0.0, 100.0)
     times = [20.0, 40.0, 60.0, 80.0, 100.0]   # strictly inside (0, tend]
 
@@ -30,14 +29,17 @@ using OrdinaryDiffEqTsit5: Tsit5
     seed! = (u0, _var_map) -> (@inbounds for i in eachindex(u0); u0[i] = Float64(i); end)
 
     # (a) reference run: in-RAM trajectory at the output times.
-    ref = simulate(prep, tspan; alg = Tsit5(), saveat = times, seed_ic! = seed!)
+    prep = esm_problem(fixture, tspan; seed_ic! = seed!)
+    ref = solve(prep, Tsit5(); saveat = times)
     @test length(ref.t) == length(times)
 
     # (b) streamed run: same model/ICs, state streamed to a Zarr v3 store.
     dir = mktempdir()
     base_url = "file://" * joinpath(dir, "out.zarr")
     sink = build_zarr_sink(prep, base_url; output_times = times, records_per_shard = 8)
-    simulate(prep, tspan; alg = Tsit5(), sinks = [sink], seed_ic! = seed!)
+    # The sink is a PROBLEM-level declaration now (§2.5.4): it contributes the
+    # output callback the problem carries, so it is passed at construction.
+    solve(esm_problem(fixture, tspan; sinks = [sink], seed_ic! = seed!), Tsit5())
 
     man = sink.manifest
     @test man !== nothing

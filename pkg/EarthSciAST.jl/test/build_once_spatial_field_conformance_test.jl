@@ -13,6 +13,8 @@
 # The forcing is CONST, so `u_c(t) = darea_c (1 - e^-t)` is analytic and exact.
 using Test
 using EarthSciAST
+import SciMLBase
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 using JSON3
 const _ESS_BO = EarthSciAST
@@ -33,14 +35,14 @@ const _ESS_BO = EarthSciAST
         @test haskey(flat.state_variables, "Field.u")
         @test !("Field.area" in Set(String.(keys(flat.state_variables))))
 
-        # (b) simulate materializes the build-once fields at setup and integrates.
+        # (b) the run materializes the build-once fields at setup and integrates.
         insp = _ESS_BO.BuildInspection()
         tspan = (Float64(golden["cadence"]["tspan"][1]), Float64(golden["cadence"]["tspan"][2]))
         traj = golden["trajectory"]
         atimes = sort!(Float64[parse(Float64, String(k)) for k in keys(traj) if String(k) != "comment"])
-        r = _ESS_BO.simulate(fixture, tspan; alg = Tsit5(),
-                             reltol = 1e-10, abstol = 1e-12, saveat = atimes, inspect = insp)
-        @test r.success && r.retcode == :Success
+        prob = _ESS_BO.esm_problem(fixture, tspan; inspect = insp)
+        r = solve(prob, Tsit5(); reltol = 1e-10, abstol = 1e-12, saveat = atimes)
+        @test SciMLBase.successful_retcode(r)
 
         # (c) setup fields materialized correctly (Gap 1: makearray at setup).
         for (name, want) in golden["setup_fields"]
@@ -57,8 +59,8 @@ const _ESS_BO = EarthSciAST
             ti = findfirst(x -> isapprox(x, t; atol = 1e-9), r.t)
             @test ti !== nothing
             for cell in ("Field.u[1]", "Field.u[2]", "Field.u[3]")
-                @test haskey(r.var_map, cell)
-                @test isapprox(r[cell][ti], Float64(traj[tk][cell]); rtol = rtol, atol = atol)
+                @test haskey(prob.var_map, cell)
+                @test isapprox(r[Symbol(cell)][ti], Float64(traj[tk][cell]); rtol = rtol, atol = atol)
             end
         end
     end

@@ -1,6 +1,6 @@
 # End-to-end simulation of the worked scoped-reference-`ic` fixture
 # `tests/valid/advection_reaction_loaded_ic_bc.esm` through the Julia tree-walk
-# runner (`EarthSciAST.simulate`), with every loaded field injected
+# runner (`EarthSciAST.esm_problem` + `solve`), with every loaded field injected
 # through the data-**Provider** seam (DESIGN pde_simulation_pipeline §2).
 #
 # What this exercises:
@@ -22,13 +22,15 @@
 # Provider injection (NOT raw const_arrays keyed by consumer name): a static
 # stub provider serves the fixture's DECLARED loader variables (keyed
 # `<Loader>.<var>`) from the manifest `inputs` arrays. Every provider is CONST
-# (empty `provider_refresh_times`), so `simulate` materializes each field once at
+# (empty `provider_refresh_times`), so `esm_problem` materializes each field once at
 # build time into `const_arrays` under its loader name — reachable when the
 # scoped-`ic` fold seeds u0 (R2) and when the `variable_map` binding resolves the
 # consumer gather. The reaction system's own inline `tests` block is the source
 # of truth: this runner executes every assertion in it.
 using Test
 using EarthSciAST
+import SciMLBase
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 const _ESS_IC = EarthSciAST
 
@@ -36,7 +38,7 @@ const _ESS_IC = EarthSciAST
 # Static stub Provider (DESIGN §2). Serves the fixture's source-fed PARAMETERS
 # from the manifest `inputs` arrays. CONST: empty `refresh_times` ⇒
 # `provider_is_const` is true ⇒ materialized once at build time, contributes no
-# tstops. `provider_sample` returns the full `<name> => field` table; `simulate`
+# tstops. `provider_sample` returns the full `<name> => field` table; the build
 # extracts each variable's field by name. [lon,lat] = [4,2]; Julia is
 # column-major, so row = lon index, column = lat index — the same numeric values
 # the const-array runner used.
@@ -112,19 +114,18 @@ end
             atimes = sort!(unique(Float64[a.time for a in t.assertions]))
             tspan = (t.time_span.start, t.time_span.stop)
 
-            r = _ESS_IC.simulate(fixture, tspan; alg = Tsit5(),
-                                 providers = _loaded_providers(),
-                                 reltol = 1e-9, abstol = 1e-11,
-                                 saveat = atimes)
-            @test r.success && r.retcode == :Success
+            prob = _ESS_IC.esm_problem(fixture, tspan;
+                                       providers = _loaded_providers())
+            r = solve(prob, Tsit5(); reltol = 1e-9, abstol = 1e-11, saveat = atimes)
+            @test SciMLBase.successful_retcode(r)
 
             for a in t.assertions
                 # `a.variable` is model-local (e.g. "O3[1,1]"); the flattened /
                 # simulated element is namespaced under the Chemistry model.
                 key = "Chemistry." * a.variable
-                @test haskey(r.var_map, key)
+                @test haskey(prob.var_map, key)
                 ti = _time_index(r.t, Float64(a.time))
-                actual = r[key][ti]
+                actual = r[Symbol(key)][ti]
                 rel, abs_ = _ic_bc_resolve_tol(chem.tolerance, t.tolerance, a.tolerance)
                 if rel > 0
                     @test isapprox(actual, a.expected; rtol = rel, atol = abs_)

@@ -1,6 +1,6 @@
 # The loader-ingest surface of esm-spec §8.9, executed: `reader_options`,
 # `codes`, `record_filter`, `extent` and `select` served by
-# `providers_from_document` + `prepare`, over real local fixtures (an FF10 zip
+# `providers_from_document` + `esm_problem`, over real local fixtures (an FF10 zip
 # and a Zarr v2 store, both over the `file` transport — no network).
 #
 # The document under test is the committed conformance fixture
@@ -174,12 +174,12 @@ end
             insp = EA_LIS.BuildInspection()
             # NOTE the absent metaparameters: the caller passes NO N_REC. The
             # document declares that the loader knows it (FORMAT-08-A-010).
-            prep = EA_LIS.prepare(doc; providers = providers, inspect = insp,
+            prep = EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, inspect = insp,
                                   pushdown_rewrite = true)
-            @test EA_LIS.observed_field(prep, insp, "is_NOx") == [1.0, 1.0, 0.0]
+            @test EA_LIS.observed_field(prep, "is_NOx") == [1.0, 1.0, 0.0]
             # 100 + 7 — the dropped CO/SO2 records contribute nothing, because
             # they are not records.
-            @test only(EA_LIS.observed_field(prep, insp, "E_NOx")) == 107.0
+            @test only(EA_LIS.observed_field(prep, "E_NOx")) == 107.0
         end
     end
 
@@ -188,7 +188,7 @@ end
             doc = _lis_document(dir)
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             err = try
-                EA_LIS.prepare(doc; providers = providers, pushdown_rewrite = true,
+                EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, pushdown_rewrite = true,
                                metaparameters = Dict("N_REC" => 5))  # the RAW row count
                 nothing
             catch e
@@ -333,12 +333,12 @@ end
                 Dict("axes" => [Dict("range" => Dict("start" => 0, "stop" => 2))])
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             insp = EA_LIS.BuildInspection()
-            prep = EA_LIS.prepare(doc; providers = providers, inspect = insp,
+            prep = EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, inspect = insp,
                                   pushdown_rewrite = true)
-            @test only(EA_LIS.observed_field(prep, insp, "E_NOx")) == 107.0
+            @test only(EA_LIS.observed_field(prep, "E_NOx")) == 107.0
             # N_REC follows the DELIVERED records, so a reduced run needs no
             # other knob.
-            @test length(EA_LIS.observed_field(prep, insp, "is_NOx")) == 2
+            @test length(EA_LIS.observed_field(prep, "is_NOx")) == 2
         end
     end
 
@@ -347,9 +347,9 @@ end
             doc = _lis_document(dir)
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             insp = EA_LIS.BuildInspection()
-            prep = EA_LIS.prepare(doc; providers = providers, inspect = insp,
+            prep = EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, inspect = insp,
                                   pushdown_rewrite = true)
-            w = EA_LIS.observed_field(prep, insp, "src_width")
+            w = EA_LIS.observed_field(prep, "src_width")
             # src_W is delivered on src_cells (N_SRC), not the full pop_cells axis
             @test size(w) == (4,)
             @test w == [101.0, 102.0, 103.0, 104.0]

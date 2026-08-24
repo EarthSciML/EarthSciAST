@@ -81,7 +81,7 @@ types are defined in package extensions (`EarthSciASTMTKExt`,
 Without these packages loaded, the package is still fully usable:
 [`flatten`](@ref) produces a pure-Julia [`FlattenedSystem`](@ref) snapshot,
 and the MTK-free tree-walk runtime ([`build_evaluator`](@ref),
-[`simulate`](@ref)) runs models end to end. Only the symbolic
+[`esm_problem`](@ref) + SciML's `solve`) runs models end to end. Only the symbolic
 `ModelingToolkit`/`Catalyst` constructors require the weak dependencies —
 calling one without its package loaded throws an `ArgumentError` naming
 what to load.

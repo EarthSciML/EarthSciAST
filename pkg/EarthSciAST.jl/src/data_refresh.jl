@@ -105,7 +105,7 @@ provider_supports_selection(::Any) = false
 
 The projection-pushdown GATE for a deferred provider, or `nothing` (the default)
 for an ordinary provider. A non-`nothing` gate marks `provider` as GATED: the
-eager const-materialization loop in [`prepare`](@ref) SKIPS it (it is not pulled
+eager const-materialization loop in [`esm_problem`](@ref) SKIPS it (it is not pulled
 whole), and the build defers its fetch until value-invention has materialised the
 gating derived set's members — then pushes that set down as a per-axis
 `selection` ([`provider_sample`](@ref)) and fetches only the compact slab.
@@ -142,7 +142,7 @@ The metaparameter this provider's own EXTENT binds (esm-spec §8.9.4), or
 A source whose record count is not knowable until it is read — an FF10 point
 inventory, whose surviving-row count depends on its own `codes` map and
 `record_filter` — declares `extent: {"metaparameter": "N_REC"}` on its loader.
-[`prepare`](@ref) then samples such a provider ONCE, BEFORE it closes
+[`esm_problem`](@ref) then samples such a provider ONCE, BEFORE it closes
 metaparameters at the loader API (esm-spec §9.7.6 binding site 3), and the
 length of the delivered record axis binds that metaparameter — so an index set
 declared `size: "N_REC"` is sized by the data instead of by a caller who counted
@@ -168,7 +168,7 @@ Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
 a source declares no variables of its own, so there is no loader-side name left
 to key on; a model reads a field by declaring a parameter whose `update` names
 the source and binds a `file_variable` (esm-spec §8.5). These are exactly the
-`providers` keys [`prepare`](@ref) consumes (and, with `pushdown_rewrite=true`,
+`providers` keys [`esm_problem`](@ref) consumes (and, with `pushdown_rewrite=true`,
 gates from the rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or
 a path.
 
@@ -379,7 +379,7 @@ seam was removed in v0.8.0), not a refresh-time transform.
 `post_refresh` is a `() -> nothing` hook the `affect!` calls at each boundary
 AFTER the raw forcing buffers are refreshed and BEFORE `u_modified!` — the
 discrete-cadence materialization seam (the middle phase of the `const ⊏ discrete
-⊏ continuous` cadence partition). [`simulate`](@ref) wires it to the
+⊏ continuous` cadence partition). [`esm_problem`](@ref) wires it to the
 [`DiscreteMaterializer`](@ref)'s `materialize!` so a state-free derived field (a
 regrid→physics stack over the forcing) is recomputed once per boundary into its
 cache buffer instead of on every continuous step. Defaults to a no-op.

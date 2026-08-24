@@ -23,6 +23,8 @@
 using Test
 using JSON3
 using EarthSciAST
+import SciMLBase
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
@@ -86,17 +88,16 @@ end
     for (spelling, key) in (("local", "A"), ("qualified", "M.A"))
         @testset "$(spelling) override key" begin
             insp = EarthSciAST.BuildInspection()
-            sim = EarthSciAST.simulate(esm_path, (0.0, 1.0);
-                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                       saveat=[0.0], inspect=insp,
-                                       parameters=Dict(key => 0.0))
-            @test sim.success
+            sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0); inspect=insp,
+                                       p=Dict(key => 0.0)), OrdinaryDiffEqTsit5.Tsit5();
+                                       saveat=[0.0])
+            @test SciMLBase.successful_retcode(sim)
             # The build resolved the parameter to the OVERRIDE, not the 1.0
             # default, whichever spelling the caller used.
             @test insp.params["M.A"] == 0.0
             # ...and the coordinate-expression ic seeded from that same scope.
             for i in 1:5
-                @test sim["M.u[$i]"][1] == 0.0
+                @test sim[Symbol("M.u[$i]")][1] == 0.0
             end
         end
     end
@@ -109,7 +110,7 @@ end
     # nothing happens, and the run measures the configuration they thought they
     # had switched off while still reporting a verdict. Rust already raised
     # `InvalidParameter` here; Julia and Python now match it.
-    @test_throws ArgumentError EarthSciAST.simulate(
-        esm_path, (0.0, 1.0); alg=OrdinaryDiffEqTsit5.Tsit5(), saveat=[0.0],
-        parameters=Dict("not_a_param" => 7.0))
+    @test_throws ArgumentError solve(EarthSciAST.esm_problem(
+        esm_path, (0.0, 1.0);
+        p=Dict("not_a_param" => 7.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
 end

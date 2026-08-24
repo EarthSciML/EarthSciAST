@@ -41,7 +41,7 @@ Base.showerror(io::IO, e::OutputError) = print(io, "OutputError: ", e.msg)
 # --------------------------------------------------------------------------- #
 # AbstractSink — an optional supertype for concrete sinks. Sinks need NOT subtype
 # it (the protocol dispatches structurally on the generics below, exactly like the
-# Provider protocol accepts any object); it exists so `simulate`'s `sinks` kwarg
+# Provider protocol accepts any object); it exists so `esm_problem`'s `sinks` kwarg
 # has a meaningful element type and so a concrete binding may opt in.
 # --------------------------------------------------------------------------- #
 
@@ -53,7 +53,7 @@ the Sink protocol ([`sink_output_times`](@ref) / [`sink_open!`](@ref) /
 [`sink_write!`](@ref) / [`sink_flush!`](@ref) / [`sink_close!`](@ref)); it need
 not subtype `AbstractSink` (the protocol dispatches structurally, mirroring how
 the Provider protocol accepts any object). It exists as the declared element type
-of [`simulate`](@ref)'s `sinks` keyword and as an opt-in for concrete bindings.
+of [`esm_problem`](@ref)'s `sinks` keyword and as an opt-in for concrete bindings.
 """
 abstract type AbstractSink end
 
@@ -463,13 +463,13 @@ end
 # distills exactly that slice of the run doc so a sink emits `lon`/`lat` dims (not
 # positional `<base>_d0`) and CF dimension-coordinates, WITHOUT the sink or the
 # writer importing the document model. Built once by [`derive_output_meta`] in
-# `prepare` (the doc is in scope there; `PreparedModel` carries the result).
+# `esm_problem` (the doc is in scope there; `ESMProblem` carries the result).
 # --------------------------------------------------------------------------- #
 
 """
     OutputMeta
 
-The document-derived output metadata carried by a [`PreparedModel`](@ref) so a
+The document-derived output metadata carried by an [`ESMProblem`](@ref) so a
 streaming sink can name axes and emit CF coordinates (RFC §7–§8). Distilled from
 the flattened run document by [`derive_output_meta`](@ref).
 
@@ -939,10 +939,10 @@ output_var_dims(g::VarGridding, time_dim::AbstractString) =
     build_zarr_sink(source, base_url; output_times, kwargs...) -> sink
 
 Construct a concrete Zarr [streaming sink](@ref sink_output_times) writing to the
-store at `base_url` (a `file://` URL or path). `source` is a [`PreparedModel`](@ref)
+store at `base_url` (a `file://` URL or path). `source` is an [`ESMProblem`](@ref)
 (or a bare `var_map` dict); `output_times` are the solver-second anchors at which
 the sink writes. The returned object implements the Sink protocol and is passed to
-[`simulate`](@ref)'s `sinks` keyword.
+[`esm_problem`](@ref)'s `sinks` keyword.
 
 Requires `EarthSciIO` to be loaded (the concrete sink is in the
 `EarthSciASTEarthSciIOExt` extension); calling it without EarthSciIO throws

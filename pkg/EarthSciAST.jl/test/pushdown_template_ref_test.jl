@@ -2,7 +2,7 @@
 # references (esm-spec §9.6.4 Option B, CONFORMANCE_SPEC §5.5.7).
 #
 # Option B has `load` PRESERVE `apply_expression_template` references so the
-# build boundary can expand them once with site recording. `prepare` therefore
+# build boundary can expand them once with site recording. `esm_problem` therefore
 # hands `desugar_pushdown` an UNEXPANDED document — and an author who factored a
 # binning body through a template used to hide the containment `ifelse` from the
 # recogniser, which then declined SILENTLY: no derived support set, no gate, and
@@ -227,7 +227,7 @@ end
         @test haskey(file.component_templates, "models.ISRM")
         EA.flatten(file)                                # the guard must NOT fire
 
-        raw = EA.serialize_esm_file(EA.load_document(doc))        # the `prepare` input form
+        raw = EA.serialize_esm_file(EA.load_document(doc))        # the `esm_problem` input form
         r = EA.desugar_pushdown(raw; model_name="ISRM")
         @test r !== raw
         rec = r["metadata"]["x_esd"]["pushdown"]

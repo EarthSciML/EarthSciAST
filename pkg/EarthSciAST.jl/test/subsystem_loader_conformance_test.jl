@@ -14,6 +14,8 @@
 # (F = k + wind[2] = 2 + 5 = 7) so `c(t) = 7 (1 - e^-t)` is analytic and exact.
 using Test
 using EarthSciAST
+import SciMLBase
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 using JSON3
 const _ESS_SL = EarthSciAST
@@ -62,7 +64,7 @@ _ESS_SL.provider_sample(p::_SubsysLoaderStub, ::Real) = p.field
         @test !("Box.k" in lhs_names)        # no synthesized defining equation
         @test !("Box.wind" in lhs_names)
 
-        # (b) simulate binds both fields through the offline CONST provider seam,
+        # (b) the run binds both fields through the offline CONST provider seam,
         # keyed by the flattened PARAMETER name.
         providers = Dict{String,Any}(
             "Box.k"    => _SubsysLoaderStub(Vector{Float64}(golden["loaders"]["Box.k"]["native"])),
@@ -74,11 +76,10 @@ _ESS_SL.provider_sample(p::_SubsysLoaderStub, ::Real) = p.field
         traj = golden["trajectory"]
         atimes = sort!(Float64[parse(Float64, String(k)) for k in keys(traj) if String(k) != "comment"])
 
-        r = _ESS_SL.simulate(fixture, tspan; alg = Tsit5(),
-                             providers = providers,
-                             reltol = 1e-9, abstol = 1e-11, saveat = atimes)
-        @test r.success && r.retcode == :Success
-        @test haskey(r.var_map, "Box.c")
+        prob = _ESS_SL.esm_problem(fixture, tspan; providers = providers)
+        r = solve(prob, Tsit5(); reltol = 1e-9, abstol = 1e-11, saveat = atimes)
+        @test SciMLBase.successful_retcode(r)
+        @test haskey(prob.var_map, "Box.c")
 
         rtol = 1e-4   # trajectory band (manifest §5.11 tolerances)
         atol = 1e-6
@@ -88,7 +89,7 @@ _ESS_SL.provider_sample(p::_SubsysLoaderStub, ::Real) = p.field
             ti = findfirst(x -> isapprox(x, t; atol = 1e-9), r.t)
             @test ti !== nothing
             expected = Float64(traj[tk]["Box.c"])
-            @test isapprox(r["Box.c"][ti], expected; rtol = rtol, atol = atol)
+            @test isapprox(r[Symbol("Box.c")][ti], expected; rtol = rtol, atol = atol)
         end
     end
 end

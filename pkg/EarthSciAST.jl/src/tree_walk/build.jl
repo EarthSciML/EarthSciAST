@@ -10,7 +10,7 @@
     BuildInspection()
 
 Observability record for [`build_evaluator`](@ref): pass one via the `inspect`
-keyword (`build_evaluator(doc; inspect=BuildInspection())`; [`simulate`](@ref)
+keyword (`build_evaluator(doc; inspect=BuildInspection())`; [`esm_problem`](@ref)
 forwards its own `inspect` keyword) and the build fills it with named
 BUILD-TIME products that are otherwise internal to the evaluator closure:
 
@@ -43,7 +43,7 @@ BUILD-TIME products that are otherwise internal to the evaluator closure:
   and `:forcing` (a live buffer a discrete provider rewrites, never in `p`).
   Derived from what the build actually read, not from what the document
   declares — see [`parameter_classes`](@ref). This is the build-level face of the same
-  partition `parameter_classes(prep)` exposes on a `PreparedModel`.
+  partition `parameter_classes(prob)` exposes on an `ESMProblem`.
 
 Filling the record never changes the build: the returned
 `(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
@@ -117,7 +117,7 @@ it gathers a raw forcing buffer. The build fills it:
   cache from the (already-refreshed) raw forcing buffers + const arrays + upstream
   caches, in dependency order. `build_evaluator` runs it ONCE at build (so u0
   seeding and the first RHS evaluation read valid caches); the caller re-runs it
-  after each in-place forcing refresh. [`simulate`](@ref) wires it as the
+  after each in-place forcing refresh. [`esm_problem`](@ref) wires it as the
   refresh callback's `post_refresh` hook automatically.
 * `var_order::Vector{String}` — the dependency order the fills run in.
 """
@@ -2949,8 +2949,8 @@ function _build_evaluator_impl_inner(model::Model;
                          _param_reads::Union{Nothing,Set{String}}=nothing,
                          # Internal: sink for the parameter PARTITION (name →
                          # `:numeric` / `:structural` / `:const_folded` /
-                         # `:forcing`; see `_classify_parameters`). `prepare`
-                         # passes one and carries it on the `PreparedModel`, so
+                         # `:forcing`; see `_classify_parameters`). `esm_problem`
+                         # passes one and carries it on the `ESMProblem`, so
                          # `parameter_classes(prep)` needs no sixth return value
                          # — the same reasoning as `param_map`.
                          _param_classes::Union{Nothing,AbstractDict}=nothing,
@@ -4028,13 +4028,13 @@ param_map(::Nothing) = Dict{String,Int}()
     parameter_classes(x) -> Dict{String,Symbol}
 
 Parameter NAME → what KIND of parameter it is in the build that produced `x`
-(a [`BuildInspection`](@ref) or a `PreparedModel`). Four classes:
+(a [`BuildInspection`](@ref) or an `ESMProblem`). Four classes:
 
 | class | where its value is consumed | overridable at solve time? |
 |---|---|---|
 | `:numeric` | the runtime `p` vector | **yes** — swap `p` (`remake`), differentiable |
-| `:structural` | BUILD time (setup geometry, value-invention extents, binning coordinates, `ic()` folds) | no — re-`prepare` |
-| `:const_folded` | frozen into the build's const arrays and inlined into the RHS | no — re-`prepare` with new data |
+| `:structural` | BUILD time (setup geometry, value-invention extents, binning coordinates, `ic()` folds) | no — rebuild the problem |
+| `:const_folded` | frozen into the build's const arrays and inlined into the RHS | no — rebuild with new data |
 | `:forcing` | a live buffer a discrete provider rewrites in place | no — write the buffer |
 
 The partition is **derived, not declared**: every one of these is spelled
@@ -4055,14 +4055,14 @@ agreeing silently. It is refused explicitly, with its own message.
 
 Like [`param_map`](@ref) this is a function of an artifact rather than an extra
 `build_evaluator` return value: the 5-tuple has hundreds of destructuring call
-sites. Pass `inspect = BuildInspection()` to `build_evaluator` / `prepare`, or
-read it off the `PreparedModel` that `prepare` returns.
+sites. Pass `inspect = BuildInspection()` to `build_evaluator` / `esm_problem`,
+or read it off the `ESMProblem` that `esm_problem` returns.
 
 ```julia
-prep = prepare("model.esm")
-cls  = parameter_classes(prep)
+prob = esm_problem("model.esm", tspan)
+cls  = parameter_classes(prob)
 θ    = [n for (n, c) in cls if c === :numeric]     # what a gradient may target
-simulate(prep, tspan; alg = Tsit5(), parameters = Dict(θ[1] => 2.0))
+solve(remake(prob; p = Dict(θ[1] => 2.0)), Tsit5())
 ```
 """
 parameter_classes(insp::BuildInspection) = insp.param_classes
@@ -4126,7 +4126,7 @@ end
 # EsmFile/Model call is unchanged.
 
 # The const-array keys an authored bare factor name resolves to in THIS build.
-# The front-door build keeps bare names, but `prepare` flattens first — every
+# The front-door build keeps bare names, but `esm_problem` flattens first — every
 # variable is namespaced to `<OrigModel>.<name>` (the model itself renamed
 # `Flattened`), while document-scoped index-set fields (`member_factor`) and gate
 # `applies_to` stay bare. So a bare authored name must be injected under BOTH the
@@ -4541,7 +4541,7 @@ function build_evaluator(esm::AbstractDict;
     # ---- Phase 2b Hook 2: gated-provider deferral → post-VI selective fetch ----
     # A GATED provider (its `.esm` data_loader declares a `gated_select`; the
     # runner reports it via `provider_gate_spec`) was SKIPPED by the eager const
-    # loop in `prepare` and stashed in `_gated_providers`. Now that value-invention
+    # loop in `esm_problem` and stashed in `_gated_providers`. Now that value-invention
     # has materialised the gating derived set's members + extent, push that set
     # down to the provider as a per-axis `selection` and fetch ONLY the compact
     # slab, merging it into `const_arrays` under the model variable name(s) the

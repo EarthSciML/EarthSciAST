@@ -18,7 +18,7 @@
 # Unlike the Rust/Python adapters (which drive a manual segment loop), Julia's
 # idiom is the integrated one: ONE `solve` over a `build_refresh_callback` whose
 # `affect!` refreshes the forcing buffer at each cadence anchor and fires the new
-# `post_refresh = dm.materialize!` hook — the exact wiring `simulate` uses. So this
+# `post_refresh = dm.materialize!` hook — the exact wiring `esm_problem` uses. So this
 # runner exercises the real materialization ⇄ refresh integration, not just the
 # build-time cut. The forcing is piecewise-constant across segments, so the
 # trajectory is analytic and exact.

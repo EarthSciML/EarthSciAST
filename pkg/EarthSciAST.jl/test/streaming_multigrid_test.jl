@@ -13,7 +13,7 @@ using OrdinaryDiffEqTsit5: Tsit5
 
 @testset "Multi-grid per-grid sinks (Wave 3)" begin
     fixture = joinpath(@__DIR__, "fixtures", "streaming_multigrid.esm")
-    prep = prepare(fixture)
+    prep = esm_problem(fixture, (0.0, 100.0))
     gridding = derive_output_gridding(prep.var_map, prep.output_meta)
 
     # two emergent grids: {col} and {lev,row} (sorted signatures).
@@ -45,7 +45,9 @@ using OrdinaryDiffEqTsit5: Tsit5
     end
     @test length(sinks) == 2
 
-    simulate(prep, tspan; alg = Tsit5(), sinks = sinks, seed_ic! = seed!)
+    # The sinks ride the PROBLEM (§2.5.4): they contribute the output callback,
+    # so they are declared at construction, not at solve.
+    solve(esm_problem(fixture, tspan; sinks = sinks, seed_ic! = seed!), Tsit5())
     for s in sinks
         @test s.manifest.n_records == length(times)
     end

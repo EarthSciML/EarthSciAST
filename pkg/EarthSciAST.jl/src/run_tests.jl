@@ -72,7 +72,7 @@ grows skip semantics.
 
 Outcome of one `(file, container, test, assertion_idx)` evaluation — the ONE
 result type both inline-test runners produce ([`run_esm_tests`](@ref) over the
-MTK engine and [`run_pde_tests`](@ref) over the tree-walk/simulate engine;
+MTK engine and [`run_pde_tests`](@ref) over the tree-walk solve engine;
 `PdeAssertionResult` is an alias of this type).
 
 `message` carries the diff or error text for non-`PASS` results.
@@ -335,7 +335,7 @@ end
 #   engine            entry point       execution pathway
 #   ----------------  ----------------  ------------------------------------
 #   MtkTestEngine     run_esm_tests     mtkcompile + ODEProblem + interpolant
-#   SimulateTestEngine run_pde_tests    tree-walk simulate() + field lookup
+#   SimulateTestEngine run_pde_tests    tree-walk esm_problem/solve + field lookup
 #                     (pde_inline_tests.jl)
 #
 # The frame owns everything the two runners used to duplicate: the per-test /

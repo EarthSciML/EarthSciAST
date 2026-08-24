@@ -15,7 +15,7 @@ Kept a `weakdep` extension (mirroring `MTKExt` / `SimulateExt`) so the base
 package carries no Catalyst dependency; without it loaded, the core stubs in
 src/mtk_export.jl throw an `ArgumentError` naming what to load, and the
 Catalyst-free path (`derive_odes` on the ESM `ReactionSystem`, plus
-`flatten`/`simulate`) remains fully available.
+`flatten`/`esm_problem`) remains fully available.
 """
 module EarthSciASTCatalystExt
 

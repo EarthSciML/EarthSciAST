@@ -11,7 +11,7 @@ Deep ModelingToolkit/Catalyst integration is provided by package extensions
 (`EarthSciASTMTKExt`, `EarthSciASTCatalystExt`) that load
 automatically when the user imports `ModelingToolkit` or `Catalyst`. Without
 those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
-snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `simulate`)
+snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `esm_problem`)
 runs it end to end.
 
 Two features live in namespaced submodules rather than the flat namespace:
@@ -116,7 +116,7 @@ include("area_faq.jl")
 # dependency-free brute-force reference + the generic seam whose fast STRtree
 # method lives in EarthSciASTGeometryOpsExt.
 include("broad_phase.jl")
-# MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
+# MTK-free runtime (tree-walk evaluator, refresh, the run Problem, cadence)
 include("tree_walk.jl")
 include("unit_conversion.jl")
 include("data_refresh.jl")
@@ -300,7 +300,7 @@ export
     # The parameter PARTITION (differentiability plan §3 Phase 5): which
     # parameters are `:numeric` (in the runtime `p` — differentiable, and
     # overridable at solve time), which are `:structural` (read at build time,
-    # so changing one is a re-`prepare`), and which never reach `p` at all
+    # so changing one is a rebuild), and which never reach `p` at all
     # (`:const_folded` / `:forcing`). `remake_parameters` is the `p`-swap that
     # applies the numeric half — the SciML `remake` shape, deliberately NOT a
     # rebuild.
@@ -349,12 +349,15 @@ export
     # Trace-time `(tensor, window)` read-interning counters (ess-oop-intern):
     # the engagement witness for the out-of-place emitter's traced read memo.
     oop_intern_stats, oop_intern_stats_reset!,
-    # One-call run entry (load → discretize → build_evaluator → seed → refresh →
-    # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).
-    # `prepare` runs the deterministic-per-document pipeline ONCE into a cached
-    # `PreparedModel`; `simulate(prep, tspan; …)` skips prep/build entirely.
-    simulate, SimulationResult, SimulateError, seed_expression_ic!, final_state,
-    prepare, PreparedModel, observed_field,
+    # The simulation Problem (esm-libraries-spec §2.5, API_SPEC §5.8): ONE noun
+    # and ONE verb. `esm_problem` absorbs the whole deterministic-per-document
+    # pipeline (load → discretize → build_evaluator → seed → callbacks); the
+    # verb is SciML's own `solve`, specialized on `ESMProblem` in the SciMLBase
+    # extension — which is also where `init` / `step!` / `solve!` / `remake` /
+    # `EnsembleProblem` come from, so EarthSciAST exports none of those names
+    # and cannot collide with the solver package that defines them.
+    esm_problem, ESMProblem, callbacks, SimulateError, seed_expression_ic!,
+    final_state, observed_field,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,

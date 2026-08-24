@@ -28,6 +28,8 @@
 # checks the constant atmosphere/fire states.
 using Test
 using EarthSciAST
+import SciMLBase
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 const _ESS_WF = EarthSciAST
 
@@ -65,18 +67,17 @@ end
             atimes = sort!(unique(Float64[a.time for a in t.assertions]))
             tspan = (t.time_span.start, t.time_span.stop)
 
-            r = _ESS_WF.simulate(fixture, tspan; alg = Tsit5(),
-                                 reltol = 1e-9, abstol = 1e-11,
-                                 saveat = atimes)
-            @test r.success && r.retcode == :Success
+            prob = _ESS_WF.esm_problem(fixture, tspan)
+            r = solve(prob, Tsit5(); reltol = 1e-9, abstol = 1e-11, saveat = atimes)
+            @test SciMLBase.successful_retcode(r)
 
             for a in t.assertions
                 # `a.variable` is model-local (e.g. "SST[1]"); the flattened /
                 # simulated element is namespaced under the OceanDynamics model.
                 key = "OceanDynamics." * a.variable
-                @test haskey(r.var_map, key)
+                @test haskey(prob.var_map, key)
                 ti = _wf_time_index(r.t, Float64(a.time))
-                actual = r[key][ti]
+                actual = r[Symbol(key)][ti]
                 rel, abs_ = _wf_resolve_tol(ocean.tolerance, t.tolerance, a.tolerance)
                 if rel > 0
                     @test isapprox(actual, a.expected; rtol = rel, atol = abs_)
@@ -92,8 +93,8 @@ end
             for (k, expected) in ("AtmosphericDynamics.T" => 288.0,
                                   "WildfirePropagation.phi" => 1.0,
                                   "WildfirePropagation.fuel" => 10.0)
-                if haskey(r.var_map, k)
-                    @test isapprox(r[k][end], expected; atol = 1e-8)
+                if haskey(prob.var_map, k)
+                    @test isapprox(r[Symbol(k)][end], expected; atol = 1e-8)
                 end
             end
         end

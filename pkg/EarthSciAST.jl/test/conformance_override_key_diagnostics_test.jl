@@ -21,6 +21,8 @@
 using Test
 using JSON3
 using EarthSciAST
+import SciMLBase
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
@@ -55,16 +57,15 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
                               keys(EarthSciAST.flatten(EarthSciAST.load_path(esm_path)).parameters)])
     @test flat_params == sort!(String[String(p) for p in fixture.parameters])
 
-    run(params) = EarthSciAST.simulate(esm_path, (0.0, 1.0);
-                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                       saveat=[1.0], parameters=params)
+    run(params) = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0); p=params), OrdinaryDiffEqTsit5.Tsit5();
+                                       saveat=[1.0])
 
     # Non-vacuity: the fixture integrates on its own, so every rejection below
     # is about the KEY and not about the document.
     base = run(Dict{String,Float64}())
-    @test base.success
+    @test SciMLBase.successful_retcode(base)
     for (name, want) in pairs(fixture.defaults_at_t1)
-        @test isapprox(base[String(name)][1], Float64(want); rtol=rtol, atol=atol)
+        @test isapprox(base[Symbol(String(name))][1], Float64(want); rtol=rtol, atol=atol)
     end
 
     for case in fixture.cases
@@ -74,9 +75,9 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
         @testset "$(key) => $(outcome)" begin
             if outcome == "resolved"
                 sim = run(Dict(key => val))
-                @test sim.success
+                @test SciMLBase.successful_retcode(sim)
                 for (name, want) in pairs(case.trajectory_at_t1)
-                    @test isapprox(sim[String(name)][1], Float64(want); rtol=rtol, atol=atol)
+                    @test isapprox(sim[Symbol(String(name))][1], Float64(want); rtol=rtol, atol=atol)
                 end
             else
                 err = try

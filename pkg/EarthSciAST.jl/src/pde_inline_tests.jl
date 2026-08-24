@@ -8,11 +8,11 @@
 # `integral | mean | max | min` — or point-sample it via `coords`. The
 # MTK-based `run_esm_tests` cannot compile
 # `aggregate`/`makearray` discretizations; this runner drives the official
-# tree-walk pipeline instead: `simulate` (build_evaluator → seed ICs → solve
+# tree-walk pipeline instead: `esm_problem` + `solve` (build_evaluator → seed ICs → solve
 # via the SciMLBase extension) then per-assertion field reduction.
 #
 # `[[library-exposes-rhs-not-solver]]`: the caller supplies the ODE algorithm
-# (`alg = Tsit5()` with OrdinaryDiffEqTsit5 loaded), exactly as for `simulate`.
+# (`alg = Tsit5()` with OrdinaryDiffEqTsit5 loaded), exactly as for `solve`.
 #
 # Cross-binding pinned conventions (identical in the Julia / Python / Rust
 # bindings; the esm-spec leaves these open, so determinism requires pinning):
@@ -54,7 +54,7 @@
 # §6.6.4 tolerance resolution, §6.6.3 pass predicate, wall-time split,
 # `AssertionResult` construction, JUnit emission) — with different execution
 # ENGINES plugged in. This file contributes the `SimulateTestEngine`
-# (tree-walk simulate + field lookup) and the §6.6.5 evaluation machinery it
+# (tree-walk solve + field lookup) and the §6.6.5 evaluation machinery it
 # drives; the MTK engine lives beside the frame in run_tests.jl.
 # ===========================================================================
 
@@ -475,7 +475,7 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
     # A SHAPELESS observed is rank 0, not unreadable: `E_NOx = Σ_r annual[r]·…`
     # contracts its only axis away and is a single number, which the Rust
-    # `Prepared::observed_field` returns and this refused to. One empty cell
+    # `observed_field(prob, name)` returns and this refused to. One empty cell
     # index is exactly what `evaluate_cellwise` wants for it (its compile-once
     # fast path is already gated on `nidx >= 1`).
     shape = v.shape === nothing ? String[] : v.shape
@@ -886,7 +886,8 @@ const _SAVED_TIME_RTOL = 1e-9
 # scalar `actual`; throws [`PdeTestError`](@ref) on any spec-relevant failure
 # (the driver records it as an `ERROR` result).
 # ---------------------------------------------------------------------------
-function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
+function _evaluate_assertion(a, sim, var_map::AbstractDict,
+                             insp::BuildInspection, eval_file::EsmFile,
                              mname::AbstractString,
                              resolved_base::AbstractString)::Float64
     ti = argmin(abs.(sim.t .- a.time))
@@ -895,7 +896,7 @@ function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
     state = sim.u[ti]
 
     if a.coords === nothing && a.reduce === nothing
-        slot = _scalar_slot(sim.var_map, a.variable, String(mname))
+        slot = _scalar_slot(var_map, a.variable, String(mname))
         slot == 0 && throw(PdeTestError("scalar state '$(a.variable)' not found"))
         return state[slot]
     end
@@ -909,7 +910,7 @@ function _evaluate_assertion(a, sim, insp::BuildInspection, eval_file::EsmFile,
         coords_target = _coords_cell(a.coords, shape, eval_file.index_sets)
     end
 
-    cells = _state_cells(sim.var_map, a.variable, String(mname))
+    cells = _state_cells(var_map, a.variable, String(mname))
     local field::Vector{Float64}, cell_tuples::Vector{Vector{Int}}
     if !isempty(cells)
         field = Float64[state[slot] for (_, slot) in cells]
@@ -971,8 +972,8 @@ end
 # ---------------------------------------------------------------------------
 # Simulate engine — the tree-walk execution strategy plugged into the unified
 # per-test frame (`_run_test_frame!`, run_tests.jl). Per test: resolve the
-# §9.7.10 form-C injection target, `simulate` with the assertion times as
-# `saveat`, then evaluate each assertion against the saved fields. `simulate`
+# §9.7.10 form-C injection target, `solve` with the assertion times as
+# `saveat`, then evaluate each assertion against the saved fields. The solve
 # flattens the file (models + coupling) into ONE runnable system named
 # "Flattened", so no model_name is passed; element names keep their
 # owning-model prefix, which the `_state_cells` / `_scalar_slot` lookups
@@ -993,7 +994,8 @@ end
 # `insp` — see `_observed_field`) and the file the assertions resolve shapes
 # against (the ephemeral injected file when the test injects a discretization).
 struct _SimulateHandle
-    sim::SimulationResult
+    sim::Any                      # the SciML solution `solve(prob, alg)` returned
+    var_map::Dict{String,Int}     # state-element name → flat index (from the problem)
     insp::BuildInspection
     eval_file::EsmFile
 end
@@ -1002,7 +1004,7 @@ end
 #
 # esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
 # name — local to the ENCLOSING component, since a test "exercises one model in
-# isolation" (§6.6). The runner hands them to `simulate`, which resolves against
+# isolation" (§6.6). The runner hands them to `esm_problem`, which resolves against
 # the WHOLE flattened document, where that locality is gone: two mounted
 # components that each declare a `T` flatten to `M1.T` / `M2.T`, and the bare
 # `T` in `M2`'s test is then AMBIGUOUS document-wide even though it is
@@ -1011,8 +1013,10 @@ end
 # So re-attach the scope the runner still knows: a key whose `<model>.<key>`
 # form names a real variable of the flattened system is rewritten to it. A key
 # that does not (already qualified, a scoped reference the prefix would double
-# up, or simply wrong) passes through untouched, so `simulate` reports on it
+# up, or simply wrong) passes through untouched, so `esm_problem` reports on it
 # exactly as it would have.
+_overrides_or_empty(o) = o === nothing ? Dict{String,Float64}() : o
+
 function _scope_to_component(overrides, mname, target)
     (overrides === nothing || isempty(overrides)) && return overrides
     known = try
@@ -1020,7 +1024,7 @@ function _scope_to_component(overrides, mname, target)
         union(Set{String}(String(n) for n in keys(flat.parameters)),
               Set{String}(String(n) for n in keys(flat.state_variables)))
     catch
-        return overrides   # let `simulate` report the real failure
+        return overrides   # let `esm_problem` report the real failure
     end
     out = Dict{String,Float64}()
     for (rawk, v) in overrides
@@ -1036,23 +1040,27 @@ function _engine_setup(e::SimulateTestEngine, t)
     target isa String && return target   # injection failed
     times = sort!(unique(Float64[a.time for a in t.assertions]))
     insp = BuildInspection()
-    local sim
+    local prob, sim
     try
-        sim = simulate(target, (t.time_span.start, t.time_span.stop);
-                       alg=e.alg, reltol=e.reltol, abstol=e.abstol,
-                       saveat=times,
-                       parameters=_scope_to_component(t.parameter_overrides, e.mname, target),
-                       initial_conditions=_scope_to_component(t.initial_conditions, e.mname, target),
-                       inspect=insp)
+        prob = esm_problem(target, (t.time_span.start, t.time_span.stop);
+                           p=_overrides_or_empty(_scope_to_component(
+                               t.parameter_overrides, e.mname, target)),
+                           u0=_scope_to_component(t.initial_conditions, e.mname, target),
+                           inspect=insp)
+        sim = _solve_problem(prob, e.alg; reltol=e.reltol, abstol=e.abstol,
+                             saveat=times)
     catch err
-        return "simulate failed: $(sprint(showerror, err))"
+        return "simulation failed: $(sprint(showerror, err))"
     end
-    sim.success || return "solver retcode $(sim.retcode): $(sim.message)"
-    return _SimulateHandle(sim, insp, target)
+    # `retcode` is a SciML `ReturnCode` (§2.5.3); compare it by name so this
+    # core file stays solver-free.
+    Symbol(sim.retcode) === :Success ||
+        return "solver retcode $(sim.retcode)"
+    return _SimulateHandle(sim, prob.var_map, insp, target)
 end
 
 _engine_actual(e::SimulateTestEngine, h::_SimulateHandle, a) =
-    _evaluate_assertion(a, h.sim, h.insp, h.eval_file, e.mname,
+    _evaluate_assertion(a, h.sim, h.var_map, h.insp, h.eval_file, e.mname,
                         e.resolved_base)
 
 _engine_error_message(::SimulateTestEngine, err) =
@@ -1070,9 +1078,9 @@ the official tree-walk simulation pathway, and return one
 value alongside pass/fail, so conformance harnesses can record and
 cross-compare the numbers.
 
-Per test: `simulate(input, (time_span.start, time_span.stop); alg, reltol,
-abstol, saveat=<assertion times>)` with the test's `initial_conditions` /
-`parameter_overrides` applied; then per assertion the asserted variable's field
+Per test: `solve(esm_problem(input, (time_span.start, time_span.stop)), alg;
+reltol, abstol, saveat=<assertion times>)` with the test's `initial_conditions`
+/ `parameter_overrides` applied; then per assertion the asserted variable's field
 is read at the assertion time and either point-sampled per its `coords`
 (positions in 1-based INDEX space; nearest grid index, exact ties rounding
 DOWN — the pinned cross-binding convention) or collapsed per its `reduce`

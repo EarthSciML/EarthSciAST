@@ -50,7 +50,7 @@ function EA.provider_sample(m::MockGatedN1, ::Real; selection=nothing)
     return m.full[lay:lay, src, rcv]
 end
 
-@testset "prepare(pushdown_rewrite=true) with a ONE-member support set" begin
+@testset "esm_problem(pushdown_rewrite=true) with a ONE-member support set" begin
     GRID = 9; N_RCV = 4; N_REC = 5; N_LAYER = 3
     W = zeros(GRID); Sv = zeros(GRID); Ev = zeros(GRID); Nv = zeros(GRID)
     for row in 1:3, col in 1:3
@@ -131,9 +131,9 @@ end
     ca = Dict{String,Any}("src_W"=>W, "src_S"=>Sv, "src_E"=>Ev, "src_N"=>Nv)
 
     insp = EA.BuildInspection()
-    prep = EA.prepare(doc; providers=providers, const_arrays=ca,
+    prep = EA.esm_problem(doc, (0.0, 1.0); providers=providers, const_arrays=ca,
                       inspect=insp, pushdown_rewrite=true)
-    @test prep isa EA.PreparedModel
+    @test prep isa EA.ESMProblem
 
     # The single-member feedback vector survived as a 1-element ARRAY.
     mfk = [k for k in keys(insp.const_arrays)
@@ -154,13 +154,13 @@ end
     end
 
     # The full downstream graph evaluated off the one-member axis.
-    E_voc = EA.observed_field(prep, insp, "E_VOC")
+    E_voc = EA.observed_field(prep, "E_VOC")
     @test length(E_voc) == 1
     @test E_voc ≈ oracle_E(is_VOC)
-    @test EA.observed_field(prep, insp, "conc_SOA") ≈ oracle_conc("SOA")
-    @test EA.observed_field(prep, insp, "TotalPM25") ≈ oracle_TotalPM25
-    @test EA.observed_field(prep, insp, "deathsK") ≈ oracle_deaths(RR_K)
-    @test EA.observed_field(prep, insp, "deathsL") ≈ oracle_deaths(RR_L)
+    @test EA.observed_field(prep, "conc_SOA") ≈ oracle_conc("SOA")
+    @test EA.observed_field(prep, "TotalPM25") ≈ oracle_TotalPM25
+    @test EA.observed_field(prep, "deathsK") ≈ oracle_deaths(RR_K)
+    @test EA.observed_field(prep, "deathsL") ≈ oracle_deaths(RR_L)
 end
 
 end # module PreparePushdownSingleMemberTests

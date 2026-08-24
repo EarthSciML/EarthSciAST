@@ -8,8 +8,8 @@
 #   :numeric      — a scalar in the runtime `p`. A solve-time override is a `p`
 #                   swap: cheap, and AD-transparent (the SciML `remake` shape).
 #   :structural   — consumed at BUILD time (here: an `ic()` fold), where it can
-#                   decide the shape of the problem. Refused at solve time; a
-#                   change is an explicit re-`prepare`.
+#                   decide the shape of the problem. Refused by `remake`; a
+#                   change is an explicit rebuild (`esm_problem` again).
 #   :const_folded — declared a parameter but supplied as CONST DATA, frozen into
 #                   the build and inlined into the RHS. It never reaches `p`, so
 #                   ∂/∂(it) is an unconditional zero that a finite-difference
@@ -26,6 +26,7 @@
 # an `ic()` equation reads it.
 using Test
 using EarthSciAST
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 using ForwardDiff
 using JSON3
@@ -68,7 +69,7 @@ function _pc_doc(; fold_ic::Bool = true)
 end
 
 # Both spellings: `build_evaluator(::Dict)` builds the document as authored (bare
-# names), while `prepare` FLATTENS first (`M.dat`). Same arrays either way.
+# names), while `esm_problem` FLATTENS first (`M.dat`). Same arrays either way.
 _pc_const() = Dict{String,Any}("dat" => [2.0, 0.0], "M.dat" => [2.0, 0.0])
 _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0])
 
@@ -109,10 +110,10 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
         @test parameter_classes(i2)["y0"] === :numeric
     end
 
-    @testset "prepare carries the partition" begin
-        prep = ESM_PC.prepare(_pc_doc(); const_arrays = _pc_const(),
-                              param_arrays = _pc_param_arrays())
-        cls = parameter_classes(prep)
+    @testset "the problem carries the partition" begin
+        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+                                  param_arrays = _pc_param_arrays())
+        cls = parameter_classes(prob)
         @test cls["M.k"] === :numeric
         @test cls["M.y0"] === :structural
         @test cls["M.dat"] === :const_folded
@@ -120,42 +121,39 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
     end
 
     # ---- the narrowed refusal -------------------------------------------- #
-    @testset "a NUMERIC override rides `p` at solve time" begin
-        prep = ESM_PC.prepare(_pc_doc(); const_arrays = _pc_const(),
-                              param_arrays = _pc_param_arrays())
-        base = ESM_PC.simulate(prep, (0.0, 1.0); alg = Tsit5())
-        over = ESM_PC.simulate(prep, (0.0, 1.0); alg = Tsit5(),
-                               parameters = Dict("M.k" => 3.0))
+    @testset "a NUMERIC override rides `p` through remake" begin
+        Y = Symbol("M.y")
+        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+                                  param_arrays = _pc_param_arrays())
+        base = solve(prob, Tsit5())
+        over = solve(remake(prob; p = Dict("M.k" => 3.0)), Tsit5())
         # dy/dt = k*dat[1]*buf[1] = k*10, y(0) = 6  ⇒  y(1) = 6 + 10k.
-        @test base["M.y"][end] ≈ 6.0 + 10 * 1.5 rtol = 1e-8
-        @test over["M.y"][end] ≈ 6.0 + 10 * 3.0 rtol = 1e-8
-        @test !isapprox(base["M.y"][end], over["M.y"][end])     # it MOVED
-        # …and it agrees with baking the same value in at prepare time.
-        prep2 = ESM_PC.prepare(_pc_doc(); parameters = Dict("M.k" => 3.0),
-                               const_arrays = _pc_const(),
-                               param_arrays = _pc_param_arrays())
-        baked = ESM_PC.simulate(prep2, (0.0, 1.0); alg = Tsit5())
-        @test over["M.y"][end] ≈ baked["M.y"][end] rtol = 1e-10
-        # The prepared model is NOT mutated by a per-run override.
-        @test prep.p.var"M.k" == 1.5
-        again = ESM_PC.simulate(prep, (0.0, 1.0); alg = Tsit5())
-        @test again["M.y"][end] ≈ base["M.y"][end]
-        # A local (un-namespaced) key resolves, exactly as `prepare`'s do.
-        @test ESM_PC.simulate(prep, (0.0, 1.0); alg = Tsit5(),
-                              parameters = Dict("k" => 3.0))["M.y"][end] ≈
-              over["M.y"][end]
+        @test base[Y][end] ≈ 6.0 + 10 * 1.5 rtol = 1e-8
+        @test over[Y][end] ≈ 6.0 + 10 * 3.0 rtol = 1e-8
+        @test !isapprox(base[Y][end], over[Y][end])     # it MOVED
+        # …and it agrees with baking the same value in at construction time.
+        prob2 = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); p = Dict("M.k" => 3.0),
+                                   const_arrays = _pc_const(),
+                                   param_arrays = _pc_param_arrays())
+        baked = solve(prob2, Tsit5())
+        @test over[Y][end] ≈ baked[Y][end] rtol = 1e-10
+        # `remake` does NOT mutate the problem it came from (§2.5.5).
+        @test prob.p.var"M.k" == 1.5
+        again = solve(prob, Tsit5())
+        @test again[Y][end] ≈ base[Y][end]
+        # A local (un-namespaced) key resolves, exactly as `esm_problem`'s do.
+        @test solve(remake(prob; p = Dict("k" => 3.0)), Tsit5())[Y][end] ≈ over[Y][end]
     end
 
     @testset "structural / const-folded / forcing are refused BY CLASS" begin
-        prep = ESM_PC.prepare(_pc_doc(); const_arrays = _pc_const(),
-                              param_arrays = _pc_param_arrays())
-        for (name, word, fix) in (("M.y0", "STRUCTURAL", "prepare"),
-                                  ("M.dat", "CONST-FOLDED", "prepare"),
+        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+                                  param_arrays = _pc_param_arrays())
+        for (name, word, fix) in (("M.y0", "STRUCTURAL", "esm_problem"),
+                                  ("M.dat", "CONST-FOLDED", "esm_problem"),
                                   ("M.buf", "LIVE FORCING", "param_buffers"))
             err = nothing
             try
-                ESM_PC.simulate(prep, (0.0, 1.0); alg = Tsit5(),
-                                parameters = Dict(name => 1.0))
+                remake(prob; p = Dict(name => 1.0))
             catch e
                 err = e
             end
@@ -166,36 +164,37 @@ _pc_param_arrays() = Dict{String,Any}("buf" => [5.0, 0.0], "M.buf" => [5.0, 0.0]
             @test occursin(fix, msg)           # …and what to do instead
         end
         # An unknown key is refused too — never silently dropped.
-        @test_throws ESM_PC.SimulateError ESM_PC.simulate(prep, (0.0, 1.0);
-            alg = Tsit5(), parameters = Dict("nope" => 1.0))
+        @test_throws ESM_PC.SimulateError remake(prob; p = Dict("nope" => 1.0))
     end
 
     @testset "remake_parameters is a `p` swap, not a rebuild" begin
-        prep = ESM_PC.prepare(_pc_doc(); const_arrays = _pc_const(),
-                              param_arrays = _pc_param_arrays())
-        p2 = remake_parameters(prep, Dict("M.k" => 7.0))
-        # Same NamedTuple shape and ORDER as `prep.p` (every `_NK_PARAM` node's
+        prob = ESM_PC.esm_problem(_pc_doc(), (0.0, 1.0); const_arrays = _pc_const(),
+                                  param_arrays = _pc_param_arrays())
+        p2 = remake_parameters(prob, Dict("M.k" => 7.0))
+        # Same NamedTuple shape and ORDER as `prob.p` (every `_NK_PARAM` node's
         # `idx` was minted against that order), one value changed.
-        @test keys(p2) == keys(prep.p)
-        @test param_map(p2) == param_map(prep.p)
+        @test keys(p2) == keys(prob.p)
+        @test param_map(p2) == param_map(prob.p)
         @test p2.var"M.k" == 7.0
-        @test prep.p.var"M.k" == 1.5                  # the prepared model is untouched
-        @test remake_parameters(prep, Dict{String,Float64}()) === prep.p
-        du = zeros(length(prep.u0))
-        prep.f!(du, copy(prep.u0), p2, 0.0)
-        @test du[prep.var_map["M.y"]] ≈ 7.0 * 10
+        @test prob.p.var"M.k" == 1.5                  # the problem is untouched
+        @test remake_parameters(prob, Dict{String,Float64}()) === prob.p
+        du = zeros(length(prob.u0))
+        prob.f!(du, copy(prob.u0), p2, 0.0)
+        @test du[prob.var_map["M.y"]] ≈ 7.0 * 10
         # AD-TRANSPARENT, which is the whole reason this is a `p` swap and not a
         # rebuild: an override keeps its OWN type, so a `Dual` stays a `Dual` in
         # `p` and ∂(RHS)/∂(parameter) flows straight through the swap. A
-        # `remake` that re-ran `prepare` could not do this at all.
-        p3 = remake_parameters(prep, Dict("M.k" => 7))
+        # `remake` that re-ran the build could not do this at all.
+        p3 = remake_parameters(prob, Dict("M.k" => 7))
         @test p3.var"M.k" === 7                      # not coerced to Float64
         g = ForwardDiff.derivative(1.5) do kk
-            pk = remake_parameters(prep, Dict("M.k" => kk))
-            duk = zeros(typeof(kk), length(prep.u0))
-            prep.f!(duk, copy(prep.u0), pk, 0.0)
-            duk[prep.var_map["M.y"]]
+            pk = remake_parameters(prob, Dict("M.k" => kk))
+            duk = zeros(typeof(kk), length(prob.u0))
+            prob.f!(duk, copy(prob.u0), pk, 0.0)
+            duk[prob.var_map["M.y"]]
         end
         @test g ≈ 10.0                               # d(k*dat[1]*buf[1])/dk
+        # `remake` installs exactly what `remake_parameters` produces.
+        @test remake(prob; p = Dict("M.k" => 7.0)).p == p2
     end
 end
