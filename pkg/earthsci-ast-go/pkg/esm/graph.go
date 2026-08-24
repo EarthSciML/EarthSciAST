@@ -769,8 +769,8 @@ func extractVariablesFromExpression(expr Expression) []string {
 	var vars []string
 	seen := make(map[string]bool)
 
-	// walk reports the names `e` references that `e` does not itself bind,
-	// appending newly seen ones to vars in first-encounter order.
+	// walk returns, in encounter order and with repeats, the names `e`
+	// references that `e` does not itself bind. The caller dedupes.
 	var walk func(Expression) []string
 	walk = func(e Expression) []string {
 		if s, ok := e.(string); ok {
