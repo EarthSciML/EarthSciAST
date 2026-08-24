@@ -1184,7 +1184,12 @@ pub fn prepare(
     };
     let file = crate::parse::load_string_with_options(&text, &load_opts)
         .map_err(|e| err(format!("load rewritten document: {e}")))?;
-    let index_sets: HashMap<String, IndexSet> = file.index_sets.clone().unwrap_or_default();
+    let index_sets: HashMap<String, IndexSet> = file
+        .index_sets
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     let models = file
         .models
         .as_ref()

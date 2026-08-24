@@ -8,15 +8,13 @@
 //! a superseding copy.)
 
 use earthsci_ast::*;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// Test basic structural validation with manually created data
 #[test]
 fn test_undefined_variable_in_model() {
-    use std::collections::HashMap;
-
     // Create a model with equation referencing undefined variable
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
     variables.insert(
         "x".to_string(),
         ModelVariable {
@@ -51,10 +49,11 @@ fn test_undefined_variable_in_model() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -102,10 +101,8 @@ fn test_undefined_variable_in_model() {
 /// Test equation count mismatch
 #[test]
 fn test_equation_count_mismatch() {
-    use std::collections::HashMap;
-
     // Create a model with more equations than state variables
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
     variables.insert(
         "x".to_string(),
         ModelVariable {
@@ -160,10 +157,11 @@ fn test_equation_count_mismatch() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -215,7 +213,7 @@ fn test_equation_count_mismatch() {
 #[test]
 fn test_undefined_species_in_reaction() {
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -247,17 +245,18 @@ fn test_undefined_species_in_reaction() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
         continuous_events: None,
     };
 
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("test".to_string(), rs);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -337,10 +336,8 @@ fn test_fixture_based_validation() {
 /// Test valid file passes validation
 #[test]
 fn test_valid_file_passes() {
-    use std::collections::HashMap;
-
     // Create a valid model with parameter only (no state variables to avoid ODE requirement)
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
     variables.insert(
         "k".to_string(),
         ModelVariable {
@@ -372,10 +369,11 @@ fn test_valid_file_passes() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("valid".to_string(), model);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,

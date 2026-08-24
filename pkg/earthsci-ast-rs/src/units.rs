@@ -1128,7 +1128,7 @@ fn describe(unit: &Unit) -> String {
 /// symbolic exponent), which stays a non-blocking warning: there the checker
 /// cannot conclude, whereas here the author wrote something that is not a unit.
 pub fn build_unit_env(
-    variables: &HashMap<String, crate::ModelVariable>,
+    variables: &indexmap::IndexMap<String, crate::ModelVariable>,
 ) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let mut env = HashMap::new();
     let mut failures = Vec::new();
@@ -2856,7 +2856,7 @@ mod tests {
 
     #[test]
     fn build_unit_env_unparseable_unit_is_unknown_not_dimensionless() {
-        let mut variables = HashMap::new();
+        let mut variables = indexmap::IndexMap::new();
         // `x` has an unparseable unit; `y` has a real unit of metres.
         variables.insert("x".to_string(), state_var_with_units(Some("not_a_unit")));
         variables.insert("y".to_string(), state_var_with_units(Some("m")));

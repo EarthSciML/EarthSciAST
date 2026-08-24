@@ -324,7 +324,9 @@ fn shared_valid_aggregate_fixture_parses_and_resolves() {
     // The resolver accepts the fixture's `{from:"cells"}` references (interval
     // size 5) without error — the undeclared-from guard does not false-positive.
     let mut resolved = model;
-    resolve_aggregate_ranges(&mut resolved, index_sets).expect("fixture `{from}` ranges resolve");
+    let index_sets_hm: std::collections::HashMap<_, _> = index_sets.clone().into_iter().collect();
+    resolve_aggregate_ranges(&mut resolved, &index_sets_hm)
+        .expect("fixture `{from}` ranges resolve");
 }
 
 /// Cross-bead invalid fixture (bead ess-my4.1.6): the shared resolver-level
@@ -348,7 +350,12 @@ fn shared_invalid_undeclared_from_fixture_is_rejected() {
 
     // v0.8.0: the document-scoped registry is where declarations live; this
     // fixture declares none, so `{from:"ghost_cells"}` is undeclared.
-    let index_sets = file.index_sets.clone().unwrap_or_default();
+    let index_sets: std::collections::HashMap<_, _> = file
+        .index_sets
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     let err = resolve_aggregate_ranges(&mut model, &index_sets)
         .expect_err("undeclared {from} must be rejected by the resolver");
     let msg = err.to_string();

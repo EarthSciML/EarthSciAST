@@ -151,13 +151,13 @@
       "julia": 291,
       "typescript": 210,
       "python": 234,
-      "rust": 291,
+      "rust": 292,
       "go": 374,
       "editor": 71
     },
     "by_tier": {
-      "extension": 693,
-      "stable": 253
+      "extension": 692,
+      "stable": 254
     }
   },
   "planned": [
@@ -4556,9 +4556,10 @@
     {
       "name": "loader_field",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "python": "LoaderField"
+        "python": "LoaderField",
+        "rust": "LoaderField"
       }
     },
     {

@@ -4,6 +4,7 @@
 //! Tests the variable and expression substitution functionality.
 
 use earthsci_ast::*;
+use indexmap::IndexMap;
 use std::collections::HashMap;
 
 /// Test simple variable replacement
@@ -154,7 +155,7 @@ fn test_scoped_reference() {
 #[test]
 fn test_model_substitution() {
     // Create a simple model for testing
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
     variables.insert(
         "x".to_string(),
         ModelVariable {
@@ -253,7 +254,7 @@ fn test_model_substitution() {
 fn test_reaction_system_substitution() {
     // Create a simple reaction system
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -303,7 +304,7 @@ fn test_reaction_system_substitution() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,

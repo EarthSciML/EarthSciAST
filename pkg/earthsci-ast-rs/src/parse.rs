@@ -220,6 +220,10 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // reference here so downstream consumers see the fully expanded Option-A
     // image — numeric results stay bit-identical, and the typed structs never
     // see an `apply_expression_template` node or an `expression_templates` block.
+    // Capture the per-component registries first: `expand` removes the blocks,
+    // and `flatten` needs them to build the step-4 merged `template_registry`.
+    let component_templates =
+        crate::lower_expression_templates::capture_component_templates(&json_value);
     crate::lower_expression_templates::expand(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
@@ -235,10 +239,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // bottom-up, so duplicates are collapsed before they can accumulate —
     // this is where the load-phase peak used to live (~978 MiB of typed AST
     // for `simpleclimate.esm` at the production grid; ~6 MiB deduplicated).
-    let esm_file: EsmFile = {
+    let mut esm_file: EsmFile = {
         let _intern = crate::intern::InternScope::new();
         serde_json::from_value(json_value).map_err(EsmError::JsonParse)?
     };
+    esm_file.component_templates = component_templates;
 
     Ok(esm_file)
 }

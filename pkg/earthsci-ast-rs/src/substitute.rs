@@ -224,9 +224,9 @@ pub fn substitute_in_reaction_system(
 #[derive(Debug, Clone)]
 pub struct ScopedContext {
     /// Available models in the ESM file
-    pub models: HashMap<String, Model>,
+    pub models: indexmap::IndexMap<String, Model>,
     /// Available reaction systems in the ESM file
-    pub reaction_systems: HashMap<String, ReactionSystem>,
+    pub reaction_systems: indexmap::IndexMap<String, ReactionSystem>,
     /// Current scope path (e.g., ["Model", "Subsystem"])
     pub current_scope: Vec<String>,
 }
@@ -481,6 +481,7 @@ mod tests {
     use super::*;
     use crate::ModelVariable;
     use crate::types::ExpressionNode;
+    use indexmap::IndexMap;
     use std::collections::HashMap;
 
     #[test]
@@ -549,8 +550,8 @@ mod tests {
     fn test_scoped_context_creation() {
         use crate::{EsmFile, Metadata, VariableType};
 
-        let mut models = HashMap::new();
-        let mut model_variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut model_variables = IndexMap::new();
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
@@ -586,6 +587,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -632,8 +634,8 @@ mod tests {
     fn test_scoped_reference_resolution() {
         use crate::{EsmFile, Metadata, VariableType};
 
-        let mut models = HashMap::new();
-        let mut model_variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut model_variables = IndexMap::new();
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
@@ -669,6 +671,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -718,8 +721,8 @@ mod tests {
     fn test_substitute_with_scoped_context() {
         use crate::{EsmFile, Metadata, VariableType};
 
-        let mut models = HashMap::new();
-        let mut model_variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut model_variables = IndexMap::new();
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
@@ -755,6 +758,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -804,8 +808,8 @@ mod tests {
         use crate::{EsmFile, Metadata, VariableType};
 
         // Create a more complex model with hierarchical scoped references
-        let mut models = HashMap::new();
-        let mut model_variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut model_variables = IndexMap::new();
         model_variables.insert(
             "Chemistry.FastChem.O3".to_string(),
             ModelVariable {
@@ -855,6 +859,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1027,7 +1032,7 @@ mod tests {
             subsystems: None,
             reference: None,
             variables: {
-                let mut vars = HashMap::new();
+                let mut vars = IndexMap::new();
                 vars.insert(
                     "state_var".to_string(),
                     ModelVariable {

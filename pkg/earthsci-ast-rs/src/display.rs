@@ -2046,6 +2046,7 @@ impl fmt::Display for EsmFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_chemical_subscripts() {
@@ -2165,8 +2166,6 @@ mod tests {
 
     #[test]
     fn test_model_summary_display() {
-        use std::collections::HashMap;
-
         // Create minimal ESM file for testing display
         let metadata = Metadata {
             name: Some("TestModel".to_string()),
@@ -2183,7 +2182,7 @@ mod tests {
         };
 
         // Create a simple reaction system
-        let mut parameters = HashMap::new();
+        let mut parameters = IndexMap::new();
         parameters.insert(
             "k1".to_string(),
             Parameter {
@@ -2208,7 +2207,7 @@ mod tests {
             reference: None,
         }];
 
-        let mut species = HashMap::new();
+        let mut species = IndexMap::new();
         species.insert(
             "A".to_string(),
             Species {
@@ -2239,11 +2238,12 @@ mod tests {
             subsystems: None,
         };
 
-        let mut reaction_systems = HashMap::new();
+        let mut reaction_systems = IndexMap::new();
         reaction_systems.insert("TestReactions".to_string(), reaction_system);
 
         // Create ESM file
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,

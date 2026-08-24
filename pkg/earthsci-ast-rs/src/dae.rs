@@ -364,6 +364,7 @@ fn factor_model(model: &mut Model, indep: &str) -> (usize, Vec<usize>) {
 mod tests {
     use super::*;
     use crate::types::{ExpressionNode, Metadata, ModelVariable, VariableType};
+    use indexmap::IndexMap;
 
     fn var(name: &str) -> Expr {
         Expr::Variable(name.into())
@@ -387,9 +388,10 @@ mod tests {
     }
 
     fn minimal_esm(model_name: &str, model: Model) -> EsmFile {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert(model_name.into(), model);
         EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -466,7 +468,7 @@ mod tests {
         Model {
             name: None,
             reference: None,
-            variables: HashMap::new(),
+            variables: IndexMap::new(),
             equations: vec![],
             discrete_events: None,
             continuous_events: None,
