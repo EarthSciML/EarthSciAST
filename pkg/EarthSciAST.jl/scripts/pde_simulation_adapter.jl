@@ -33,6 +33,7 @@ end
 using EarthSciAST
 using JSON3
 import OrdinaryDiffEqTsit5
+import SciMLBase
 const ODE = OrdinaryDiffEqTsit5
 const ESS = EarthSciAST
 
@@ -93,7 +94,7 @@ end
 
 # Static CONST stub Provider (DESIGN §2), identical protocol to the gate test:
 # `provider_sample` returns the whole `<Loader>.<var> => field` table and
-# `simulate` extracts each variable's field by name; empty `refresh_times` ⇒
+# the run extracts each variable's field by name; empty `refresh_times` ⇒
 # CONST ⇒ materialized once at build time into `const_arrays` under the loader
 # name, reachable by the scoped-`ic` fold (u0) and the loader→consumer gather.
 struct _StubLoaderProvider
@@ -147,7 +148,7 @@ function _time_index(times, t)
     best
 end
 
-# Build the provider-folded tree-walk evaluator exactly as `simulate` does: fold
+# Build the provider-folded tree-walk evaluator exactly as `esm_problem` does: fold
 # every CONST provider's field into `const_arrays` under its loader name, then
 # `build_evaluator` (which folds scoped-`ic` `Loader.*` into u0 and resolves the
 # lifted consumer gather from the loader name).
@@ -195,11 +196,11 @@ function pipeline_fixture(fx, base, reltol, abstol)
                                                    for (name, idx) in var_map)
     end
 
-    # --- Trajectory via the sanctioned `simulate` provider path ---------------
-    r = ESS.simulate(path, (t0, t1); alg = ODE.Tsit5(),
-                     providers = providers, reltol = reltol, abstol = abstol,
-                     saveat = checkpoints)
-    r.success || error("simulate failed: $(r.message)")
+    # --- Trajectory via the sanctioned ESMProblem provider path ---------------
+    prob = ESS.esm_problem(path, (t0, t1); providers = providers)
+    r = SciMLBase.solve(prob, ODE.Tsit5(); reltol = reltol, abstol = abstol,
+                        saveat = checkpoints)
+    SciMLBase.successful_retcode(r) || error("solve failed: retcode $(r.retcode)")
     traj = Dict{String,Any}()
     for tc in checkpoints
         ti = _time_index(r.t, tc)

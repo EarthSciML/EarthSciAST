@@ -1,5 +1,7 @@
 using Test
 using EarthSciAST
+import SciMLBase
+import SciMLBase: solve, remake
 import OrdinaryDiffEqTsit5: Tsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT, _require_fixture
@@ -77,15 +79,15 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 # Simulate both; the by-ref trajectories are bit-identical to the
                 # inlined ones (same spliced-in reaction system, same solver).
                 tspan = (0.0, 10.0)
-                r_inl = ESM_RR.simulate(chem_leaf, tspan; alg=Tsit5(), saveat=1.0)
-                r_ref = ESM_RR.simulate(refasm, tspan; alg=Tsit5(), saveat=1.0)
-                @test r_ref.success && r_inl.success
-                @test r_ref["Chem.A"] == r_inl["Chem.A"]   # bit-close (identical)
-                @test r_ref["Chem.B"] == r_inl["Chem.B"]
+                r_inl = solve(ESM_RR.esm_problem(chem_leaf, tspan), Tsit5(); saveat=1.0)
+                r_ref = solve(ESM_RR.esm_problem(refasm, tspan), Tsit5(); saveat=1.0)
+                @test SciMLBase.successful_retcode(r_ref) && SciMLBase.successful_retcode(r_inl)
+                @test r_ref[Symbol("Chem.A")] == r_inl[Symbol("Chem.A")]   # bit-close (identical)
+                @test r_ref[Symbol("Chem.B")] == r_inl[Symbol("Chem.B")]
 
                 # And they match the analytic solution A(t)=exp(-k t), k=0.3.
-                @test isapprox(r_ref["Chem.A"][end], exp(-0.3 * 10.0); rtol=1e-5)
-                @test isapprox(r_ref["Chem.B"][end], 1 - exp(-0.3 * 10.0); rtol=1e-5)
+                @test isapprox(r_ref[Symbol("Chem.A")][end], exp(-0.3 * 10.0); rtol=1e-5)
+                @test isapprox(r_ref[Symbol("Chem.B")][end], 1 - exp(-0.3 * 10.0); rtol=1e-5)
             finally
                 rm(tmp, recursive=true, force=true)
             end

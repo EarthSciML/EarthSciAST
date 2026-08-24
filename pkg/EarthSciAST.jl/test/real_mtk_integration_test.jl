@@ -187,7 +187,7 @@ import Symbolics
         @test !isdefined(EarthSciAST, :check_mtk_availability)
         @test !isdefined(EarthSciAST, :check_catalyst_availability)
         # The vestigial Mock* fallbacks were deleted too (the MTK-free path
-        # is flatten/FlattenedSystem + build_evaluator/simulate).
+        # is flatten/FlattenedSystem + build_evaluator/esm_problem).
         @test !isdefined(EarthSciAST, :MockMTKSystem)
         @test !isdefined(EarthSciAST, :MockPDESystem)
         @test !isdefined(EarthSciAST, :MockCatalystSystem)

@@ -268,7 +268,7 @@ _pit_from_file_assert(refdict; reduce="L2_error", abs_tol=1e-12) =
 end
 
 # A COMPUTED array observed `scaled = mult * base` of arbitrary rank over a
-# const `base`, plus a trivial state `u` (D(u) = scaled) so `simulate` runs.
+# const `base`, plus a trivial state `u` (D(u) = scaled) so the solve runs.
 # Asserting DIRECTLY on `scaled` drives `_observed_field`, whose cell sweep is
 # a `CartesianIndices` comprehension: rank≥2 yields a Matrix, and the pre-fix
 # `sort!` on it threw `UndefKeywordError: dims`. Pins the `vec()` fix and the

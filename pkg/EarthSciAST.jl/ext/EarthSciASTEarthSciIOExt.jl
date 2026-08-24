@@ -6,7 +6,7 @@ Wires the EarthSciIO Julia `Provider` into EarthSciAST's data-provider seam
 automatically whenever `EarthSciIO` is in the session alongside
 EarthSciAST. Before this extension existed the adapter shipped only as
 a doc comment on the seam (`data_refresh.jl`), so every run script had to repeat
-it; now `simulate(...; providers = Dict("<ModelPath>.<param>" => provider))`
+it; now `esm_problem(...; providers = Dict("<ModelPath>.<param>" => provider))`
 accepts an EarthSciIO provider with no per-script glue. The key is the CONSUMING
 PARAMETER's flattened name: from esm 1.0.0 a data source declares no variables of
 its own, so the parameter IS the loaded field (esm-spec §8.5).
@@ -201,7 +201,7 @@ silently misalign (esm-spec §8.9.3). That forces one decode — this type —
 rather than one per variable, which also means the 69 MB FF10 zip is unzipped
 and parsed once for all eight of its columns instead of eight times.
 
-Materialized lazily on first use and then held: `prepare` samples the providers
+Materialized lazily on first use and then held: `esm_problem` samples the providers
 one after another (single-threaded, which is why the memo needs no lock), and
 the second must not re-read.
 """
@@ -453,7 +453,7 @@ function _apply_declared_select(key::AbstractString, arr::AbstractArray, axes)
         else
             throw(RefreshError(
                 "provider '$key': axis $i gates on '$(ax["gated_by"])', which is " *
-                "resolved by value-invention inside prepare, not by an eager sample"))
+                "resolved by value-invention inside esm_problem, not by an eager sample"))
         end
     end
     out = arr[idx...]
@@ -704,7 +704,7 @@ end
 # Wave 3: REAL index-set dim names + CF dimension-coordinate emission (values +
 # standard_name/units/axis) from the document's `coordinates` registry, plus
 # per-variable CF attrs (units, …) — all carried in via the `OutputMeta` a
-# `PreparedModel` derives. Observed fields, auxiliary/source coordinates,
+# `ESMProblem` derives. Observed fields, auxiliary/source coordinates,
 # checkpoint profiles, and object stores are later waves; the protocol is unchanged.
 # --------------------------------------------------------------------------- #
 
@@ -723,12 +723,12 @@ mutable struct ZarrSink
 end
 
 """
-    build_zarr_sink(prep::PreparedModel, base_url; output_times, kwargs...) -> ZarrSink
+    build_zarr_sink(prob::ESMProblem, base_url; output_times, kwargs...) -> ZarrSink
     build_zarr_sink(var_map::AbstractDict, base_url; output_times, meta=nothing, kwargs...) -> ZarrSink
 
 Construct a [`ZarrSink`](@ref) streaming the flat state to the Zarr v3 store at
 `base_url`. The gridded layout is derived from the model's `var_map`
-([`derive_output_gridding`](@ref), RFC §7). Given a `PreparedModel` (or an
+([`derive_output_gridding`](@ref), RFC §7). Given an `ESMProblem` (or an
 [`OutputMeta`](@ref) via the `meta` keyword), axes are named by their REAL
 index-set names and the document's `coordinates` registry is emitted as CF
 dimension coordinates (RFC §8); with a bare `var_map` and no `meta`, axes keep

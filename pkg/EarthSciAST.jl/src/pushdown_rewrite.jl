@@ -109,7 +109,7 @@ end
 The rewrite's provenance record `metadata.x_esd.pushdown` written by
 [`desugar_pushdown`](@ref) (see `_pd_apply`), or `nothing` when `doc` carries
 none. This is the record the engine reads BACK to derive provider gates —
-callers no longer hand-author gate dicts (`prepare(...; pushdown_rewrite=true)`
+callers no longer hand-author gate dicts (`esm_problem(...; pushdown_rewrite=true)`
 + `providers`)."""
 function _pushdown_record(doc::AbstractDict)
     md = get(doc, "metadata", nothing)
@@ -1383,7 +1383,7 @@ end
 """
     _inject_pushdown_aliases!(dst, run_doc, coupling_pairs) -> dst
 
-Alias-key injection for the `prepare` pushdown path (same-object references,
+Alias-key injection for the `esm_problem` pushdown path (same-object references,
 no copies). The flattener rewrites EQUATION references through the coupling
 `variable_map` (`ISRM.SR_SOA → ISRM_SR.SOA`) but leaves the VARIABLES'
 `expression` fields namespaced-only (`ISRM.emis_lon`) — and the build-front-door

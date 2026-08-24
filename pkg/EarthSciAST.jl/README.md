@@ -49,7 +49,14 @@ sys = ModelingToolkit.System(model; name=:AtmosphereModel)
 
 # Without ModelingToolkit loaded, flatten() and the MTK-free runtime still work:
 flat = flatten(esm_file)
-result = simulate("model.esm", (0.0, 1.0))
+
+# Build the simulation Problem, then solve it (the solver is a package
+# extension: `using SciMLBase` + an OrdinaryDiffEq algorithm activates it).
+using SciMLBase, OrdinaryDiffEqTsit5
+prob = esm_problem("model.esm", (0.0, 1.0))
+sol  = solve(prob, Tsit5())
+sol.retcode                    # SciMLBase.ReturnCode.Success
+sol[Symbol("atmosphere.T")]    # a state element's trajectory, BY NAME
 
 # Validate the model
 result = validate(esm_file)
@@ -79,7 +86,7 @@ recovered = EarthSciAST.Model(sys)
 
 When ModelingToolkit and Catalyst are not loaded, the pure-Julia path still
 covers the full pipeline: `flatten` produces a `FlattenedSystem` snapshot, and
-the tree-walk runtime (`build_evaluator`, `simulate`) runs it end to end.
+the tree-walk runtime (`build_evaluator`, `esm_problem` + `solve`) runs it end to end.
 
 ## Documentation
 

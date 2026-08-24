@@ -116,7 +116,7 @@ end
 # refused every observed here with "not a build-time-evaluable observed" while
 # the build had computed all of them. `observed_field` now falls back to the
 # build's own materialized arrays; this alias is what pins that it does.
-_field(prep, insp, name::AbstractString) = EA.observed_field(prep, insp, name)
+_field(prep, name::AbstractString) = EA.observed_field(prep, name)
 
 _defs(out) = Dict(String(e["lhs"]) => e["rhs"]
                   for e in out["models"]["Binned"]["equations"]
@@ -272,9 +272,9 @@ end
     # --- dense reference: no rewrite, SR an ordinary const array -------------
     dense_ca = merge(ca, Dict{String,Any}("SR_PM25" => SR, "Binned.SR_PM25" => SR))
     dense_insp = EA.BuildInspection()
-    dense = EA.prepare(_doc(); const_arrays=dense_ca, inspect=dense_insp)
-    E_dense = _field(dense, dense_insp, "E_PM25")
-    conc_dense = _field(dense, dense_insp, "conc_PM25")
+    dense = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays=dense_ca, inspect=dense_insp)
+    E_dense = _field(dense, "E_PM25")
+    conc_dense = _field(dense, "conc_PM25")
     # The dense arm is itself checked against a hand oracle, so a shared bug in
     # both arms cannot pass this test by agreeing with itself.
     @test E_dense ≈ EXPECT_E
@@ -283,13 +283,13 @@ end
     # --- rewritten: SR gated, cell_ring gathered onto the support axis -------
     g = MockGatedPoly(SR, Any[])
     insp = EA.BuildInspection()
-    prep = EA.prepare(_doc(); const_arrays=ca,
+    prep = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays=ca,
                       providers=Dict{String,Any}("Binned.SR_PM25" => g),
                       inspect=insp, pushdown_rewrite=true)
     mf = Int.(insp.const_arrays["pd_member_factor__src_cells"])
     @test mf == [1, 2, 4]                     # 1-based; cell 3 is met by nothing
-    @test _field(prep, insp, "E_PM25") ≈ EXPECT_E[mf]
-    @test _field(prep, insp, "conc_PM25") ≈ conc_dense
+    @test _field(prep, "E_PM25") ≈ EXPECT_E[mf]
+    @test _field(prep, "conc_PM25") ≈ conc_dense
 
     # And the gate did its job: the SR rows were selected, not taken wholesale.
     @test isempty([c for c in g.calls if c[1] == :wholesale])
@@ -302,10 +302,10 @@ end
     # nothing else. Both spellings must agree with the array the build used, and
     # a name that is not an observed must still be refused rather than answered
     # out of the const-array registry (`SR_PM25` is a PARAMETER).
-    @test EA.observed_field(prep, insp, "E_PM25") ≈ insp.setup_arrays["Binned.E_PM25"]
-    @test EA.observed_field(prep, insp, "conc_PM25") ≈ insp.setup_arrays["Binned.conc_PM25"]
-    @test_throws EA.SimulateError EA.observed_field(prep, insp, "SR_PM25")
-    @test_throws EA.SimulateError EA.observed_field(prep, insp, "no_such_thing")
+    @test EA.observed_field(prep, "E_PM25") ≈ insp.setup_arrays["Binned.E_PM25"]
+    @test EA.observed_field(prep, "conc_PM25") ≈ insp.setup_arrays["Binned.conc_PM25"]
+    @test_throws EA.SimulateError EA.observed_field(prep, "SR_PM25")
+    @test_throws EA.SimulateError EA.observed_field(prep, "no_such_thing")
 end
 
 end # module PushdownCellGeometryTests

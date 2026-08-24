@@ -2,9 +2,9 @@
 #
 # Phase 4/5 proved the automatic rewrite + gated deferral through the PRIVATE
 # `build_evaluator` front door (`_gated_providers`, hand-authored gate dicts).
-# This test drives the same clean pattern through the PUBLIC `prepare` surface:
+# This test drives the same clean pattern through the PUBLIC `esm_problem` surface:
 #
-#   * `prepare(input; pushdown_rewrite=true, providers=…)` — the rewrite runs
+#   * `esm_problem(input, tspan; pushdown_rewrite=true, providers=…)` — the rewrite runs
 #     on the AUTHORED document BEFORE flattening (post-flatten the coupling
 #     substitution has split equation names from variable-expression names and
 #     the pattern no longer matches);
@@ -14,7 +14,7 @@
 #   * the loader's `metadata.x_esd.gated_select.axes` template contributes the
 #     NATIVE axis layout (the `fixed` emission-layer axis), with the record's
 #     GENERATED set name substituted over the template's stale one;
-#   * `observed_field(prep, insp, name)` reads the results back through the
+#   * `observed_field(prep, name)` reads the results back through the
 #     prepared document's own graph.
 #
 # The fixture mirrors isrm.esm's structure: `data_sources` + a clean model with
@@ -107,7 +107,7 @@ function EA.provider_sample(m::MockGatedP1, ::Real; selection=nothing)
     return m.full[lay:lay, src, rcv]
 end
 
-@testset "prepare(pushdown_rewrite=true) + record-derived provider gating" begin
+@testset "esm_problem(pushdown_rewrite=true) + record-derived provider gating" begin
 
     GRID = 9; N_RCV = 4; N_REC = 5; N_LAYER = 3
     W = zeros(GRID); Sv = zeros(GRID); Ev = zeros(GRID); Nv = zeros(GRID)
@@ -315,9 +315,9 @@ end
     ca = Dict{String,Any}("src_W"=>W, "src_S"=>Sv, "src_E"=>Ev, "src_N"=>Nv)
 
     insp = EA.BuildInspection()
-    prep = EA.prepare(doc; providers=providers, const_arrays=ca,
+    prep = EA.esm_problem(doc, (0.0, 1.0); providers=providers, const_arrays=ca,
                       inspect=insp, pushdown_rewrite=true)
-    @test prep isa EA.PreparedModel
+    @test prep isa EA.ESMProblem
 
     # ---- the gated mocks were fetched pre-sliced, never wholesale -----------
     for v in LVARS
@@ -331,21 +331,21 @@ end
     end
 
     # ---- results through the prepared document's own graph ------------------
-    @test EA.observed_field(prep, insp, "E_VOC")  ≈ oracle_E(is_VOC)
-    @test EA.observed_field(prep, insp, "ISRM.E_PM25") ≈ oracle_E(is_PM25)
-    @test EA.observed_field(prep, insp, "conc_SOA") ≈ oracle_conc("SOA")
-    @test EA.observed_field(prep, insp, "TotalPM25") ≈ oracle_TotalPM25
-    @test EA.observed_field(prep, insp, "deathsK") ≈ oracle_deaths(RR_K)
-    @test EA.observed_field(prep, insp, "deathsL") ≈ oracle_deaths(RR_L)
-    @test_throws EA.SimulateError EA.observed_field(prep, insp, "no_such_observed")
+    @test EA.observed_field(prep, "E_VOC")  ≈ oracle_E(is_VOC)
+    @test EA.observed_field(prep, "ISRM.E_PM25") ≈ oracle_E(is_PM25)
+    @test EA.observed_field(prep, "conc_SOA") ≈ oracle_conc("SOA")
+    @test EA.observed_field(prep, "TotalPM25") ≈ oracle_TotalPM25
+    @test EA.observed_field(prep, "deathsK") ≈ oracle_deaths(RR_K)
+    @test EA.observed_field(prep, "deathsL") ≈ oracle_deaths(RR_L)
+    @test_throws EA.SimulateError EA.observed_field(prep, "no_such_observed")
 
     # ---- the SAME run, with the binning bodies factored through a template --
     # esm-spec §9.6.4 Option B preserves `apply_expression_template` references
-    # through `load`, so `prepare` runs the desugar on a document whose binning
+    # through `load`, so `esm_problem` runs the desugar on a document whose binning
     # body may be a reference rather than the containment `ifelse`. Whether the
     # pushdown fires MUST NOT depend on that (CONFORMANCE_SPEC §5.5.7), and this
     # is the numeric discharge of the claim: same gated selections, same fetched
-    # slabs, same observed values — through the same public `prepare` surface.
+    # slabs, same observed values — through the same public `esm_problem` surface.
     #
     # The template body names ONLY its own params. `emis_annual` and the `is_*`
     # masks are COUPLING-FED (`MockPts.annual → ISRM.emis_annual`), so naming them
@@ -403,11 +403,11 @@ end
             providers2["ISRM.SR_$v"] = gmocks2[v]
         end
         insp2 = EA.BuildInspection()
-        prep2 = EA.prepare(tdoc; providers=providers2,
+        prep2 = EA.esm_problem(tdoc, (0.0, 1.0); providers=providers2,
                            const_arrays=Dict{String,Any}("src_W"=>W, "src_S"=>Sv,
                                                          "src_E"=>Ev, "src_N"=>Nv),
                            inspect=insp2, pushdown_rewrite=true)
-        @test prep2 isa EA.PreparedModel
+        @test prep2 isa EA.ESMProblem
         for v in LVARS
             sel = [c for c in gmocks2[v].calls if c[1] == :selection]
             @test isempty([c for c in gmocks2[v].calls if c[1] == :wholesale])
@@ -416,12 +416,12 @@ end
             @test sel[1][2][2] == MEMBERS                      # the same derived gate
             @test sel[1][2][3] === Colon()
         end
-        @test EA.observed_field(prep2, insp2, "E_VOC")  ≈ oracle_E(is_VOC)
-        @test EA.observed_field(prep2, insp2, "ISRM.E_PM25") ≈ oracle_E(is_PM25)
-        @test EA.observed_field(prep2, insp2, "conc_SOA") ≈ oracle_conc("SOA")
-        @test EA.observed_field(prep2, insp2, "TotalPM25") ≈ oracle_TotalPM25
-        @test EA.observed_field(prep2, insp2, "deathsK") ≈ oracle_deaths(RR_K)
-        @test EA.observed_field(prep2, insp2, "deathsL") ≈ oracle_deaths(RR_L)
+        @test EA.observed_field(prep2, "E_VOC")  ≈ oracle_E(is_VOC)
+        @test EA.observed_field(prep2, "ISRM.E_PM25") ≈ oracle_E(is_PM25)
+        @test EA.observed_field(prep2, "conc_SOA") ≈ oracle_conc("SOA")
+        @test EA.observed_field(prep2, "TotalPM25") ≈ oracle_TotalPM25
+        @test EA.observed_field(prep2, "deathsK") ≈ oracle_deaths(RR_K)
+        @test EA.observed_field(prep2, "deathsL") ≈ oracle_deaths(RR_L)
     end
 end
 

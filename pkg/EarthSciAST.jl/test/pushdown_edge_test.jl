@@ -1,6 +1,6 @@
 # Projection-pushdown CONST-tier dependency edge — L1 MILESTONE (Phase 2b).
 #
-# Drives a SMALL ISRM-like model end-to-end through the REAL build/prepare path
+# Drives a SMALL ISRM-like model end-to-end through the REAL build/esm_problem path
 # and proves the whole edge:
 #
 #   value-invention (overlap-gate producer → distinct containing cells `ppl`)
@@ -284,7 +284,7 @@ end
     # BUILD through the front-door — Hook 1 (feedback) + Hook 2 (defer+fetch).
     # The front door does NOT namespace (bare names throughout, like the overlap
     # conformance test), so the gated fetch, the members-fed factor, and the
-    # supplied const arrays all resolve under the authored names. `prepare`'s
+    # supplied const arrays all resolve under the authored names. `esm_problem`'s
     # eager-loop deferral ROUTING is exercised by the separate testset below.
     # ============================================================
     insp = EA.BuildInspection()
@@ -359,18 +359,18 @@ end
     # ============================================================
     # PREPARE PATH — the public API (flattens + qualifies names). Proves the
     # eager-loop DEFERRAL literally: the gated provider is never wholesale-pulled
-    # by prepare's const loop; it is fetched pre-sliced after value-invention.
+    # by the construction const loop; it is fetched pre-sliced after value-invention.
     # (Const arrays are model-qualified — the standard flattened convention, cf.
     # the runner's part_b.jl — and Hook 1/2 resolve the bare factor names to the
     # namespaced variable keys.)
     # ============================================================
-    @testset "full prepare() API: eager-loop deferral + fetch" begin
+    @testset "full esm_problem() API: eager-loop deferral + fetch" begin
         ca_q = Dict{String,Any}("ISRM." * k => v for (k, v) in ca)
         insp2 = EA.BuildInspection()
         mock2 = MockSR(fullSR, gate, Any[])
-        prep = EA.prepare(f; const_arrays=ca_q, providers=Dict("ISRM_SR"=>mock2),
+        prep = EA.esm_problem(f, (0.0, 1.0); const_arrays=ca_q, providers=Dict("ISRM_SR"=>mock2),
                           inspect=insp2)
-        @test prep isa EA.PreparedModel
+        @test prep isa EA.ESMProblem
         # deferral: NEVER wholesale-materialized in the eager const loop
         @test count(c -> c[1] == :wholesale, mock2.calls) == 0
         selc = [c for c in mock2.calls if c[1] == :selection]
@@ -380,7 +380,7 @@ end
         @test Vector{Float64}(insp2.const_arrays["ISRM.src_cell_of_ppl"]) ==
               Float64.(HAND_MEMBERS)
         @test size(insp2.const_arrays["ISRM.SR_SOA"]) == (NP, N_RCV)
-        # end-to-end oracle through the real prepare pipeline (spot-check deaths)
+        # end-to-end oracle through the real esm_problem pipeline (spot-check deaths)
         @test EA._observed_field(insp2, f, "ISRM", "deathsK")[1] ≈ oracle_deaths(RR_K)
         @test EA._observed_field(insp2, f, "ISRM", "TotalPM25")[1] ≈ oracle_TotalPM25
     end
