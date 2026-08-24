@@ -206,7 +206,7 @@
           "lhs": {
             "op": "D",
             "args": [
-              "u"
+              "_var"
             ],
             "wrt": "t"
           },
@@ -225,7 +225,7 @@
                   {
                     "op": "grad",
                     "args": [
-                      "u"
+                      "_var"
                     ],
                     "dim": "lon"
                   }
@@ -243,7 +243,7 @@
                   {
                     "op": "grad",
                     "args": [
-                      "u"
+                      "_var"
                     ],
                     "dim": "lat"
                   }
@@ -261,7 +261,7 @@
                   {
                     "op": "grad",
                     "args": [
-                      "u"
+                      "_var"
                     ],
                     "dim": "lev"
                   }
@@ -274,7 +274,7 @@
                   {
                     "op": "laplacian",
                     "args": [
-                      "u"
+                      "_var"
                     ],
                     "dim": "lon"
                   }
@@ -287,7 +287,7 @@
                   {
                     "op": "laplacian",
                     "args": [
-                      "u"
+                      "_var"
                     ],
                     "dim": "lev"
                   }
@@ -304,7 +304,7 @@
             {
               "op": "-",
               "args": [
-                "u",
+                "_var",
                 0.001
               ]
             }
@@ -325,7 +325,7 @@
                   {
                     "op": "Pre",
                     "args": [
-                      "u"
+                      "_var"
                     ]
                   }
                 ]

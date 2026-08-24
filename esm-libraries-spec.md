@@ -402,6 +402,7 @@ text.
 | `undefined_parameter` | Parameter referenced in a rate expression is not declared |
 | `undefined_system` | Coupling entry references a nonexistent model, reaction system, or operator |
 | `undefined_operator` | `operator_apply` references a nonexistent operator |
+| `couple_multiplicative_no_tendency` | A `couple` connector equation applies the `multiplicative` transform to a `to` target that has no `D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or an undefined name. There is no tendency to multiply (§4.7.2, esm-spec §10.3) |
 | `unresolved_scoped_ref` | Scoped reference (e.g., `"Model.Subsystem.var"`) cannot be resolved — a segment in the system path does not exist or the final variable is not declared. Also raised at flatten for an edge produced by a `coupling_import` expansion whose bound component lacks a referenced variable (esm-spec §10.10.3) |
 | `coupling_import_unresolved` | A `coupling_import` `ref` failed to load or parse (esm-spec §10.11) |
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
@@ -489,7 +490,30 @@ However, for deterministic intermediate representations (e.g., variable naming),
    - If the LHS is `D(var, t)`, the dependent variable is `var`.
    - Otherwise, the dependent variable is the LHS expression itself.
 
-2. **Apply translations.** If a `translate` map is provided, build a mapping from system A variable names to system B variable names (with optional conversion factors). Translations use scoped references (e.g., `"ChemModel.ozone": "PhotolysisModel.O3"`).
+2. **Apply translations.** If a `translate` map is provided, build a mapping from system A
+   variable names to system B variable names (with optional conversion factors). Translations use
+   scoped references (e.g., `"ChemModel.ozone": "PhotolysisModel.O3"`).
+
+   **The direction is normative and is not symmetric.** For `"systems": [A, B]`, every `translate`
+   KEY names a variable of **A** (`systems[0]`) and every VALUE names a variable of **B**
+   (`systems[1]`) — the spelling esm-spec §10.2 shows. Step 3 walks B's equations, so an
+   implementation that indexes the map by B's dependent variable is consulting it BACKWARDS: it
+   must use the **inverse** (B → A) map, or index the forward map by its values. Getting this
+   wrong is not a partial failure — a correctly spelled `translate` map then never matches
+   anything and the whole entry is a silent no-op, which is the one outcome a coupling
+   mis-specification must not have.
+
+   A binding MAY additionally accept the reversed spelling, but MUST accept the normative one.
+
+   **The redundancy invariant.** esm-spec §10.2 states that `translate` "is only needed when two
+   non-placeholder systems have differently-named variables", because `_var` expansion (step 3) is
+   automatic. A `translate` entry whose value is `"B._var"` is therefore **redundant by
+   construction**, and adding it MUST NOT change the result of the composition. In particular it
+   must not be consulted with B's *post-expansion* dependent variable: after step 3 substitutes
+   `_var`, B's equation carries A's own variable name, so a map keyed by A's names will hit
+   spuriously and redirect the match to a target that does not exist — turning a working
+   composition into an over-determination error. Translation lookup MUST use B's dependent
+   variable **as authored**, before placeholder expansion.
 
 3. **Match equations.** For each equation in system A, find a matching equation in system B by comparing dependent variables:
    - **Direct match:** Both equations have `D(x, t)` on the LHS with the same variable name `x`.
@@ -499,6 +523,16 @@ However, for deterministic intermediate representations (e.g., variable naming),
 4. **Combine matched equations.** For each matched pair:
    - The final equation for variable `x` has the original LHS: `D(x, t)`.
    - The RHS is the sum of both systems' RHS expressions: `rhs_A + factor * rhs_B`, where `factor` is the conversion factor from the translate map (default 1).
+   - On a **translation match**, B's dependent variable is rewritten to A's target throughout
+     `rhs_B` before summing. §10.2 says a `translate` pair names two spellings of *the same physical
+     quantity*, so the merged equation must speak of it in one name. Leaving `rhs_B` referring to
+     B's spelling strands that variable: its own defining equation was just consumed by the merge,
+     so it survives as an unknown nothing defines — a structurally singular system. Only the
+     dependent variable is rewritten; B's other variables (its parameters, its observeds) keep their
+     names, which is what the next bullet is about.
+   - On a **direct match** the two names are already equal and on a **placeholder match** step 3 has
+     already substituted, so in both cases this rewrite is the identity. Step 4 introduces no
+     renaming of its own beyond it.
    - Variables from system B that appear in the combined RHS are added to the merged system's variable list.
 
 5. **Preserve unmatched equations.** Equations in either system that have no match are included in the merged system unchanged.
@@ -524,9 +558,24 @@ The `connector.equations` array contains the complete coupling specification, ex
    - Resolve the `from` and `to` scoped references to their respective systems and variables.
    - Apply the coupling based on the `transform` type:
      - `additive`: Add the `expression` as a source/sink term to the target variable's ODE RHS.
+       If `to` has no tendency yet, `expression` BECOMES it (`D(to) ~ expression`) — an additive
+       term against an absent tendency is well defined, because zero is the additive identity.
      - `multiplicative`: Multiply the target variable's existing ODE RHS by the `expression`.
      - `replacement`: Replace the target variable's value with the `expression` (used for algebraic constraints).
 3. Variables referenced across systems become shared — the coupled system includes both systems' variables.
+
+**A `multiplicative` transform REQUIRES an existing tendency.** Both this section and esm-spec §10.3
+define the operation against the target's existing ODE RHS. When `to` names something with no
+`D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or simply
+an undefined name — there is nothing to multiply and the operation has no meaning. A library MUST
+raise `couple_multiplicative_no_tendency` naming the target; it MUST NOT silently drop the connector
+equation. Dropping it is a wrong answer delivered quietly: the document declares a coupling, the
+flattened system carries no trace of it, and nothing downstream can tell the difference between
+"this coupling was applied" and "this coupling was ignored".
+
+Note the asymmetry with `additive` above, and that it is deliberate: zero is the additive identity,
+so `additive` against an absent tendency has an obvious reading and takes it; there is no
+corresponding identity that makes `multiplicative` meaningful against nothing.
 
 #### 4.7.3 `variable_map` Resolution
 

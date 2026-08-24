@@ -258,18 +258,6 @@
                 "FluidDynamics.velocity"
               ]
             }
-          },
-          {
-            "from": "HeatTransfer.temperature",
-            "to": "FluidDynamics.density",
-            "transform": "multiplicative",
-            "expression": {
-              "op": "/",
-              "args": [
-                300.0,
-                "HeatTransfer.temperature"
-              ]
-            }
           }
         ]
       },
@@ -375,6 +363,25 @@
         ]
       },
       "description": "TEST CASE 3: couple with complex multi-directional coupling and all transform types"
+    },
+    {
+      "type": "variable_map",
+      "from": "HeatTransfer.temperature",
+      "to": "FluidDynamics.density",
+      "transform": {
+        "op": "*",
+        "args": [
+          1000.0,
+          {
+            "op": "/",
+            "args": [
+              300.0,
+              "HeatTransfer.temperature"
+            ]
+          }
+        ]
+      },
+      "description": "Scale density by a factor computed from HeatTransfer.temperature"
     }
   ]
 }

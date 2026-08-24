@@ -3831,15 +3831,33 @@ Optionally with a conversion factor:
 }
 ```
 
+**Direction.** For `"systems": [A, B]`, every KEY names a variable of `A` (`systems[0]`) and every
+VALUE names a variable of `B` (`systems[1]`), as both examples above show. `esm-libraries-spec.md`
+§4.7.1 step 2 makes this normative and explains why it matters: the matching loop walks `B`'s
+equations, so an implementation that looks up `B`'s dependent variable in a map keyed by `A`'s names
+consults it backwards, and a correctly spelled `translate` map then matches nothing at all.
+
+**A `translate` value of `"B._var"` is redundant, and must stay harmless.** Placeholder expansion
+(§6.4) is automatic, so naming `_var` explicitly asks for something that already happens. Writing it
+MUST produce the same flattened system as omitting it — see §4.7.1 step 2's redundancy invariant for
+the specific way this goes wrong when translation is applied after expansion rather than before.
+
 ### 10.3 The `connector` Field
 
 For `couple`, `connector` defines the `ConnectorSystem` — the set of equations that link two systems. Each equation is explicitly provided by the user and specifies which variable is affected and how:
 
 | Transform | Description |
 |---|---|
-| `additive` | Add expression as source/sink term |
-| `multiplicative` | Multiply existing tendency by expression |
+| `additive` | Add expression as source/sink term. If `to` has no tendency, the expression becomes it |
+| `multiplicative` | Multiply existing tendency by expression. `to` MUST already have one — see below |
 | `replacement` | Replace the variable value entirely |
+
+`multiplicative` is defined against an **existing** tendency. When `to` names something with no
+`D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or an
+undefined name — there is nothing to multiply, and a library MUST raise
+`couple_multiplicative_no_tendency` rather than silently dropping the connector equation
+(`esm-libraries-spec.md` §4.7.2). `additive` has no such requirement because zero is the additive
+identity; there is no multiplicative counterpart that would give the degenerate case a meaning.
 
 ### 10.4 The `variable_map` Transforms
 

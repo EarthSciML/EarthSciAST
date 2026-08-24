@@ -61,6 +61,25 @@ class ConflictingDerivativeError(FlattenError):
     """Two systems define non-additive equations for the same dependent variable."""
 
 
+class CoupleMultiplicativeNoTendencyError(FlattenError):
+    """A ``multiplicative`` connector transform targets something with no tendency.
+
+    esm-spec §10.3 and esm-libraries-spec §4.7.2 define ``multiplicative``
+    against the target's EXISTING ODE right-hand side. When ``to`` names a
+    parameter, an observed, an algebraic unknown, or an undefined name, there is
+    no ``D(to)`` to multiply and the operation has no meaning.
+
+    Silently dropping the connector equation -- what this binding did before --
+    is the one outcome a coupling mis-specification must not have: the document
+    declares a coupling and the flattened system carries no trace of it.
+
+    ``additive`` has no counterpart error because zero is the additive identity,
+    so an additive term against an absent tendency simply becomes the tendency.
+    """
+
+    code = "couple_multiplicative_no_tendency"
+
+
 class DimensionPromotionError(FlattenError):
     """A variable or equation cannot be promoted given the available Interfaces.
 
@@ -1071,22 +1090,29 @@ def _collect_reaction_system(
 
 
 def _build_translate_map(entry: OperatorComposeCoupling) -> dict[str, tuple[str, float]]:
-    """Normalize the operator_compose ``translate`` dict.
+    """Normalize the operator_compose ``translate`` dict, INVERTED for matching.
 
-    Each entry maps a scoped reference in system A to a scoped reference in
-    system B (or vice versa), optionally with a conversion factor.
+    The authored direction is normative and is not symmetric (esm-spec §10.2,
+    esm-libraries-spec §4.7.1 step 2): for ``"systems": [A, B]`` every KEY names
+    a variable of ``A`` and every VALUE names a variable of ``B``.
+
+    The matching loop in :func:`_apply_operator_compose` walks *B's* equations,
+    so it needs the map the other way round. This returns the INVERSE:
+    ``{b_name: (a_name, factor)}``. Indexing the authored (A-keyed) map by B's
+    dependent variable is the bug this function exists to prevent -- it makes a
+    correctly spelled ``translate`` map match nothing at all.
     """
     out: dict[str, tuple[str, float]] = {}
     if not entry.translate:
         return out
-    for k, v in entry.translate.items():
+    for a_name, v in entry.translate.items():
         if isinstance(v, dict):
-            target = v.get("to") or v.get("target") or v.get("var")
+            b_name = v.get("to") or v.get("target") or v.get("var")
             factor = float(v.get("factor", 1.0))
-            if target:
-                out[k] = (target, factor)
+            if b_name:
+                out[b_name] = (a_name, factor)
         elif isinstance(v, str):
-            out[k] = (v, 1.0)
+            out[v] = (a_name, 1.0)
     return out
 
 
@@ -1125,12 +1151,21 @@ def _apply_operator_compose(
             surviving_b.append(b_eq)
             continue
 
-        # Determine the A target for this dependent variable.
+        # Determine the A target for this dependent variable. Spec §4.7.1 step 3
+        # lists the match kinds in precedence order: DIRECT first, then
+        # TRANSLATION, then the bare-name fallback. Direct-first is load-bearing,
+        # not cosmetic: placeholder expansion has already rewritten `_var` to A's
+        # own variable name, so an expanded equation IS a direct match. Consulting
+        # `translate` first would let a map keyed by A's names hit spuriously on
+        # that rewritten name and redirect the match to a target that does not
+        # exist -- turning a working composition into an over-determination error
+        # (the `translate: {"A.x": "B._var"}` redundancy invariant, §10.2).
         target_dep = b_dep
         factor = 1.0
-        if b_dep in translate:
-            t, factor = translate[b_dep]
-            target_dep = t
+        if b_dep in a_index:
+            pass  # direct match; `target_dep` is already right
+        elif b_dep in translate:
+            target_dep, factor = translate[b_dep]
         else:
             # Try mapping bare names from B back to A's equivalent.
             short = b_dep.split(".", 1)[1] if "." in b_dep else b_dep
@@ -1198,10 +1233,27 @@ def _apply_couple(
             if dep is not None:
                 eq_index[dep] = (sys_name, i)
 
+    # Which targets carry a TENDENCY (`D(x)`), as opposed to merely some defining
+    # equation: `multiplicative` is defined against an ODE RHS (§10.3, §4.7.2).
+    tendencies: set[str] = set()
+    for comp in components.values():
+        for eq in comp.equations:
+            if isinstance(eq.lhs, ExprNode) and eq.lhs.op == "D":
+                dep = _lhs_dependent_var(eq.lhs)
+                if dep is not None:
+                    tendencies.add(dep)
+
     for ceq in entry.connector.equations:
         target = ceq.to_var
         if not target:
             continue
+        if ceq.transform == "multiplicative" and target not in tendencies:
+            raise CoupleMultiplicativeNoTendencyError(
+                f"couple connector 'multiplicative' transform targets {target!r}, "
+                f"which has no tendency (D({target})) to multiply (esm-spec §10.3). "
+                f"To scale a constant parameter by a factor, use a variable_map "
+                f"entry with an Expression transform (esm-spec §10.4) instead."
+            )
         if target not in eq_index:
             continue
         sys_name, i = eq_index[target]

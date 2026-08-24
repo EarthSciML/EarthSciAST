@@ -295,34 +295,29 @@
       "description": "TEST CASE 5: Four-level resolution in different subsystem branch - AtmosphereModel.Transport.Advection.u_wind"
     },
     {
-      "type": "couple",
-      "systems": [
-        "AtmosphereModel.Chemistry",
-        "SurfaceModel"
-      ],
-      "connector": {
-        "equations": [
+      "type": "variable_map",
+      "from": "AtmosphereModel.Chemistry.O3",
+      "to": "SurfaceModel.surface_resistance",
+      "transform": {
+        "op": "*",
+        "args": [
+          100.0,
           {
-            "from": "AtmosphereModel.Chemistry.O3",
-            "to": "SurfaceModel.surface_resistance",
-            "transform": "multiplicative",
-            "expression": {
-              "op": "+",
-              "args": [
-                1.0,
-                {
-                  "op": "*",
-                  "args": [
-                    0.1,
-                    "AtmosphereModel.Chemistry.O3"
-                  ]
-                }
-              ]
-            }
+            "op": "+",
+            "args": [
+              1.0,
+              {
+                "op": "*",
+                "args": [
+                  0.1,
+                  "AtmosphereModel.Chemistry.O3"
+                ]
+              }
+            ]
           }
         ]
       },
-      "description": "TEST CASE 8: couple with scoped references in connector expressions"
+      "description": "Scale surface_resistance by a factor computed from AtmosphereModel.Chemistry.O3"
     }
   ],
   "domain": {

@@ -127,6 +127,36 @@ CASES: list[tuple[str, str, str]] = [
         "coupled_atmospheric_system",
         "end_to_end/coupled_atmospheric_system.esm",
     ),
+    # --- operator_compose that actually COMPOSES -----------------------------
+    # Added 2026-08-24. Until then EVERY coupled case above recorded an
+    # operator_compose that matched nothing, because each named an operator model
+    # whose equations used a state of its own instead of the `_var` placeholder
+    # (esm-spec §6.4). The corpus therefore pinned the NO-OP as the correct
+    # answer, and a binding whose `operator_compose` did nothing at all passed
+    # every case. These three fixtures are the ones in the shared tree whose
+    # operator model really is spelled with `_var`, so they are what makes
+    # §4.7.1 steps 3-5 observable:
+    #
+    #   * minimal_chemistry        -- the canonical §4.7.1 example: three species
+    #                                 x one placeholder advection equation.
+    #   * metadata_inheritance_coupled -- the same shape under a reaction system.
+    #   * bare_reference_resolution -- placeholder expansion AND a `translate`
+    #                                 map together, which is the pair that pins
+    #                                 §10.2's redundancy invariant: consulting
+    #                                 `translate` with the POST-expansion
+    #                                 dependent variable turns this document into
+    #                                 a spurious ConflictingDerivativeError.
+    ("operator_compose", "minimal_chemistry", "valid/minimal_chemistry.esm"),
+    (
+        "operator_compose",
+        "metadata_inheritance_coupled",
+        "valid/metadata_inheritance_coupled.esm",
+    ),
+    (
+        "operator_compose",
+        "bare_reference_resolution",
+        "scoping/bare_reference_resolution.esm",
+    ),
     # --- arrayed model exercising index_sets ---------------------------------
     (
         "arrayed",
