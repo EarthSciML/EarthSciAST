@@ -2202,7 +2202,7 @@ export function emitEsmString(doc: unknown): string {
  * according to `rename` (old name → new name), in lockstep with a registry
  * rename. Mirrors the Julia reference `_rename_apply_refs`.
  */
-function renameApplyRefs(node: Json, rename: Record<string, string>): Json {
+export function renameApplyRefs(node: Json, rename: Record<string, string>): Json {
   if (Array.isArray(node)) {
     return node.map((v) => renameApplyRefs(v, rename))
   }
@@ -2252,7 +2252,7 @@ function renameApplyRefs(node: Json, rename: Record<string, string>): Json {
  *
  * Mirrors the Julia reference `_registry_collision_names`.
  */
-function registryCollisionNames(
+export function registryCollisionNames(
   byname: Map<string, { path: string; decl: unknown }[]>,
 ): Set<string> {
   const collide = new Set<string>()
