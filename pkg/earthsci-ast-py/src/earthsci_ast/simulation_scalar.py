@@ -173,7 +173,7 @@ class _ScalarRhsBuild:
     This is the scalar pathway's half of what esm-libraries-spec §2.5.2 calls
     "the compile": the lambdified SymPy right-hand side, the resolved parameter
     vector, the initial state, and the continuous-event root functions. A
-    :class:`~earthsci_ast.problem.Problem` builds one at construction and both
+    :class:`~earthsci_ast.problem.EsmProblem` builds one at construction and both
     :func:`_simulate_scalar` and the stepping integrator run it.
 
     ``rhs_function`` is ``None`` for an observed-only system (no ODE states):
@@ -197,7 +197,7 @@ def _build_scalar_rhs(
     """Lower a scalar flattened system to a lambdified NumPy right-hand side.
 
     Extracted verbatim from :func:`_simulate_scalar` so the compile can happen
-    once, at Problem construction, and be reused by both the one-shot solve and
+    once, at EsmProblem construction, and be reused by both the one-shot solve and
     the stepping integrator. Pure code motion: the values it produces are the
     ones the inline version produced.
     """
@@ -309,10 +309,10 @@ def _simulate_scalar(
     """Integrate a scalar (non-array) flattened system via lambdified SymPy + SciPy.
 
     See :func:`earthsci_ast.problem.esm_problem` / :func:`earthsci_ast.problem.solve`
-    for the full argument contract; this is the pathway a Problem routes to when
+    for the full argument contract; this is the pathway a EsmProblem routes to when
     its system has no array ops, loader fields, or provider injections.
 
-    ``prebuilt`` is the :class:`_ScalarRhsBuild` the Problem compiled at
+    ``prebuilt`` is the :class:`_ScalarRhsBuild` the EsmProblem compiled at
     construction; ``None`` compiles here (the SymPy lambdify is cached on the
     flattened system either way, so the numbers are identical).
     """

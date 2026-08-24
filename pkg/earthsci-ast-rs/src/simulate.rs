@@ -19,7 +19,7 @@
 //! ## Usage
 //!
 //! This module is the compiled right-hand side and the solver plumbing around
-//! it. The public entry point is the Problem/`solve` surface in
+//! it. The public entry point is the EsmProblem/`solve` surface in
 //! [`crate::problem`] (`esm-libraries-spec.md` §2.5):
 //!
 //! ```no_run
@@ -36,7 +36,7 @@ use crate::types::{EsmFile, Expr, Model};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
-// The solver is OPTIONAL (esm-libraries-spec §2.5.9): building a `Problem`
+// The solver is OPTIONAL (esm-libraries-spec §2.5.9): building a `EsmProblem`
 // never needs it, so `diffsol` sits behind the `solve` Cargo feature and every
 // item that touches it is gated the same way.
 #[cfg(feature = "solve")]
@@ -74,13 +74,13 @@ pub enum SimulateError {
     #[error("Tolerance not met")]
     ToleranceNotMet,
 
-    /// [`crate::problem::solve`] was called on a Problem whose document
+    /// [`crate::problem::solve`] was called on a EsmProblem whose document
     /// declares no differential equations, so there is nothing to integrate.
     /// Its build-time products are still readable with
     /// [`crate::problem::observed_field`].
     #[error("Nothing to integrate: {details}")]
     NotDynamic {
-        /// Why the Problem carries no integrable right-hand side.
+        /// Why the EsmProblem carries no integrable right-hand side.
         details: String,
     },
 
@@ -90,7 +90,7 @@ pub enum SimulateError {
     /// Distinct from every other variant in that nothing went wrong: it is the
     /// caller's own decision. It stays an ERROR — unlike a cancelled *solve*,
     /// which is [`ReturnCode::Terminated`] with a partial trajectory — because a
-    /// half-built Problem is not a usable result.
+    /// half-built EsmProblem is not a usable result.
     #[error("Cancelled by the caller during the build: {details}")]
     Cancelled {
         /// The phase and item the build stopped at.
@@ -98,12 +98,12 @@ pub enum SimulateError {
     },
 
     /// [`crate::problem::remake`] was asked to substitute a binding the
-    /// Problem cannot honour without redoing part of construction.
+    /// EsmProblem cannot honour without redoing part of construction.
     ///
     /// Raised rather than silently rebuilding or silently ignoring the
     /// substitution (`esm-libraries-spec.md` §2.5.5): the name and the class
     /// that makes it un-substitutable are both reported so the caller knows to
-    /// build a fresh Problem instead.
+    /// build a fresh EsmProblem instead.
     #[error("Cannot remake '{name}': {class}")]
     UnsubstitutableBinding {
         /// The binding the caller tried to substitute.
@@ -401,9 +401,9 @@ pub struct SolveOptions {
     pub saveat: Option<Vec<f64>>,
     /// Callbacks for THIS run.
     ///
-    /// **`Some(set)` REPLACES the Problem's callback set entirely** — it does
+    /// **`Some(set)` REPLACES the EsmProblem's callback set entirely** — it does
     /// not append, merge or wrap (`esm-libraries-spec.md` §2.5.4). `None`
-    /// inherits the Problem's set. To extend rather than replace, read the set
+    /// inherits the EsmProblem's set. To extend rather than replace, read the set
     /// back with [`crate::problem::callbacks`] and
     /// [`crate::problem::compose`] explicitly.
     pub callback: Option<crate::problem::CallbackSet>,
@@ -1719,7 +1719,7 @@ where
 
 /// Whether `file` must route to the array/spatial runtime
 /// ([`crate::simulate_array`]) rather than the scalar ODE interpreter: it has
-/// array-op nodes or spatial model structure. Problem construction
+/// array-op nodes or spatial model structure. EsmProblem construction
 /// ([`crate::problem::esm_problem`]) is the single caller, so the routing is
 /// decided exactly once, at build time.
 pub(crate) fn is_array_file(file: &EsmFile) -> bool {

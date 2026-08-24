@@ -406,7 +406,7 @@ class _RecordTable:
     than one per variable, which also means the 69 MB FF10 zip is unzipped and
     parsed once for all eight of its columns instead of eight times.
 
-    Decoded lazily on first use and then held: Problem construction samples the
+    Decoded lazily on first use and then held: EsmProblem construction samples the
     providers one after another, and the second one must not re-read.
     """
 

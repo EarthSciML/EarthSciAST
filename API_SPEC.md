@@ -701,6 +701,7 @@ reading that as a gap.
 | `canonicalize` | function | `canonicalize` | `canonicalize` | – | `canonicalize` | `Canonicalize` |
 | `closed_function_error` | error | `ClosedFunctionError` | `ClosedFunctionError` | – | `ClosedFunctionError` | `ClosedFunctionError` |
 | `component_graph` | function | `component_graph` | `componentGraph` / `component_graph` | `component_graph` | `component_graph` | – |
+| `compose` | function | `compose` | `compose` | – | `compose` | `Compose` |
 | `conflicting_derivative_error` | error | `ConflictingDerivativeError` | `ConflictingDerivativeError` | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` |
 | `contains` | function | – | `contains` | `contains` | `contains` | `Contains` |
 | `continuous_event` | type | `ContinuousEvent` | – | `ContinuousEvent` | `ContinuousEvent` | `ContinuousEvent` |
@@ -755,11 +756,11 @@ reading that as a gap.
 | `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | – | – | `AddContinuousEvent` |
 | `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | – | – | `AddDiscreteEvent` |
 | `cadence_error` | error | – | – | `CadenceError` | `CadenceError` | `CadenceError` |
+| `callbacks` | function | `callbacks` | – | `callbacks` | `callbacks` | – |
 | `canonicalize_error` | error | `CanonicalizeError` | `CanonicalizeError` | – | `CanonicalizeError` | – |
 | `closed_function_names` | function | `closed_function_names` | – | – | `closed_function_names` | `ClosedFunctionNames` |
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
-| `compose` | function | `compose` | `compose` | – | – | `Compose` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
 | `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
@@ -767,6 +768,8 @@ reading that as a gap.
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
+| `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
+| `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
 | `evaluate_closed_function` | function | `evaluate_closed_function` | – | – | `evaluate_closed_function` | `EvaluateClosedFunction` |
 | `extract` | function | `extract` | `extract` | – | – | `Extract` |
@@ -781,16 +784,15 @@ reading that as a gap.
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
+| `observed_field` | function | `observed_field` | – | `observed_field` | `observed_field` | – |
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
 | `parse_unit` | function | – | `parseUnit` | – | `parse_unit` | `ParseUnit` |
-| `prepare` | function | `prepare` | – | `prepare` | `prepare` | – |
 | `reference` | type | `Reference` | – | `Reference` | – | `Reference` |
 | `reference_resolution_error` | error | `ReferenceResolutionError` | – | `ReferenceResolutionError` | – | `ReferenceResolutionError` |
 | `remove_equation` | function | `remove_equation` | `removeEquation` | – | `remove_equation` | – |
 | `remove_event` | function | `remove_event` | `removeEvent` | – | – | `RemoveEvent` |
 | `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | `RenameVariable` |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
-| `simulate` | function | `simulate` | – | `simulate` | `simulate` | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
 | `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
 | `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
@@ -809,6 +811,7 @@ reading that as a gap.
 | `area_tolerance_ok` | function | – | – | `area_tolerance_ok` | `area_tolerance_ok` | – |
 | `build_unit_env` | function | – | – | – | `build_unit_env` | `BuildUnitEnv` |
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
+| `callback_set` | type | – | – | `CallbackSet` | `CallbackSet` | – |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
@@ -827,6 +830,7 @@ reading that as a gap.
 | `earth_sci_ast_error` | error | `EarthSciASTError` | – | `EarthSciAstError` | – | – |
 | `emit_document` | function | – | `emitDocument` | `emit_document` | – | – |
 | `emit_esm_string` | function | – | `emitEsmString` | `emit_esm_string` | – | – |
+| `ensemble_problem` | type | – | – | `EnsembleProblem` | `EnsembleProblem` | – |
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
 | `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
@@ -849,6 +853,8 @@ reading that as a gap.
 | `grid_plan` | type | `GridPlan` | – | – | `GridPlan` | – |
 | `group_aggregate` | function | – | – | `group_aggregate` | `group_aggregate` | – |
 | `group_gridding_by_grid` | function | `group_gridding_by_grid` | – | – | `group_gridding_by_grid` | – |
+| `init` | function | – | – | `init` | `init` | – |
+| `integrator` | type | – | – | `Integrator` | `Integrator` | – |
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
@@ -856,7 +862,6 @@ reading that as a gap.
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
 | `merge` | function | – | `merge` | – | – | `Merge` |
 | `observed_definition` | function | `observed_definition` | – | – | – | `ObservedDefinition` |
-| `observed_field` | function | `observed_field` | – | `observed_field` | – | – |
 | `operator` | type | – | – | `Operator` | `Operator` | – |
 | `output_error` | error | `OutputError` | – | – | `OutputError` | – |
 | `output_meta` | type | `OutputMeta` | – | – | `OutputMeta` | – |
@@ -867,18 +872,21 @@ reading that as a gap.
 | `pde_assertion_result` | type | `PdeAssertionResult` | – | – | `PdeAssertionResult` | – |
 | `plan_dimension_coordinates` | function | `plan_dimension_coordinates` | – | – | `plan_dimension_coordinates` | – |
 | `polygon_area` | function | – | – | `polygon_area` | `polygon_area` | – |
-| `prepared_model` | type | `PreparedModel` | – | `PreparedModel` | – | – |
 | `product_matrix` | function | – | `productMatrix` | `product_matrix` | – | – |
 | `rank` | function | – | – | `rank` | `rank` | – |
 | `ranking` | type | – | – | `Ranking` | `Ranking` | – |
+| `remake` | function | – | – | `remake` | `remake` | – |
+| `return_code` | type | – | – | `ReturnCode` | `ReturnCode` | – |
 | `run_pde_tests` | function | `run_pde_tests` | – | – | `run_pde_tests` | – |
 | `schema_error` | error | – | – | – | `SchemaError` | `SchemaError` |
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
 | `simulate_error` | error | `SimulateError` | – | – | `SimulateError` | – |
-| `simulation_result` | type | `SimulationResult` | – | `SimulationResult` | – | – |
 | `skolem` | function | – | – | `skolem` | `skolem` | – |
 | `skolem_edge` | function | – | – | `skolem_edge` | `skolem_edge` | – |
 | `slice_out_of_domain_error` | error | `SliceOutOfDomainError` | – | `SliceOutOfDomainError` | – | – |
+| `solution` | type | – | – | `Solution` | `Solution` | – |
+| `solve` | function | – | – | `solve` | `solve` | – |
+| `step` | function | – | – | `step` | `step` | – |
 | `structural_error` | error | – | – | – | `StructuralError` | `StructuralError` |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |

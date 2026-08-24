@@ -325,9 +325,9 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 /// `t_end`, anything else means it stopped early and the trajectory ends there.
 ///
 /// Named `solve`, not `simulate`: `simulate` is deleted in every binding
-/// (`esm-libraries-spec.md` §2.5.1). This export builds the Problem and solves
+/// (`esm-libraries-spec.md` §2.5.1). This export builds the EsmProblem and solves
 /// it in one call because a `wasm_bindgen` boundary cannot hand a host a
-/// `Problem` handle without a lifetime story JS has no way to honour.
+/// `EsmProblem` handle without a lifetime story JS has no way to honour.
 #[cfg(all(feature = "wasm", feature = "solve"))]
 #[wasm_bindgen]
 pub fn solve(
@@ -425,7 +425,7 @@ pub fn solve(
     }
 
     // Build once, then solve — the same two steps every native caller takes,
-    // collapsed here because the JS boundary cannot hold a `Problem`.
+    // collapsed here because the JS boundary cannot hold a `EsmProblem`.
     let prob = esm_problem(
         &esm_file,
         (t0, t_end),
@@ -436,7 +436,7 @@ pub fn solve(
             ..Default::default()
         },
     )
-    .map_err(|e| JsValue::from_str(&format!("Problem build error: {e}")))?;
+    .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
     let sol =
         rust_solve(&prob, &opts).map_err(|e| JsValue::from_str(&format!("Solve error: {e}")))?;
 

@@ -3141,9 +3141,9 @@ mod subsystem_ragged_and_inspection_tests {
         serde_json::from_value(doc).expect("test document deserializes")
     }
 
-    /// A Problem with build observability switched on at CONSTRUCTION — the
+    /// A EsmProblem with build observability switched on at CONSTRUCTION — the
     /// seam that replaced threading a `&mut BuildInspection` through the run.
-    fn inspecting_problem(file: &EsmFile) -> crate::problem::Problem {
+    fn inspecting_problem(file: &EsmFile) -> crate::problem::EsmProblem {
         crate::problem::esm_problem(
             file,
             (0.0, 1.0),

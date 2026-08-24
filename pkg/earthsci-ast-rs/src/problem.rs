@@ -1,4 +1,4 @@
-//! The Problem / `solve` surface — one noun and one verb
+//! The EsmProblem / `solve` surface — one noun and one verb
 //! (`esm-libraries-spec.md` §2.5, `API_SPEC.md` §5.8).
 //!
 //! ```text
@@ -27,7 +27,7 @@
 //!
 //! ## The solver is optional
 //!
-//! Per §2.5.9, **constructing a Problem does not require the solver.**
+//! Per §2.5.9, **constructing a EsmProblem does not require the solver.**
 //! [`esm_problem`], [`remake`], [`callbacks`] and [`observed_field`] are all
 //! available with the `solve` Cargo feature switched off; only [`solve`],
 //! [`init`], [`step`] and [`solve_to_completion`] need it. `diffsol` is behind
@@ -66,14 +66,14 @@ pub type CallbackFn = std::rc::Rc<dyn for<'p> Fn(&Progress<'p>) -> Flow>;
 #[cfg(not(target_arch = "wasm32"))]
 pub type CallbackFn = std::sync::Arc<dyn for<'p> Fn(&Progress<'p>) -> Flow + Send + Sync>;
 
-/// The callbacks declared on a [`Problem`].
+/// The callbacks declared on a [`EsmProblem`].
 ///
-/// Callbacks live on the Problem, not on a run: a callback that refreshes
+/// Callbacks live on the EsmProblem, not on a run: a callback that refreshes
 /// provider buffers or writes an output stream belongs to the *document*, not
 /// to a particular run's tolerances (§2.5.4).
 ///
 /// Entries are named so that [`CallbackSet::names`] can tell a caller what a
-/// Problem already carries before they decide whether to replace it.
+/// EsmProblem already carries before they decide whether to replace it.
 #[derive(Clone, Default)]
 pub struct CallbackSet {
     entries: Vec<(String, CallbackFn)>,
@@ -139,7 +139,7 @@ impl CallbackSet {
 /// Concatenate two callback sets into a new one.
 ///
 /// This is the explicit composition §2.5.4 requires: a `callback` argument to
-/// [`solve`] REPLACES the Problem's set entirely — it does not append, merge or
+/// [`solve`] REPLACES the EsmProblem's set entirely — it does not append, merge or
 /// wrap — so a caller who wants to *extend* rather than replace reads the
 /// existing set back with [`callbacks`] and composes:
 ///
@@ -196,7 +196,7 @@ impl<'a> From<&'a FlattenedSystem> for ProblemInput<'a> {
 pub enum Compile {
     /// Compile when the selected document declares differential equations,
     /// skip when it does not. A document with no ODEs — a dispatched static
-    /// evaluation — still gets a Problem, whose build-time products
+    /// evaluation — still gets a EsmProblem, whose build-time products
     /// [`observed_field`] reads; [`solve`] on it raises
     /// [`SimulateError::NotDynamic`].
     #[default]
@@ -226,7 +226,7 @@ pub struct ProblemOptions {
     pub metaparameters: BTreeMap<String, i64>,
     /// Base path anchoring relative `{ref}`s.
     pub base_path: Option<PathBuf>,
-    /// Callbacks declared on the Problem (§2.5.4).
+    /// Callbacks declared on the EsmProblem (§2.5.4).
     pub callbacks: CallbackSet,
     /// Whether to compile a right-hand side. See [`Compile`].
     pub compile: Compile,
@@ -272,7 +272,7 @@ pub struct ProblemOptions {
     /// This is the **construction-time build-observability seam** that replaced
     /// the old `simulate_with_inspection` / `observed_field(prep, inspection,
     /// name)` threading: the caller asks for observability when it builds,
-    /// and reads it back off the Problem, instead of carrying a
+    /// and reads it back off the EsmProblem, instead of carrying a
     /// `BuildInspection` through the run.
     pub inspect: bool,
 
@@ -326,10 +326,10 @@ impl std::fmt::Debug for ProblemOptions {
 }
 
 // =============================================================================
-// The Problem
+// The EsmProblem
 // =============================================================================
 
-/// The compiled right-hand side a [`Problem`] integrates, if any.
+/// The compiled right-hand side a [`EsmProblem`] integrates, if any.
 pub(crate) enum Backend {
     /// The scalar ODE interpreter.
     Scalar(Rc<Compiled>),
@@ -361,10 +361,10 @@ pub(crate) struct BuildProducts {
 ///
 /// Built once by [`esm_problem`]; run by [`solve`] (or stepped by [`init`]).
 /// Re-parameterized without rebuilding by [`remake`].
-pub struct Problem {
+pub struct EsmProblem {
     /// The (possibly rewritten) raw document.
     pub(crate) doc: Rc<JsonValue>,
-    /// The name of the model this Problem was built from, when one was
+    /// The name of the model this EsmProblem was built from, when one was
     /// selected.
     pub(crate) model_name: Option<String>,
     /// The integration interval.
@@ -383,7 +383,7 @@ pub struct Problem {
     pub(crate) inspection: std::cell::RefCell<BuildInspection>,
     /// Whether the caller asked for build observability.
     pub(crate) inspect: bool,
-    /// Callbacks declared on the Problem (§2.5.4).
+    /// Callbacks declared on the EsmProblem (§2.5.4).
     pub(crate) callbacks: CallbackSet,
     /// Bound run-time providers, already CONST-materialized.
     #[cfg(not(target_arch = "wasm32"))]
@@ -396,9 +396,9 @@ pub struct Problem {
     pub(crate) refresh_boundaries: Vec<f64>,
 }
 
-impl std::fmt::Debug for Problem {
+impl std::fmt::Debug for EsmProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Problem")
+        f.debug_struct("EsmProblem")
             .field("model_name", &self.model_name)
             .field("tspan", &self.tspan)
             .field("p", &self.p.len())
@@ -409,23 +409,23 @@ impl std::fmt::Debug for Problem {
     }
 }
 
-impl Problem {
+impl EsmProblem {
     /// The integration interval.
     pub fn tspan(&self) -> (f64, f64) {
         self.tspan
     }
 
-    /// The parameter bindings this Problem carries.
+    /// The parameter bindings this EsmProblem carries.
     pub fn p(&self) -> &HashMap<String, f64> {
         &self.p
     }
 
-    /// The initial-state bindings this Problem carries.
+    /// The initial-state bindings this EsmProblem carries.
     pub fn u0(&self) -> &HashMap<String, f64> {
         &self.u0
     }
 
-    /// The model this Problem was built from, when one was selected.
+    /// The model this EsmProblem was built from, when one was selected.
     pub fn model_name(&self) -> Option<&str> {
         self.model_name.as_deref()
     }
@@ -444,13 +444,13 @@ impl Problem {
         }
     }
 
-    /// Whether this Problem has a right-hand side to integrate.
+    /// Whether this EsmProblem has a right-hand side to integrate.
     pub fn is_dynamic(&self) -> bool {
         !matches!(&*self.backend, Backend::Static(_))
     }
 
     /// The state-variable names of the compiled right-hand side, in the
-    /// flattened state-vector order. Empty for a static Problem.
+    /// flattened state-vector order. Empty for a static EsmProblem.
     pub fn state_variable_names(&self) -> Vec<String> {
         match &*self.backend {
             Backend::Scalar(c) => c.state_variable_names().to_vec(),
@@ -460,7 +460,7 @@ impl Problem {
     }
 
     /// The parameter names of the compiled right-hand side. Empty for a static
-    /// Problem.
+    /// EsmProblem.
     pub fn parameter_names(&self) -> Vec<String> {
         match &*self.backend {
             Backend::Scalar(c) => c.parameter_names().to_vec(),
@@ -469,12 +469,12 @@ impl Problem {
         }
     }
 
-    /// The value-invention members this Problem's build materialized.
+    /// The value-invention members this EsmProblem's build materialized.
     pub fn members(&self) -> &HashMap<String, Vec<i64>> {
         &self.build.members
     }
 
-    /// The derived index-set extents this Problem's build materialized.
+    /// The derived index-set extents this EsmProblem's build materialized.
     pub fn extents(&self) -> &HashMap<String, i64> {
         &self.build.extents
     }
@@ -484,7 +484,7 @@ impl Problem {
         &self.build.gated_provider_keys
     }
 
-    /// Take the build-observability record this Problem collected.
+    /// Take the build-observability record this EsmProblem collected.
     ///
     /// Only populated when [`ProblemOptions::inspect`] was set. This is the
     /// construction-time seam that replaced threading a `&mut BuildInspection`
@@ -493,7 +493,7 @@ impl Problem {
         std::mem::take(&mut self.inspection.borrow_mut())
     }
 
-    /// Every build-time field this Problem's construction materialized, keyed
+    /// Every build-time field this EsmProblem's construction materialized, keyed
     /// by observed name.
     pub fn observed_fields(&self) -> &HashMap<String, ArrayD<f64>> {
         &self.build.fields
@@ -513,9 +513,9 @@ impl Problem {
 ///
 /// Stable API in every simulation-capable binding, and for a specific reason:
 /// a `callback` argument to [`solve`] REPLACES this set entirely, so without a
-/// way to read it back, a Problem-level callback would be impossible to extend.
+/// way to read it back, a EsmProblem-level callback would be impossible to extend.
 /// See [`compose`].
-pub fn callbacks(prob: &Problem) -> &CallbackSet {
+pub fn callbacks(prob: &EsmProblem) -> &CallbackSet {
     &prob.callbacks
 }
 
@@ -525,7 +525,7 @@ pub fn callbacks(prob: &Problem) -> &CallbackSet {
 /// build pipeline's fields and, when [`ProblemOptions::inspect`] was set, the
 /// array runtime's materialized setup arrays — one arity, `(prob, name)`, in
 /// every binding.
-pub fn observed_field(prob: &Problem, name: &str) -> Result<ArrayD<f64>, SimulateError> {
+pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, SimulateError> {
     fn pick<'a, T>(map: &'a HashMap<String, T>, name: &str) -> Option<&'a T> {
         if let Some(v) = map.get(name) {
             return Some(v);
@@ -550,7 +550,7 @@ pub fn observed_field(prob: &Problem, name: &str) -> Result<ArrayD<f64>, Simulat
     Err(SimulateError::Compile(
         crate::compile_error::CompileError::InterpreterBuildError {
             details: format!(
-                "observed_field: '{name}' is not a build-time-evaluable observed of this Problem"
+                "observed_field: '{name}' is not a build-time-evaluable observed of this EsmProblem"
             ),
         },
     ))
@@ -564,17 +564,17 @@ pub fn observed_field(prob: &Problem, name: &str) -> Result<ArrayD<f64>, Simulat
 /// field is inherited unchanged.
 #[derive(Debug, Clone, Default)]
 pub struct Remake {
-    /// Replacement parameter bindings, merged over the Problem's.
+    /// Replacement parameter bindings, merged over the EsmProblem's.
     pub p: HashMap<String, f64>,
-    /// Replacement initial-state bindings, merged over the Problem's.
+    /// Replacement initial-state bindings, merged over the EsmProblem's.
     pub u0: HashMap<String, f64>,
     /// A different integration interval.
     pub tspan: Option<(f64, f64)>,
-    /// Replacement callbacks. `None` inherits the Problem's set.
+    /// Replacement callbacks. `None` inherits the EsmProblem's set.
     pub callbacks: Option<CallbackSet>,
 }
 
-/// A NEW Problem with `changes` applied and everything else shared (§2.5.5).
+/// A NEW EsmProblem with `changes` applied and everything else shared (§2.5.5).
 ///
 /// Does not mutate `prob`, and does not redo the parts of construction the
 /// substitution cannot have invalidated: the compiled right-hand side, the
@@ -582,14 +582,14 @@ pub struct Remake {
 /// rebuilt. A changed parameter value does not re-fetch provider data or
 /// recompile.
 ///
-/// **Refusal is deliberate.** A substitution the Problem cannot honour without
+/// **Refusal is deliberate.** A substitution the EsmProblem cannot honour without
 /// a rebuild raises [`SimulateError::UnsubstitutableBinding`], naming the
 /// binding and the class that makes it un-substitutable, rather than silently
 /// rebuilding or silently ignoring it. Two classes refuse: a parameter that was
 /// baked into the build (it is a load-time constant of the compiled RHS, not a
 /// solver input), and a name that is not a parameter of the compiled system at
 /// all.
-pub fn remake(prob: &Problem, changes: &Remake) -> Result<Problem, SimulateError> {
+pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, SimulateError> {
     let known: std::collections::HashSet<String> = prob.parameter_names().into_iter().collect();
     let known_bare: HashMap<String, usize> = {
         let mut counts: HashMap<String, usize> = HashMap::new();
@@ -605,7 +605,7 @@ pub fn remake(prob: &Problem, changes: &Remake) -> Result<Problem, SimulateError
         if prob.build.baked_parameters.iter().any(|b| b == name) {
             return Err(SimulateError::UnsubstitutableBinding {
                 name: name.clone(),
-                class: "baked into the build as a load-time constant — build a new Problem"
+                class: "baked into the build as a load-time constant — build a new EsmProblem"
                     .to_string(),
             });
         }
@@ -634,7 +634,7 @@ pub fn remake(prob: &Problem, changes: &Remake) -> Result<Problem, SimulateError
         .filter(|&b| b > tspan.0 && b < tspan.1)
         .collect();
 
-    Ok(Problem {
+    Ok(EsmProblem {
         doc: Rc::clone(&prob.doc),
         model_name: prob.model_name.clone(),
         tspan,
@@ -649,9 +649,9 @@ pub fn remake(prob: &Problem, changes: &Remake) -> Result<Problem, SimulateError
             .clone()
             .unwrap_or_else(|| prob.callbacks.clone()),
         // The materialized provider data is shared by moving the executor's
-        // ownership question out of `remake`'s way: a remade Problem reads the
+        // ownership question out of `remake`'s way: a remade EsmProblem reads the
         // SAME forcing buffer, because the provider fetch is exactly the work
-        // §2.5.5 forbids redoing. A Problem with providers therefore cannot be
+        // §2.5.5 forbids redoing. A EsmProblem with providers therefore cannot be
         // remade into two live copies; the derivative borrows nothing and
         // carries no executor of its own.
         #[cfg(not(target_arch = "wasm32"))]
@@ -667,14 +667,14 @@ pub fn remake(prob: &Problem, changes: &Remake) -> Result<Problem, SimulateError
 // Ensembles
 // =============================================================================
 
-/// A Problem plus a per-trajectory rewrite, and the family it stands for
+/// A EsmProblem plus a per-trajectory rewrite, and the family it stands for
 /// (§2.5.8) — the canonical form for parameter sweeps, Monte Carlo over
 /// declared distributions, and perturbed initial conditions.
 pub struct EnsembleProblem<'a> {
-    prob: &'a Problem,
+    prob: &'a EsmProblem,
     trajectories: usize,
     #[allow(clippy::type_complexity)]
-    rewrite: Box<dyn Fn(&Problem, usize) -> Result<Remake, SimulateError> + 'a>,
+    rewrite: Box<dyn Fn(&EsmProblem, usize) -> Result<Remake, SimulateError> + 'a>,
 }
 
 impl std::fmt::Debug for EnsembleProblem<'_> {
@@ -689,13 +689,13 @@ impl std::fmt::Debug for EnsembleProblem<'_> {
 impl<'a> EnsembleProblem<'a> {
     /// Wrap `prob` with a rewrite applied once per trajectory index.
     ///
-    /// The rewrite returns a [`Remake`], not a Problem, so every trajectory
+    /// The rewrite returns a [`Remake`], not a EsmProblem, so every trajectory
     /// goes through the same refusal rules and shares the same compiled
     /// right-hand side.
     pub fn new(
-        prob: &'a Problem,
+        prob: &'a EsmProblem,
         trajectories: usize,
-        rewrite: impl Fn(&Problem, usize) -> Result<Remake, SimulateError> + 'a,
+        rewrite: impl Fn(&EsmProblem, usize) -> Result<Remake, SimulateError> + 'a,
     ) -> Self {
         Self {
             prob,
@@ -704,8 +704,8 @@ impl<'a> EnsembleProblem<'a> {
         }
     }
 
-    /// The base Problem.
-    pub fn problem(&self) -> &Problem {
+    /// The base EsmProblem.
+    pub fn problem(&self) -> &EsmProblem {
         self.prob
     }
 
@@ -714,8 +714,8 @@ impl<'a> EnsembleProblem<'a> {
         self.trajectories
     }
 
-    /// The Problem for trajectory `i`.
-    pub fn trajectory(&self, i: usize) -> Result<Problem, SimulateError> {
+    /// The EsmProblem for trajectory `i`.
+    pub fn trajectory(&self, i: usize) -> Result<EsmProblem, SimulateError> {
         let changes = (self.rewrite)(self.prob, i)?;
         remake(self.prob, &changes)
     }
@@ -739,7 +739,7 @@ pub fn solve_ensemble(
 // Construction
 // =============================================================================
 
-/// Build a [`Problem`] (§2.5.2).
+/// Build a [`EsmProblem`] (§2.5.2).
 ///
 /// Absorbs the whole deterministic-per-document pipeline — the pushdown
 /// rewrite, value invention, the gated fetch of provider data, CONST-provider
@@ -753,7 +753,7 @@ pub fn esm_problem<'a>(
     input: impl Into<ProblemInput<'a>>,
     tspan: (f64, f64),
     opts: ProblemOptions,
-) -> Result<Problem, SimulateError> {
+) -> Result<EsmProblem, SimulateError> {
     let input = input.into();
     #[allow(unused_mut)]
     let mut opts = opts;
@@ -847,7 +847,7 @@ pub fn esm_problem<'a>(
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
 
-    let prob = Problem {
+    let prob = EsmProblem {
         doc: Rc::new(owned_json.unwrap_or(JsonValue::Null)),
         model_name,
         tspan,
@@ -922,7 +922,7 @@ fn compile_backend(
 /// differential equation, i.e. whether there is anything to integrate.
 ///
 /// A document with none is a *dispatched static evaluation*: it still gets a
-/// Problem, and [`observed_field`] still reads its build-time products, but
+/// EsmProblem, and [`observed_field`] still reads its build-time products, but
 /// [`solve`] on it raises [`SimulateError::NotDynamic`] rather than handing
 /// back an empty trajectory.
 pub(crate) fn has_differential_equations(file: &EsmFile, model_name: Option<&str>) -> bool {
@@ -1007,12 +1007,12 @@ fn bind_providers(
 /// [`retcode`](crate::ReturnCode) — a caller distinguishes "ran to `tspan.1`"
 /// from "stopped early, here is why" without parsing prose.
 ///
-/// **`opts.callback` REPLACES the Problem's callback set entirely.** It does
+/// **`opts.callback` REPLACES the EsmProblem's callback set entirely.** It does
 /// not append, merge or wrap. To extend rather than replace, read the set back
 /// with [`callbacks`] and [`compose`] explicitly. See §2.5.4 for why
 /// replacement is the safe default.
 #[cfg(feature = "solve")]
-pub fn solve(prob: &Problem, opts: &SolveOptions) -> Result<Solution, SimulateError> {
+pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, SimulateError> {
     let effective = effective_options(prob, opts);
     match &*prob.backend {
         Backend::Static(reason) => Err(SimulateError::NotDynamic {
@@ -1062,11 +1062,11 @@ pub fn solve(prob: &Problem, opts: &SolveOptions) -> Result<Solution, SimulateEr
     }
 }
 
-/// Fold the Problem's callbacks (or the run's REPLACEMENT set) and the
+/// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
 /// extension-seam progress observer into the one per-step hook `run_solver`
 /// already drives.
-fn effective_options(prob: &Problem, opts: &SolveOptions) -> SolveOptions {
-    // §2.5.4: the run's `callback` REPLACES the Problem's set. It does not
+fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
+    // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.
     let set = opts
         .callback
@@ -1130,13 +1130,13 @@ fn wrap_observer(set: CallbackSet, user: Option<ProgressFn>) -> ProgressFn {
 /// tolerance, at some extra cost per boundary. Choose the grid accordingly:
 /// coarse when you only need to interleave, fine when you need control.
 ///
-/// (`diffsol`'s solver borrows its `OdeSolverProblem`, so a Problem-owning
+/// (`diffsol`'s solver borrows its `OdeSolverProblem`, so a EsmProblem-owning
 /// integrator that also owns a live solver would be self-referential. Restarting
 /// per grid interval is the safe-Rust way to expose the lifecycle, and it is
 /// the mechanism already in production here for segmented refresh.)
 #[cfg(feature = "solve")]
 pub struct Integrator<'a> {
-    prob: &'a Problem,
+    prob: &'a EsmProblem,
     opts: SolveOptions,
     grid: Vec<f64>,
     next: usize,
@@ -1176,7 +1176,7 @@ pub enum StepStatus {
 /// The step grid is `opts.saveat` when the caller supplied one, else 100 evenly
 /// spaced points across `tspan`.
 #[cfg(feature = "solve")]
-pub fn init<'a>(prob: &'a Problem, opts: &SolveOptions) -> Result<Integrator<'a>, SimulateError> {
+pub fn init<'a>(prob: &'a EsmProblem, opts: &SolveOptions) -> Result<Integrator<'a>, SimulateError> {
     if let Backend::Static(reason) = &*prob.backend {
         return Err(SimulateError::NotDynamic {
             details: reason.clone(),

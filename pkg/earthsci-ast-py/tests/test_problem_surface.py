@@ -1,10 +1,10 @@
-"""The Problem / ``solve`` surface (esm-libraries-spec §2.5, API_SPEC §5.8).
+"""The EsmProblem / ``solve`` surface (esm-libraries-spec §2.5, API_SPEC §5.8).
 
 One noun and one verb replace ``simulate``. These tests pin the parts of §2.5
 that are contract rather than numerics — the return-code vocabulary, name-keyed
 indexing, ``remake``'s no-rebuild promise, the REPLACE (not merge) rule for a
 ``solve`` callback, the stepping lifecycle, ensembles, and the rule that
-building a Problem never needs the solver — plus one end-to-end integration
+building a EsmProblem never needs the solver — plus one end-to-end integration
 against a closed-form answer (§2.4.2), so the surface is not merely present but
 correct.
 """
@@ -29,7 +29,7 @@ from earthsci_ast.problem import (
     CallbackSet,
     EnsembleProblem,
     Integrator,
-    Problem,
+    EsmProblem,
     ReturnCode,
     Solution,
     callbacks,
@@ -68,7 +68,7 @@ def _decay_file(k: float = 0.5) -> EsmFile:
 
 def test_simulate_and_prepare_are_gone() -> None:
     """§2.5.1: `simulate` is DELETED, not deprecated — and `prepare` /
-    `PreparedModel` are replaced by Problem construction, not kept beside it."""
+    `PreparedModel` are replaced by EsmProblem construction, not kept beside it."""
     for gone in ("simulate", "prepare", "PreparedModel", "SimulationResult"):
         assert gone not in earthsci_ast.__all__
         assert not hasattr(earthsci_ast, gone), f"{gone} is still reachable"
@@ -156,7 +156,7 @@ def test_maxiters_stops_early_with_its_own_code() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# §2.5.4 — a `callback` argument REPLACES the Problem's set
+# §2.5.4 — a `callback` argument REPLACES the EsmProblem's set
 # --------------------------------------------------------------------------- #
 
 
@@ -176,7 +176,7 @@ def test_solve_callback_replaces_the_problems_set() -> None:
 
     fired.clear()
     solve(prob, callback=lambda t, y: fired.append("run"))
-    # REPLACES: the Problem's own callback must NOT also fire.
+    # REPLACES: the EsmProblem's own callback must NOT also fire.
     assert fired == ["run"]
 
     # To EXTEND, compose explicitly — that is what callbacks(prob) is for.
@@ -184,7 +184,7 @@ def test_solve_callback_replaces_the_problems_set() -> None:
     solve(prob, callback=callbacks(prob) + (lambda t, y: fired.append("run")))
     assert fired == ["problem", "run"]
 
-    # The Problem's own set is untouched by any of that.
+    # The EsmProblem's own set is untouched by any of that.
     fired.clear()
     solve(prob)
     assert fired == ["problem"]
@@ -199,7 +199,7 @@ def test_remake_is_pure_and_reuses_the_build() -> None:
     prob = esm_problem(_decay_file(k=0.5), (0.0, 4.0), u0={"A": 2.0})
     faster = remake(prob, p={"k": 2.0})
 
-    assert isinstance(faster, Problem)
+    assert isinstance(faster, EsmProblem)
     assert faster is not prob
     # No mutation of the original.
     assert prob.p == {}
@@ -280,7 +280,7 @@ def test_ensemble_problem_sweeps_a_parameter() -> None:
     for k, sol in zip(ks, sols):
         assert sol.retcode is ReturnCode.Success
         assert sol["Decay.A"][-1] == pytest.approx(math.exp(-k * 2.0), rel=1e-6)
-    # The base Problem is untouched by the sweep.
+    # The base EsmProblem is untouched by the sweep.
     assert base.p == {}
 
 
@@ -301,7 +301,7 @@ def test_constructing_a_problem_does_not_need_scipy(monkeypatch) -> None:
 
     monkeypatch.setattr(problem_mod, "SCIPY_AVAILABLE", False)
     prob = problem_mod.esm_problem(_decay_file(), (0.0, 1.0), u0={"A": 1.0})
-    assert isinstance(prob, Problem)
+    assert isinstance(prob, EsmProblem)
     assert prob.scalar_build is not None  # the compile happened anyway
 
     sol = problem_mod.solve(prob)

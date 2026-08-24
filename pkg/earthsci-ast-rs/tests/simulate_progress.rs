@@ -238,7 +238,7 @@ fn assert_well_formed(log: &[Snap], t0: f64, t_end: f64) {
     assert!(log.iter().all(|p| p.t0 == t0 && p.t_end == t_end));
     assert!(log.iter().all(|p| p.maxiters == 100_000));
     // Every report carries the integrator's live state vector, which is what
-    // lets a Problem-level callback write output or checkpoint rather than only
+    // lets a EsmProblem-level callback write output or checkpoint rather than only
     // draw a bar.
     assert!(log.iter().all(|p| p.n_u > 0), "reports must carry `u`");
 }

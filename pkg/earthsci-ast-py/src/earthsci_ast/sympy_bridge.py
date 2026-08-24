@@ -103,7 +103,7 @@ def _flat_to_sympy_rhs(
     Parameter values are NOT inlined — parameter symbols remain free in
     ``rhs_exprs`` and ``algebraic_value_exprs`` so the symbolic form (and
     its lambdified counterpart) can be cached and reused across multiple
-    Problem builds with different parameter bindings. The caller passes
+    EsmProblem builds with different parameter bindings. The caller passes
     parameter values to the lambdified function as runtime arguments
     (see :func:`_compile_flat_rhs`).
 
@@ -401,7 +401,7 @@ class _CompiledRhs:
     state vector instead of one lambdify-per-expression. Each function takes
     state symbols followed by parameter symbols (in the orders given by
     ``state_names`` / ``parameter_names``) so a single compile is reusable
-    across Problem builds with different parameter bindings.
+    across EsmProblem builds with different parameter bindings.
     """
 
     state_names: list[str]

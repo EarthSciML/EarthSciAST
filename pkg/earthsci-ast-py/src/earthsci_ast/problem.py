@@ -1,4 +1,4 @@
-"""The simulation Problem — one noun, and the verbs that run it.
+"""The simulation EsmProblem — one noun, and the verbs that run it.
 
 This module is the Python binding's whole simulation surface
 (esm-libraries-spec §2.5, ``API_SPEC.md`` §5.8):
@@ -15,7 +15,7 @@ provider data, and the compile of the right-hand side — because that work is
 per-DOCUMENT, while ``solve``'s arguments are per-RUN. There is no ``simulate``:
 it conflated the two, which is exactly why this binding had grown a second,
 ``prepare``-shaped entry point beside it. ``prepare`` and ``PreparedModel`` are
-this module's ``esm_problem`` / :class:`Problem` under a local name, and are
+this module's ``esm_problem`` / :class:`EsmProblem` under a local name, and are
 gone.
 
 The vocabulary is SciML's in every binding (``API_SPEC.md`` §4), so this module
@@ -39,7 +39,7 @@ exactly as in Julia:
   materialised the set's members.
 
 Per esm-libraries-spec §2.5.9 the solver stays optional: importing this module
-and CONSTRUCTING a Problem never needs SciPy. Only :func:`solve`, :func:`init`,
+and CONSTRUCTING a EsmProblem never needs SciPy. Only :func:`solve`, :func:`init`,
 :func:`step` and :func:`solve_all` do.
 """
 
@@ -104,7 +104,7 @@ __all__ = [
     "CallbackSet",
     "EnsembleProblem",
     "Integrator",
-    "Problem",
+    "EsmProblem",
     "ReturnCode",
     "Solution",
     "callbacks",
@@ -245,7 +245,7 @@ def _has_template_import_edge(raw: Any) -> bool:
 
 
 class CallbackSet(tuple):
-    """An ordered, immutable set of callbacks, declared on a :class:`Problem`.
+    """An ordered, immutable set of callbacks, declared on a :class:`EsmProblem`.
 
     A callback is a callable ``(t, y)`` — ``t`` the output-time vector and ``y``
     the matching state/observed block — invoked once the run has produced its
@@ -256,7 +256,7 @@ class CallbackSet(tuple):
 
     A ``callback`` argument to :func:`solve` REPLACES this set entirely — it
     does not append, merge, or wrap (§2.5.4). Silent composition is the more
-    dangerous default: a caller overriding a Problem-level callback would
+    dangerous default: a caller overriding a EsmProblem-level callback would
     otherwise get both, and two callbacks that each write output produce a wrong
     run rather than an error. To EXTEND rather than replace, read the set back
     and compose explicitly::
@@ -284,7 +284,7 @@ class CallbackSet(tuple):
         return super().__new__(cls, items)
 
     def __add__(self, other: Any) -> CallbackSet:
-        """Explicit composition — the sanctioned way to EXTEND a Problem's set."""
+        """Explicit composition — the sanctioned way to EXTEND a EsmProblem's set."""
         return CallbackSet(tuple(self) + tuple(CallbackSet(other)))
 
     def __call__(self, t: Any, y: Any) -> None:
@@ -296,12 +296,12 @@ class CallbackSet(tuple):
 
 
 # --------------------------------------------------------------------------- #
-# The Problem
+# The EsmProblem
 # --------------------------------------------------------------------------- #
 
 
 @dataclass
-class Problem:
+class EsmProblem:
     """A document, built and ready to run (esm-libraries-spec §2.5.2).
 
     Construct one with :func:`esm_problem`; do not instantiate it directly. It
@@ -312,7 +312,7 @@ class Problem:
 
     ``p`` and ``u0`` are the SciML spellings of the parameter and initial-state
     bindings; both fix the DOCUMENT, so both live here rather than on
-    :func:`solve`. :attr:`callbacks` is the Problem's callback set — read it
+    :func:`solve`. :attr:`callbacks` is the EsmProblem's callback set — read it
     back with :func:`callbacks`.
     """
 
@@ -347,14 +347,14 @@ class Problem:
     #: it from) can fill it on their seed build. Extension seam, not stable API.
     inspect: BuildInspection | None = None
     callbacks: CallbackSet = field(default_factory=CallbackSet)
-    # Loader-INVARIANT build products, shared with every Problem `remake`
+    # Loader-INVARIANT build products, shared with every EsmProblem `remake`
     # derives from this one so a substituted parameter never re-materializes
     # the conservative-regrid geometry or the value-invention join buffers.
     static_cache: dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:  # pragma: no cover - display only
         return (
-            f"Problem(pathway={self.pathway!r}, tspan={self.tspan!r}, "
+            f"EsmProblem(pathway={self.pathway!r}, tspan={self.tspan!r}, "
             f"states={len(self.flat.state_variables)}, params={len(self.flat.parameters)})"
         )
 
@@ -381,12 +381,12 @@ def esm_problem(
     provider_factory: Callable | None = None,
     inspect: BuildInspection | None = None,
     pushdown_rewrite: bool = False,
-) -> Problem:
-    """Build a document into a runnable :class:`Problem` (esm-libraries-spec §2.5.2).
+) -> EsmProblem:
+    """Build a document into a runnable :class:`EsmProblem` (esm-libraries-spec §2.5.2).
 
     This runs the whole deterministic-per-document pipeline ONCE — the pushdown
     rewrite, load, flatten, loader-extent discovery, the gated fetch of provider
-    data, and the compile of the right-hand side — and returns the Problem
+    data, and the compile of the right-hand side — and returns the EsmProblem
     :func:`solve` runs. Nothing is integrated here, and SciPy is not needed
     (§2.5.9).
 
@@ -438,7 +438,7 @@ def esm_problem(
         ``False`` bypasses SymPy's CSE pass for diagnostic comparisons. Compiles
         for each setting are cached separately on the flattened system.
     callback:
-        The Problem's :class:`CallbackSet`. A ``callback`` passed to
+        The EsmProblem's :class:`CallbackSet`. A ``callback`` passed to
         :func:`solve` REPLACES this set entirely (§2.5.4).
     loader_provider, provider_factory:
         The data-loader seams (RFC pure-io-data-loaders §4.3), consulted only
@@ -620,7 +620,7 @@ def esm_problem(
         # A document with no ODE states is a pure BUILD: its whole content is
         # the observed graph, which is exactly what `observed_field` reads back.
         # Materialize it through the NumPy interpreter — the same build the
-        # pre-Problem `prepare` did for exactly these documents.
+        # pre-EsmProblem `prepare` did for exactly these documents.
         build = _build_numpy_rhs(
             flat,
             p,
@@ -648,7 +648,7 @@ def esm_problem(
     # geometry the build folds in — so their compile belongs to the segment, not
     # to construction. They keep the provider objects instead.
 
-    return Problem(
+    return EsmProblem(
         flat=flat,
         tspan=tspan,
         p=p,
@@ -685,7 +685,7 @@ def _choose_pathway(
     a ``providers`` entry materialized at build, a caller ``const_arrays``, a
     deferred gated fetch — are array-valued by construction, so they route to
     the NumPy interpreter and take precedence over the in-document data-loader
-    seam (a document with both binds the injected arrays, as the pre-Problem
+    seam (a document with both binds the injected arrays, as the pre-EsmProblem
     entry points did). ``loader_fields`` alone means cadence segmentation.
     Otherwise an array op anywhere (including every discretized PDE) routes to
     the NumPy interpreter, and a scalar-only system to the lambdified SymPy
@@ -708,7 +708,7 @@ def _choose_pathway(
 
 
 def solve(
-    prob: Problem | EnsembleProblem,
+    prob: EsmProblem | EnsembleProblem,
     *,
     alg: str = DEFAULT_ALG,
     abstol: float = DEFAULT_ABSTOL,
@@ -731,7 +731,7 @@ def solve(
     Parameters
     ----------
     prob:
-        The :class:`Problem` to run, or an :class:`EnsembleProblem` (in which
+        The :class:`EsmProblem` to run, or an :class:`EnsembleProblem` (in which
         case ``trajectories`` is required and a ``list`` of solutions comes
         back).
     alg:
@@ -743,7 +743,7 @@ def solve(
         Output times: an explicit sequence, or a scalar output STEP measured
         from ``tspan[0]``. ``None`` keeps the dense uniform default grid.
     callback:
-        REPLACES the Problem's callback set entirely — it does not append or
+        REPLACES the EsmProblem's callback set entirely — it does not append or
         merge (§2.5.4). To extend it, compose explicitly with
         ``callbacks(prob) + extra``.
     maxiters:
@@ -771,10 +771,10 @@ def solve(
             maxiters=maxiters,
         )
     if not SCIPY_AVAILABLE:
-        return _failure_result("SciPy is required to solve a Problem but is not available.")
+        return _failure_result("SciPy is required to solve a EsmProblem but is not available.")
 
-    # §2.5.4: an explicit `callback` REPLACES the Problem's set. `None` means
-    # "not given", which is what leaves the Problem's own set in force.
+    # §2.5.4: an explicit `callback` REPLACES the EsmProblem's set. `None` means
+    # "not given", which is what leaves the EsmProblem's own set in force.
     cbs = prob.callbacks if callback is None else CallbackSet(callback)
     cb = cbs if cbs else None
 
@@ -870,12 +870,12 @@ def _finish_segmented(sol: Solution, saveat: Any, cb: Any) -> Solution:
     return sol
 
 
-def callbacks(prob: Problem) -> CallbackSet:
-    """The Problem's callback set (esm-libraries-spec §2.5.4).
+def callbacks(prob: EsmProblem) -> CallbackSet:
+    """The EsmProblem's callback set (esm-libraries-spec §2.5.4).
 
     Stable API in every simulation-capable binding for one reason: a ``callback``
     argument to :func:`solve` REPLACES this set, so without a way to read it back
-    a Problem-level callback would be impossible to extend. Compose explicitly::
+    a EsmProblem-level callback would be impossible to extend. Compose explicitly::
 
         solve(prob, callback=callbacks(prob) + my_extra_callback)
     """
@@ -888,13 +888,13 @@ def callbacks(prob: Problem) -> CallbackSet:
 
 
 def remake(
-    prob: Problem,
+    prob: EsmProblem,
     *,
     p: dict[str, float] | None = None,
     u0: dict[str, float] | None = None,
     tspan: tuple[float, float] | None = None,
-) -> Problem:
-    """A NEW Problem with the named substitutions applied, everything else shared.
+) -> EsmProblem:
+    """A NEW EsmProblem with the named substitutions applied, everything else shared.
 
     It never mutates ``prob``, and it never redoes the parts of construction the
     substitution cannot have invalidated: the flattened system is shared (so the
@@ -904,9 +904,9 @@ def remake(
     conservative-regrid geometry — are shared through the parent's static cache.
 
     ``tspan``-only substitution rebinds nothing at all: the compiled right-hand
-    side does not depend on the interval, so the new Problem reuses it verbatim.
+    side does not depend on the interval, so the new EsmProblem reuses it verbatim.
 
-    A substitution the Problem cannot honour without a rebuild RAISES, naming
+    A substitution the EsmProblem cannot honour without a rebuild RAISES, naming
     the parameter and the class that makes it un-substitutable, rather than
     silently rebuilding or silently ignoring it.
     """
@@ -921,14 +921,14 @@ def remake(
         #
         # A metaparameter is closed at LOAD (esm-spec §9.7.6): it sizes index
         # sets, so substituting one changes the SHAPE of the system, not a value
-        # in it. There is nothing to substitute into — build a new Problem.
+        # in it. There is nothing to substitute into — build a new EsmProblem.
         clash = sorted(set(p) & set(prob.metaparameters))
         if clash:
             raise SimulationError(
                 f"remake: '{clash[0]}' is a METAPARAMETER of this document, not a "
                 f"substitutable parameter — it is closed at load and sizes the "
                 f"system's index sets, so changing it changes the shape of the "
-                f"state vector. Build a new Problem with "
+                f"state vector. Build a new EsmProblem with "
                 f"esm_problem(..., metaparameters={{'{clash[0]}': ...}})."
             )
         check_parameter_override_keys(prob.flat.parameters, p)
@@ -937,11 +937,11 @@ def remake(
         # can move that set, and re-fetching is exactly what remake must not do.
         if prob.gated_provider_keys:
             raise SimulationError(
-                f"remake: this Problem carries GATED providers "
+                f"remake: this EsmProblem carries GATED providers "
                 f"({', '.join(prob.gated_provider_keys)}), whose fetch was pre-sliced "
                 f"to the support set derived from the build-time parameters; "
                 f"substituting '{sorted(p)[0]}' could move that set, and remake must "
-                f"not re-fetch provider data. Build a new Problem with esm_problem()."
+                f"not re-fetch provider data. Build a new EsmProblem with esm_problem()."
             )
 
     rebind = p is not None or u0 is not None
@@ -960,7 +960,7 @@ def remake(
     elif rebind and prob.pathway == "scalar":
         scalar_build = _build_scalar_rhs(prob.flat, new_p, new_u0, cse=prob.cse)
 
-    return Problem(
+    return EsmProblem(
         flat=prob.flat,
         tspan=new_tspan,
         p=new_p,
@@ -990,13 +990,13 @@ def remake(
 
 
 #: SciPy's steppable solver classes, keyed by the ``alg`` name :func:`solve`
-#: takes. Imported lazily by :func:`init` so constructing a Problem never needs
+#: takes. Imported lazily by :func:`init` so constructing a EsmProblem never needs
 #: SciPy (§2.5.9).
 _STEPPABLE_ALGS = ("RK45", "RK23", "DOP853", "Radau", "BDF", "LSODA")
 
 
 class Integrator:
-    """A stepping integrator over a :class:`Problem` (esm-libraries-spec §2.5.6).
+    """A stepping integrator over a :class:`EsmProblem` (esm-libraries-spec §2.5.6).
 
     Build one with :func:`init`, advance it with :func:`step` (or
     :meth:`Integrator.step`), and run it out with :func:`solve_all`. This is the
@@ -1018,7 +1018,7 @@ class Integrator:
 
     def __init__(
         self,
-        prob: Problem,
+        prob: EsmProblem,
         *,
         alg: str = DEFAULT_ALG,
         abstol: float = DEFAULT_ABSTOL,
@@ -1027,7 +1027,7 @@ class Integrator:
         maxiters: int | None = None,
     ) -> None:
         if not SCIPY_AVAILABLE:
-            raise SimulationError("SciPy is required to step a Problem but is not available.")
+            raise SimulationError("SciPy is required to step a EsmProblem but is not available.")
         if prob.pathway in ("loaders", "discrete_providers"):
             raise SimulationError(
                 f"init: the {prob.pathway!r} pathway rebuilds its right-hand side at "
@@ -1147,8 +1147,8 @@ class Integrator:
         return self.t, self.u
 
 
-def _rhs_of(prob: Problem) -> tuple[Callable, np.ndarray, list[str]]:
-    """The compiled ``(rhs, u0, element names)`` a Problem steps."""
+def _rhs_of(prob: EsmProblem) -> tuple[Callable, np.ndarray, list[str]]:
+    """The compiled ``(rhs, u0, element names)`` a EsmProblem steps."""
     if prob.pathway == "array" and prob.build is not None:
         build = prob.build
         return build.rhs_function, build.y0, _element_names(build.state_names, build.shapes)
@@ -1158,7 +1158,7 @@ def _rhs_of(prob: Problem) -> tuple[Callable, np.ndarray, list[str]]:
         # (a state-free document whose SymPy lowering the interpreter-only body
         # defeated), so it gets a real error.
         raise SimulationError(
-            f"init: this Problem has no compiled right-hand side to step "
+            f"init: this EsmProblem has no compiled right-hand side to step "
             f"(pathway {prob.pathway!r}). Run it with solve()."
         )
     if build_s.rhs_function is None:
@@ -1170,7 +1170,7 @@ def _rhs_of(prob: Problem) -> tuple[Callable, np.ndarray, list[str]]:
 
 
 def init(
-    prob: Problem,
+    prob: EsmProblem,
     *,
     alg: str = DEFAULT_ALG,
     abstol: float = DEFAULT_ABSTOL,
@@ -1197,7 +1197,7 @@ def solve_all(integrator: Integrator) -> Solution:
     """Run ``integrator`` to completion — the spec's ``solve!``.
 
     Named ``solve_all`` rather than ``solve`` because Python cannot overload on
-    argument type and :func:`solve` already names the Problem-to-Solution verb.
+    argument type and :func:`solve` already names the EsmProblem-to-Solution verb.
     """
     return integrator.solve()
 
@@ -1209,7 +1209,7 @@ def solve_all(integrator: Integrator) -> Solution:
 
 @dataclass
 class EnsembleProblem:
-    """A :class:`Problem` plus a per-trajectory rewrite (esm-libraries-spec §2.5.8).
+    """A :class:`EsmProblem` plus a per-trajectory rewrite (esm-libraries-spec §2.5.8).
 
     This is the canonical form for a parameter sweep, Monte Carlo over declared
     distributions, and perturbed initial conditions::
@@ -1217,16 +1217,16 @@ class EnsembleProblem:
         ens = EnsembleProblem(prob, lambda p, i: remake(p, p={"k1": ks[i]}))
         sols = solve(ens, trajectories=len(ks))
 
-    ``rewrite(prob, i)`` returns the Problem for trajectory ``i`` (0-based) —
+    ``rewrite(prob, i)`` returns the EsmProblem for trajectory ``i`` (0-based) —
     ordinarily via :func:`remake`, so the family shares one build. A rewrite
-    that returns ``None`` runs the base Problem unchanged.
+    that returns ``None`` runs the base EsmProblem unchanged.
     """
 
-    prob: Problem
-    rewrite: Callable[[Problem, int], Problem | None] | None = None
+    prob: EsmProblem
+    rewrite: Callable[[EsmProblem, int], EsmProblem | None] | None = None
 
-    def problem_for(self, i: int) -> Problem:
-        """The Problem for trajectory ``i``."""
+    def problem_for(self, i: int) -> EsmProblem:
+        """The EsmProblem for trajectory ``i``."""
         if self.rewrite is None:
             return self.prob
         made = self.rewrite(self.prob, i)
@@ -1247,12 +1247,12 @@ class EnsembleProblem:
 # --------------------------------------------------------------------------- #
 
 
-def observed_field(prob: Problem, name: str):
+def observed_field(prob: EsmProblem, name: str):
     """Evaluate/read the state-free observed ``name`` at BUILD time through the
-    Problem's own graph — the const-geometry hoist already materialized it; this
+    EsmProblem's own graph — the const-geometry hoist already materialized it; this
     resolves the (flattened or local) name against those products. Raises
     :class:`SimulationError` when ``name`` is not a build-time-evaluable observed
-    of the Problem.
+    of the EsmProblem.
 
     Two arguments in every binding (API_SPEC §5.8): build observability moved to
     a construction-time seam, so no caller has to thread a BuildInspection
@@ -1262,7 +1262,7 @@ def observed_field(prob: Problem, name: str):
     build = prob.build
     if build is None:
         raise SimulationError(
-            f"observed_field: this Problem took the {prob.pathway!r} pathway, which "
+            f"observed_field: this EsmProblem took the {prob.pathway!r} pathway, which "
             f"has no build-time observed graph to read '{name}' from. Only the "
             f"array/PDE pathway materializes state-free observeds at build."
         )
@@ -1309,7 +1309,7 @@ def observed_field(prob: Problem, name: str):
                 detail += f"; '{name}': {own}"
         raise SimulationError(
             f"observed_field: '{name}' is not a build-time-evaluable observed of "
-            f"the Problem (state-dependent, unresolved, or not an "
+            f"the EsmProblem (state-dependent, unresolved, or not an "
             f"observed at all){detail}"
         )
     return got

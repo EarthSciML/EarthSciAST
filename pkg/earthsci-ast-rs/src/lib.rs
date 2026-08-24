@@ -141,13 +141,13 @@ pub mod pushdown_rewrite;
 // The deterministic-per-document BUILD PIPELINE — rewrite → value-invention →
 // member-factor feedback → gated fetch → observed-graph evaluation, all
 // engine-side. It used to be the public `prepare`/`Prepared` entry point;
-// `esm-libraries-spec.md` §2.5.1 folds it into Problem construction, so what is
+// `esm-libraries-spec.md` §2.5.1 folds it into EsmProblem construction, so what is
 // public here is the provider contract and the build-observability seam.
 // Native-only (drives `simulate_array`).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prepare;
 
-// The Problem / `solve` surface (`esm-libraries-spec.md` §2.5): one noun and
+// The EsmProblem / `solve` surface (`esm-libraries-spec.md` §2.5): one noun and
 // one verb. Construction does NOT require the solver — only `solve` / `init` /
 // `solve_to_completion` do, and those are behind the `solve` feature.
 pub mod problem;
@@ -257,7 +257,7 @@ pub use pushdown_rewrite::{
 // `Flow` is deliberately absent: the build pipeline re-exports the SAME `Flow`
 // the solver uses, and the crate root already carries it from `simulate`.
 // `prepare` / `Prepared` / `PrepareOptions` are GONE (esm-libraries-spec §2.5.1
-// — replaced by `esm_problem` / `Problem` / `ProblemOptions`); what remains is
+// — replaced by `esm_problem` / `EsmProblem` / `ProblemOptions`); what remains is
 // the build-time provider contract and the build-observability seam.
 #[cfg(not(target_arch = "wasm32"))]
 pub use prepare::{
@@ -294,9 +294,9 @@ pub use simulate::{
     fold_constant_expr, interpret,
 };
 
-// The Problem / `solve` surface. `simulate` is deleted in all its forms.
+// The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
 pub use problem::{
-    CallbackFn, CallbackSet, Compile, EnsembleProblem, Problem, ProblemInput, ProblemOptions,
+    CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, ProblemInput, ProblemOptions,
     Remake, callbacks, compose, esm_problem, observed_field, remake,
 };
 #[cfg(feature = "solve")]

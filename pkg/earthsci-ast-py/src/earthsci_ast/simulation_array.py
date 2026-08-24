@@ -2466,7 +2466,7 @@ def _simulate_with_numpy(
     filled right after the RHS build (see :func:`_fill_build_inspection`);
     nothing downstream consults it, so results are identical either way.
 
-    ``prebuilt`` is the :class:`_NumpyRhsBuild` a :class:`Problem` already
+    ``prebuilt`` is the :class:`_NumpyRhsBuild` a :class:`EsmProblem` already
     compiled at construction (esm-libraries-spec §2.5.2 puts the compile in
     construction, not in the run). When given, the build is REUSED verbatim —
     no second compile, and no second provider sample — and ``inspect`` was
@@ -2487,7 +2487,7 @@ def _simulate_with_numpy(
                     inspect, flat, build, float(tspan[0]), loader_arrays=loader_arrays
                 )
         if build.total_size == 0 and not build.has_value_invention_states:
-            # Parity with the pre-Problem build guard: a system with no ODE
+            # Parity with the pre-EsmProblem build guard: a system with no ODE
             # states has nothing to integrate. Construction still succeeds (the
             # observed graph is exactly what `observed_field` reads back); it is
             # the RUN that has no content.

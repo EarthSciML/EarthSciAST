@@ -1,7 +1,7 @@
 """Python simulation tier with SciPy integration — the pathway facade.
 
 The PUBLIC simulation surface is :mod:`earthsci_ast.problem`: one noun
-(:class:`~earthsci_ast.problem.Problem`) and one verb
+(:class:`~earthsci_ast.problem.EsmProblem`) and one verb
 (:func:`~earthsci_ast.problem.solve`). There is no ``simulate`` here any more;
 esm-libraries-spec §2.5.1 deletes it in every binding, because it conflated the
 per-document build with the per-run integration.

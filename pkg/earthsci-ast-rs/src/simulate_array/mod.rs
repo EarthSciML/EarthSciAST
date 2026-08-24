@@ -364,7 +364,7 @@ enum AlgebraicRule {
 
 /// Build/run observability record — the Rust mirror of the Julia binding's
 /// `BuildInspection` (`build_evaluator(…; inspect=BuildInspection())`). Pass
-/// one to a Problem built with [`crate::problem::ProblemOptions::inspect`] (or
+/// one to a EsmProblem built with [`crate::problem::ProblemOptions::inspect`] (or
 /// [`ArrayCompiled::simulate_inspect`]) and the run fills it with named
 /// build-time products that are otherwise internal to the runtime:
 ///

@@ -27,7 +27,7 @@ MANIFEST_PATH = REPO_ROOT / "api-surface.json"
 
 # ---------------------------------------------------------------------------
 # Phase 4 (esm-libraries-spec §2.5 / API_SPEC §5.8): `simulate` is DELETED and
-# `prepare` / `PreparedModel` are REPLACED by Problem construction, in Julia,
+# `prepare` / `PreparedModel` are REPLACED by EsmProblem construction, in Julia,
 # Python and Rust. `api-surface.json` is regenerated ONCE, after all three
 # bindings land, so between now and that regeneration the manifest still
 # describes the old Python surface. These two sets carry the delta so the
@@ -43,7 +43,7 @@ PENDING_ADDED = {
     "CallbackSet",
     "EnsembleProblem",
     "Integrator",
-    "Problem",
+    "EsmProblem",
     "ReturnCode",
     "Solution",
     "callbacks",

@@ -155,7 +155,7 @@ const MEMBERS0: [usize; 4] = [0, 1, 3, 8];
 fn run(
     opts_from: impl FnOnce(&mut ProblemOptions),
 ) -> (
-    Result<earthsci_ast::Problem, earthsci_ast::SimulateError>,
+    Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError>,
     HashMap<String, Vec<Vec<AxisSel>>>,
 ) {
     let mut w = vec![0.0; GRID];
@@ -282,7 +282,7 @@ fn run(
     (prep, seen)
 }
 
-fn fields_of(p: &earthsci_ast::Problem) -> Vec<(String, Vec<u64>)> {
+fn fields_of(p: &earthsci_ast::EsmProblem) -> Vec<(String, Vec<u64>)> {
     let mut out: Vec<(String, Vec<u64>)> = p
         .observed_fields()
         .iter()

@@ -423,7 +423,7 @@ def test_unlowered_integral_loads_but_errors_before_evaluation():
     assert "m" in f.models
 
     # (b) Reaching the BUILD surfaces the uniform code (the compile is part of
-    # Problem construction, esm-libraries-spec §2.5.2).
+    # EsmProblem construction, esm-libraries-spec §2.5.2).
     with pytest.raises(UnreachableSpatialOperatorError) as exc:
         esm_problem(f, (0.0, 1.0))
     assert "unlowered_operator" in str(exc.value)

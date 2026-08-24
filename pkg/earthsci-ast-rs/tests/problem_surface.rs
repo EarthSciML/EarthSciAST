@@ -1,4 +1,4 @@
-//! The Problem / `solve` surface (`esm-libraries-spec.md` §2.5, `API_SPEC.md`
+//! The EsmProblem / `solve` surface (`esm-libraries-spec.md` §2.5, `API_SPEC.md`
 //! §5.8).
 //!
 //! One noun and one verb: `esm_problem` builds, `solve` runs. `simulate` does
@@ -7,7 +7,7 @@
 //!
 //! * §2.5.3 — a `retcode` from the SciML vocabulary, not step counters read as
 //!   a proxy for "did it finish";
-//! * §2.5.4 — a `callback` argument to `solve` REPLACES the Problem's set;
+//! * §2.5.4 — a `callback` argument to `solve` REPLACES the EsmProblem's set;
 //! * §2.5.5 — `remake` shares the compiled RHS, never mutates, and REFUSES a
 //!   substitution it cannot honour;
 //! * §2.5.6 — the `init` / `step` / `solve_to_completion` lifecycle;
@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use earthsci_ast::{
-    Alg, CallbackFn, CallbackSet, Compile, EnsembleProblem, Flow, Problem, ProblemOptions,
+    Alg, CallbackFn, CallbackSet, Compile, EnsembleProblem, Flow, EsmProblem, ProblemOptions,
     Progress, Remake, ReturnCode, SimulateError, SolveOptions, callbacks, compose, esm_problem,
     init, load_string, observed_field, remake, solve, solve_ensemble, step,
 };
@@ -64,7 +64,7 @@ const STATIC_DOC: &str = r#"
     }
     "#;
 
-fn decay_problem(tspan: (f64, f64)) -> Problem {
+fn decay_problem(tspan: (f64, f64)) -> EsmProblem {
     let file = load_string(DECAY).expect("load");
     esm_problem(
         &file,
@@ -106,7 +106,7 @@ fn grid(t_end: f64, n: usize) -> Option<Vec<f64>> {
 // §2.5.1 / §2.5.2 — build once, run per knob-set
 // ===========================================================================
 
-/// The split is the point: one Problem, many solves, and the solves do not
+/// The split is the point: one EsmProblem, many solves, and the solves do not
 /// re-do the build.
 #[test]
 fn one_problem_serves_many_solves() {
@@ -183,7 +183,7 @@ fn the_default_tolerances_are_a_production_setting_not_a_test_setting() {
 }
 
 /// Construction does not require the solver (§2.5.9). This asserts the shape of
-/// that claim that a test CAN assert — a Problem builds and reports its
+/// that claim that a test CAN assert — a EsmProblem builds and reports its
 /// structure with no solve — while the Cargo feature itself is what makes
 /// `diffsol` absent from the dependency graph.
 #[test]
@@ -195,7 +195,7 @@ fn a_problem_is_useful_without_solving_it() {
     assert_eq!(prob.parameter_names(), vec!["M.k".to_string()]);
 }
 
-/// A document with nothing to integrate still gets a Problem — its build-time
+/// A document with nothing to integrate still gets a EsmProblem — its build-time
 /// products are the result — and `solve` says so in a distinguishable way
 /// rather than handing back an empty trajectory.
 #[test]
@@ -251,7 +251,7 @@ fn a_completed_run_reports_success() {
 }
 
 // ===========================================================================
-// §2.5.4 — callbacks live on the Problem; `solve`'s argument REPLACES them
+// §2.5.4 — callbacks live on the EsmProblem; `solve`'s argument REPLACES them
 // ===========================================================================
 
 fn counting_callback() -> (CallbackFn, Arc<Mutex<usize>>) {
@@ -264,7 +264,7 @@ fn counting_callback() -> (CallbackFn, Arc<Mutex<usize>>) {
     (f, n)
 }
 
-fn problem_with_callbacks(set: CallbackSet) -> Problem {
+fn problem_with_callbacks(set: CallbackSet) -> EsmProblem {
     let file = load_string(DECAY).expect("load");
     esm_problem(
         &file,
@@ -285,7 +285,7 @@ fn a_problem_level_callback_runs_and_is_readable_back() {
     assert_eq!(callbacks(&prob).names(), vec!["count"]);
 
     solve(&prob, &SolveOptions::default()).expect("solve");
-    assert!(*n.lock().unwrap() > 1, "the Problem's callback never ran");
+    assert!(*n.lock().unwrap() > 1, "the EsmProblem's callback never ran");
 }
 
 /// The one genuinely ambiguous point in the design, settled deliberately:
@@ -308,7 +308,7 @@ fn solves_callback_argument_replaces_the_problems_set() {
     assert_eq!(
         *problem_hits.lock().unwrap(),
         0,
-        "the Problem's callback ran anyway — the run's set must REPLACE it"
+        "the EsmProblem's callback ran anyway — the run's set must REPLACE it"
     );
     assert!(
         *run_hits.lock().unwrap() > 1,
@@ -318,7 +318,7 @@ fn solves_callback_argument_replaces_the_problems_set() {
 
 /// A caller who wants to EXTEND reads the set back and composes explicitly.
 /// This is why `callbacks(prob)` is stable API: without it, replacement
-/// semantics would make a Problem-level callback impossible to extend.
+/// semantics would make a EsmProblem-level callback impossible to extend.
 #[test]
 fn compose_is_how_a_caller_extends_rather_than_replaces() {
     let (on_problem, problem_hits) = counting_callback();
@@ -403,7 +403,7 @@ fn remake_can_move_the_interval_and_the_initial_state() {
     assert!((sol.final_value("M.y").unwrap() - want).abs() < 1e-6);
 }
 
-/// A substitution the Problem cannot honour RAISES, naming the binding and the
+/// A substitution the EsmProblem cannot honour RAISES, naming the binding and the
 /// class — it does not silently rebuild and does not silently ignore.
 #[test]
 fn remake_refuses_a_substitution_it_cannot_honour() {
@@ -495,7 +495,7 @@ fn a_solution_is_indexed_by_variable_name() {
 // §2.5.8 — ensembles
 // ===========================================================================
 
-/// The canonical form for a parameter sweep: one Problem, one per-trajectory
+/// The canonical form for a parameter sweep: one EsmProblem, one per-trajectory
 /// rewrite, and every trajectory sharing the compiled right-hand side.
 #[test]
 fn an_ensemble_sweeps_a_parameter() {
@@ -518,7 +518,7 @@ fn an_ensemble_sweeps_a_parameter() {
         let got = sol.final_value("M.y").unwrap();
         assert!((got - want).abs() < 1e-6, "trajectory {i}: {got} != {want}");
     }
-    // The base Problem is untouched by the sweep.
+    // The base EsmProblem is untouched by the sweep.
     assert!(prob.p().is_empty());
 }
 

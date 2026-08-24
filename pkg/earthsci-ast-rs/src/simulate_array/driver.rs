@@ -16,7 +16,7 @@ use crate::simulate::{
 // The solver is optional (esm-libraries-spec §2.5.9). Everything below that
 // touches `diffsol` is gated on the `solve` feature; the `debug_*` RHS entry
 // points and the forcing-channel handle are not, because a caller that only
-// BUILDS a Problem still reaches them.
+// BUILDS a EsmProblem still reaches them.
 #[cfg(feature = "solve")]
 use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 use std::collections::HashSet;

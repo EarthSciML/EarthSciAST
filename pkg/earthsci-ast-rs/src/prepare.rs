@@ -3,7 +3,7 @@
 //!
 //! This module used to be the public `prepare` / `Prepared` entry point.
 //! `esm-libraries-spec.md` §2.5.1 replaces that: `prepare` and `Prepared` are
-//! the same concept as `Problem` under a local name, and construction absorbs
+//! the same concept as `EsmProblem` under a local name, and construction absorbs
 //! them rather than sitting beside them. What survives here is the pipeline
 //! itself ([`run_build_pipeline`], crate-internal) and the two things a caller
 //! genuinely reaches for — the build-time provider contract
@@ -1527,7 +1527,7 @@ pub(crate) fn run_prepare(
 }
 
 // --------------------------------------------------------------------------- //
-// The adapter Problem construction goes through.
+// The adapter EsmProblem construction goes through.
 // --------------------------------------------------------------------------- //
 
 /// Run the build pipeline for [`crate::problem::esm_problem`], translating

@@ -290,9 +290,9 @@ except ImportError:
     # scipy (a hard dep) missing only in a broken install; skip the sim tier.
     pass
 
-# The simulation Problem surface (esm-libraries-spec §2.5, API_SPEC §5.8): one
+# The simulation EsmProblem surface (esm-libraries-spec §2.5, API_SPEC §5.8): one
 # noun and one verb, plus the raw-dict pushdown desugar. `simulate` / `prepare`
-# / `PreparedModel` are DELETED, not deprecated — Problem construction absorbs
+# / `PreparedModel` are DELETED, not deprecated — EsmProblem construction absorbs
 # what `prepare` did, and `solve` is the run.
 _has_problem = False
 try:
@@ -300,7 +300,7 @@ try:
         CallbackSet,
         EnsembleProblem,
         Integrator,
-        Problem,
+        EsmProblem,
         ReturnCode,
         Solution,
         callbacks,
@@ -683,7 +683,7 @@ if _has_problem:
     __all__.extend(
         [
             "esm_problem",
-            "Problem",
+            "EsmProblem",
             "solve",
             "Solution",
             "ReturnCode",

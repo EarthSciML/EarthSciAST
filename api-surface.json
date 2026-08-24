@@ -109,6 +109,7 @@
         "pde_inline_tests",
         "performance",
         "prepare",
+        "problem",
         "provider",
         "pushdown_rewrite",
         "reactions",
@@ -145,19 +146,19 @@
     }
   },
   "counts": {
-    "symbols": 956,
+    "symbols": 972,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 291,
+      "julia": 290,
       "typescript": 220,
-      "python": 235,
-      "rust": 292,
+      "python": 244,
+      "rust": 311,
       "go": 385,
       "editor": 71
     },
     "by_tier": {
-      "extension": 700,
-      "stable": 256
+      "extension": 708,
+      "stable": 264
     }
   },
   "planned": [
@@ -412,6 +413,14 @@
         "julia": "AffectEquation",
         "python": "AffectEquation",
         "rust": "AffectEquation"
+      }
+    },
+    {
+      "name": "alg",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Alg"
       }
     },
     {
@@ -868,6 +877,33 @@
       "tier": "extension",
       "bindings": {
         "go": "CallbackCoupling"
+      }
+    },
+    {
+      "name": "callback_fn",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "CallbackFn"
+      }
+    },
+    {
+      "name": "callback_set",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "CallbackSet",
+        "rust": "CallbackSet"
+      }
+    },
+    {
+      "name": "callbacks",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "callbacks",
+        "python": "callbacks",
+        "rust": "callbacks"
       }
     },
     {
@@ -1618,6 +1654,14 @@
       }
     },
     {
+      "name": "compile",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Compile"
+      }
+    },
+    {
       "name": "compile_array",
       "kind": "function",
       "tier": "extension",
@@ -1768,6 +1812,7 @@
       "bindings": {
         "go": "Compose",
         "julia": "compose",
+        "rust": "compose",
         "typescript": "compose"
       }
     },
@@ -2238,6 +2283,14 @@
       }
     },
     {
+      "name": "default_abstol",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DEFAULT_ABSTOL"
+      }
+    },
+    {
       "name": "default_dae_support",
       "kind": "function",
       "tier": "extension",
@@ -2259,6 +2312,14 @@
       "tier": "extension",
       "bindings": {
         "typescript": "DEFAULT_MIN_COMPLEXITY"
+      }
+    },
+    {
+      "name": "default_reltol",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DEFAULT_RELTOL"
       }
     },
     {
@@ -2753,6 +2814,15 @@
       }
     },
     {
+      "name": "ensemble_problem",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "EnsembleProblem",
+        "rust": "EnsembleProblem"
+      }
+    },
+    {
       "name": "entity_not_found_error",
       "kind": "error",
       "tier": "stable",
@@ -3098,6 +3168,26 @@
       "tier": "extension",
       "bindings": {
         "julia": "esm_path"
+      }
+    },
+    {
+      "name": "esm_problem",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "esm_problem",
+        "python": "esm_problem",
+        "rust": "esm_problem"
+      }
+    },
+    {
+      "name": "esm_problem",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "EsmProblem",
+        "python": "EsmProblem",
+        "rust": "EsmProblem"
       }
     },
     {
@@ -4331,11 +4421,29 @@
       }
     },
     {
+      "name": "init",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "init",
+        "rust": "init"
+      }
+    },
+    {
       "name": "int_expr",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "julia": "IntExpr"
+      }
+    },
+    {
+      "name": "integrator",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "Integrator",
+        "rust": "Integrator"
       }
     },
     {
@@ -5111,7 +5219,8 @@
       "tier": "stable",
       "bindings": {
         "julia": "observed_field",
-        "python": "observed_field"
+        "python": "observed_field",
+        "rust": "observed_field"
       }
     },
     {
@@ -5708,29 +5817,11 @@
       }
     },
     {
-      "name": "prepare",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "julia": "prepare",
-        "python": "prepare",
-        "rust": "prepare"
-      }
-    },
-    {
       "name": "prepare_error",
       "kind": "error",
       "tier": "extension",
       "bindings": {
         "rust": "PrepareError"
-      }
-    },
-    {
-      "name": "prepare_options",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "PrepareOptions"
       }
     },
     {
@@ -5766,28 +5857,27 @@
       }
     },
     {
-      "name": "prepared",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "Prepared"
-      }
-    },
-    {
-      "name": "prepared_model",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "julia": "PreparedModel",
-        "python": "PreparedModel"
-      }
-    },
-    {
       "name": "preset_times_trigger",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "julia": "PresetTimesTrigger"
+      }
+    },
+    {
+      "name": "problem_input",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProblemInput"
+      }
+    },
+    {
+      "name": "problem_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProblemOptions"
       }
     },
     {
@@ -6189,6 +6279,23 @@
       }
     },
     {
+      "name": "remake",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "remake",
+        "rust": "remake"
+      }
+    },
+    {
+      "name": "remake",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Remake"
+      }
+    },
+    {
       "name": "remake_parameters",
       "kind": "function",
       "tier": "extension",
@@ -6497,6 +6604,15 @@
       }
     },
     {
+      "name": "return_code",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "ReturnCode",
+        "rust": "ReturnCode"
+      }
+    },
+    {
       "name": "rhs_with_buffers",
       "kind": "function",
       "tier": "extension",
@@ -6802,16 +6918,6 @@
       }
     },
     {
-      "name": "simulate",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "julia": "simulate",
-        "python": "simulate",
-        "rust": "simulate"
-      }
-    },
-    {
       "name": "simulate_error",
       "kind": "error",
       "tier": "stable",
@@ -6821,28 +6927,11 @@
       }
     },
     {
-      "name": "simulate_options",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "SimulateOptions"
-      }
-    },
-    {
       "name": "simulation_error",
       "kind": "error",
       "tier": "extension",
       "bindings": {
         "python": "SimulationError"
-      }
-    },
-    {
-      "name": "simulation_result",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "julia": "SimulationResult",
-        "python": "SimulationResult"
       }
     },
     {
@@ -6963,8 +7052,9 @@
     {
       "name": "solution",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "python": "Solution",
         "rust": "Solution"
       }
     },
@@ -6977,11 +7067,44 @@
       }
     },
     {
-      "name": "solver_choice",
+      "name": "solve",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "solve",
+        "rust": "solve"
+      }
+    },
+    {
+      "name": "solve_all",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "solve_all"
+      }
+    },
+    {
+      "name": "solve_ensemble",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "solve_ensemble"
+      }
+    },
+    {
+      "name": "solve_options",
       "kind": "type",
       "tier": "extension",
       "bindings": {
-        "rust": "SolverChoice"
+        "rust": "SolveOptions"
+      }
+    },
+    {
+      "name": "solve_to_completion",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "solve_to_completion"
       }
     },
     {
@@ -7057,6 +7180,23 @@
       "tier": "extension",
       "bindings": {
         "python": "StaticLoaderError"
+      }
+    },
+    {
+      "name": "step",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "step",
+        "rust": "step"
+      }
+    },
+    {
+      "name": "step_status",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "StepStatus"
       }
     },
     {

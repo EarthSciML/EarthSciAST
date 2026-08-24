@@ -117,7 +117,7 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
         dy = build.rhs_function(float(probe.get("t", 0.0)), build.y0)
         rhs[probe["id"]] = {_bare(n): float(v) for n, v in zip(build.elem_names, dy)}
 
-    # --- Trajectory via the sanctioned provider-injected Problem path --------
+    # --- Trajectory via the sanctioned provider-injected EsmProblem path --------
     tspan = (checkpoints[0], checkpoints[-1])
     prob = esm_problem(esm, tspan, providers=providers)
     result = solve(

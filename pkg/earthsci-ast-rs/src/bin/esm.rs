@@ -1461,8 +1461,8 @@ fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::e
 fn bench_simulate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
     let esm_file = load_string(content)?;
     let opts = earthsci_ast::SolveOptions::default();
-    // Build the Problem ONCE, outside the loop, and time only the solve. That
-    // split is the point of the Problem/`solve` surface: construction is
+    // Build the EsmProblem ONCE, outside the loop, and time only the solve. That
+    // split is the point of the EsmProblem/`solve` surface: construction is
     // deterministic per document, `solve` is what a benchmark should measure.
     let prob = earthsci_ast::esm_problem(
         &esm_file,
