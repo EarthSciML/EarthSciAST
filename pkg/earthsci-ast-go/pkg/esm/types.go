@@ -990,6 +990,43 @@ type ESMFile struct {
 	// tests/valid/template_import_rename_lib.esm).
 	Metaparameters      json.RawMessage `json:"metaparameters,omitempty"`
 	ExpressionTemplates json.RawMessage `json:"expression_templates,omitempty"`
+
+	// keyOrders records the AUTHORED JSON key order of every object in the
+	// document, keyed by a JSON-pointer-like path ("/models",
+	// "/models/OU/variables", "/coupling/0/translate", ...). A decoded
+	// map[string]T loses declaration order, and esm-libraries-spec §4.7.5
+	// step 4 makes DOCUMENT ORDER normative for every map a FlattenedSystem
+	// carries -- a parameter vector is positional, so sorted or
+	// map-iteration order is observable and non-conforming. Populated by
+	// LoadString from the authored text; nil for a struct built in code, in
+	// which case every consumer falls back to sorted-name order (see
+	// declarationOrder).
+	keyOrders map[string][]string
+	// componentTemplates holds each component's `expression_templates` block
+	// as it stood AFTER import resolution and BEFORE Expand-at-build stripped
+	// it, keyed "models.<name>" / "reaction_systems.<name>" -- the same key
+	// shape Python's EsmFile.component_templates and Julia's use. Flatten
+	// merges these into the normative `template_registry` field; a registry
+	// cannot be merged from a document that has already thrown its inputs
+	// away.
+	componentTemplates map[string]*orderedMap
+}
+
+// declarationOrder returns the authored key order recorded for `path`, or nil
+// when the document was not loaded from text (or carries no such object). Pass
+// the result to orderedKeysOf, which falls back to sorted-name order for any
+// key the recorded order does not mention.
+//
+// Two paths deliberately fall back to sorted order: a struct built directly in
+// code (there is no authored text to read an order from), and a subsystem
+// mounted by `{"ref": ...}`, whose variables come from ANOTHER file that
+// LoadPath splices in after LoadString has already recorded this document's
+// orders.
+func (esm *ESMFile) declarationOrder(path string) []string {
+	if esm == nil || esm.keyOrders == nil {
+		return nil
+	}
+	return esm.keyOrders[path]
 }
 
 // FunctionTableAxis is a single named axis inside a FunctionTable.

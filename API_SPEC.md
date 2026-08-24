@@ -693,9 +693,11 @@ reading that as a gap.
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
 | `compose` | function | `compose` | `compose` | – | – | `Compose` |
+| `conflicting_derivative_error` | error | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
+| `dimension_promotion_error` | error | `DimensionPromotionError` | – | `DimensionPromotionError` | – | `DimensionPromotionError` |
 | `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
@@ -740,7 +742,6 @@ reading that as a gap.
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
-| `conflicting_derivative_error` | error | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` | – | – |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
 | `coupling_role` | type | – | – | – | `CouplingRole` | `CouplingRole` |
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |
@@ -752,7 +753,6 @@ reading that as a gap.
 | `derive_output_plan` | function | `derive_output_plan` | – | – | `derive_output_plan` | – |
 | `desugar_pushdown` | function | – | – | `desugar_pushdown` | `desugar_pushdown` | – |
 | `dimension` | type | – | – | – | `Dimension` | `Dimension` |
-| `dimension_promotion_error` | error | `DimensionPromotionError` | – | `DimensionPromotionError` | – | – |
 | `distinct` | function | – | – | `distinct` | `distinct` | – |
 | `domain_extent_mismatch_error` | error | `DomainExtentMismatchError` | – | `DomainExtentMismatchError` | – | – |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | – | `DomainUnitMismatchError` | – | – |
@@ -774,6 +774,7 @@ reading that as a gap.
 | `flatten_error` | error | – | – | `FlattenError` | `FlattenError` | – |
 | `flatten_template_registries` | function | – | `flattenTemplateRegistries` | `flatten_template_registries` | – | – |
 | `flatten_with_options` | function | – | – | – | `flatten_with_options` | `FlattenWithOptions` |
+| `flattened_variable` | type | – | – | `FlattenedVariable` | – | `FlattenedVariable` |
 | `float_key_error` | error | – | – | `FloatKeyError` | `FloatKeyError` | – |
 | `geometry_error` | error | – | – | `GeometryError` | `GeometryError` | – |
 | `get_component_type` | function | – | `getComponentType` | – | `get_component_type` | – |
@@ -785,6 +786,7 @@ reading that as a gap.
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
+| `loader_field` | type | – | – | `LoaderField` | – | `LoaderField` |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
 | `merge` | function | – | `merge` | – | – | `Merge` |
