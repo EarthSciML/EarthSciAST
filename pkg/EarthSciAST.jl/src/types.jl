@@ -1,3 +1,5 @@
+using OrderedCollections: OrderedDict
+
 """
 Type definitions for EarthSciML Serialization Format.
 
@@ -1246,14 +1248,21 @@ SubsystemRef(ref::AbstractString) =
 ODE-based model component containing variables, equations, and optional subsystems.
 Supports hierarchical composition through subsystems. A subsystem value is a
 child `Model` or — only until references are resolved — a `SubsystemRef`; the
-field is typed by their shared supertype, `Dict{String,SubsystemNode}`.
+field is typed by their shared supertype, `OrderedDict{String,SubsystemNode}`.
+
+`variables` and `subsystems` are `OrderedDict`s, and the parser populates them in
+DOCUMENT ORDER. That is not a convenience: esm-libraries-spec §4.7.5 step 4 makes
+the flattened system's ordering normative (variables in the order their component
+declares them), and a flattener can only inherit an order the IR preserved. A
+plain `Dict` here leaked its hash order all the way out to `flatten`'s
+`parameters`, which a consumer reads POSITIONALLY as the parameter vector.
 """
 struct Model <: SubsystemNode
-    variables::Dict{String,ModelVariable}
+    variables::OrderedDict{String,ModelVariable}
     equations::Vector{Equation}
     discrete_events::Vector{DiscreteEvent}
     continuous_events::Vector{ContinuousEvent}
-    subsystems::Dict{String,SubsystemNode}
+    subsystems::OrderedDict{String,SubsystemNode}
     tolerance::Union{Tolerance,Nothing}
     tests::Vector{InlineTest}
     initialization_equations::Vector{Equation}
@@ -1268,8 +1277,8 @@ struct Model <: SubsystemNode
           initialization_equations=Equation[],
           guesses=Dict{String,Union{Float64,ASTExpr}}(),
           system_kind=nothing) =
-        new(Dict{String,ModelVariable}(variables), equations,
-            discrete_events, continuous_events, Dict{String,SubsystemNode}(subsystems),
+        new(OrderedDict{String,ModelVariable}(variables), equations,
+            discrete_events, continuous_events, OrderedDict{String,SubsystemNode}(subsystems),
             tolerance, tests,
             initialization_equations, guesses, system_kind)
 
@@ -1277,14 +1286,14 @@ struct Model <: SubsystemNode
     Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation};
           discrete_events=DiscreteEvent[],
           continuous_events=ContinuousEvent[],
-          subsystems=Dict{String,SubsystemNode}(),
+          subsystems=OrderedDict{String,SubsystemNode}(),
           tolerance=nothing,
           tests=InlineTest[],
           initialization_equations=Equation[],
           guesses=Dict{String,Union{Float64,ASTExpr}}(),
           system_kind=nothing) =
-        new(Dict{String,ModelVariable}(variables), equations,
-            discrete_events, continuous_events, Dict{String,SubsystemNode}(subsystems),
+        new(OrderedDict{String,ModelVariable}(variables), equations,
+            discrete_events, continuous_events, OrderedDict{String,SubsystemNode}(subsystems),
             tolerance, tests,
             initialization_equations, guesses, system_kind)
 end
@@ -1574,6 +1583,12 @@ end
     Domain
 
 Spatial and temporal domain specification.
+
+Carries every field esm-schema.json's `Domain` defines — the schema sets
+`additionalProperties: false`, so this list is closed — because a flattened
+system is required to reproduce "the file's `domain` section, unchanged"
+(esm-libraries-spec §4.7.5 step 4). A field this type does not hold is a field
+`load` silently drops.
 """
 struct Domain
     # The name of the independent (time) variable, `"t"` unless the document
@@ -1586,10 +1601,27 @@ struct Domain
     # bare `t` in a document that renamed it and rejected the real name.
     independent_variable::String
     temporal::Union{Dict{String,Any},Nothing}
+    # Floating-point precision and array backend (esm-schema.json `Domain`:
+    # `element_type` ∈ {"Float32","Float64"}, `array_type` e.g. "Array" /
+    # "CuArray"). Carried for the same reason `independent_variable` is: the
+    # schema defines them, `tests/valid/model_only.esm` declares
+    # `element_type: "Float32"`, and `Domain` used not to hold them — so `load`
+    # silently DROPPED them and a round trip rewrote a Float32 document as one
+    # with no precision declared at all. They also decide real behaviour
+    # downstream (Float32 vs Float64 for the assembled problem, host vs GPU
+    # arrays), and esm-libraries-spec §4.7.5 step 4 says a `FlattenedSystem`
+    # carries "the file's `domain` section, UNCHANGED". `nothing` means the
+    # document declared none — absence is preserved rather than replaced by the
+    # schema default, so emit round-trips byte-for-byte.
+    element_type::Union{String,Nothing}
+    array_type::Union{String,Nothing}
 
     # Constructor with optional parameters
-    Domain(; independent_variable::AbstractString="t", temporal=nothing) =
-        new(String(independent_variable), temporal)
+    Domain(; independent_variable::AbstractString="t", temporal=nothing,
+             element_type=nothing, array_type=nothing) =
+        new(String(independent_variable), temporal,
+            element_type === nothing ? nothing : String(element_type),
+            array_type === nothing ? nothing : String(array_type))
 end
 
 """
@@ -1645,15 +1677,16 @@ struct ReactionSystem
     species::Vector{Species}
     reactions::Vector{Reaction}
     parameters::Vector{Parameter}
-    subsystems::Dict{String,ReactionSystem}
+    subsystems::OrderedDict{String,ReactionSystem}
     tolerance::Union{Tolerance,Nothing}
     tests::Vector{InlineTest}
 
     # Constructor with optional parameters and subsystems
     ReactionSystem(species::Vector{Species}, reactions::Vector{Reaction};
-                   parameters=Parameter[], subsystems=Dict{String,ReactionSystem}(),
+                   parameters=Parameter[], subsystems=OrderedDict{String,ReactionSystem}(),
                    tolerance=nothing, tests=InlineTest[]) =
-        new(species, reactions, parameters, subsystems, tolerance, tests)
+        new(species, reactions, parameters,
+            OrderedDict{String,ReactionSystem}(subsystems), tolerance, tests)
 end
 
 """
@@ -1731,12 +1764,17 @@ end
     EsmFile
 
 Main ESM file structure containing all components.
+
+`models`, `reaction_systems`, `index_sets`, `function_tables` and
+`component_templates` are `OrderedDict`s populated by the parser in DOCUMENT
+ORDER — see [`Model`](@ref) for why, and esm-libraries-spec §4.7.5 step 4 for the
+normative rule.
 """
 struct EsmFile
     esm::String  # Version string
     metadata::Metadata
-    models::Union{Dict{String,Model},Nothing}
-    reaction_systems::Union{Dict{String,ReactionSystem},Nothing}
+    models::Union{OrderedDict{String,Model},Nothing}
+    reaction_systems::Union{OrderedDict{String,ReactionSystem},Nothing}
     # Document-scoped INGEST REGISTRY (esm-spec §8). Not components: a data
     # source is not a coupling endpoint, not a subsystem, and not the path root
     # of a scoped reference. A model consumes one through a parameter whose
@@ -1756,13 +1794,13 @@ struct EsmFile
     # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0).
     # Keys are table ids; values are FunctionTable entries referenced by
     # table_lookup AST nodes.
-    function_tables::Union{Dict{String,FunctionTable},Nothing}
+    function_tables::Union{OrderedDict{String,FunctionTable},Nothing}
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2;
     # esm-spec v0.8.0). A single registry, sibling of `models`/`domain`, shared
     # by every component: `ranges[*]` `{from: <name>}` references, array-variable
     # `shape`s, and derived-set `from_faq` edges resolve against it. Empty when
     # the document declares none.
-    index_sets::Dict{String,IndexSet}
+    index_sets::OrderedDict{String,IndexSet}
 
     # The top-level `expression_templates` registry and `metaparameters` block,
     # PRESERVED VERBATIM (raw JSON) across parse → emit.
@@ -1795,7 +1833,7 @@ struct EsmFile
     # blocks so `to_json(EsmFile)` emits the reference-preserving form byte-identically
     # to `emit_document`. `nothing` under `ESS_TEMPLATE_REF_DISABLE=1` (Expand at
     # load) or for a document with no surviving references.
-    component_templates::Union{Dict{String,Any},Nothing}
+    component_templates::Union{OrderedDict{String,Any},Nothing}
 
     # Document-scoped `coordinates` registry (streaming-output-sinks RFC §8.3): each
     # entry marks an existing data array (by `source` name) or an inline `values`
@@ -1815,15 +1853,23 @@ struct EsmFile
             domain=nothing,
             enums=nothing,
             function_tables=nothing,
-            index_sets=Dict{String,IndexSet}(),
+            index_sets=OrderedDict{String,IndexSet}(),
             expression_templates=nothing,
             metaparameters=nothing,
             component_templates=nothing,
             coordinates=nothing) =
-        new(esm, metadata, models, reaction_systems, data_sources,
-            coupling, domain, enums, function_tables,
-            Dict{String,IndexSet}(index_sets),
-            expression_templates, metaparameters, component_templates,
+        new(esm, metadata,
+            models === nothing ? nothing : OrderedDict{String,Model}(models),
+            reaction_systems === nothing ? nothing :
+                OrderedDict{String,ReactionSystem}(reaction_systems),
+            data_sources,
+            coupling, domain, enums,
+            function_tables === nothing ? nothing :
+                OrderedDict{String,FunctionTable}(function_tables),
+            OrderedDict{String,IndexSet}(index_sets),
+            expression_templates, metaparameters,
+            component_templates === nothing ? nothing :
+                OrderedDict{String,Any}(component_templates),
             coordinates)
 end
 
@@ -2298,6 +2344,8 @@ const RECORD_FIELD_TABLES = (
         (f = :independent_variable, wire = "independent_variable", kind = :string,
          mode = :default, default = "t", emit = :nondefault),
         (f = :temporal, wire = "temporal", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+        (f = :element_type, wire = "element_type", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :array_type,   wire = "array_type",   kind = :string, mode = :opt, emit = :nonnothing),
     )),
     (T = :DataSourceLocation, fn = :data_source_location, rows = (
         (f = :url_template, wire = "url_template", kind = :string, mode = :req, emit = :always, pos = true),

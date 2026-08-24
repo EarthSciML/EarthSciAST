@@ -65,6 +65,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reference_resolution_test.jl")
     include("codegen_test.jl")
     include("flatten_test.jl")
+    include("flatten_conformance_test.jl")  # FlattenedSystem field set ≡ Python oracle
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")

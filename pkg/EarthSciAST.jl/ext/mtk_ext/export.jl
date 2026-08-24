@@ -238,7 +238,7 @@ end
 # `observed_eqs` receives one `oname ~ rhs` equation per MTK observed: from esm
 # 1.0.0 the bare-variable-LHS equation is what MAKES a variable observed
 # (esm-spec §6.3.1), so the export has to emit it alongside the declaration.
-function _export_variables!(esm_vars::Dict{String,ModelVariable},
+function _export_variables!(esm_vars::AbstractDict{String,ModelVariable},
                             known_vars::Set{String}, gaps::Vector{GapReport},
                             sys, strip_ns::Function,
                             observed_eqs::Vector{Equation}=Equation[])

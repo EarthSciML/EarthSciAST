@@ -346,7 +346,7 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
                 end
             end
             if !isempty(blocks)
-                comp_tpls = Dict{String,Any}(k => v for (k, v) in blocks)
+                comp_tpls = OrderedDict{String,Any}(k => v for (k, v) in blocks)
             end
             bump && (esm_stamp = _esm_stamp_floor(get(root, "esm", nothing)))
             expanded = root
@@ -837,7 +837,7 @@ Recursively resolve subsystem references within a Model's subsystems.
 """
 function _resolve_model_refs!(models_dict, name::String,
                               model, base_path::String, visited::Set{String},
-                              registry::Dict{String,IndexSet})
+                              registry::AbstractDict{String,IndexSet})
     # Only Model values carry subsystems to walk; a SubsystemRef leaf has none.
     model isa Model || return
     for (sub_name, sub_value) in collect(model.subsystems)
@@ -894,7 +894,7 @@ code `subsystem_index_set_conflict` (§9.6.6) — the mounted-mesh failure mode
 this makes loud: a mesh file whose axis size disagrees with the importer's
 declaration must fail at load, not silently resolve against the importer.
 """
-function _merge_subsystem_index_sets!(registry::Dict{String,IndexSet},
+function _merge_subsystem_index_sets!(registry::AbstractDict{String,IndexSet},
                                       loaded::EsmFile, ref::String)
     for (n, decl) in loaded.index_sets
         if haskey(registry, n)
@@ -929,7 +929,7 @@ importing document's registry — with the §4.7 deep-equal-or-error rule
 (`subsystem_index_set_conflict`).
 """
 function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::Set{String},
-                                registry::Dict{String,IndexSet})
+                                registry::AbstractDict{String,IndexSet})
     # esm-spec §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the referenced component's own scope, threaded into
     # its load so the §9.6.3 fixpoint lowers its rewrite-targets at the mount.
@@ -952,7 +952,7 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
 end
 
 _resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String},
-                       registry::Dict{String,IndexSet}=Dict{String,IndexSet}()) =
+                       registry::AbstractDict{String,IndexSet}=OrderedDict{String,IndexSet}()) =
     _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited, registry)
 
 """
@@ -960,7 +960,7 @@ _resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String},
 
 Recursively resolve subsystem references within a ReactionSystem's subsystems.
 """
-function _resolve_reaction_system_refs!(rsys_dict::Dict{String,ReactionSystem}, name::String,
+function _resolve_reaction_system_refs!(rsys_dict::AbstractDict{String,ReactionSystem}, name::String,
                                         rsys::ReactionSystem, base_path::String, visited::Set{String})
     for (sub_name, sub_rsys) in rsys.subsystems
         # Recursively resolve nested subsystem refs
