@@ -2213,15 +2213,20 @@ fn compose_dependent(lhs: &Expr) -> Option<String> {
 /// and an optional conversion factor (`{"var": "B.O3", "factor": 1e-9}`); the
 /// `to` / `target` spellings of that key are accepted alongside `var`, as in
 /// the oracle. Anything else is ignored.
-fn build_translate_map(translate: Option<&serde_json::Value>) -> HashMap<String, (String, f64)> {
+fn build_translate_map(
+    translate: Option<&serde_json::Value>,
+    a_system: &str,
+    b_system: &str,
+) -> HashMap<String, (String, f64)> {
     let mut out: HashMap<String, (String, f64)> = HashMap::new();
     let Some(obj) = translate.and_then(|v| v.as_object()) else {
         return out;
     };
     for (a_name, value) in obj {
+        let a_q = qualify_translate_endpoint(a_name, a_system);
         match value {
             serde_json::Value::String(b_name) => {
-                out.insert(b_name.clone(), (a_name.clone(), 1.0));
+                out.insert(qualify_translate_endpoint(b_name, b_system), (a_q, 1.0));
             }
             serde_json::Value::Object(spec) => {
                 let b_name = ["var", "to", "target"]
@@ -2229,13 +2234,45 @@ fn build_translate_map(translate: Option<&serde_json::Value>) -> HashMap<String,
                     .find_map(|k| spec.get(*k).and_then(|v| v.as_str()));
                 let factor = spec.get("factor").and_then(|f| f.as_f64()).unwrap_or(1.0);
                 if let Some(b_name) = b_name {
-                    out.insert(b_name.to_string(), (a_name.clone(), factor));
+                    out.insert(qualify_translate_endpoint(b_name, b_system), (a_q, factor));
                 }
             }
             _ => {}
         }
     }
     out
+}
+
+/// Put one `translate` endpoint into the NAMESPACED form the matcher uses
+/// (esm-libraries-spec §4.7.1 step 2, esm-spec §10.2).
+///
+/// `translate` endpoints are authored in either form — bare (`"O3"`) or fully
+/// scoped (`"ChemistrySystem.O3"`) — and §10.2 admits both, but matching runs
+/// against the namespaced dependent variable of a flattened equation. An
+/// endpoint left bare can therefore never match, which is why a correctly
+/// spelled bare map was a silent no-op: the lookup missed, and the bare-name
+/// fallback then searched A for B's short name and missed too.
+///
+/// A bare endpoint is qualified with the system it belongs to under §10.2's
+/// direction rule — a KEY against `systems[0]`, a VALUE against `systems[1]`.
+/// An endpoint that already carries a dot is left ALONE: it is either already
+/// namespaced or names a subsystem path, and re-prefixing it would break it.
+///
+/// `_var` is exempt in both positions. It is a GLOBAL sentinel (esm-spec §6.4),
+/// never namespaced; a value of `"B._var"` is the redundant spelling §10.2
+/// requires to stay harmless, and it stays harmless because placeholder
+/// expansion has already turned that equation into a DIRECT match, which takes
+/// precedence over this map.
+fn qualify_translate_endpoint(name: &str, system: &str) -> String {
+    if name.is_empty()
+        || name == VAR_PLACEHOLDER
+        || name.ends_with(&format!(".{VAR_PLACEHOLDER}"))
+        || name.contains('.')
+        || system.is_empty()
+    {
+        return name.to_string();
+    }
+    format!("{system}.{name}")
 }
 
 /// Expand the `_var` placeholder (esm-spec §6.4) in B's equations against A's
@@ -2340,8 +2377,11 @@ fn apply_operator_compose(
     // ordinary direct matches below.
     expand_placeholder_equations(a_idx, b_idx, per_system);
 
-    // Step 2: the INVERSE (B -> A) translation map.
-    let translate = build_translate_map(translate);
+    // Step 2: the INVERSE (B -> A) translation map, both endpoints put into
+    // NAMESPACED form first (`qualify_translate_endpoint`) — matching runs
+    // against a flattened equation's namespaced dependent variable, so a bare
+    // endpoint that is not qualified here can never match.
+    let translate = build_translate_map(translate, &systems[0], &systems[1]);
 
     // Step 1: A's equations, indexed by dependent variable.
     let mut a_index: IndexMap<String, usize> = IndexMap::new();
@@ -2353,6 +2393,10 @@ fn apply_operator_compose(
 
     let b_equations = std::mem::take(&mut per_system[b_idx].equations);
     let mut surviving: Vec<Equation> = Vec::new();
+    // `b_dep -> target_dep` for every match that RENAMED the dependent variable
+    // (step 4's "the merged-away name does not survive"). Insertion-ordered so
+    // the prune below is deterministic.
+    let mut merged_away: IndexMap<String, String> = IndexMap::new();
     for b_eq in b_equations {
         let Some(b_dep) = compose_dependent(&b_eq.lhs) else {
             surviving.push(b_eq);
@@ -2407,10 +2451,56 @@ fn apply_operator_compose(
         }
         let rhs_a = std::mem::replace(&mut per_system[a_idx].equations[i].rhs, Expr::Integer(0));
         per_system[a_idx].equations[i].rhs = sum_exprs(rhs_a, rhs_b);
+        if target != b_dep {
+            merged_away.insert(b_dep, target);
+        }
     }
     per_system[b_idx].equations = surviving;
 
+    // Step 4, second half: a RENAMING match — a translation match, or the
+    // bare-name fallback, which is a name-based translation — has just consumed
+    // B's defining equation for `b_dep`, so B's declaration of that name is left
+    // constraining nothing. An unknown with no defining equation classifies as
+    // ALGEBRAIC (esm-spec §6.3.1), so keeping it would hand the solver a state
+    // with no constraint — a structurally singular system, which is exactly what
+    // the rhs rewrite above exists to prevent; this prune is its other half.
+    //
+    // §10.2 says a `translate` pair names ONE physical quantity under two
+    // spellings, so only A's spelling survives: every remaining reference is
+    // retargeted at it FIRST, then the stranded declaration is dropped. The
+    // retarget is DOCUMENT-WIDE, not B-local — a third system is free to
+    // reference `B.x` by its scoped name, and pruning the declaration while
+    // leaving that reference dangling would trade one broken system for another.
+    if !merged_away.is_empty() {
+        retarget_merged_names(per_system, &merged_away);
+        for gone in merged_away.keys() {
+            per_system[b_idx].state_vars.shift_remove(gone);
+            per_system[b_idx].observed_vars.shift_remove(gone);
+        }
+    }
+
     Ok(())
+}
+
+/// Rewrite every reference to a merged-away dependent variable, EVERYWHERE
+/// (esm-libraries-spec §4.7.1 step 4).
+///
+/// Applied after an `operator_compose` renaming match folds `B.x` into `A.y`:
+/// the two spellings named one quantity, only `A.y` still exists, so every
+/// equation side in the whole document is rewritten off the dead name. An
+/// observed variable's defining expression is one of those equations (it is not
+/// carried on the variable record), so this covers it too.
+fn retarget_merged_names(per_system: &mut [SystemBlock], renames: &IndexMap<String, String>) {
+    let subs: HashMap<String, Expr> = renames
+        .iter()
+        .map(|(from, to)| (from.clone(), Expr::Variable(to.clone())))
+        .collect();
+    for block in per_system.iter_mut() {
+        for eq in block.equations.iter_mut() {
+            eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
+            eq.rhs = crate::substitute::substitute(&eq.rhs, &subs);
+        }
+    }
 }
 
 fn sum_exprs(a: Expr, b: Expr) -> Expr {

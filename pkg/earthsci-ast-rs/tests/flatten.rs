@@ -1174,6 +1174,145 @@ fn operator_compose_translate_is_a_keyed_and_carries_the_factor() {
     );
 }
 
+/// §10.2 "Either name form is admitted": a `translate` endpoint authored BARE
+/// denotes the same variable as the fully scoped spelling and MUST produce the
+/// same flattened system.
+///
+/// Matching runs against a flattened equation's NAMESPACED dependent variable,
+/// so a bare endpoint that is not qualified first can never match. That was a
+/// silent no-op, not a loud one: the lookup missed, the bare-name fallback then
+/// searched A for B's short name (`ozone_conc`, which A does not have) and
+/// missed too, and the whole entry composed nothing.
+#[test]
+fn operator_compose_translate_endpoints_may_be_authored_bare() {
+    let body = r#"
+      "models": {
+        "Chem": {
+          "variables": {
+            "ozone": {"type": "unknown", "default": 1.0},
+            "k": {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["ozone"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Diff": {
+          "variables": {
+            "ozone_conc": {"type": "unknown", "default": 1.0},
+            "kh": {"type": "parameter", "default": 2.0}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["ozone_conc"], "wrt": "t"},
+             "rhs": {"op": "*", "args": ["kh", "ozone_conc"]}}
+          ]
+        }
+      },"#;
+    let mk = |translate: &str| {
+        let doc = format!(
+            r#"{{"esm": "1.0.0", "metadata": {{"name": "T"}},{body}
+            "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Diff"],
+                          "translate": {translate}}}]}}"#
+        );
+        flatten(&earthsci_ast::parse::load_string(&doc).expect("loads")).expect("flattens")
+    };
+    let bare = mk(r#"{"ozone": {"var": "ozone_conc", "factor": 1.0}}"#);
+    let scoped = mk(r#"{"Chem.ozone": {"var": "Diff.ozone_conc", "factor": 1.0}}"#);
+
+    assert_eq!(
+        rendered_rhs(&bare, "Chem.ozone"),
+        "Chem.k + Diff.kh * Chem.ozone",
+        "a bare translate endpoint must be qualified before matching"
+    );
+    assert_eq!(
+        rendered_rhs(&bare, "Chem.ozone"),
+        rendered_rhs(&scoped, "Chem.ozone"),
+        "the two admitted name forms must denote the same variable"
+    );
+    assert_eq!(bare.equations.len(), scoped.equations.len());
+    assert_eq!(
+        bare.state_variables
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect::<Vec<_>>(),
+        scoped
+            .state_variables
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// §4.7.1 step 4, "the merged-away name does not survive": a renaming match
+/// consumes B's defining equation, so B's declaration is pruned — and every
+/// surviving reference to it is retargeted at A's spelling FIRST, DOCUMENT-WIDE.
+///
+/// `Obs` here is the third system the rule exists for: it references `Diff.c` by
+/// scoped name and belongs to neither side of the coupling entry, so a B-local
+/// retarget would leave its reference dangling at a name nothing declares.
+#[test]
+fn operator_compose_prunes_the_merged_away_name_after_a_document_wide_retarget() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Chem": {
+          "variables": {
+            "ozone": {"type": "unknown", "default": 1.0},
+            "k": {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["ozone"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Diff": {
+          "variables": {
+            "c": {"type": "unknown", "default": 1.0},
+            "kh": {"type": "parameter", "default": 2.0}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+             "rhs": {"op": "*", "args": ["kh", "c"]}}
+          ]
+        },
+        "Obs": {
+          "variables": {"burden": {"type": "unknown", "default": 0.0}},
+          "equations": [
+            {"lhs": "burden", "rhs": {"op": "*", "args": [2.0, "Diff.c"]}}
+          ]
+        }
+      },
+      "coupling": [
+        {"type": "operator_compose", "systems": ["Chem", "Diff"],
+         "translate": {"ozone": "c"}}
+      ]
+    }"#;
+    let file = earthsci_ast::parse::load_string(doc).expect("document loads");
+    let flat = flatten(&file).expect("flattens");
+
+    // The stranded declaration is gone: an unknown with no defining equation
+    // classifies as ALGEBRAIC (§6.3.1) and would make the system structurally
+    // singular.
+    let states: Vec<String> = flat
+        .state_variables
+        .iter()
+        .map(|(n, _)| n.clone())
+        .collect();
+    assert_eq!(states, vec!["Chem.ozone".to_string()], "states: {states:?}");
+
+    // ...and the THIRD system's scoped reference now points at A's spelling
+    // rather than at the pruned name.
+    let obs = flat
+        .equations
+        .iter()
+        .find(|eq| matches!(&eq.lhs, Expr::Variable(v) if v == "Obs.burden"))
+        .expect("Obs.burden equation survives");
+    assert_eq!(
+        earthsci_ast::to_ascii(&obs.rhs),
+        "2 * Chem.ozone",
+        "a document-wide retarget must reach a third system's reference"
+    );
+}
+
 /// §10.2's redundancy invariant: a `translate` value of `"B._var"` asks for
 /// something placeholder expansion already does, so writing it MUST produce the
 /// same flattened system as omitting it.
