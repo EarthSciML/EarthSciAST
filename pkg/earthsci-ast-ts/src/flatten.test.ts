@@ -312,13 +312,13 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
     // throughout `rhs_B`. Leaving `B.y` here would strand it as an unknown
     // nothing defines — its defining equation was just consumed.
     expect(toAscii(flat.equations[0]!.rhs)).toBe('A.k * A.x + B.u * A.x')
-    // `B.y` stays a DECLARED state with no remaining equation — the oracle
-    // agrees (`states: ['A.x', 'B.y']` on this exact document), so it is the
-    // shared answer, not a TypeScript divergence. Step 4's rewrite is what
-    // keeps `B.y` out of the merged RHS; whether a now-equationless
-    // DECLARATION should also be pruned is a separate question no spec text
-    // settles, and this test only pins that the two bindings answer alike.
-    expect(Object.keys(flat.stateVariables)).toEqual(['A.x', 'B.y'])
+    // `B.y` does NOT survive as a declaration. §4.7.1 step 4's last bullet and
+    // esm-spec §10.2 now settle what an earlier revision left open: a
+    // translation match consumes the merged-away name, because an unknown whose
+    // defining equation was just consumed classifies as ALGEBRAIC (§6.3.1) and
+    // would hand the solver an unconstrained state. The rewrite above keeps
+    // `B.y` out of the merged RHS; the prune is its other half.
+    expect(Object.keys(flat.stateVariables)).toEqual(['A.x'])
   })
 
   it('applies the translate conversion factor to B`s RHS only', () => {
