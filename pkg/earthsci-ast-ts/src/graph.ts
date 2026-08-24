@@ -16,7 +16,8 @@ import type {
   ExpressionNode,
   Reference,
 } from './types.js'
-import { freeVariables } from './expression.js'
+import { forEachChild, isExprNode } from './expression.js'
+import { isNumericLiteral } from './numeric-literal.js'
 import {
   forEachComponent,
   forEachModelVariable,
@@ -118,8 +119,9 @@ export interface VariableNode {
    * categories a consumer of the graph actually wants, recovered from the
    * equations and from each parameter's `distribution` / `update`.
    *
-   * `state` is an ODE state, `observed` an unknown with a bare-variable-LHS
-   * definition, `algebraic` an implicitly-constrained unknown, `brownian` a
+   * `state` is an ODE state, `observed` an unknown some equation DEFINES (its
+   * LHS naming it, bare or indexed), `algebraic` one that is only implicitly
+   * CONSTRAINED (no equation names it on its LHS), `brownian` a
    * wiener-updated parameter, `discrete` a parameter with any other update,
    * `parameter` a sampled or constant one, and `species` a reaction-system
    * species.
@@ -136,7 +138,9 @@ export interface VariableNode {
  *
  * The `equation_index` sentinel {@link NON_EQUATION_INDEX} (`-1`) marks a
  * dependency that does not originate from a positionally-numbered equation or
- * reaction — i.e. an observed/expression definition or a coupling variable map.
+ * reaction — a coupling variable map, or the synthetic `expr_result` edges of a
+ * BARE-EXPRESSION target. (An observed unknown's definition IS one of the
+ * model's equations from 1.0.0, so its edges carry that equation's index.)
  */
 export interface DependencyEdge {
   /** Source variable name */
@@ -156,7 +160,7 @@ export interface DependencyEdge {
   /**
    * Position of the equation/reaction that created this dependency, or
    * {@link NON_EQUATION_INDEX} (`-1`) when the dependency has no positional
-   * equation (observed-variable definitions and coupling maps).
+   * equation (coupling maps and bare-expression targets).
    */
   equation_index: number
   /** The expression that created this dependency */
@@ -165,8 +169,8 @@ export interface DependencyEdge {
 
 /**
  * Sentinel `equation_index` for {@link DependencyEdge}s that are not produced by
- * a positionally-numbered equation or reaction (observed-variable definitions
- * and coupling variable maps).
+ * a positionally-numbered equation or reaction: coupling variable maps, and the
+ * `expr_result` edges of a bare-expression target.
  */
 export const NON_EQUATION_INDEX = -1
 
@@ -297,7 +301,14 @@ function extractComponentGraph(esmFile: EsmFile): ComponentGraph {
         description: inline?.reference?.notes,
         reference: inline?.reference,
         metadata: {
-          var_count: 0,
+          // A reaction system's PARAMETERS are its variable count. The schema
+          // forbids a `variables` field here, and `species_count` below already
+          // carries the species, so `parameters` is the only thing left for
+          // §4.8.1's "variable count" to mean — and it is the exact analogue of
+          // a model's `variables`, which likewise counts unknowns and
+          // parameters together. Writing 0 asserted that a reaction system
+          // declares no variables at all, which is false for every fixture.
+          var_count: inline?.parameters ? Object.keys(inline.parameters).length : 0,
           eq_count: inline?.reactions ? inline.reactions.length : 0,
           species_count: inline?.species ? Object.keys(inline.species).length : 0,
         },
@@ -573,6 +584,70 @@ export function lhsTargetName(lhs: Expr): string | undefined {
   return undefined
 }
 
+/**
+ * The variables an expression REFERENCES, with every locally-bound index symbol
+ * removed — the node set §4.8.2 asks for.
+ *
+ * This is deliberately NOT `expression.freeVariables`. That function walks every
+ * child and reports every bare name it reaches, so an `aggregate`'s own range
+ * binders (`sum over a of src[a]`) come back looking like model variables and
+ * become graph nodes with no declaration, no units and no kind. A binder is
+ * introduced by the aggregate's own `ranges` clause and is scoped to it; it is
+ * not a variable of the system, so it is not a node.
+ *
+ * The subtraction is PER NODE, at the binder that introduces the symbol, so a
+ * name that is bound inside one reduction and free outside it is still reported
+ * — a tree-wide union of bound names would silently hide real references.
+ *
+ * `freeVariables` itself is unchanged: it is public API and is shared with
+ * substitution, differentiation and unit conversion, where "every name the
+ * subtree mentions" is the wanted answer.
+ */
+export function graphVariableReferences(expr: Expr): Set<string> {
+  const out = new Set<string>()
+  collectGraphVariableReferences(expr, out)
+  return out
+}
+
+/**
+ * Index symbols BOUND by this node for its own body: an `aggregate` /
+ * `arrayop`'s `ranges` keys and `output_idx` entries, and an `integral`'s `var`.
+ *
+ * Narrower than the validator's `collectIndexSymbols`, which also treats every
+ * bare name in an `index(A, i, j)` position as bound. Those positions are
+ * exactly where an aggregate's binders appear, and subtracting them HERE rather
+ * than at the binding node would hide a real reference to a declared variable
+ * used as an index. The binder itself is caught at its `aggregate`.
+ */
+function boundIndexSymbols(node: ExpressionNode): string[] {
+  const bound: string[] = []
+  const ranges = (node as { ranges?: Record<string, unknown> }).ranges
+  if (ranges && typeof ranges === 'object') bound.push(...Object.keys(ranges))
+  const outputIdx = (node as { output_idx?: unknown[] }).output_idx
+  if (Array.isArray(outputIdx)) {
+    for (const idx of outputIdx) if (typeof idx === 'string') bound.push(idx)
+  }
+  const intVar = (node as { var?: unknown }).var
+  if (typeof intVar === 'string') bound.push(intVar)
+  return bound
+}
+
+function collectGraphVariableReferences(expr: Expr, out: Set<string>): void {
+  if (typeof expr === 'string') {
+    out.add(expr)
+    return
+  }
+  if (typeof expr === 'number' || isNumericLiteral(expr)) return
+  if (!isExprNode(expr)) return
+
+  // Collect this node's subtree into a LOCAL set, subtract the symbols this
+  // node binds, and only then promote what is left to the caller.
+  const local = new Set<string>()
+  forEachChild(expr, (child) => collectGraphVariableReferences(child, local))
+  for (const symbol of boundIndexSymbols(expr)) local.delete(symbol)
+  for (const name of local) out.add(name)
+}
+
 /** Add a model's variables (+ observed-definition edges) and equations. */
 function processModel(b: ExprGraphBuilder, model: Model, systemId: string): void {
   // The node kind is DERIVED (esm-spec §6.3.1), never read off `variable.type`:
@@ -651,7 +726,7 @@ function processEquation(
   const lhsVar = b.addNode(targetName, 'state', undefined, systemId)
 
   // Create dependencies from all RHS variables to the LHS variable.
-  for (const rhsVar of freeVariables(equation.rhs)) {
+  for (const rhsVar of graphVariableReferences(equation.rhs)) {
     const sourceVar = b.addNode(rhsVar, 'parameter', undefined, systemId)
     b.addDependency(sourceVar, lhsVar, EDGE_PROVENANCE.equation, equationIndex, equation.rhs)
   }
@@ -664,7 +739,7 @@ function processReaction(
   reactionIndex: number,
   systemId: string,
 ): void {
-  const rateVars = freeVariables(reaction.rate)
+  const rateVars = graphVariableReferences(reaction.rate)
 
   // Substrates are consumed (negative stoichiometry).
   if (reaction.substrates) {
@@ -716,7 +791,7 @@ function processExpression(
   systemId: string,
 ): void {
   const targetVariable = b.addNode(targetVar, 'observed', undefined, systemId)
-  for (const freeVar of freeVariables(expr)) {
+  for (const freeVar of graphVariableReferences(expr)) {
     const sourceVar = b.addNode(freeVar, 'parameter', undefined, systemId)
     b.addDependency(sourceVar, targetVariable, EDGE_PROVENANCE.definition, equationIndex, expr)
   }
@@ -834,8 +909,11 @@ export function expressionGraph(
     // Reaction (schema field is `rate`; every reaction carries one).
     processReaction(b, target as Reaction, 0, 'default')
   } else {
-    // Expression — analyze dependencies within the expression itself.
-    processExpression(b, target as Expr, 'expr_result', 0, 'default')
+    // Expression — analyze dependencies within the expression itself. The
+    // edges carry NON_EQUATION_INDEX: a bare expression has no positional
+    // equation to index, which is exactly what the sentinel is for. (The
+    // Equation and Reaction overloads DO number their single target 0.)
+    processExpression(b, target as Expr, 'expr_result', NON_EQUATION_INDEX, 'default')
   }
 
   return buildGraph(b.nodes, b.edges, (node) => node.name)

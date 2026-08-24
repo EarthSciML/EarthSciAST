@@ -53,13 +53,18 @@ func IsODEState(model *Model, name string) bool {
 	return odeStateSet(model)[name]
 }
 
-// ObservedUnknowns returns the model's unknowns defined by a BARE-VARIABLE LHS
-// (`y ~ f(…)`) — eliminable, materializable — sorted lexicographically.
+// ObservedUnknowns returns the model's unknowns an equation DEFINES — its LHS
+// naming them, bare (`y ~ f(…)`) or indexed (`y[i] ~ f(…)`, which defines the
+// whole array `y`) — eliminable, materializable — sorted lexicographically.
 //
-// An unknown that is BOTH differentiated somewhere and given a bare-variable
+// The split from AlgebraicUnknowns is SEMANTIC, not syntactic: observed when an
+// equation defines the unknown, algebraic when it is only constrained. See
+// observedDefinitions for how the defining form is read.
+//
+// An unknown that is BOTH differentiated somewhere and given a defining
 // equation elsewhere is an ODE state; the three sets partition, and ODE-ness
-// wins, because the bare equation is then an extra constraint on a state rather
-// than that state's definition.
+// wins, because the defining equation is then an extra constraint on a state
+// rather than that state's definition.
 func ObservedUnknowns(model *Model) []string {
 	if model == nil {
 		return nil
@@ -75,9 +80,10 @@ func ObservedUnknowns(model *Model) []string {
 }
 
 // AlgebraicUnknowns returns the model's unknowns constrained only IMPLICITLY —
-// those that are neither differentiated nor given a bare-variable definition,
-// so the only equations mentioning them have an expression LHS (`H*H*SO4 ~ Ksp`)
-// or mention them on a right-hand side. Sorted lexicographically.
+// those that are neither differentiated nor DEFINED, so the only equations
+// mentioning them have an expression LHS naming no single variable
+// (`H*H*SO4 ~ Ksp`) or mention them on a right-hand side. Sorted
+// lexicographically.
 func AlgebraicUnknowns(model *Model) []string {
 	if model == nil {
 		return nil
@@ -101,8 +107,8 @@ func AlgebraicUnknowns(model *Model) []string {
 }
 
 // ObservedDefinition returns the defining RHS of an observed unknown — the RHS
-// of the first equation whose LHS is exactly that bare name — and whether one
-// exists. This is where an observed's behaviour moved in 1.0.0: out of
+// of the first equation whose LHS names it, bare (`y ~ f(…)`) or indexed
+// (`y[i] ~ f(…)`) — and whether one exists. This is where an observed's behaviour moved in 1.0.0: out of
 // `variables[v].expression` and into the model's `equations`. Passes that used
 // to read the removed field (units propagation, array-shape checking, the
 // cadence leaf seed) read it here instead.
@@ -224,14 +230,23 @@ func odeStateSet(model *Model) map[string]bool {
 	return states
 }
 
-// observedDefinitions maps each unknown given a BARE-VARIABLE-LHS equation to
-// that equation's RHS. The first such equation wins, so the map is stable under
-// a (malformed) duplicate definition.
+// observedDefinitions maps each unknown an equation DEFINES to that equation's
+// RHS. The first such equation wins, so the map is stable under a (malformed)
+// duplicate definition.
+//
+// An equation defines the unknown its LHS names, read through the LHS's BASE
+// NAME: a bare `y ~ f(…)` and an indexed `y[i] ~ f(…)` both define `y`. Only a
+// genuine expression LHS, one that names no single variable (`H*H*SO4 ~ Ksp`),
+// is an implicit constraint and leaves its unknown algebraic (esm-spec §6.3.1).
+// This used to be a bare-string test, which read the spec's old scalar-era
+// wording literally and classed every arrayed definition algebraic — pushing
+// its build-time work onto the per-timestep hot path, since `AlgebraicUnknowns`
+// seeds the cadence partition CONTINUOUS.
 func observedDefinitions(model *Model) map[string]Expression {
 	defs := make(map[string]Expression)
 	for _, eq := range model.Equations {
-		name, ok := eq.LHS.(string)
-		if !ok {
+		name := definedVariableName(eq.LHS)
+		if name == "" {
 			continue
 		}
 		if v, ok := model.Variables[name]; !ok || v.Type != VarTypeUnknown {
@@ -242,6 +257,28 @@ func observedDefinitions(model *Model) map[string]Expression {
 		}
 	}
 	return defs
+}
+
+// definedVariableName is the variable an equation LHS DEFINES: a bare name is
+// itself and `index(u, …)` is `u`. Anything else — a derivative, an `ic`, an
+// arithmetic expression — names no defined variable and returns "".
+//
+// Deliberately NARROWER than graph.go's extractVariableFromLHS, which also
+// credits `D` and `aggregate`: a derivative LHS makes an ODE state, not an
+// observed, and crediting it here would make ObservedDefinition hand a state's
+// derivative RHS to the units and cadence passes as if it were a definition.
+func definedVariableName(lhs Expression) string {
+	if s, ok := lhs.(string); ok {
+		return s
+	}
+	node, ok := asExprNode(lhs)
+	if !ok {
+		return ""
+	}
+	if node.Op == "index" && len(node.Args) > 0 {
+		return definedVariableName(node.Args[0])
+	}
+	return ""
 }
 
 // derivativeTargets collects the base variable names differentiated with respect

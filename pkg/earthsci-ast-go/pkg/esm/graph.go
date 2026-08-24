@@ -22,9 +22,13 @@ type GraphEdge[N any, E any] struct {
 //
 //   - a MODEL carries VarCount = len(variables), EqCount = len(equations) and
 //     SpeciesCount = 0;
-//   - a REACTION SYSTEM carries VarCount = 0, EqCount = len(reactions) — the
-//     reaction count IS the equation count, there is no fourth field — and
-//     SpeciesCount = len(species).
+//   - a REACTION SYSTEM carries VarCount = len(parameters), EqCount =
+//     len(reactions) — the reaction count IS the equation count, there is no
+//     fourth field — and SpeciesCount = len(species). The schema forbids a
+//     `variables` field on a reaction system and SpeciesCount already carries
+//     the species, so `parameters` is the only thing left for §4.8.1's
+//     "variable count" to mean — and it is the exact analogue of a model's
+//     `variables`, which likewise counts unknowns and parameters together.
 type ComponentCounts struct {
 	VarCount     int `json:"var_count"`
 	EqCount      int `json:"eq_count"`
@@ -102,8 +106,9 @@ type DependencyEdge struct {
 }
 
 // NonEquationIndex is the EquationIndex sentinel for a dependency that does not
-// originate from a positionally-numbered equation or reaction — currently only
-// a coupling variable map folded in by ExpressionGraphOptions.MergeCoupled.
+// originate from a positionally-numbered equation or reaction: a coupling
+// variable map folded in by ExpressionGraphOptions.MergeCoupled, and the
+// synthetic expr_result edges of a bare-expression target.
 const NonEquationIndex = -1
 
 // Dependency-edge relationship labels. These are PROVENANCE categories (which
@@ -179,7 +184,7 @@ func ComponentGraphFromFile(file *ESMFile) *ComponentGraph {
 			Type: "reaction_system",
 			Name: id,
 			Metadata: ComponentCounts{
-				VarCount:     0,
+				VarCount:     len(system.Parameters),
 				EqCount:      len(system.Reactions),
 				SpeciesCount: len(system.Species),
 			},
@@ -447,7 +452,10 @@ func ExpressionGraphFromReaction(reaction Reaction) *ExpressionGraph {
 // node stands in for the expression's value, and every free variable feeds it.
 func ExpressionGraphFromExpression(expr Expression) *ExpressionGraph {
 	b := newExprGraphBuilder()
-	b.processExpression(expr, "expr_result", 0, defaultSystem)
+	// NonEquationIndex: a bare expression has no positional equation to index,
+	// which is exactly what the sentinel is for. (The Equation and Reaction
+	// overloads DO number their single target 0.)
+	b.processExpression(expr, "expr_result", NonEquationIndex, defaultSystem)
 	return b.graph
 }
 
@@ -711,15 +719,49 @@ func extractVariableFromLHS(lhs Expression) string {
 	return ""
 }
 
+// graphBoundIndexSymbols is the set of index symbols a node BINDS for its own
+// body: an `aggregate` / `arrayop`'s `ranges` keys and `output_idx` entries, and
+// an `integral`'s `var`.
+//
+// Narrower than validate.go's boundIndexSymbols, which also treats every bare
+// name in an `index(A, i, j)` position as bound. Those positions are exactly
+// where an aggregate's binders appear, and subtracting them THERE rather than at
+// the binding node would hide a real reference to a declared variable used as an
+// index. The binder itself is caught at its `aggregate`.
+func graphBoundIndexSymbols(node ExprNode) []string {
+	var bound []string
+	for k := range node.Ranges {
+		bound = append(bound, k)
+	}
+	for _, idx := range node.OutputIdx {
+		if name, ok := idx.(string); ok {
+			bound = append(bound, name)
+		}
+	}
+	if node.Var != nil {
+		bound = append(bound, *node.Var)
+	}
+	return bound
+}
+
 // extractVariablesFromExpression extracts every variable name an expression
-// references, in a deterministic walk order, with duplicates removed.
+// references, in a deterministic walk order, with duplicates removed and every
+// locally-bound index symbol subtracted — the node set §4.8.2 asks for.
 //
 // It used to hand-roll its own recursion over `args` ONLY — and had no
 // `*ExprNode` case at all — so a dependency reachable through a sidecar field
 // (an aggregate's `expr`/`filter`, an integral's bounds, a `table_lookup`'s
 // `axes`, …) contributed NO edge to the dependency graph, silently (audit G11).
-// It now shares the one field-preserving walk that backs FreeVariables, so the
-// graph sees exactly what the rest of the package sees.
+// It now shares the one field-preserving walk that backs FreeVariables.
+//
+// It does NOT share FreeVariables' answer, though. That function reports every
+// bare name it reaches, so an `aggregate`'s own range binders (`sum over a of
+// src[a]`) come back looking like model variables and became graph nodes with no
+// declaration, no units and no kind. A binder is introduced by the aggregate's
+// own `ranges` clause and is scoped to it; it is not a variable of the system,
+// so it is not a node. The subtraction is PER NODE, at the binder that
+// introduces the symbol, so a name bound inside one reduction and free outside
+// it is still reported.
 //
 // Order is deterministic (mapExprChildren walks maps in sorted-key order), so
 // the emitted edge list is stable across runs.
@@ -727,30 +769,51 @@ func extractVariablesFromExpression(expr Expression) []string {
 	var vars []string
 	seen := make(map[string]bool)
 
-	var walk func(Expression)
-	walk = func(e Expression) {
+	// walk reports the names `e` references that `e` does not itself bind,
+	// appending newly seen ones to vars in first-encounter order.
+	var walk func(Expression) []string
+	walk = func(e Expression) []string {
 		if s, ok := e.(string); ok {
-			if !seen[s] {
-				seen[s] = true
-				vars = append(vars, s)
-			}
-			return
+			return []string{s}
 		}
 		node, ok := asExprNode(e)
 		if !ok {
 			if list, isList := e.([]any); isList {
+				var found []string
 				for _, el := range list {
-					walk(el)
+					found = append(found, walk(el)...)
 				}
+				return found
 			}
-			return
+			return nil
 		}
+		var found []string
 		_, _ = mapExprChildren(node, func(child Expression) (Expression, error) {
-			walk(child)
+			found = append(found, walk(child)...)
 			return child, nil
 		})
+		bound := graphBoundIndexSymbols(node)
+		if len(bound) == 0 {
+			return found
+		}
+		boundSet := make(map[string]bool, len(bound))
+		for _, b := range bound {
+			boundSet[b] = true
+		}
+		free := found[:0:0]
+		for _, name := range found {
+			if !boundSet[name] {
+				free = append(free, name)
+			}
+		}
+		return free
 	}
-	walk(expr)
+	for _, name := range walk(expr) {
+		if !seen[name] {
+			seen[name] = true
+			vars = append(vars, name)
+		}
+	}
 
 	if vars == nil {
 		return []string{}

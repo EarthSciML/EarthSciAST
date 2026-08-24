@@ -198,17 +198,15 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     # Create nodes for reaction systems
     if file.reaction_systems !== nothing
         for (name, rxn_sys) in file.reaction_systems
-            # `var_count` is 0, matching the oracle: a reaction system declares
-            # no `variables`; its species and reactions are counted by the two
-            # fields below and its parameters by nothing. This is the ONE corpus
-            # field carried without a majority behind it (TypeScript writes 0,
-            # this module and Python used to write length(parameters), Go and
-            # Rust report no variable count for a reaction system at all), so it
-            # is pinned to keep consumers agreeing rather than because
-            # esm-libraries-spec §4.8.1 settles it — it asks only for "summary
-            # metadata".
+            # A reaction system's PARAMETERS are its `var_count`. The schema
+            # forbids a `variables` field here and `species_count` below already
+            # carries the species, so `parameters` is the only thing left for
+            # esm-libraries-spec §4.8.1's "variable count" to mean — and it is
+            # the exact analogue of a model's `variables`, which likewise counts
+            # unknowns and parameters together. This used to be 0, which
+            # asserted that a reaction system declares no variables at all.
             metadata = Dict{String, Any}(
-                "var_count" => 0,
+                "var_count" => length(rxn_sys.parameters),
                 "eq_count" => length(rxn_sys.reactions),
                 "species_count" => length(rxn_sys.species)
             )
@@ -360,8 +358,9 @@ const _DEFAULT_SYSTEM = "default"
 
 """
 `equation_index` for a dependency no positionally-numbered equation or reaction
-produced — a coupling variable map. Spelled -1 rather than `nothing` so "no
-positional equation" is a positive statement rather than "not tracked".
+produced: a coupling variable map, or the synthetic `expr_result` edges of a
+bare-expression target. Spelled -1 rather than `nothing` so "no positional
+equation" is a positive statement rather than "not tracked".
 """
 const _NON_EQUATION_INDEX = -1
 
@@ -642,7 +641,11 @@ function expression_graph(expr::ASTExpr)::Graph{VariableNode, DependencyEdge}
     result_key = _add_node!(b, _EXPR_RESULT, "observed", nothing, _DEFAULT_SYSTEM)
     for var_name in sort!(collect(free_variables(expr)))
         source_key = _add_node!(b, var_name, "parameter", nothing, _DEFAULT_SYSTEM)
-        _add_dependency!(b, source_key, result_key, "multiplicative", 0, expr)
+        # `_NON_EQUATION_INDEX`: a bare expression has no positional equation to
+        # index, which is exactly what the sentinel is for. (The Equation and
+        # Reaction overloads DO number their single target 0.)
+        _add_dependency!(b, source_key, result_key, "multiplicative",
+                         _NON_EQUATION_INDEX, expr)
     end
     return _graph(b)
 end
