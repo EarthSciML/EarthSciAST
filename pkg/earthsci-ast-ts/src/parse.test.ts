@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { loadString, loadDocument, toJson, ParseError, SchemaValidationError, validateSchema } from './index.js'
+import {
+  loadString,
+  loadDocument,
+  toJson,
+  ParseError,
+  SchemaValidationError,
+  validateSchema,
+} from './index.js'
 import { isNumericLiteral, isIntLit, isFloatLit } from './numeric-literal.js'
 import { observedUnknowns, observedDefinitions } from './classification.js'
 import type { Model } from './types.js'

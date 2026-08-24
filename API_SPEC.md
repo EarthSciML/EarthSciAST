@@ -293,11 +293,18 @@ and returns the payload.**
 
 `to_json_compact` exists in all five rather than being an option, because Rust
 and Go have no default arguments and so cannot express `to_json(file,
-indent=0)`. Where a binding *does* have defaults it also takes the option —
-Julia `to_json(file; indent=2)`, Python `to_json(file, *, indent=2)`,
-TypeScript `toJson(file, {indent, canonical})` — and `to_json_compact` is a
-one-line wrapper over it. Go additionally keeps `WritePathCompact` (extension
-tier), the rename of its `SaveCompactToFile`.
+indent=0)`. Python (`to_json(file, *, indent=2)`) and TypeScript
+(`toJson(file, {indent, canonical})`) also take the option, and their
+`to_json_compact` wraps it. Julia takes no `indent`: `JSON3.write` ignores the
+keyword, so `save(file, path)` has been emitting UNINDENTED bytes all along
+despite passing `indent=2`, and an option that does nothing is worse than
+none. Go additionally keeps `WritePathCompact` (extension tier), the rename of
+its `SaveCompactToFile`.
+
+The COMPACT form is byte-identical across bindings: Python pins
+`separators=(",", ":")`, since `json.dumps(indent=None)` otherwise emits
+`", "` / `": "` where serde_json, `encoding/json` and `JSON.stringify` emit
+nothing.
 
 Julia's `to_json` shares its name with the graph serializer (`to_json(::Graph)`,
 graph.jl) and dispatches on argument type. Python's graph serializer is

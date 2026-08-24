@@ -85,10 +85,21 @@ returns the payload any more.**
 
 `to_json_compact` exists in all five rather than being an option, because Rust
 and Go have no default arguments and so cannot express `to_json(file,
-indent=0)`. Where a binding does have defaults it takes the option as well —
-Julia `to_json(file; indent=2)`, Python `to_json(file, *, indent=2)`,
-TypeScript `toJson(file, {indent, canonical})` — and `to_json_compact` is a
-one-line wrapper over it.
+indent=0)`. Python (`to_json(file, *, indent=2)`) and TypeScript
+(`toJson(file, {indent, canonical})`) take the option as well, and their
+`to_json_compact` is a one-line wrapper over it.
+
+**Julia takes no `indent`**, and its `to_json_compact` returns exactly what
+`to_json` returns. The reason is a defect this rename surfaced rather than
+introduced: `save` passed `indent=2` to `JSON3.write`, and JSON3 ignores that
+keyword — so Julia has been emitting UNINDENTED JSON all along while claiming
+otherwise. Rather than carry an option that does nothing, `to_json` takes
+none and says so. (Byte-canonical output has always been a separate path:
+`emit_esm_string`, esm-spec §9.6.4 rule 5.)
+
+The COMPACT bytes now agree across bindings. Python's `json.dumps(indent=None)`
+still emits `", "` / `": "` separators where serde_json, `encoding/json` and
+`JSON.stringify` emit none, so `to_json_compact` pins `separators=(",", ":")`.
 
 Rust gains an `EsmError::FileWrite` variant. `write_path`'s I/O failures used
 to have to be reported through `FileRead`, whose message reads "failed to read

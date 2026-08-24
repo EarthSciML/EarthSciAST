@@ -1165,7 +1165,13 @@ def to_json(esm_file: EsmFile, *, indent: int | None = 2) -> str:
         JSON string representation of the ESM file
     """
     data = _serialize_esm_file(esm_file)
-    return json.dumps(data, indent=indent or None, ensure_ascii=False)
+    if indent:
+        return json.dumps(data, indent=indent, ensure_ascii=False)
+    # Compact: `json.dumps(indent=None)` still emits `", "` / `": "` separators,
+    # where every other binding's compact form (serde_json::to_string,
+    # encoding/json.Marshal, JSON.stringify) emits none. Pin the separators so
+    # `to_json_compact` means the same bytes in all five.
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
 
 
 def to_json_compact(esm_file: EsmFile) -> str:

@@ -555,7 +555,9 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     expect(err).toBeInstanceOf(EsmMachineryError)
     expect((err as EsmMachineryError).code).toBe('rewrite_rule_nonterminating')
     // Also fires through the full loadString() pipeline (stage: "loadString").
-    expect(() => loadString(fixtureText('nonterminating_rewrite'))).toThrow(/rewrite_rule_nonterminating/)
+    expect(() => loadString(fixtureText('nonterminating_rewrite'))).toThrow(
+      /rewrite_rule_nonterminating/,
+    )
     expect((err as EsmMachineryError).code).toBe(goldenError('nonterminating_rewrite').code)
   })
 

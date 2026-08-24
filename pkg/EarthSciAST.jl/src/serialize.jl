@@ -496,7 +496,7 @@ function serialize_function_table_axis(ax::FunctionTableAxis)::Dict{String,Any}
 end
 
 """
-    to_json(file::EsmFile; indent::Integer=2) -> String
+    to_json(file::EsmFile) -> String
 
 Serialize an `EsmFile` to wire-form JSON. PURE — it never touches disk;
 [`write_path`](@ref) is the writer.
@@ -505,11 +505,17 @@ Serialize an `EsmFile` to wire-form JSON. PURE — it never touches disk;
 touching nothing in TypeScript and Rust — one name, two opposite effects. No
 function in this API both writes and hands back the payload any more.
 
-`indent=0` emits the single-line compact form (see [`to_json_compact`](@ref)).
-A document carrying surviving template references ignores `indent`: it emits
-the canonical reference-preserving byte form (esm-spec §9.6.4 rule 5).
+Takes no `indent` option, unlike the Python and TypeScript twins: JSON3 emits
+the single-line form and its `indent=` keyword is a silent no-op in the pinned
+version, so `save(file, path)` has been writing UNINDENTED bytes since it was
+written, despite saying `indent=2`. Offering an option that does nothing would
+be worse than not offering it. (Byte-canonical output is a separate concern
+with its own path — see `emit_esm_string` / esm-spec §9.6.4 rule 5.)
+
+A document carrying surviving template references emits in the canonical
+reference-preserving byte form instead.
 """
-function to_json(file::EsmFile; indent::Integer=2)::String
+function to_json(file::EsmFile)::String
     serialized = serialize_esm_file(file)
     if file.component_templates !== nothing
         # esm-spec §9.6.4 rule 5 (Option B): a document carrying surviving
@@ -519,18 +525,21 @@ function to_json(file::EsmFile; indent::Integer=2)::String
         # `emit_document` path. Other documents keep the historical JSON3 form.
         return emit_esm_string(serialized)
     else
-        return JSON3.write(serialized, indent=indent)
+        return JSON3.write(serialized)
     end
 end
 
 """
     to_json_compact(file::EsmFile) -> String
 
-[`to_json`](@ref) with no indentation — the single-line wire form. Present in
-every binding, because Rust and Go have no default arguments and so cannot
-express `to_json(file; indent=0)`.
+The single-line wire form. Exists in every binding for call-site parity —
+Rust and Go have no default arguments and so cannot express
+`to_json(file, indent=0)`.
+
+In THIS binding it returns exactly what [`to_json`](@ref) returns, because
+JSON3 already emits the compact form (see `to_json`).
 """
-to_json_compact(file::EsmFile)::String = to_json(file; indent=0)
+to_json_compact(file::EsmFile)::String = to_json(file)
 
 """
     write_path(file::EsmFile, path::AbstractString) -> Nothing
