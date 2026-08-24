@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -1940,17 +1939,29 @@ func namespaceAffects(affects []AffectEquation, bare map[string]Expression) []Af
 // deriveIndependentVars derives the flattened system's independent variables
 // from the equation set: time is always present, and a spatial dimension is
 // added when an UNDISCRETIZED spatial differential still names it.
+// The axes are collected in DOCUMENT ORDER -- the order the scan first meets
+// them -- not sorted. This used to collect into a map and sort on the way out;
+// because Go randomizes map iteration, the sort was also the only thing making
+// the output deterministic, which hid that the order was wrong rather than
+// merely arbitrary. `full_coupled` names lon, lat, lev and emitted lat, lev,
+// lon. For a PDE the axis order is the order a downstream array layout follows
+// (esm-libraries-spec §4.7.5 step 4's ordering rule, and §4.7.6).
 func deriveIndependentVars(flat *FlattenedSystem) {
-	dims := map[string]bool{}
+	seen := map[string]bool{}
+	names := make([]string, 0, 4)
+	appendDims := func(expr Expression) {
+		walkExprNodes(expr, func(n ExprNode) {
+			if n.Dim == nil || *n.Dim == "" || seen[*n.Dim] {
+				return
+			}
+			seen[*n.Dim] = true
+			names = append(names, *n.Dim)
+		})
+	}
 	for _, eq := range flat.Equations {
-		spatialDimsInExpr(eq.LHS, dims)
-		spatialDimsInExpr(eq.RHS, dims)
+		appendDims(eq.LHS)
+		appendDims(eq.RHS)
 	}
-	names := make([]string, 0, len(dims))
-	for d := range dims {
-		names = append(names, d)
-	}
-	sort.Strings(names)
 	flat.IndependentVariables = append([]string{DefaultIndepVar}, names...)
 }
 

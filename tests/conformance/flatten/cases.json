@@ -927,9 +927,9 @@
       "system_kind": "pde",
       "independent_variables": [
         "t",
+        "lon",
         "lat",
-        "lev",
-        "lon"
+        "lev"
       ],
       "state_variables": [
         {

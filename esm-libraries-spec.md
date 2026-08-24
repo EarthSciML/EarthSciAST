@@ -652,10 +652,18 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
   spatial dimension. §4.7.6 governs: a model carrying undiscretized spatial
   operators is a PDE, `system_kind` has a `"pde"` value for exactly that case,
   and refusing to flatten it makes `PDESystem` construction unreachable.
-  Within the list, `t` comes first and the remaining spatial axes are ordered
-  lexicographically — `full_coupled` flattens to `["t","lat","lev","lon"]`. This
-  is the one place the document-order rule does not apply, because the axes are
-  discovered by scanning equations rather than declared in a document order.
+  Within the list, `t` comes first and the remaining spatial axes follow in
+  **document order** — the order the scan first encounters them, which is the
+  order the document names them in. `full_coupled` flattens to
+  `["t","lon","lat","lev"]`. The document-order rule applies here like anywhere
+  else; an earlier draft of this bullet carved out an exception for
+  lexicographic order, which was wrong on two counts. It was justified by three
+  bindings agreeing, but two of those had just been conformed to the third's
+  corpus, so their agreement was derivative rather than corroborating. And the
+  order is not cosmetic: for a PDE it is the order a downstream array layout
+  follows, so sorting it silently permutes the modeller's axes. A library that
+  accumulates the axes into an unordered set and sorts on the way out is
+  non-conforming even though its output looks stable.
 - **Ordering (normative).** "Post-step-2 scoping" above is an ordering requirement, not a
      parenthetical: the step-2 free-variable rename runs on each component's carried bodies
      **before** the union is taken, and the deep-equal dedup compares the post-scoping bodies.
