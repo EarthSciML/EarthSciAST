@@ -145,6 +145,25 @@ const (
 	CodeCouplingRoleUnused = "coupling_role_unused"
 )
 
+// --- Diagnostic codes: §10.3 / esm-libraries-spec §4.7.2 `couple` connector
+// semantics (raised from flatten.go's applyCouple). ---
+const (
+	// CodeCoupleMultiplicativeNoTendency: a `couple` connector equation applies
+	// the `multiplicative` transform to a `to` target that has no `D(to)`
+	// equation in the flattened system — a parameter, an observed, an algebraic
+	// unknown, or an undefined name. Both esm-spec §10.3 and §4.7.2 define
+	// `multiplicative` against the target's EXISTING ODE right-hand side, so
+	// there is nothing to multiply and the operation has no meaning. Silently
+	// dropping the connector equation — what this binding did before — is the
+	// one outcome a coupling mis-specification must not have: the document
+	// declares a coupling and the flattened system carries no trace of it.
+	//
+	// `additive` deliberately has NO counterpart code: zero is the additive
+	// identity, so an additive term against an absent tendency simply becomes
+	// the tendency. There is no multiplicative identity that would do the same.
+	CodeCoupleMultiplicativeNoTendency = "couple_multiplicative_no_tendency"
+)
+
 // --- Diagnostic codes: §4.7 subsystem refs. Shared with the structural
 // validator, which reports the same two conditions for a document whose refs
 // were never resolved (tests/invalid/subsystem_ref_not_found.esm,
@@ -308,10 +327,10 @@ const (
 
 // DiagnosticError is implemented by the package's code-bearing error types
 // (EvaluationError, ExpressionTemplateError, RuleEngineError, LowerEnumsError,
-// ClosedFunctionError). It lets a caller recover the stable diagnostic code
-// from any of them uniformly — errors.As(err, &de) then de.DiagnosticCode() —
-// without switching over the concrete types. All five render Error() in the
-// shared "[code] message" form.
+// ClosedFunctionError, CoupleMultiplicativeNoTendencyError). It lets a caller
+// recover the stable diagnostic code from any of them uniformly —
+// errors.As(err, &de) then de.DiagnosticCode() — without switching over the
+// concrete types. All six render Error() in the shared "[code] message" form.
 type DiagnosticError interface {
 	error
 	DiagnosticCode() string
@@ -325,4 +344,5 @@ var (
 	_ DiagnosticError = (*RuleEngineError)(nil)
 	_ DiagnosticError = (*LowerEnumsError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
+	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
 )
