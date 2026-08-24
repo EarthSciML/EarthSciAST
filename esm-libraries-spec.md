@@ -629,7 +629,21 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      consumers — graph construction, simulation backends, emit — resolve surviving
      `apply_expression_template` references against this registry; a consumer MAY evaluate them
      natively or via `Expand` (esm-spec §9.6.4 rule 2), whose observable behavior is identical.
-   - **Ordering (normative).** "Post-step-2 scoping" above is an ordering requirement, not a
+   - **`state_variables` is the solved-for vector, not a classification.** esm-spec
+  §6.3.1's `ode_states` / `observed_unknowns` / `algebraic_unknowns` partition the
+  UNKNOWNS and are recovered by the accessors of that section; they are a different
+  axis from this field. `state_variables` is what a solver integrates or solves,
+  so `algebraic_variables` is a SUBSET of it (a DAE solves for an algebraic
+  unknown), and a materialized arrayed observed is in it too, while an inlineable
+  scalar observed is not. A binding that flattens `algebraic_variables` into a
+  bucket disjoint from `state_variables` produces a `u` vector that silently omits
+  the algebraic unknowns.
+- **`field_ics` entries are REMOVED from `equations`.** An initial condition is a
+  datum, not an equation of motion; leaving it in `equations` makes `equations`
+  unusable for building a right-hand side without filtering, and makes equation
+  counts incomparable across bindings. A library classifies `ic` equations out at
+  step 4 and reports them only in `field_ics`.
+- **Ordering (normative).** "Post-step-2 scoping" above is an ordering requirement, not a
      parenthetical: the step-2 free-variable rename runs on each component's carried bodies
      **before** the union is taken, and the deep-equal dedup compares the post-scoping bodies.
      Deduplicating pre-scoping bodies is unsound — two components importing one library, each
@@ -655,13 +669,13 @@ TypeScript `camelCase`, others verbatim).
 | Field | Type | Contents |
 |---|---|---|
 | `independent_variables` | list of name | Always `["t"]` for a discretized system. An undiscretized spatial operator never reaches step 4. |
-| `state_variables` | ordered map name → variable | Unknowns under `D(·,t)`, plus every reaction-system species. |
+| `state_variables` | ordered map name → variable | The **solved-for vector**: every unknown the solver advances or solves for. Differential unknowns (under `D(·,t)`, including every reaction-system species, which gets a derived `D` equation at step 1), PLUS `algebraic_variables`, PLUS any arrayed observed that materializes into a buffer. NOT the same set as esm-spec §6.3.1's `ode_states`. |
 | `parameters` | ordered map name → variable | **ALL** parameters of every cadence, minus any promoted to variables by `variable_map`. |
-| `observed_variables` | ordered map name → variable | Unknowns DEFINED by an equation (esm-spec §6.3.1). |
-| `algebraic_variables` | ordered map name → variable | Unknowns CONSTRAINED only by an expression-LHS equation (esm-spec §6.3.1). |
+| `observed_variables` | ordered map name → variable | Unknowns DEFINED by an equation, bare-LHS or indexed-LHS (esm-spec §6.3.1). A scalar observed is eliminated by substitution and is NOT in `state_variables`; an arrayed observed materializes into a buffer and IS. |
+| `algebraic_variables` | ordered map name → variable | Unknowns CONSTRAINED only by an expression-LHS equation (esm-spec §6.3.1). A **subset** of `state_variables` — a DAE solves for them. |
 | `brownian_parameters` | ordered map name → variable | `update.kind == "wiener"`. A **subset** of `parameters`, not a sibling bucket. |
 | `discrete_parameters` | ordered map name → variable | Any other `update`. A **subset** of `parameters`. |
-| `equations` | list | All equations, coupling applied, dot-namespaced. |
+| `equations` | list | The governing equations — dynamics and constraints — coupling applied, dot-namespaced. Entries classified out into `field_ics` are REMOVED from this list (see below). |
 | `continuous_events` / `discrete_events` | list | Events, dot-namespaced. |
 | `domain` | domain or null | The file's `domain` section, unchanged. |
 | `metadata` | record | Which components were flattened, which coupling rules applied. |
